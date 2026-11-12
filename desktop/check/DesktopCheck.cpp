@@ -14,6 +14,9 @@
 #include "audio/CueRenderer.h"
 #include "ui/CueManager.h"
 #include "ui/ScoreExchange.h"
+#include "audio/StemRenderer.h"
+#include "ui/StemExport.h"
+#include "vcc/project/Stems.h"
 #include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
 #include "ui/VideoWindow.h"
@@ -1159,6 +1162,104 @@ int main(int argc, char** argv)
             check(!results.empty() && results[0].peak > 1.0e-4f, "the bounced cue is not silent");
             auto again = render_cues(ctx, request);
             check(again.size() == 1 && again[0].skipped_protected, "an approved cue's deliverable is not overwritten unasked");
+        }
+
+        // Stems (Main Spec 16): the mix and every stem, adding back up to the mix.
+        {
+            auto stems = session.stems();
+            check(stems.size() >= 2 && project::stem_coverage(stems, session.data()).complete(),
+                  "default stems cover every deliverable track once (" + juce::String(static_cast<int>(stems.size())) +
+                      " stems)");
+            // Music in two stems, one of them sending to the reverb.
+            std::vector<std::string> playing;
+            for (const auto& st : stems) {
+                const auto tracks = project::stem_tracks(st, session.data());
+                if (tracks.empty() || playing.size() == 2) continue;
+                const std::string tid = tracks.front()->id;
+                session.insert_notes(tid, 0, 2 * kTicksPerWhole,
+                                     {{0, kTicksPerWhole, 52 + 7 * static_cast<int>(playing.size()), 100, 0, {}},
+                                      {kTicksPerWhole, kTicksPerWhole, 55, 90, 0, {}}},
+                                     project::CollisionPolicy::Merge, "check");
+                playing.push_back(st.id);
+            }
+            StemRenderRequest rq;
+            rq.folder = dir.getChildFile("stems");
+            rq.folder.deleteRecursively();
+            rq.ranges = {whole_project_range(ctx)};
+            rq.ranges.front().end = 2 * kTicksPerWhole;
+            rq.tail_seconds = 1.5;
+            auto printed = render_stems(ctx, rq);
+            int ok_files = 0;
+            std::map<std::string, float> peak_of;
+            for (const auto& f : printed.files) {
+                ok_files += f.ok;
+                peak_of[f.stem] = f.peak;
+            }
+            bool music_heard = peak_of["Mix"] > 1.0e-3f;
+            for (const auto& st : stems)
+                if (std::find(playing.begin(), playing.end(), st.id) != playing.end())
+                    music_heard = music_heard && peak_of[st.name] > 1.0e-3f;
+            check(ok_files == static_cast<int>(stems.size()) + 1,
+                  "the mix and every stem print (" + juce::String(ok_files) + " files)");
+            check(music_heard, "the mix and the stems given music are audible");
+            check(printed.ranges.size() == 1 && printed.ranges[0].sum_checked && printed.ranges[0].sum_error_db < -60.0,
+                  "the stems add back up to the mix (residual " +
+                      (printed.ranges.empty() ? juce::String("?") : juce::String(printed.ranges[0].sum_error_db, 1)) + " dB)");
+            for (const auto& w : printed.warnings) std::printf("  note %s\n", w.toRawUTF8());
+
+            // A dry stem prints without its reverb share; a cue's stems tick its deliverable.
+            auto edited = stems;
+            for (auto& st : edited) st.include_effects = false;
+            session.set_stems(edited);
+            StemRenderRequest dry = rq;
+            dry.include_mix = false;
+            dry.folder = dir.getChildFile("stems-dry");
+            dry.folder.deleteRecursively();
+            dry.stem_ids = {playing.front()};
+            auto rd = render_stems(ctx, dry);
+            check(rd.files.size() == 1 && rd.files[0].ok && rd.files[0].peak > 1.0e-3f,
+                  "a dry stem prints (" + (rd.files.empty() ? juce::String() : rd.files[0].message) + ")");
+            // The last second is the release tail: the wet print carries reverb there, the dry one less.
+            auto tail_rms = [](const juce::File& f) {
+                juce::AudioFormatManager fm;
+                fm.registerBasicFormats();
+                std::unique_ptr<juce::AudioFormatReader> reader(fm.createReaderFor(f));
+                if (!reader) return -1.0f;
+                const int n = static_cast<int>(reader->sampleRate);
+                juce::AudioBuffer<float> b(2, n);
+                reader->read(&b, 0, n, reader->lengthInSamples - n, true, true);
+                return std::max(b.getRMSLevel(0, 0, n), b.getRMSLevel(1, 0, n));
+            };
+            juce::File wet_file;
+            for (const auto& f : printed.files)
+                for (const auto& st : stems)
+                    if (st.id == playing.front() && f.stem == st.name) wet_file = f.file;
+            const float wet_tail = tail_rms(wet_file), dry_tail = rd.files.empty() ? -1.0f : tail_rms(rd.files[0].file);
+            check(wet_tail > 0.0f && dry_tail >= 0.0f && wet_tail > dry_tail * 1.5f,
+                  "the dry stem leaves its reverb share out (tail rms wet " + juce::String(wet_tail, 5) + ", dry " +
+                      juce::String(dry_tail, 5) + ")");
+            session.undo();
+
+            StemRenderRequest per_cue = rq;
+            per_cue.folder = dir.getChildFile("stems-cues");
+            per_cue.folder.deleteRecursively();
+            per_cue.ranges = cue_ranges(ctx);
+            per_cue.include_mix = false;
+            auto rc = render_stems(ctx, per_cue);
+            bool named = !rc.files.empty();
+            for (const auto& f : rc.files) named = named && f.ok && f.file.getFileName().contains("1M1");
+            const auto* c = session.data().find_cue(cue_id);
+            bool ticked = false;
+            for (const auto& del : c ? c->deliverables : std::vector<project::Deliverable>{})
+                ticked = ticked || (del.name == "Stems" && del.done);
+            check(named && ticked, "per-cue stems are named by cue and tick the cue's Stems deliverable");
+            show_stem_export(ctx);
+            pump(300);
+            if (auto* w = find_dialog("Export Stems")) shoot(*w, dir, "11-export-stems");
+            auto again = render_stems(ctx, per_cue);
+            bool skipped = !again.files.empty();
+            for (const auto& f : again.files) skipped = skipped && f.skipped_protected;
+            check(skipped, "an approved cue's stems are not overwritten unasked");
         }
 
         // Notation out and in (Main Spec 16): printed parts as PDF, MusicXML.

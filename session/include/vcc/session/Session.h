@@ -17,6 +17,7 @@
 #include "vcc/interchange/MusicXml.h"
 #include "vcc/ostinato/Ostinato.h"
 #include "vcc/project/Project.h"
+#include "vcc/project/Stems.h"
 #include "vcc/templates/Templates.h"
 #include "vcc/theory/Progression.h"
 
@@ -249,6 +250,13 @@ public:
     bool commit_automation_pass(const std::vector<AutomationWrite>& writes);
     /// The owner's lanes, or null for an unknown owner.
     const std::vector<project::AutomationLane>* lanes_of(const std::string& owner_id) const;
+
+    // --- Stems (Main Spec §16) ---------------------------------------------------------
+    /// The project's stems, or sensible defaults when it has none (group
+    /// buses, then instrument families).
+    std::vector<project::StemDef> stems() const;
+    /// Replaces the stem definitions (one undo step). Stems without an id get one.
+    bool set_stems(std::vector<project::StemDef> stems);
 
     // --- Selection ----------------------------------------------------------------
     const std::string& selected_track() const noexcept { return selected_track_; }

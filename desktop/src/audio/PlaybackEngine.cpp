@@ -280,6 +280,7 @@ struct MixPlan {
     std::vector<int> order;
     std::vector<bool> track_audible, bus_audible;
     std::vector<bool> track_solo_ok, bus_solo_ok;  // audible but for the strip's own mute
+    std::vector<bool> bus_forced_mute;             // a render override mutes it
 };
 
 std::vector<const project::Track*> played_tracks(const session::Session& session, bool export_mode)
@@ -287,7 +288,8 @@ std::vector<const project::Track*> played_tracks(const session::Session& session
     return export_mode ? session.project().export_tracks() : session.music_tracks();
 }
 
-MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Track*> tracks)
+MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Track*> tracks,
+                  const PlaybackEngine::RenderOverride* over = nullptr)
 {
     MixPlan p;
     p.tracks = std::move(tracks);
@@ -370,21 +372,25 @@ MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Trac
         p.track_sends.push_back(std::move(sends));
     }
 
-    // Solo-in-place.
-    bool any_solo = false;
-    for (const auto* t : p.tracks) any_solo = any_solo || t->solo;
+    // Solo-in-place. A render override replaces the document's solo switches.
+    const std::set<std::string> override_solo =
+        over ? std::set<std::string>(over->solo.begin(), over->solo.end()) : std::set<std::string>{};
+    auto track_solo = [&](const project::Track* t) { return over ? override_solo.count(t->id) > 0 : t->solo; };
+    auto bus_solo = [&](const project::Bus* b) { return over ? override_solo.count(b->id) > 0 : b->solo; };
+    bool any_solo = over != nullptr;
+    for (const auto* t : p.tracks) any_solo = any_solo || track_solo(t);
     for (int i = 0; i < n; ++i)
-        if (const auto* b = p.buses[static_cast<std::size_t>(i)]; b && i != p.master) any_solo = any_solo || b->solo;
+        if (const auto* b = p.buses[static_cast<std::size_t>(i)]; b && i != p.master) any_solo = any_solo || bus_solo(b);
     std::vector<char> down(static_cast<std::size_t>(n), 0), soloed_bus(static_cast<std::size_t>(n), 0);
     std::vector<int> stack;
     for (std::size_t k = 0; k < p.tracks.size(); ++k)
-        if (p.tracks[k]->solo) {
+        if (track_solo(p.tracks[k])) {
             stack.push_back(p.track_output[k]);
             for (int dest : p.track_sends[k])
                 if (dest >= 0) stack.push_back(dest);
         }
     for (int i = 0; i < n; ++i)
-        if (const auto* b = p.buses[static_cast<std::size_t>(i)]; b && b->solo) {
+        if (const auto* b = p.buses[static_cast<std::size_t>(i)]; b && i != p.master && bus_solo(b)) {
             soloed_bus[static_cast<std::size_t>(i)] = 1;
             for (int y : adj[static_cast<std::size_t>(i)]) stack.push_back(y);
         }
@@ -402,7 +408,7 @@ MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Trac
     };
     for (std::size_t k = 0; k < p.tracks.size(); ++k) {
         const auto* t = p.tracks[k];
-        const bool ok = !any_solo || t->solo || feeds_soloed_bus(p.track_output[k]);
+        const bool ok = !any_solo || track_solo(t) || feeds_soloed_bus(p.track_output[k]);
         p.track_solo_ok.push_back(ok);
         p.track_audible.push_back(!t->mute && ok);
     }
@@ -411,13 +417,16 @@ MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Trac
         if (!b) {
             p.bus_audible.push_back(true);
             p.bus_solo_ok.push_back(true);
+            p.bus_forced_mute.push_back(false);
             continue;
         }
         const bool safe = i == p.master || b->kind == "fx";
-        const bool ok = !any_solo || safe || b->solo || down[static_cast<std::size_t>(i)] ||
+        const bool ok = !any_solo || safe || bus_solo(b) || down[static_cast<std::size_t>(i)] ||
                         feeds_soloed_bus(p.bus_output[static_cast<std::size_t>(i)]);
+        const bool forced = over && over->mute_effects && b->kind == "fx";
         p.bus_solo_ok.push_back(ok);
-        p.bus_audible.push_back(!b->mute && ok);
+        p.bus_forced_mute.push_back(forced);
+        p.bus_audible.push_back(!b->mute && !forced && ok);
     }
     return p;
 }
@@ -822,7 +831,7 @@ std::shared_ptr<Instrument> PlaybackEngine::instrument_for(const project::Track&
 void PlaybackEngine::sync_processors()
 {
     const auto& d = session_.data();
-    const MixPlan plan = make_plan(d, played_tracks(session_, export_mode_));
+    const MixPlan plan = make_plan(d, played_tracks(session_, export_mode_), render_override_ ? &*render_override_ : nullptr);
     std::set<std::string> live_strips, live_inserts;
 
     auto strip_for = [&](const std::string& id) -> StripDsp& {
@@ -875,7 +884,8 @@ void PlaybackEngine::sync_processors()
             strip.params.write(make_params({}, 0.0, 0.0, false, true, false, {}));
             continue;
         }
-        strip.params.write(make_params(b->strip, b->gain_db, b->pan, b->mute, plan.bus_solo_ok[i], false, b->sends));
+        strip.params.write(make_params(b->strip, b->gain_db, b->pan, b->mute || plan.bus_forced_mute[i],
+                                       plan.bus_solo_ok[i], false, b->sends));
         sync_inserts(b->id, b->inserts);
     }
     // Strips and inserts that are gone: snapshots still holding them keep
@@ -898,7 +908,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
 {
     sync_processors();
     const auto& d = session_.data();
-    const MixPlan plan = make_plan(d, played_tracks(session_, export_mode_));
+    const MixPlan plan = make_plan(d, played_tracks(session_, export_mode_), render_override_ ? &*render_override_ : nullptr);
     auto snap = std::make_unique<PlaybackSnapshot>();
     snap->sample_rate = sample_rate_;
     snap->max_block = block_size_;
@@ -1271,6 +1281,12 @@ juce::AudioPluginInstance* PlaybackEngine::insert_plugin(const std::string& stri
     if (keys == insert_keys_.end() || slot < 0 || slot >= static_cast<int>(keys->second.size())) return nullptr;
     auto it = inserts_.find(keys->second[static_cast<std::size_t>(slot)]);
     return it == inserts_.end() ? nullptr : it->second->plugin();
+}
+
+void PlaybackEngine::set_render_override(std::optional<RenderOverride> override_settings)
+{
+    render_override_ = std::move(override_settings);
+    rebuild_now();
 }
 
 void PlaybackEngine::set_export_mode(bool on)

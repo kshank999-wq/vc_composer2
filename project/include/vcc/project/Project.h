@@ -294,6 +294,18 @@ struct Bus {
     std::string automation_mode = "read";
 };
 
+/// A stem (Main Spec §16): a named part of the mix printed to its own file,
+/// so a dubbing mixer can rebalance the score. Sources are track ids and/or
+/// bus ids (a group bus brings every track that feeds it).
+struct StemDef {
+    std::string id;
+    std::string name;                  ///< "Strings", "Brass", "Synths".
+    std::vector<std::string> sources;
+    /// The stem carries its own share of the reverb and delay returns (what
+    /// its tracks send there). Off prints it dry.
+    bool include_effects = true;
+};
+
 /// Spec §14 hierarchy: Production -> Reel/Episode -> Scene -> Cue.
 struct Production {
     std::string title;     ///< The film or series.
@@ -412,6 +424,7 @@ struct ProjectData {
     std::vector<PictureVersion> pictures;
     std::string active_picture_id;
     std::vector<Marker> markers;
+    std::vector<StemDef> stems;
     std::vector<Snapshot> snapshots;
     std::vector<std::string> applied_templates;
 

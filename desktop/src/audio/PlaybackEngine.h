@@ -172,6 +172,15 @@ public:
     /// Deliverable rendering: only the tracks a deliverable includes play
     /// (reference/temp tracks are left out unless opted in).
     void set_export_mode(bool on);
+    /// Stem printing: while set, these strips (track or bus ids) are the
+    /// only ones soloed - the document's own solo switches are ignored, mute
+    /// switches still count - and with `mute_effects` every fx return is
+    /// muted (a dry stem). Render-only: never touches the document.
+    struct RenderOverride {
+        std::vector<std::string> solo;
+        bool mute_effects = false;
+    };
+    void set_render_override(std::optional<RenderOverride> override_settings);
 
     // --- Automation (Main Spec §12) ------------------------------------------------
     // `owner_id` is a track id or bus id ("bus-master"); `param` as in
@@ -294,6 +303,7 @@ private:
     std::unique_ptr<AudioFileCache> files_;
     std::map<std::string, juce::String> audio_status_;
     bool export_mode_ = false;
+    std::optional<RenderOverride> render_override_;
     std::array<std::atomic<float>, 64> input_meters_{};
     std::atomic<int> num_inputs_{0};
 

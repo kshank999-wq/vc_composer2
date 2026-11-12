@@ -20,7 +20,8 @@ boundaries, build system, test infrastructure and targets.
 ├──────────────────────────────────────────────────────────────────────────┤
 │ Services             Audition · VST3/AU instrument hosting with crash-safe  │  built
 │   desktop/src/audio  scanning · plug-in state in the project · autosave     │
-│                      FFmpeg picture decoding · render-by-cue bounces        │
+│                      FFmpeg picture decoding · render-by-cue bounces ·      │
+│                      stem export with a sum-to-mix check                    │
 │                      (collaboration sync: not yet)                          │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ Realtime engine      Snapshot-driven playback · placeholder synth · group/  │  built
@@ -187,7 +188,7 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 | Main 0: discovery | Reuse audit, framework/licensing decision, VST3 host spike | Reuse audit and port done (02). **Framework licence needs a decision** (01) |
 | Main 1: core scoring MVP | Desktop shell, notation entry, shared track panel, MIDI mirror, playback, shortcuts, save/reload, basic VST3 | **Done** in `desktop/`: Composer view with keyboard and mouse entry, track panel, Sequencer, playback via the placeholder synth or VST3/AU instruments, save/reload/autosave. Verified headlessly on Linux; macOS/Windows built in CI |
 | Main 2: scoring workflow | Template wizard UI, library search/mapping UI, articulation engine, video + timecode, temp tracks, cues | Data model and timecode done; UI and media pending |
-| Main 3: DAW production | Audio record/edit, mixer/buses/inserts/sends, automation, device I/O, PDC, stems/score export | **Console mixer, channel DSP, buses/sends, audio recording with punch and takes, clip editing, automation (read/touch/latch/write, lanes for every strip control, sends, inserts and plug-in parameters) and plug-in delay compensation done.** MusicXML import/export and PDF parts done. Disk streaming and stem export pending |
+| Main 3: DAW production | Audio record/edit, mixer/buses/inserts/sends, automation, device I/O, PDC, stems/score export | **Console mixer, channel DSP, buses/sends, audio recording with punch and takes, clip editing, automation (read/touch/latch/write, lanes for every strip control, sends, inserts and plug-in parameters) and plug-in delay compensation done.** MusicXML import/export, PDF parts and full score, and stem export (mix plus stems per project or per cue, wet or dry, with a sum-to-mix check) done. Disk streaming pending |
 | Main 4: collaboration | Versions, snapshots, A/B review, sync, roles, comments, packaging | Versions and snapshots done (local); sync pending |
 | Main 5: hardening | Performance, plug-in matrix, video sync, recovery, accessibility, signed installers | Pending |
 

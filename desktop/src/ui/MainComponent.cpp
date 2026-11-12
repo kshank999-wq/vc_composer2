@@ -5,6 +5,7 @@
 #include "ui/CueManager.h"
 #include "ui/Dialogs.h"
 #include "ui/ScoreExchange.h"
+#include "ui/StemExport.h"
 #include "ui/VideoWindow.h"
 #include "ui/WaveformCache.h"
 #include "vcc/picture/Picture.h"
@@ -669,7 +670,7 @@ void MainComponent::show_about()
 void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
 {
     c.addArray({cmd::newProject, cmd::newFromTemplate, cmd::open, cmd::save, cmd::saveAs, cmd::exportMidi,
-                cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportFullScorePdf, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
+                cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportFullScorePdf, cmd::exportStems, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
                 cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::addAudioTrack, cmd::importAudio,
                 cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
@@ -699,6 +700,10 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             break;
         case cmd::exportFullScorePdf:
             info.setInfo("Export Full Score (PDF)...", "Every part on one system, transposed or in C", "File", 0);
+            break;
+        case cmd::exportStems:
+            info.setInfo("Export Stems...", "The mix and each stem as WAV, for the project or every cue", "File", 0);
+            info.addDefaultKeypress('e', cmdKey | juce::ModifierKeys::shiftModifier);
             break;
         case cmd::exportPartsPdf:
             info.setInfo("Export Parts (PDF)...", "Printed parts, one PDF each or all in one", "File", 0);
@@ -794,6 +799,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::exportMusicXml: export_musicxml(); break;
         case cmd::exportPartsPdf: export_parts_pdf_dialog(); break;
         case cmd::exportFullScorePdf: export_full_score_dialog(); break;
+        case cmd::exportStems: show_stem_export(context_); break;
         case cmd::saveAsTemplate: save_as_template(); break;
         case cmd::undo: s.undo(); break;
         case cmd::redo: s.redo(); break;
@@ -870,7 +876,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             for (auto id : {cmd::save, cmd::saveAs, cmd::saveAsTemplate}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::exportMidi, cmd::exportMusicXml, cmd::exportFullScorePdf, cmd::exportPartsPdf,
+            for (auto id : {cmd::exportStems, cmd::exportMidi, cmd::exportMusicXml, cmd::exportFullScorePdf, cmd::exportPartsPdf,
                             cmd::exportScoreSvg})
                 m.addCommandItem(c, id);
             break;

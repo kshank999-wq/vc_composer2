@@ -866,6 +866,15 @@ json::Value Project::to_json() const
     for (const auto& m : d.markers)
         markers.emplace_back(json::Object{{"id", m.id}, {"kind", m.kind}, {"seconds", m.seconds}, {"label", m.label},
                                           {"cue_id", m.cue_id}, {"streamer_seconds", m.streamer_seconds}});
+    {
+        json::Array stems;
+        for (const auto& st : d.stems)
+            stems.emplace_back(json::Object{{"id", st.id},
+                                            {"name", st.name},
+                                            {"sources", string_array(st.sources)},
+                                            {"include_effects", st.include_effects}});
+        root.set("stems", stems);
+    }
     root.set("markers", markers);
 
     json::Array snaps;
@@ -1126,6 +1135,15 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
     }
     d.active_picture_id = doc.get_string("active_picture_id");
     if (!d.active_picture_id.empty() && !d.active_picture()) return fail("active picture not found");
+    for (const auto& j : doc.get("stems") ? doc.get("stems")->as_array() : json::Array{}) {
+        StemDef st;
+        st.id = j.get_string("id");
+        if (!unique(st.id)) return fail("missing or duplicate stem id '" + st.id + "'");
+        st.name = j.get_string("name");
+        st.sources = j.get_string_array("sources");
+        st.include_effects = j.get_bool("include_effects", true);
+        d.stems.push_back(std::move(st));
+    }
     for (const auto& j : doc.get("markers") ? doc.get("markers")->as_array() : json::Array{}) {
         Marker m;
         m.id = j.get_string("id");

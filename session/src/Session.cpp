@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <set>
 
 #include "vcc/core/Files.h"
 #include "vcc/cues/Cues.h"
 #include "vcc/picture/Picture.h"
 #include "vcc/project/Automation.h"
 #include "vcc/project/Render.h"
+#include "vcc/project/Stems.h"
 
 namespace vcc::session {
 
@@ -1127,6 +1129,33 @@ bool Session::commit_automation_pass(const std::vector<AutomationWrite>& writes)
             })(d);
             if (!ok) return false;
         }
+        return true;
+    });
+}
+
+// --- Stems -------------------------------------------------------------------------------
+
+std::vector<project::StemDef> Session::stems() const
+{
+    if (!data().stems.empty()) return data().stems;
+    return project::default_stems(data(), [this](const project::Track& t) {
+        const auto* def = instrument_for(t);
+        return def ? def->family : std::string();
+    });
+}
+
+bool Session::set_stems(std::vector<project::StemDef> stems)
+{
+    std::set<std::string> used;
+    for (const auto& st : stems) used.insert(st.id);
+    for (auto& st : stems)
+        if (st.id.empty()) {
+            do st.id = project_.ids().next("stem");
+            while (used.count(st.id));
+            used.insert(st.id);
+        }
+    return edit("Edit stems", [&](project::ProjectData& d) {
+        d.stems = stems;
         return true;
     });
 }
