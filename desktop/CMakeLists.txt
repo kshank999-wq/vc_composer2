@@ -115,12 +115,30 @@ target_compile_definitions(VccTestInstrument PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_
 target_link_libraries(VccTestInstrument PRIVATE juce::juce_audio_utils
                                         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
+# A latency-reporting effect for the delay-compensation and automation checks.
+juce_add_plugin(VccTestEffect
+    FORMATS VST3
+    PRODUCT_NAME "VCC Test Effect"
+    COMPANY_NAME "VC Composer"
+    PLUGIN_MANUFACTURER_CODE Vccm
+    PLUGIN_CODE Vcte
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    COPY_PLUGIN_AFTER_BUILD FALSE
+    VST3_AUTO_MANIFEST FALSE)
+target_sources(VccTestEffect PRIVATE testplugin/TestEffect.cpp)
+target_compile_definitions(VccTestEffect PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0
+                                                JUCE_DISPLAY_SPLASH_SCREEN=0)
+target_link_libraries(VccTestEffect PRIVATE juce::juce_audio_utils
+                                    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
 # --- Headless check ----------------------------------------------------------------
 add_executable(vcc_desktop_check check/DesktopCheck.cpp)
 target_link_libraries(vcc_desktop_check PRIVATE vcc_desktop)
-add_dependencies(vcc_desktop_check VccTestInstrument_VST3)
+add_dependencies(vcc_desktop_check VccTestInstrument_VST3 VccTestEffect_VST3)
 target_compile_definitions(vcc_desktop_check PRIVATE
-    VCC_TEST_PLUGIN="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTestInstrument_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>")
+    VCC_TEST_PLUGIN="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTestInstrument_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>"
+    VCC_TEST_EFFECT="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTestEffect_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>")
 if(VCC_BUILD_TESTS)
     add_test(NAME desktop_check COMMAND vcc_desktop_check "${CMAKE_BINARY_DIR}/screenshots")
 endif()

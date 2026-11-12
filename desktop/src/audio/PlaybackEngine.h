@@ -30,6 +30,31 @@
 // device rate. Recording writes each armed track's input to a 24-bit WAV
 // through ThreadedWriter (lock-free from the audio thread); the pass is
 // placed as one "Record" undo step on the message thread when it ends.
+//
+// Automation (Main Spec §12): every enabled lane of a track or bus whose mode
+// is not "off" is rendered into the snapshot in samples (the tempo map is
+// applied on the message thread) and evaluated on the audio thread each
+// block: fader, pan and send gains ramp across the block to the lane's value
+// at its end; strip, insert and plug-in parameters change per block (a
+// plug-in parameter only when its value changes); a mute lane is applied
+// sample-accurately, closing over 1 ms that ends exactly on its point. An
+// automated value overrides the static one. Writing (touch / latch / write)
+// is captured on the message thread against the heard playhead; the value
+// being written reaches the sound through a lock-free slot; the pass is
+// committed as one "Write automation" undo step on stop or locate. Gestures
+// in a plug-in's own editor are captured too (ParameterWatch).
+//
+// Plug-in delay compensation: a strip's latency is its instrument's plus its
+// inserts' (a bypassed plug-in keeps its latency). Each routing edge (track
+// to bus, send, bus to bus) is delayed so every path reaches the master at
+// the same time; the click is scheduled late by the same amount. The
+// playhead (position(), position_seconds()) reports what is heard: the
+// render position minus the compensation, so picture and meters follow the
+// sound. Recording places takes against the heard position. Low-latency
+// monitoring: a track monitoring its audio input, and the live-MIDI track
+// while stopped or record-armed, skip their compensation delay (what the
+// performer plays is heard at once; such a track's own playback is then
+// early by the compensation while it monitors).
 #pragma once
 
 #include <array>
@@ -38,12 +63,14 @@
 #include <optional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "audio/AutomationRt.h"
 #include "audio/Instrument.h"
 #include "audio/PluginHost.h"
 #include "vcc/audio/SpscRingBuffer.h"
@@ -56,6 +83,7 @@ struct PlaybackSnapshot;
 struct PreviewClip;
 struct StripDsp;
 struct RecordPass;
+struct AutoSlot;  // per automated (owner, param): the value being written, lock-free
 class InsertProcessor;
 class AudioFileCache;
 
@@ -170,6 +198,7 @@ public:
     /// Processing latency of a strip (its instrument and inserts), samples.
     int latency_samples(const std::string& strip_id) const;
     /// The delay the engine adds to line everything up (the longest path).
+    /// 0 while compensation is off.
     int compensation_samples() const;
 
     /// Re-render the snapshot now (normally debounced after document changes).
@@ -188,6 +217,16 @@ public:
     void audioDeviceStopped() override;
 
 private:
+    /// A parameter being written in the current pass (message thread).
+    struct WriteSegment {
+        std::string key, owner, param, name;
+        Ticks from = 0;
+        std::vector<project::AutomationPoint> points;
+        std::shared_ptr<AutoSlot> slot;
+        double value = 0.0;
+        bool held = false;         ///< The control is being touched.
+        bool from_static = false;  ///< Write mode, untouched: writes the static value.
+    };
     struct InstrumentSlot {
         std::string key;  ///< what it was built from; rebuilt when this changes
         std::shared_ptr<Instrument> instrument;
@@ -215,6 +254,30 @@ private:
     void collect_finished_passes();
     void finalize_pass(std::unique_ptr<RecordPass> pass);
     void report_recording(const juce::String& message, bool ok);
+    // Automation (message thread)
+    std::shared_ptr<AutoSlot> slot_for(const std::string& owner, const std::string& param, bool* created = nullptr);
+    std::string mode_of(const std::string& owner) const;
+    std::optional<double> static_of(const std::string& owner, const std::string& param) const;
+    std::string param_name(const std::string& owner, const std::string& param) const;
+    std::string owner_name(const std::string& owner) const;
+    Ticks tick_at_sample(std::int64_t sample) const;
+    WriteSegment* find_segment(const std::string& key);
+    static void add_point(WriteSegment& seg, Ticks tick, double value);
+    bool open_segment(const std::string& owner, const std::string& param, double value, bool held, bool from_static,
+                      std::int64_t at);
+    void close_segment(std::size_t index, std::int64_t at);
+    void begin_touch_at(const std::string& owner, const std::string& param, std::int64_t at);
+    void touch_value_at(const std::string& owner, const std::string& param, double value, std::int64_t at);
+    void end_touch_at(const std::string& owner, const std::string& param, std::int64_t at);
+    void start_automation_pass();
+    void finish_automation_pass();
+    void refresh_writes();
+    void drain_gestures();
+    void watch_plugin(juce::AudioPluginInstance& instance, const void* holder, bool has_watch,
+                      const std::function<void(std::unique_ptr<ParameterWatch>)>& attach,
+                      std::map<int, std::pair<std::string, std::string>>& targets, const std::string& owner,
+                      const std::string& prefix);
+    std::vector<int> current_latencies() const;
 
     session::Session& session_;
     PluginHost& plugins_;
@@ -270,6 +333,28 @@ private:
     std::atomic<bool> device_running_{false};
     std::atomic<int> latency_samples_{0};
     std::unique_ptr<juce::TimeSliceThread> writer_thread_;
+
+    // Automation (message thread unless noted)
+    std::map<std::string, std::shared_ptr<AutoSlot>> auto_slots_;  // owner + '\x1f' + param
+    std::vector<WriteSegment> segments_;                            // open in this pass
+    std::vector<session::Session::AutomationWrite> written_;       // closed, committed on stop
+    std::set<std::string> touched_;                                 // keys of controls held now
+    bool writing_pass_ = false;
+    bool committing_ = false;
+    std::shared_ptr<GestureQueue> gestures_ = std::make_shared<GestureQueue>();
+    int next_watch_ = 1;
+    std::map<const void*, int> watch_ids_;
+    std::map<int, std::pair<std::string, std::string>> insert_watch_targets_, instrument_watch_targets_;
+    // Delay compensation (message thread)
+    std::map<std::string, std::shared_ptr<DelayLine>> delay_lines_;
+    std::map<std::string, int> strip_latency_;
+    int compensation_ = 0;
+    bool pdc_ = true;
+    std::vector<int> latencies_seen_;
+    // What is heard: the render position minus the compensation (audio thread writes).
+    std::atomic<std::int64_t> heard_samples_{0};
+    std::int64_t play_start_ = 0;  // audio thread
+    bool rolling_ = false;         // audio thread: playing at the last block
 
     juce::MidiMessageCollector live_input_;
     std::string live_track_;

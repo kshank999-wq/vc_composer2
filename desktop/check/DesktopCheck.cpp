@@ -16,6 +16,7 @@
 #include "ui/Dialogs.h"
 #include "ui/VideoWindow.h"
 #include "vcc/media/VideoDecoder.h"
+#include "vcc/project/Automation.h"
 #include "vcc/project/Render.h"
 
 using namespace vcc;
@@ -435,6 +436,546 @@ void console_and_recording_checks(AppContext& ctx, const juce::File& dir)
     engine.on_recording_finished = previous;
 }
 
+// --- Automation and plug-in delay compensation (Main Spec §12) --------------------------
+
+/// Plays from the start for `seconds` and returns the whole output.
+/// `before_block(seconds)` runs on this (message) thread between blocks, as
+/// console gestures would.
+juce::AudioBuffer<float> capture(Rig& rig, double seconds, const std::function<float(int, std::int64_t)>& signal = {},
+                                 const std::function<void(double)>& before_block = {})
+{
+    rig.engine.rebuild_now();
+    const int blocks = static_cast<int>(std::ceil(seconds * 48000.0 / 512.0));
+    juce::AudioBuffer<float> all(2, blocks * 512);
+    for (int b = 0; b < blocks; ++b) {
+        if (before_block) before_block(b * 512 / 48000.0);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < 512; ++i) rig.input.setSample(ch, i, signal ? signal(ch, rig.clock + i) : 0.0f);
+        rig.engine.render_offline_with_input(rig.input, rig.out, 512);
+        rig.clock += 512;
+        for (int ch = 0; ch < 2; ++ch) all.copyFrom(ch, b * 512, rig.out, ch, 0, 512);
+    }
+    return all;
+}
+
+double rms_db(const juce::AudioBuffer<float>& b, double t0, double t1, int ch = 0)
+{
+    const int a = static_cast<int>(t0 * 48000.0), z = std::min(b.getNumSamples(), static_cast<int>(t1 * 48000.0));
+    double sum = 0.0;
+    for (int i = a; i < z; ++i) sum += static_cast<double>(b.getSample(ch, i)) * b.getSample(ch, i);
+    const double rms = z > a ? std::sqrt(sum / (z - a)) : 0.0;
+    return rms > 1.0e-9 ? 20.0 * std::log10(rms) : -180.0;
+}
+
+int loudest(const juce::AudioBuffer<float>& b, int ch)
+{
+    int at = -1;
+    float best = 0.0f;
+    for (int i = 0; i < b.getNumSamples(); ++i)
+        if (std::abs(b.getSample(ch, i)) > best) {
+            best = std::abs(b.getSample(ch, i));
+            at = i;
+        }
+    return at;
+}
+
+std::optional<project::PluginRef> scan(AppContext& ctx, const char* path)
+{
+    juce::VST3PluginFormat vst3;
+    juce::OwnedArray<juce::PluginDescription> found;
+    vst3.findAllTypesForFile(found, path);
+    if (found.isEmpty()) return std::nullopt;
+    ctx.plugins.known().addType(*found[0]);
+    return ctx.plugins.ref_for(*found[0]);
+}
+
+void automation_checks(AppContext& ctx, const juce::File& dir, const std::optional<project::PluginRef>& instrument_ref)
+{
+    auto& session = ctx.session;
+    auto& engine = ctx.engine;
+    engine.stop();
+    session.new_empty();
+    std::string error;
+    session.save_as(dir.getChildFile("automation-check.vcc2").getFullPathName().toStdString(), &error);
+    engine.prepare_offline(48000.0, 512);
+    Rig rig(engine);
+    auto T = [&](double seconds) { return session.data().tempo.tick_at_seconds(seconds); };
+    auto set_lane = [&](const std::string& owner, const std::string& param, std::vector<project::AutomationPoint> points) {
+        const std::string id = session.ensure_lane(owner, param);
+        session.edit_lane(owner, id, "check " + param, [&](project::AutomationLane& l) { l.points = points; });
+        return id;
+    };
+    auto drop_lane = [&](const std::string& owner, const std::string& param) {
+        if (const auto* lanes = session.lanes_of(owner))
+            if (const auto* l = project::find_lane(*lanes, param)) session.remove_lane(owner, std::string(l->id));
+    };
+    auto lane_value = [&](const std::string& owner, const std::string& param, double seconds) {
+        const auto* lanes = session.lanes_of(owner);
+        const auto* l = lanes ? project::find_lane(*lanes, param) : nullptr;
+        return l ? project::value_at(*l, T(seconds)).value_or(-999.0) : -999.0;
+    };
+    juce::String written_message;
+    auto previous_written = engine.on_automation_written;
+    engine.on_automation_written = [&](const juce::String& m) { written_message = m; };
+    auto play = [&](double seconds, const std::function<float(int, std::int64_t)>& signal,
+                    const std::function<void(double)>& gestures = {}) {
+        engine.stop();
+        engine.locate(0);
+        engine.play();
+        auto out = capture(rig, seconds, signal, gestures);
+        engine.stop();
+        return out;
+    };
+
+    // Every strip parameter the project model offers can be automated by the engine.
+    int unknown = 0;
+    for (const auto& p : project::strip_params())
+        if (p.id.rfind("strip.", 0) == 0 && strip_field_index(p.id) < 0) ++unknown;
+    check(unknown == 0, "every strip.* parameter maps to an engine field (" + juce::String(unknown) + " unknown)");
+
+    // A mono audio track monitoring a steady 1 kHz input.
+    const std::string tr = session.add_audio_track("Auto", false);
+    session.update_track_mix(tr, "monitor", [](project::Track& t) { t.monitor = "input"; });
+    const auto tone = Rig::sine(1000.0, 0.5f);
+
+    // Volume lane: 0 dB at 0.5 s ramping to -20 dB at 1.5 s.
+    set_lane(tr, "volume", {{T(0.5), 0.0, "linear"}, {T(1.5), -20.0, "linear"}});
+    {
+        const auto out = play(2.0, tone);
+        const double ref = rms_db(out, 0.1, 0.45);
+        double worst = 0.0;
+        juce::String detail;
+        for (double t : {0.75, 1.0, 1.25, 1.75}) {
+            const double expected = lane_value(tr, "volume", t);
+            const double got = rms_db(out, t - 0.005, t + 0.005) - ref;
+            worst = std::max(worst, std::abs(got - expected));
+            detail << juce::String(expected, 1) << "/" << juce::String(got, 2) << " ";
+        }
+        check(worst < 0.5, "a volume lane ramp is heard (lane/measured dB: " + detail + "; worst " + juce::String(worst, 2) + " dB)");
+    }
+    drop_lane(tr, "volume");
+
+    // A step mute lane: muted exactly from 1.0 s to 1.5 s.
+    set_lane(tr, "mute", {{0, 0.0, "step"}, {T(1.0), 1.0, "step"}, {T(1.5), 0.0, "step"}});
+    {
+        const auto out = play(2.0, tone);
+        const float inside = out.getMagnitude(0, 48000, 24000);
+        const float edge = out.getMagnitude(0, 47900, 52);  // before the 1 ms close
+        const double after = rms_db(out, 1.51, 1.9) - rms_db(out, 0.5, 0.9);
+        check(juce::exactlyEqual(inside, 0.0f) && edge > 0.3f && std::abs(after) < 0.1,
+              "a step mute lane silences exactly from its point to the next (peak inside " + juce::String(inside, 6) +
+                  ", just before " + juce::String(edge, 3) + ", after " + juce::String(after, 2) + " dB)");
+    }
+    drop_lane(tr, "mute");
+
+    // A strip EQ lane: the LF shelf jumps to +12 dB at 1 s on a 100 Hz tone.
+    session.update_track_mix(tr, "eq", [](project::Track& t) {
+        t.strip.eq_on = true;
+        t.strip.lf.freq = 300.0;
+    });
+    set_lane(tr, "strip.lf.gain_db", {{0, 0.0, "step"}, {T(1.0), 12.0, "step"}});
+    {
+        const auto out = play(2.0, Rig::sine(100.0, 0.5f));
+        const double boost = rms_db(out, 1.3, 1.9) - rms_db(out, 0.4, 0.9);
+        check(boost > 9.0 && boost < 13.0, "a strip EQ lane changes the sound (+" + juce::String(boost, 1) + " dB at 100 Hz)");
+    }
+    drop_lane(tr, "strip.lf.gain_db");
+    session.update_track_mix(tr, "eq", [](project::Track& t) { t.strip.eq_on = false; });
+
+    // A built-in insert lane: compressor make-up 0 -> 12 dB at 1 s (below threshold).
+    session.update_track_mix(tr, "inserts", [](project::Track& t) {
+        project::InsertSlot c;
+        c.kind = "compressor";
+        c.suggestion = false;
+        c.params["threshold_db"] = 0.0;
+        t.inserts = {c};
+    });
+    set_lane(tr, "insert:0:makeup_db", {{0, 0.0, "step"}, {T(1.0), 12.0, "step"}});
+    {
+        const auto out = play(2.0, tone);
+        const double gain = rms_db(out, 1.3, 1.9) - rms_db(out, 0.4, 0.9);
+        check(std::abs(gain - 12.0) < 0.5, "an insert parameter lane reaches the insert (+" + juce::String(gain, 2) + " dB)");
+    }
+    drop_lane(tr, "insert:0:makeup_db");
+    session.update_track_mix(tr, "inserts", [](project::Track& t) { t.inserts.clear(); });
+
+    // A send lane: pre-fader send to a group bus opens at 1 s; the fader is down.
+    const std::string bus = session.add_bus("Send Bus", "group");
+    session.update_track_mix(tr, "send", [&](project::Track& t) {
+        project::Send send(bus, -96.0);
+        send.pre_fader = true;
+        t.sends = {send};
+        t.gain_db = -96.0;
+    });
+    set_lane(tr, "send:" + bus, {{0, -96.0, "step"}, {T(1.0), 0.0, "step"}});
+    double ref_level = 0.0;
+    {
+        const auto out = play(2.0, tone);
+        const double before = rms_db(out, 0.3, 0.9), after = rms_db(out, 1.3, 1.9);
+        ref_level = after;
+        // A mono 0.5 sine panned centre: 0.354 peak, -12.04 dB rms.
+        check(before < -100.0 && std::abs(after + 12.04) < 0.5, "a send lane opens the send (" + juce::String(before, 0) + " dB -> " +
+                                                  juce::String(after, 1) + " dB at the master)");
+    }
+    drop_lane(tr, "send:" + bus);
+    session.update_track_mix(tr, "send", [](project::Track& t) {
+        t.sends.clear();
+        t.gain_db = 0.0;
+    });
+
+    // Plug-in parameter lanes: the instrument's Level and an effect's Gain.
+    std::string synth;
+    if (instrument_ref) {
+        synth = session.add_track("Synth", "keys.piano");
+        session.set_instrument_plugin(synth, *instrument_ref);
+        session.insert_notes(synth, 0, kTicksPerWhole * 2, {{0, kTicksPerWhole, 69, 100, 0, {}}}, project::CollisionPolicy::Ask,
+                             "check");
+        session.set_solo(synth, true);
+        set_lane(synth, "plugin:0", {{0, 0.25, "step"}, {T(1.0), 1.0, "step"}});
+        const auto out = play(1.9, {});
+        const double gain = rms_db(out, 1.2, 1.85) - rms_db(out, 0.3, 0.9);
+        auto* instance = engine.plugin_for(synth);
+        const float now = instance ? instance->getParameters()[0]->getValue() : -1.0f;
+        check(std::abs(gain - 12.04) < 0.5 && std::abs(now - 1.0f) < 1.0e-3f,
+              "a plug-in parameter lane reaches the plug-in (Level 0.25 -> 1: +" + juce::String(gain, 2) + " dB, value " +
+                  juce::String(now, 3) + ")");
+        session.set_solo(synth, false);
+        session.set_mute(synth, true);  // out of the way of the following measurements
+    }
+    const auto effect_ref = scan(ctx, VCC_TEST_EFFECT);
+    check(effect_ref.has_value(), "the test VST3 effect scans");
+    if (effect_ref) {
+        session.update_track_mix(tr, "inserts", [&](project::Track& t) {
+            project::InsertSlot slot;
+            slot.kind = "plugin";
+            slot.suggestion = false;
+            slot.plugin = *effect_ref;
+            t.inserts = {slot};
+        });
+        set_lane(tr, "insert_plugin:0:1", {{0, 0.5, "step"}, {T(1.0), 1.0, "step"}});
+        const auto out = play(2.0, tone);
+        const double gain = rms_db(out, 1.3, 1.9) - rms_db(out, 0.4, 0.9);
+        check(std::abs(gain - 6.02) < 0.3, "an effect plug-in's parameter lane reaches it (Gain 0.5 -> 1: +" + juce::String(gain, 2) + " dB)");
+        drop_lane(tr, "insert_plugin:0:1");
+        session.update_track_mix(tr, "inserts", [](project::Track& t) { t.inserts.clear(); });
+    }
+
+    // --- Writing -----------------------------------------------------------------------
+    // Touch: the lane holds -20 dB; touched 1.0..2.0 s (-6, then -3 from 1.5 s).
+    set_lane(tr, "volume", {{0, -20.0, "linear"}});
+    session.set_automation_mode(tr, "touch");
+    {
+        const auto history = session.project().history_size();
+        bool writes_while_playing = false, writes_stopped = true;
+        bool began = false, mid = false, ended = false;
+        written_message.clear();
+        const auto out = play(3.0, tone, [&](double t) {
+            if (!began && t >= 1.0) {
+                began = true;
+                writes_while_playing = engine.writes_automation(tr, "volume");
+                engine.begin_touch(tr, "volume");
+                engine.touch_value(tr, "volume", -6.0);
+            } else if (!mid && t >= 1.5) {
+                mid = true;
+                engine.touch_value(tr, "volume", -3.0);
+            } else if (!ended && t >= 2.0) {
+                ended = true;
+                engine.end_touch(tr, "volume");
+            }
+        });
+        writes_stopped = engine.writes_automation(tr, "volume");
+        const double base = ref_level;
+        const double l0 = rms_db(out, 0.3, 0.95) - base, l1 = rms_db(out, 1.1, 1.45) - base,
+                     l2 = rms_db(out, 1.6, 1.95) - base, l3 = rms_db(out, 2.2, 2.9) - base;
+        check(std::abs(l0 + 20.0) < 0.5 && std::abs(l1 + 6.0) < 0.5 && std::abs(l2 + 3.0) < 0.5 && std::abs(l3 + 20.0) < 0.5,
+              "touch: the written value is heard only while touched, then the lane (" + juce::String(l0, 1) + ", " +
+                  juce::String(l1, 1) + ", " + juce::String(l2, 1) + ", " + juce::String(l3, 1) + " dB)");
+        check(writes_while_playing && !writes_stopped, "writes_automation is true while playing in touch, false when stopped");
+        const double v0 = lane_value(tr, "volume", 0.5), v1 = lane_value(tr, "volume", 1.25),
+                     v2 = lane_value(tr, "volume", 1.75), v3 = lane_value(tr, "volume", 2.5);
+        check(std::abs(v0 + 20) < 0.01 && std::abs(v1 + 6) < 0.3 && std::abs(v2 + 3) < 0.3 && std::abs(v3 + 20) < 0.01,
+              "touch writes only the touched span into the lane (" + juce::String(v0, 1) + ", " + juce::String(v1, 1) +
+                  ", " + juce::String(v2, 1) + ", " + juce::String(v3, 1) + ")");
+        check(session.project().history_size() == history + 1 && session.undo_label() == "Write automation",
+              "a written pass is one undo step \"Write automation\" (" + juce::String(session.undo_label()) + ")");
+        check(written_message == "Wrote automation: Volume (Auto)", "the pass is reported (" + written_message + ")");
+        session.undo();
+        const auto* lane = project::find_lane(*session.lanes_of(tr), "volume");
+        check(lane && lane->points.size() == 1 && juce::exactlyEqual(lane->points[0].value, -20.0),
+              "undo restores the lane as it was before the pass");
+    }
+
+    // Latch: touched at 1.0 s (-6), released at 1.5 s, stopped at 2.5 s: holds -6 to the stop.
+    session.set_automation_mode(tr, "latch");
+    {
+        bool began = false, ended = false;
+        const auto out = play(2.5, tone, [&](double t) {
+            if (!began && t >= 1.0) {
+                began = true;
+                engine.begin_touch(tr, "volume");
+                engine.touch_value(tr, "volume", -6.0);
+            } else if (!ended && t >= 1.5) {
+                ended = true;
+                engine.end_touch(tr, "volume");
+            }
+        });
+        const double held = rms_db(out, 1.7, 2.45) - ref_level;
+        const double v = lane_value(tr, "volume", 2.2), after = lane_value(tr, "volume", 2.7);
+        check(std::abs(held + 6.0) < 0.5 && std::abs(v + 6.0) < 0.3 && std::abs(after + 20.0) < 0.01,
+              "latch keeps writing the last value until stop (heard " + juce::String(held, 1) + " dB, lane " +
+                  juce::String(v, 1) + " then " + juce::String(after, 1) + " after the pass)");
+        session.undo();
+    }
+
+    // Write: every lane of the strip is written for the whole pass with the
+    // control's value (static volume -10 dB, pan 0), whatever the lanes held.
+    session.update_track_mix(tr, "fader", [](project::Track& t) {
+        t.gain_db = -10.0;
+        t.pan = 0.0;
+    });
+    set_lane(tr, "volume", {{0, 0.0, "linear"}, {T(2.0), -40.0, "linear"}});
+    set_lane(tr, "pan", {{0, 0.5, "linear"}});
+    session.set_automation_mode(tr, "write");
+    {
+        const auto history = session.project().history_size();
+        written_message.clear();
+        const auto out = play(2.0, tone);
+        const double heard = rms_db(out, 0.9, 1.1) - ref_level;
+        const double v = lane_value(tr, "volume", 1.0), p = lane_value(tr, "pan", 1.0);
+        check(std::abs(heard + 10.0) < 0.5 && std::abs(v + 10.0) < 0.01 && std::abs(p) < 0.01 &&
+                  session.project().history_size() == history + 1,
+              "write mode writes every lane for the whole pass with the control value (heard " + juce::String(heard, 1) +
+                  " dB; volume lane " + juce::String(v, 1) + ", pan lane " + juce::String(p, 2) + "; " + written_message + ")");
+        session.undo();
+    }
+    session.set_automation_mode(tr, "read");
+    drop_lane(tr, "pan");
+    drop_lane(tr, "volume");
+    session.update_track_mix(tr, "fader", [](project::Track& t) { t.gain_db = 0.0; });
+
+    // A gesture in the plug-in's own editor is written (touch mode).
+    if (!synth.empty()) {
+        session.set_mute(synth, false);
+        session.set_solo(synth, true);
+        session.set_automation_mode(synth, "touch");
+        auto* instance = engine.plugin_for(synth);
+        auto* param = instance ? instance->getParameters()[0] : nullptr;
+        bool began = false, ended = false;
+        written_message.clear();
+        play(1.9, {}, [&](double t) {
+            if (!param) return;
+            if (!began && t >= 0.5) {
+                began = true;
+                param->beginChangeGesture();
+                param->setValueNotifyingHost(0.8f);
+            } else if (!ended && t >= 1.0) {
+                ended = true;
+                param->endChangeGesture();
+            }
+        });
+        const double inside = lane_value(synth, "plugin:0", 0.75), before = lane_value(synth, "plugin:0", 0.3),
+                     after = lane_value(synth, "plugin:0", 1.5);
+        check(std::abs(inside - 0.8) < 0.01 && std::abs(before - 0.25) < 0.01 && std::abs(after - 1.0) < 0.01,
+              "a gesture in the plug-in's editor is written as plugin:0 (" + juce::String(before, 2) + ", " +
+                  juce::String(inside, 2) + ", " + juce::String(after, 2) + "; " + written_message + ")");
+        session.set_automation_mode(synth, "read");
+        session.set_solo(synth, false);
+    }
+    engine.on_automation_written = previous_written;
+}
+
+/// The test effect's saved state (as the host stores it) with a latency.
+std::string state_with_latency(AppContext& ctx, const project::PluginRef& ref, int latency)
+{
+    juce::String error;
+    auto instance = ctx.plugins.create(ref, 48000.0, 512, error);
+    if (!instance) return {};
+    instance->getParameters()[0]->setValue(static_cast<float>(latency) / 8192.0f);
+    return PluginHost::state_of(*instance);
+}
+
+void delay_compensation_checks(AppContext& ctx, const juce::File& dir, const std::optional<project::PluginRef>& instrument_ref)
+{
+    auto& session = ctx.session;
+    auto& engine = ctx.engine;
+    const auto effect_ref = scan(ctx, VCC_TEST_EFFECT);
+    if (!effect_ref) return;
+    engine.stop();
+    session.new_empty();
+    std::string error;
+    session.save_as(dir.getChildFile("pdc-check.vcc2").getFullPathName().toStdString(), &error);
+    engine.prepare_offline(48000.0, 512);
+    engine.set_delay_compensation(true);
+    Rig rig(engine);
+
+    // One click at 0.25 s in a mono file, played by two tracks: "Wet" through
+    // a plug-in reporting 1000 samples of latency (panned left), "Dry" plain
+    // (panned right).
+    const auto file = dir.getChildFile("Audio Files").getChildFile("click.wav");
+    file.getParentDirectory().createDirectory();
+    file.deleteFile();
+    {
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(24));
+        juce::AudioBuffer<float> wave(1, 48000);
+        wave.clear();
+        wave.setSample(0, 12000, 0.9f);
+        if (writer) writer->writeFromAudioSampleBuffer(wave, 0, 48000);
+    }
+    const std::string wet = session.add_audio_track("Wet", false);
+    const std::string dry = session.add_audio_track("Dry", false);
+    for (const auto& [id, pan] : {std::pair<std::string, double>{wet, -1.0}, {dry, 1.0}}) {
+        project::AudioClip c;
+        c.file = "Audio Files/click.wav";
+        c.length = 1.0;
+        c.channels = 1;
+        c.file_sample_rate = 48000.0;
+        session.add_audio_clips({{id, c}}, "Import");
+        session.update_track_mix(id, "pan", [pan = pan](project::Track& t) { t.pan = pan; });
+    }
+    session.update_track_mix(wet, "inserts", [&](project::Track& t) {
+        project::InsertSlot slot;
+        slot.kind = "plugin";
+        slot.suggestion = false;
+        slot.plugin = *effect_ref;
+        slot.plugin.state_base64 = state_with_latency(ctx, *effect_ref, 1000);
+        t.inserts = {slot};
+    });
+    auto play = [&](double seconds, const std::function<float(int, std::int64_t)>& signal = {}) {
+        engine.stop();
+        engine.locate(0);
+        engine.play();
+        auto out = capture(rig, seconds, signal);
+        engine.stop();
+        return out;
+    };
+
+    engine.rebuild_now();
+    {
+        engine.locate(0);
+        engine.play();
+        const auto out = capture(rig, 1.0);
+        const double heard = engine.position_seconds() * 48000.0;
+        engine.stop();
+        const int l = loudest(out, 0), r = loudest(out, 1);
+        check(engine.latency_samples(wet) == 1000 && engine.latency_samples(dry) == 0 && engine.compensation_samples() == 1000,
+              "latency is reported per strip and compensated (wet " + juce::String(engine.latency_samples(wet)) + ", dry " +
+                  juce::String(engine.latency_samples(dry)) + ", compensation " + juce::String(engine.compensation_samples()) + ")");
+        check(l == r && l == 12000 + 1000,
+              "PDC on: the plug-in track and the dry track are sample-aligned at the master (wet " + juce::String(l) +
+                  ", dry " + juce::String(r) + ")");
+        check(std::abs(heard - (out.getNumSamples() - 1000)) < 0.5,
+              "the playhead reports what is heard (render " + juce::String(out.getNumSamples()) + " - 1000 = " +
+                  juce::String(heard, 0) + ")");
+    }
+    engine.set_delay_compensation(false);
+    {
+        const auto out = play(1.0);
+        const int l = loudest(out, 0), r = loudest(out, 1);
+        check(l - r == 1000 && engine.compensation_samples() == 0,
+              "PDC off: misaligned by the plug-in's latency (wet " + juce::String(l) + ", dry " + juce::String(r) + ")");
+    }
+    engine.set_delay_compensation(true);
+
+    // The plug-in changes its latency while running: detected, re-aligned.
+    if (auto* instance = engine.insert_plugin(wet, 0)) {
+        instance->getParameters()[0]->setValueNotifyingHost(2000.0f / 8192.0f);
+        engine.render_offline(rig.out, 512);  // the plug-in sees the change and reports it
+        engine.render_offline(rig.out, 512);
+        pump(120);                             // the engine notices on its timer
+        const auto out = play(1.0);
+        const int l = loudest(out, 0), r = loudest(out, 1);
+        check(engine.compensation_samples() == 2000 && l == r && l == 12000 + 2000,
+              "a run-time latency change re-aligns (compensation " + juce::String(engine.compensation_samples()) + ", wet " +
+                  juce::String(l) + ", dry " + juce::String(r) + ")");
+    }
+
+    // Recording with compensation: the performer hears the mix (the click at
+    // 0.25 s) and plays along; a loop-back from the output to input 1 stands
+    // in for them. The take must put the click back at 0.25 s.
+    {
+        const auto heard = play(1.0);
+        const std::string rec = session.add_audio_track("Rec", false);
+        session.set_record_armed(rec, true);
+        engine.set_record_enabled(true);
+        engine.rebuild_now();
+        const std::int64_t start = rig.clock;
+        play(1.0, [&](int ch, std::int64_t i) {
+            const std::int64_t k = i - start;
+            return ch == 0 && k >= 0 && k < heard.getNumSamples() ? heard.getSample(0, static_cast<int>(k)) : 0.0f;
+        });
+        engine.set_record_enabled(false);
+        session.set_record_armed(rec, false);
+        const auto* take = lane_clip(session, rec, 0);
+        double at = -1.0;
+        if (take) {
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader(
+                formats.createReaderFor(juce::File(juce::String(session.resolve_audio_path(take->file)))));
+            if (reader) {
+                juce::AudioBuffer<float> wav(1, static_cast<int>(reader->lengthInSamples));
+                reader->read(&wav, 0, wav.getNumSamples(), 0, true, false);
+                at = take->start_seconds * 48000.0 + loudest(wav, 0) - take->source_offset * 48000.0;
+            }
+        }
+        check(std::abs(at - 12000.0) < 1.0, "a take recorded with compensation lines up with what was heard (click at sample " +
+                                                juce::String(at, 1) + ", expected 12000)");
+    }
+
+    // Everything at once on the audio thread, allocation-free: lanes on
+    // volume, pan, mute, a send, the strip EQ, an insert plug-in and an
+    // instrument plug-in, a touch being written, and delay lines in use.
+    {
+        auto T = [&](double seconds) { return session.data().tempo.tick_at_seconds(seconds); };
+        auto set_lane = [&](const std::string& owner, const std::string& param, std::vector<project::AutomationPoint> points) {
+            const std::string id = session.ensure_lane(owner, param);
+            session.edit_lane(owner, id, "check " + param, [&](project::AutomationLane& l) { l.points = points; });
+        };
+        const std::string bus = session.add_bus("Verb", "fx");
+        session.update_track_mix(dry, "all", [&](project::Track& t) {
+            t.sends = {project::Send(bus, -12.0)};
+            t.strip.eq_on = true;
+        });
+        set_lane(dry, "volume", {{0, 0.0, "linear"}, {T(3.0), -12.0, "smooth"}, {T(6.0), 0.0, "linear"}});
+        set_lane(dry, "pan", {{0, -0.5, "linear"}, {T(6.0), 0.5, "linear"}});
+        std::vector<project::AutomationPoint> mutes;
+        for (int i = 0; i < 12; ++i) mutes.push_back({T(i * 0.25), static_cast<double>(i % 2), "step"});
+        set_lane(dry, "mute", mutes);
+        set_lane(dry, "send:" + bus, {{0, -30.0, "linear"}, {T(4.0), 0.0, "linear"}});
+        set_lane(dry, "strip.lf.gain_db", {{0, -6.0, "linear"}, {T(4.0), 6.0, "linear"}});
+        set_lane(wet, "insert_plugin:0:1", {{0, 0.2, "linear"}, {T(4.0), 1.0, "linear"}});
+        std::string synth;
+        if (instrument_ref) {
+            synth = session.add_track("Synth", "keys.piano");
+            session.set_instrument_plugin(synth, *instrument_ref);
+            session.insert_notes(synth, 0, kTicksPerWhole * 4, {{0, kTicksPerWhole * 4, 60, 100, 0, {}}},
+                                 project::CollisionPolicy::Ask, "check");
+            set_lane(synth, "plugin:0", {{0, 0.0, "linear"}, {T(4.0), 1.0, "linear"}});
+        }
+        session.set_automation_mode(dry, "touch");
+        engine.rebuild_now();
+        engine.locate(0);
+        engine.play();
+        engine.begin_touch(dry, "volume");
+        engine.touch_value(dry, "volume", -3.0);
+        long before = allocations.load();
+        for (int i = 0; i < 150; ++i) {
+            if (i % 10 == 0) engine.touch_value(dry, "volume", -3.0 - i * 0.02);  // message thread, between blocks
+            counting = true;
+            engine.render_offline_with_input(rig.input, rig.out, 512);
+            counting = false;
+        }
+        const long n = allocations.load() - before;
+        const bool active = engine.compensation_samples() > 0 && engine.writes_automation(dry, "volume");
+        engine.end_touch(dry, "volume");
+        engine.stop();
+        check(n == 0 && active, "automation playback + a pass being written + PDC delay lines allocate nothing (" +
+                                    juce::String(n) + " allocations in 150 blocks)");
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -639,6 +1180,8 @@ int main(int argc, char** argv)
         }
 
         console_and_recording_checks(ctx, dir);
+        automation_checks(ctx, dir, plugin_track.empty() ? std::nullopt : std::optional<project::PluginRef>(plugin_ref));
+        delay_compensation_checks(ctx, dir, plugin_track.empty() ? std::nullopt : std::optional<project::PluginRef>(plugin_ref));
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

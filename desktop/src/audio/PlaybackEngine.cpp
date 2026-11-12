@@ -5,9 +5,11 @@
 #include <set>
 
 #include "audio/AudioFileCache.h"
+#include "audio/AutomationRt.h"
 #include "audio/ChannelDsp.h"
 #include "audio/PlaceholderSynth.h"
 #include "audio/Recorder.h"
+#include "vcc/project/Automation.h"
 #include "vcc/project/Render.h"
 
 namespace vcc::desktop {
@@ -28,13 +30,23 @@ float db_to_gain(double db) { return db <= -96.0 ? 0.0f : static_cast<float>(std
 constexpr int kMaxSends = 16;
 constexpr double kDeclickSeconds = 0.003;
 
+constexpr double kMuteFadeSeconds = 0.001;
+
 /// Every mix setting of one strip, computed on the message thread and sent
 /// to the audio thread through a Mailbox. Gains are final (fader, pan law,
-/// mute/solo folded in), so the audio thread only ramps to them.
+/// mute/solo folded in), so the audio thread only ramps to them. The raw
+/// settings travel too, so automation can override one and recompute the
+/// gains on the audio thread (finalize()).
 struct StripParams {
     project::ChannelStrip strip;
     float out_l = 0.0f, out_r = 0.0f;
     std::array<float, kMaxSends> send_l{}, send_r{};
+    // Raw settings.
+    double gain_db = 0.0, pan = 0.0;
+    bool mute = false, solo_ok = true, mono = false;
+    int num_sends = 0;
+    std::array<double, kMaxSends> send_db{}, send_pan{};
+    std::array<std::uint8_t, kMaxSends> send_flags{};  // 1 pre-fader, 2 muted, 4 pan follows
 };
 
 void store_max(std::atomic<float>& a, float v) noexcept
@@ -87,20 +99,56 @@ struct StripDsp {
     bool primed = false;
     float cur_l = 0.0f, cur_r = 0.0f;
     std::array<float, kMaxSends> cur_send_l{}, cur_send_r{};
+    // Audio thread: this block's automated settings.
+    StripParams eff;
+    bool use_eff = false;
+    int mute_mode = 0;  // 0 static, 1 lane (sample-accurate curve), 2 written value (ramped)
+    const Curve* mute_curve = nullptr;
+    std::int64_t mute_from = 0;
+    float mute_cur = 1.0f, mute_target = 1.0f;
     // Meters (audio thread writes, message thread takes).
     std::atomic<float> peak_l{0.0f}, peak_r{0.0f}, gr_db{0.0f};
     std::atomic<bool> gate_closed{false}, clipped{false};
 };
 
+/// The value being written for one (owner, param), shared by the message
+/// thread (writer) and the audio thread.
+struct AutoSlot {
+    std::atomic<int> mode{0};  // 0 play the lane, 1 play `value`, 2 play the static value
+    std::atomic<double> value{0.0};
+};
+
+namespace {
+enum class AutoKind : std::uint8_t { Volume, Pan, Mute, Send, Strip, Insert, Plugin };
+
+/// One automated parameter of a strip, ready for the audio thread.
+struct AutoParam {
+    AutoKind kind = AutoKind::Volume;
+    int a = -1, b = -1;  // send index / strip field / insert index + param index
+    juce::AudioProcessorParameter* param = nullptr;  // plug-in parameter
+    Curve curve;                                     // empty: written only
+    std::shared_ptr<AutoSlot> slot;
+    std::int64_t offset = 0;  // processing latency before this point of the strip
+    float last_sent = -1.0f;  // audio thread
+};
+}  // namespace
+
 struct PlaybackSnapshot {
     double sample_rate = 48000.0;
     int max_block = 512;
+    std::int64_t comp = 0;  // delay compensation: what is heard is the render position minus this
 
     struct Strip {
         std::shared_ptr<StripDsp> dsp;
         std::vector<std::shared_ptr<InsertProcessor>> inserts;
         std::vector<int> sends;  // destination bus per send (-1 = none), aligned with StripParams
         int output = -1;         // bus index; -1 = the device (master bus only)
+        std::vector<AutoParam> autos;
+        // Delay compensation per routing edge (0 = none).
+        int out_delay = 0;
+        std::shared_ptr<DelayLine> out_line;
+        std::array<int, kMaxSends> send_delay{};
+        std::array<std::shared_ptr<DelayLine>, kMaxSends> send_lines;
     };
     struct Clip {
         std::shared_ptr<const AudioData> data;
@@ -141,10 +189,17 @@ struct PlaybackSnapshot {
                 std::lower_bound(t.events.begin(), t.events.end(), sample,
                                  [](const Event& e, std::int64_t s) { return e.sample < s; }) -
                 t.events.begin());
+        // The click is scheduled against what is heard.
         click_cursor = static_cast<std::size_t>(
-            std::lower_bound(clicks.begin(), clicks.end(), sample,
+            std::lower_bound(clicks.begin(), clicks.end(), sample - comp,
                              [](const std::pair<std::int64_t, bool>& c, std::int64_t s) { return c.first < s; }) -
             clicks.begin());
+    }
+    template <class F>
+    void for_each_strip(F&& f) noexcept
+    {
+        for (auto& t : tracks) f(t.strip);
+        for (auto& b : buses) f(b.strip);
     }
 };
 
@@ -224,6 +279,7 @@ struct MixPlan {
     std::vector<std::vector<int>> track_sends;
     std::vector<int> order;
     std::vector<bool> track_audible, bus_audible;
+    std::vector<bool> track_solo_ok, bus_solo_ok;  // audible but for the strip's own mute
 };
 
 std::vector<const project::Track*> played_tracks(const session::Session& session, bool export_mode)
@@ -346,38 +402,64 @@ MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Trac
     };
     for (std::size_t k = 0; k < p.tracks.size(); ++k) {
         const auto* t = p.tracks[k];
-        p.track_audible.push_back(!t->mute && (!any_solo || t->solo || feeds_soloed_bus(p.track_output[k])));
+        const bool ok = !any_solo || t->solo || feeds_soloed_bus(p.track_output[k]);
+        p.track_solo_ok.push_back(ok);
+        p.track_audible.push_back(!t->mute && ok);
     }
     for (int i = 0; i < n; ++i) {
         const auto* b = p.buses[static_cast<std::size_t>(i)];
         if (!b) {
             p.bus_audible.push_back(true);
+            p.bus_solo_ok.push_back(true);
             continue;
         }
         const bool safe = i == p.master || b->kind == "fx";
-        p.bus_audible.push_back(!b->mute && (!any_solo || safe || b->solo || down[static_cast<std::size_t>(i)] ||
-                                             feeds_soloed_bus(p.bus_output[static_cast<std::size_t>(i)])));
+        const bool ok = !any_solo || safe || b->solo || down[static_cast<std::size_t>(i)] ||
+                        feeds_soloed_bus(p.bus_output[static_cast<std::size_t>(i)]);
+        p.bus_solo_ok.push_back(ok);
+        p.bus_audible.push_back(!b->mute && ok);
     }
     return p;
 }
 
-StripParams make_params(const project::ChannelStrip& strip, double gain_db, double pan, bool audible, bool mono,
-                        const std::vector<project::Send>& sends)
+/// Folds the raw settings into final gains (either thread; no allocation).
+void finalize(StripParams& p) noexcept
 {
-    StripParams p;
-    p.strip = strip;
-    const float fader = audible ? db_to_gain(gain_db) : 0.0f;
-    const auto [pl, pr] = pan_gains(pan, mono);
+    const bool audible = p.solo_ok && !p.mute;
+    const float fader = audible ? db_to_gain(p.gain_db) : 0.0f;
+    const auto [pl, pr] = pan_gains(p.pan, p.mono);
     p.out_l = fader * pl;
     p.out_r = fader * pr;
-    for (std::size_t i = 0; i < sends.size() && i < static_cast<std::size_t>(kMaxSends); ++i) {
-        const auto& s = sends[i];
-        if (s.mute || !audible) continue;
-        const float level = db_to_gain(s.level_db) * (s.pre_fader ? 1.0f : fader);
-        const auto [sl, sr] = pan_gains(s.pan_follow ? pan : s.pan, mono);
+    p.send_l.fill(0.0f);
+    p.send_r.fill(0.0f);
+    for (std::size_t i = 0; i < static_cast<std::size_t>(p.num_sends); ++i) {
+        const auto flags = p.send_flags[i];
+        if ((flags & 2) || !audible) continue;
+        const float level = db_to_gain(p.send_db[i]) * ((flags & 1) ? 1.0f : fader);
+        const auto [sl, sr] = pan_gains((flags & 4) ? p.pan : p.send_pan[i], p.mono);
         p.send_l[i] = level * sl;
         p.send_r[i] = level * sr;
     }
+}
+
+StripParams make_params(const project::ChannelStrip& strip, double gain_db, double pan, bool mute, bool solo_ok,
+                        bool mono, const std::vector<project::Send>& sends)
+{
+    StripParams p;
+    p.strip = strip;
+    p.gain_db = gain_db;
+    p.pan = pan;
+    p.mute = mute;
+    p.solo_ok = solo_ok;
+    p.mono = mono;
+    p.num_sends = static_cast<int>(std::min(sends.size(), static_cast<std::size_t>(kMaxSends)));
+    for (std::size_t i = 0; i < static_cast<std::size_t>(p.num_sends); ++i) {
+        const auto& s = sends[i];
+        p.send_db[i] = s.level_db;
+        p.send_pan[i] = s.pan;
+        p.send_flags[i] = static_cast<std::uint8_t>((s.pre_fader ? 1 : 0) | (s.mute ? 2 : 0) | (s.pan_follow ? 4 : 0));
+    }
+    finalize(p);
     return p;
 }
 
@@ -414,17 +496,101 @@ void render_clip(const PlaybackSnapshot::Clip& c, float* l, float* r, std::int64
     }
 }
 
+/// Audio thread, before a strip's instrument and processing: evaluates its
+/// automation for the block [pos, pos + n). Gains take the lane's value at the
+/// end of the block (process_strip ramps to it); strip, insert and plug-in
+/// parameters take the value at the start.
+void automate_strip(PlaybackSnapshot::Strip& st, std::int64_t pos, int n, bool playing) noexcept
+{
+    StripDsp& d = *st.dsp;
+    d.use_eff = false;
+    d.mute_mode = 0;
+    if (st.autos.empty()) return;
+    d.eff = d.params.latest();
+    bool changed = false;
+    for (auto& ap : st.autos) {
+        const int mode = ap.slot ? ap.slot->mode.load(std::memory_order_relaxed) : 0;
+        if (mode == 2) continue;  // write mode, untouched: the static value
+        const bool gain = ap.kind == AutoKind::Volume || ap.kind == AutoKind::Pan || ap.kind == AutoKind::Send;
+        const std::int64_t t = playing ? pos + (gain ? n : 0) - ap.offset : pos;
+        if (ap.kind == AutoKind::Mute) {
+            changed = true;
+            d.eff.mute = false;
+            if (mode == 1) {
+                d.mute_mode = 2;
+                d.mute_target = ap.slot->value.load(std::memory_order_relaxed) >= 0.5 ? 0.0f : 1.0f;
+            } else if (!ap.curve.empty()) {
+                d.mute_mode = 1;
+                d.mute_curve = &ap.curve;
+                d.mute_from = playing ? pos - ap.offset : pos;
+            } else {
+                d.eff.mute = d.params.latest().mute;
+            }
+            continue;
+        }
+        double v = 0.0;
+        if (mode == 1) v = ap.slot->value.load(std::memory_order_relaxed);
+        else if (!ap.curve.empty()) v = curve_value(ap.curve, t);
+        else continue;
+        switch (ap.kind) {
+            case AutoKind::Volume: d.eff.gain_db = v; changed = true; break;
+            case AutoKind::Pan: d.eff.pan = v; changed = true; break;
+            case AutoKind::Send:
+                if (ap.a >= 0 && ap.a < kMaxSends) d.eff.send_db[static_cast<std::size_t>(ap.a)] = v;
+                changed = true;
+                break;
+            case AutoKind::Strip: set_strip_field(d.eff.strip, ap.a, v); changed = true; break;
+            case AutoKind::Insert:
+                if (ap.a >= 0 && ap.a < static_cast<int>(st.inserts.size()))
+                    st.inserts[static_cast<std::size_t>(ap.a)]->automate(ap.b, static_cast<float>(v));
+                break;
+            case AutoKind::Plugin: {
+                const float f = juce::jlimit(0.0f, 1.0f, static_cast<float>(v));
+                if (ap.param && std::abs(f - ap.last_sent) > 1.0e-6f) {
+                    ap.param->setValue(f);
+                    ap.last_sent = f;
+                }
+                break;
+            }
+            case AutoKind::Mute: break;
+        }
+    }
+    if (changed) {
+        finalize(d.eff);
+        d.use_eff = true;
+    }
+}
+
 /// Channel strip, inserts, sends, fader/pan and meters; adds the result to
-/// the strip's output (a bus, or the device for the master).
-void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::AudioBuffer<float>& buf, int n) noexcept
+/// the strip's output (a bus, or the device for the master), through the
+/// edge's compensation delay unless `low_latency`.
+void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::AudioBuffer<float>& buf, int n,
+                   bool playing, bool low_latency) noexcept
 {
     StripDsp& d = *strip.dsp;
-    const StripParams& p = d.params.latest();
+    const StripParams& p = d.use_eff ? d.eff : d.params.latest();
     float* l = buf.getWritePointer(0);
     float* r = buf.getWritePointer(1);
     d.channel.process(l, r, n, p.strip);
-    for (const auto& ins : strip.inserts)
+    for (const auto& ins : strip.inserts) {
         if (!ins->bypass.load(std::memory_order_relaxed)) ins->process(l, r, n);
+        else ins->process_bypassed(l, r, n);
+    }
+    // Automated mute: before the sends and the fader, like the static mute.
+    if (d.mute_mode == 1 && d.mute_curve) {
+        if (playing) {
+            apply_curve_gain(*d.mute_curve, d.mute_from, l, r, n);
+            d.mute_cur = static_cast<float>(curve_value(*d.mute_curve, d.mute_from + n - 1));
+        } else {
+            d.mute_cur = static_cast<float>(curve_value(*d.mute_curve, d.mute_from));
+            buf.applyGain(d.mute_cur);
+        }
+    } else if (d.mute_mode == 2) {
+        buf.applyGainRamp(0, n, d.mute_cur, d.mute_target);
+        d.mute_cur = d.mute_target;
+    } else {
+        d.mute_cur = 1.0f;
+    }
     if (!d.primed) {
         d.primed = true;
         d.cur_l = p.out_l;
@@ -437,8 +603,15 @@ void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::Au
         const int dest = strip.sends[i];
         if (dest < 0 || dest >= static_cast<int>(s.buses.size())) continue;
         auto& target = s.buses[static_cast<std::size_t>(dest)].buffer;
-        if (d.cur_send_l[i] > 0.0f || p.send_l[i] > 0.0f) target.addFromWithRamp(0, 0, l, n, d.cur_send_l[i], p.send_l[i]);
-        if (d.cur_send_r[i] > 0.0f || p.send_r[i] > 0.0f) target.addFromWithRamp(1, 0, r, n, d.cur_send_r[i], p.send_r[i]);
+        DelayLine* line = strip.send_delay[i] > 0 ? strip.send_lines[i].get() : nullptr;
+        if (line && !low_latency) {
+            line->send(l, r, n, d.cur_send_l[i], p.send_l[i], d.cur_send_r[i], p.send_r[i], target.getWritePointer(0),
+                       target.getWritePointer(1), strip.send_delay[i]);
+        } else {
+            if (line) line->silence(n);
+            if (d.cur_send_l[i] > 0.0f || p.send_l[i] > 0.0f) target.addFromWithRamp(0, 0, l, n, d.cur_send_l[i], p.send_l[i]);
+            if (d.cur_send_r[i] > 0.0f || p.send_r[i] > 0.0f) target.addFromWithRamp(1, 0, r, n, d.cur_send_r[i], p.send_r[i]);
+        }
         d.cur_send_l[i] = p.send_l[i];
         d.cur_send_r[i] = p.send_r[i];
     }
@@ -446,6 +619,11 @@ void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::Au
     buf.applyGainRamp(1, 0, n, d.cur_r, p.out_r);
     d.cur_l = p.out_l;
     d.cur_r = p.out_r;
+    // The output edge's compensation; metered after it, so meters follow the sound.
+    if (strip.out_delay > 0 && strip.out_line) {
+        if (low_latency) strip.out_line->silence(n);
+        else strip.out_line->process(l, r, n, strip.out_delay);
+    }
 
     const float pl = buf.getMagnitude(0, 0, n), pr = buf.getMagnitude(1, 0, n);
     store_max(d.peak_l, pl);
@@ -482,6 +660,7 @@ PlaybackEngine::PlaybackEngine(session::Session& session, PluginHost& plugins)
         if (c != session::Change::Document) return;
         sync_processors();  // mix changes are heard at once; structure follows with the rebuild
         request_rebuild();
+        if (writing_pass_ && !committing_) refresh_writes();
     });
     midi_callback_ = std::make_unique<LiveMidiCallback>(live_input_);
     live_input_.reset(sample_rate_);
@@ -594,7 +773,9 @@ void PlaybackEngine::request_rebuild() { rebuild_pending_ = true; }
 
 void PlaybackEngine::timerCallback()
 {
-    if (rebuild_pending_) rebuild_now();
+    drain_gestures();
+    // A plug-in that changed its latency (setLatencySamples) re-aligns the mix.
+    if (rebuild_pending_ || current_latencies() != latencies_seen_) rebuild_now();
     retire_garbage();
     collect_finished_passes();
 }
@@ -653,6 +834,7 @@ void PlaybackEngine::sync_processors()
         live_strips.insert(id);
         return *slot;
     };
+    insert_watch_targets_.clear();
     auto sync_inserts = [&](const std::string& id, const std::vector<project::InsertSlot>& slots) {
         auto& keys = insert_keys_[id];
         keys.assign(slots.size(), {});
@@ -669,6 +851,12 @@ void PlaybackEngine::sync_processors()
             if (!proc) continue;
             proc->set_params(slot);
             proc->bypass.store(slot.bypass);
+            if (auto* instance = proc->plugin()) {
+                InsertProcessor* raw = proc.get();
+                watch_plugin(*instance, raw, raw->has_watch(),
+                             [raw](std::unique_ptr<ParameterWatch> w) { raw->set_watch(std::move(w)); },
+                             insert_watch_targets_, id, "insert_plugin:" + std::to_string(i) + ":");
+            }
             keys[i] = key;
             live_inserts.insert(key);
         }
@@ -676,17 +864,18 @@ void PlaybackEngine::sync_processors()
 
     for (std::size_t k = 0; k < plan.tracks.size(); ++k) {
         const project::Track& t = *plan.tracks[k];
-        strip_for(t.id).params.write(make_params(t.strip, t.gain_db, t.pan, plan.track_audible[k], is_mono_track(t), t.sends));
+        strip_for(t.id).params.write(
+            make_params(t.strip, t.gain_db, t.pan, t.mute, plan.track_solo_ok[k], is_mono_track(t), t.sends));
         sync_inserts(t.id, t.inserts);
     }
     for (std::size_t i = 0; i < plan.buses.size(); ++i) {
         const project::Bus* b = plan.buses[i];
         StripDsp& strip = strip_for(plan.bus_ids[i]);
         if (!b) {
-            strip.params.write(make_params({}, 0.0, 0.0, true, false, {}));
+            strip.params.write(make_params({}, 0.0, 0.0, false, true, false, {}));
             continue;
         }
-        strip.params.write(make_params(b->strip, b->gain_db, b->pan, plan.bus_audible[i], false, b->sends));
+        strip.params.write(make_params(b->strip, b->gain_db, b->pan, b->mute, plan.bus_solo_ok[i], false, b->sends));
         sync_inserts(b->id, b->inserts);
     }
     // Strips and inserts that are gone: snapshots still holding them keep
@@ -744,6 +933,10 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
             instrument_ids.insert(t->id);
             auto& slot = instruments_[t->id];
             st.instrument = instrument_for(*t, slot);
+            if (auto* pi = dynamic_cast<PluginInstrument*>(st.instrument.get()))
+                watch_plugin(pi->instance(), pi, pi->has_watch(),
+                             [pi](std::unique_ptr<ParameterWatch> w) { pi->set_watch(std::move(w)); },
+                             instrument_watch_targets_, t->id, "plugin:");
             project::RenderedTrack r = project::render_track(*t);
             if (st.instrument->wants_keyswitches()) r.notes.insert(r.notes.end(), r.keyswitches.begin(), r.keyswitches.end());
             st.events = to_events(r.notes, r.controllers, d.tempo, sample_rate_);
@@ -788,6 +981,178 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         else ++it;
     }
 
+    // --- Plug-in delay compensation ------------------------------------------------
+    // Latency of each strip (instrument + inserts; a bypassed plug-in keeps
+    // its latency), then, sources before destinations, when each bus's
+    // inputs arrive and how long each routing edge must wait to match.
+    auto inserts_latency = [](const PlaybackSnapshot::Strip& st, std::size_t upto) {
+        int sum = 0;
+        for (std::size_t i = 0; i < upto && i < st.inserts.size(); ++i) sum += std::max(0, st.inserts[i]->latency_samples());
+        return sum;
+    };
+    const std::size_t nb = snap->buses.size();
+    std::vector<int> instrument_latency(snap->tracks.size(), 0), track_out(snap->tracks.size(), 0);
+    std::vector<int> bus_own(nb, 0), bus_in(nb, 0), bus_out(nb, 0);
+    strip_latency_.clear();
+    for (std::size_t k = 0; k < snap->tracks.size(); ++k) {
+        const auto& st = snap->tracks[k];
+        instrument_latency[k] = st.instrument ? std::max(0, st.instrument->latency_samples()) : 0;
+        track_out[k] = instrument_latency[k] + inserts_latency(st.strip, st.strip.inserts.size());
+        strip_latency_[plan.tracks[k]->id] = track_out[k];
+        auto arrive = [&](int dest) {
+            if (dest >= 0 && dest < static_cast<int>(nb)) bus_in[static_cast<std::size_t>(dest)] = std::max(bus_in[static_cast<std::size_t>(dest)], track_out[k]);
+        };
+        arrive(st.strip.output);
+        for (std::size_t i = 0; i < st.strip.sends.size() && i < static_cast<std::size_t>(kMaxSends); ++i) arrive(st.strip.sends[i]);
+    }
+    for (int bi : snap->bus_order) {
+        const auto b = static_cast<std::size_t>(bi);
+        const auto& st = snap->buses[b].strip;
+        bus_own[b] = inserts_latency(st, st.inserts.size());
+        bus_out[b] = bus_in[b] + bus_own[b];
+        strip_latency_[plan.bus_ids[b]] = bus_own[b];
+        auto arrive = [&](int dest) {
+            if (dest >= 0 && dest < static_cast<int>(nb)) bus_in[static_cast<std::size_t>(dest)] = std::max(bus_in[static_cast<std::size_t>(dest)], bus_out[b]);
+        };
+        arrive(st.output);
+        for (std::size_t i = 0; i < st.sends.size() && i < static_cast<std::size_t>(kMaxSends); ++i) arrive(st.sends[i]);
+    }
+    const int master = plan.master;
+    const int total = master >= 0 && master < static_cast<int>(nb) ? bus_out[static_cast<std::size_t>(master)] : 0;
+    compensation_ = pdc_ ? total : 0;
+    snap->comp = compensation_;
+    std::set<std::string> live_lines;
+    auto line_for = [&](const std::string& key, int delay) -> std::shared_ptr<DelayLine> {
+        if (delay <= 0) return nullptr;
+        live_lines.insert(key);
+        auto& line = delay_lines_[key];
+        if (!line || line->capacity() < delay + block_size_ + 1) line = std::make_shared<DelayLine>(delay + block_size_ + 1);
+        return line;
+    };
+    auto set_edges = [&](PlaybackSnapshot::Strip& st, const std::string& id, int out_latency) {
+        auto edge = [&](int dest) {
+            if (!pdc_ || dest < 0 || dest >= static_cast<int>(nb)) return 0;
+            return bus_in[static_cast<std::size_t>(dest)] - out_latency;
+        };
+        st.out_delay = edge(st.output);
+        st.out_line = line_for(id + ">out", st.out_delay);
+        for (std::size_t i = 0; i < st.sends.size() && i < static_cast<std::size_t>(kMaxSends); ++i) {
+            st.send_delay[i] = edge(st.sends[i]);
+            st.send_lines[i] = line_for(id + ">send" + std::to_string(i), st.send_delay[i]);
+        }
+    };
+    for (std::size_t k = 0; k < snap->tracks.size(); ++k) set_edges(snap->tracks[k].strip, plan.tracks[k]->id, track_out[k]);
+    for (std::size_t b = 0; b < nb; ++b) set_edges(snap->buses[b].strip, plan.bus_ids[b], bus_out[b]);
+    for (auto it = delay_lines_.begin(); it != delay_lines_.end();) {
+        if (!live_lines.count(it->first)) it = delay_lines_.erase(it);
+        else ++it;
+    }
+    latencies_seen_ = current_latencies();
+
+    // --- Automation -------------------------------------------------------------------
+    const std::int64_t mute_fade = std::max<std::int64_t>(1, std::llround(kMuteFadeSeconds * sample_rate_));
+    auto automate = [&](PlaybackSnapshot::Strip& st, const std::string& owner, const std::string& mode,
+                        const std::vector<project::AutomationLane>& lanes, const std::vector<project::Send>& sends,
+                        const std::vector<project::InsertSlot>& slots, Instrument* instrument, std::int64_t pre,
+                        std::int64_t post) {
+        // Slot index -> index into st.inserts (inactive slots have none).
+        std::vector<int> slot_insert(slots.size(), -1);
+        {
+            const auto& keys = insert_keys_[owner];
+            int next = 0;
+            for (std::size_t i = 0; i < keys.size() && i < slots.size(); ++i)
+                if (!keys[i].empty() && inserts_.count(keys[i]) && inserts_[keys[i]]) slot_insert[i] = next++;
+        }
+        std::vector<std::string> params;
+        if (mode != "off")
+            for (const auto& lane : lanes)
+                if (lane.enabled && !lane.points.empty()) params.push_back(lane.param);
+        // Parameters written in this pass without a lane yet.
+        const std::string prefix = owner + '\x1f';
+        for (auto it = auto_slots_.lower_bound(prefix); it != auto_slots_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
+            const std::string param = it->first.substr(prefix.size());
+            if (std::find(params.begin(), params.end(), param) == params.end()) params.push_back(param);
+        }
+        for (const auto& param : params) {
+            AutoParam ap;
+            const project::AutomationLane* lane = mode == "off" ? nullptr : project::find_lane(lanes, param);
+            if (lane && (!lane->enabled || lane->points.empty())) lane = nullptr;
+            const auto info = project::param_info(param);
+            if (!info) continue;
+            ap.offset = post;
+            if (param == "volume") ap.kind = AutoKind::Volume;
+            else if (param == "pan") ap.kind = AutoKind::Pan;
+            else if (param == "mute") ap.kind = AutoKind::Mute;
+            else if (param.rfind("send:", 0) == 0) {
+                ap.kind = AutoKind::Send;
+                for (std::size_t i = 0; i < sends.size(); ++i)
+                    if (sends[i].bus_id == param.substr(5)) ap.a = static_cast<int>(i);
+                if (ap.a < 0 || ap.a >= kMaxSends) continue;
+            } else if (param.rfind("strip.", 0) == 0) {
+                ap.kind = AutoKind::Strip;
+                ap.a = strip_field_index(param);
+                ap.offset = pre;
+                if (ap.a < 0) continue;
+            } else {
+                // insert:<slot>:<name>, plugin:<index>, insert_plugin:<slot>:<index>
+                std::vector<std::string> parts;
+                for (std::size_t from = 0;;) {
+                    const auto at = param.find(':', from);
+                    parts.push_back(param.substr(from, at == std::string::npos ? std::string::npos : at - from));
+                    if (at == std::string::npos) break;
+                    from = at + 1;
+                }
+                auto number = [](const std::string& x) { return x.empty() ? -1 : std::atoi(x.c_str()); };
+                if (parts[0] == "plugin" && parts.size() == 2) {
+                    auto* pi = dynamic_cast<PluginInstrument*>(instrument);
+                    const int index = number(parts[1]);
+                    if (!pi || index < 0 || index >= pi->instance().getParameters().size()) continue;
+                    ap.kind = AutoKind::Plugin;
+                    ap.param = pi->instance().getParameters()[index];
+                    ap.offset = 0;
+                } else if ((parts[0] == "insert" || parts[0] == "insert_plugin") && parts.size() == 3) {
+                    const int slot = number(parts[1]);
+                    if (slot < 0 || slot >= static_cast<int>(slots.size())) continue;
+                    const int ins = slot_insert[static_cast<std::size_t>(slot)];
+                    if (ins < 0) continue;
+                    ap.a = ins;
+                    ap.offset = pre + inserts_latency(st, static_cast<std::size_t>(ins));
+                    if (parts[0] == "insert") {
+                        ap.kind = AutoKind::Insert;
+                        ap.b = insert_automation_index(slots[static_cast<std::size_t>(slot)].kind, parts[2]);
+                        if (ap.b < 0) continue;
+                    } else {
+                        auto* instance = st.inserts[static_cast<std::size_t>(ins)]->plugin();
+                        const int index = number(parts[2]);
+                        if (!instance || index < 0 || index >= instance->getParameters().size()) continue;
+                        ap.kind = AutoKind::Plugin;
+                        ap.param = instance->getParameters()[index];
+                    }
+                } else {
+                    continue;
+                }
+            }
+            if (lane)
+                ap.curve = ap.kind == AutoKind::Mute ? make_mute_gain_curve(*lane, d.tempo, sample_rate_, mute_fade)
+                                                     : make_curve(*lane, d.tempo, sample_rate_, info->toggle);
+            ap.slot = slot_for(owner, param);
+            st.autos.push_back(std::move(ap));
+        }
+    };
+    for (std::size_t k = 0; k < snap->tracks.size(); ++k) {
+        const project::Track& t = *plan.tracks[k];
+        auto& st = snap->tracks[k];
+        automate(st.strip, t.id, t.automation_mode, t.automation, t.sends, t.inserts, st.instrument.get(),
+                 instrument_latency[k], track_out[k]);
+    }
+    for (std::size_t b = 0; b < nb; ++b) {
+        const project::Bus* bus = plan.buses[b];
+        if (!bus) continue;
+        const int pre = pdc_ ? bus_in[b] : 0;
+        automate(snap->buses[b].strip, plan.bus_ids[b], bus->automation_mode, bus->automation, bus->sends, bus->inserts,
+                 nullptr, pre, pre + bus_own[b]);
+    }
+
     // Click: every felt beat to the end of the content.
     const Ticks end = session_.content_end();
     for (int bar = 1;; ++bar) {
@@ -811,14 +1176,17 @@ void PlaybackEngine::rebuild_now()
 
 void PlaybackEngine::play()
 {
+    const bool was = playing_.load();
     play_request_ = true;
     playing_ = true;
     begin_pass();
+    if (!was) start_automation_pass();
     if (on_transport_changed) on_transport_changed();
 }
 
 void PlaybackEngine::stop()
 {
+    if (playing_.load()) finish_automation_pass();  // at the heard position, before it rewinds
     stop_request_ = true;
     playing_ = false;
     end_passes();
@@ -830,12 +1198,17 @@ void PlaybackEngine::toggle_play() { playing() ? stop() : play(); }
 void PlaybackEngine::locate(Ticks tick)
 {
     const auto sample = static_cast<std::int64_t>(std::llround(session_.data().tempo.seconds_at(std::max<Ticks>(0, tick)) * sample_rate_));
+    const bool restart = playing_.load() && writing_pass_;
+    if (restart) finish_automation_pass();  // a jump ends the written pass
     locate_request_ = sample;
     position_samples_ = sample;  // the UI sees the new position immediately
+    heard_samples_ = sample;
+    gestures_->heard.store(sample);
+    if (restart) start_automation_pass();
     if (on_transport_changed) on_transport_changed();
 }
 
-double PlaybackEngine::position_seconds() const { return static_cast<double>(position_samples_.load()) / sample_rate_; }
+double PlaybackEngine::position_seconds() const { return static_cast<double>(heard_samples_.load()) / sample_rate_; }
 
 Ticks PlaybackEngine::position() const { return session_.data().tempo.tick_at_seconds(position_seconds()); }
 
@@ -1181,6 +1554,11 @@ void PlaybackEngine::process(const float* const* inputs, int num_inputs, float* 
             if (current_ && !retired_.push(current_)) spill_ = current_;  // queue full: hand back next block
             current_ = incoming;
             current_->seek(position_samples_.load());
+            // Overrides from lanes that are gone are dropped; the live ones
+            // are set again before this block is processed.
+            current_->for_each_strip([](PlaybackSnapshot::Strip& st) {
+                for (auto& ins : st.inserts) ins->clear_automation();
+            });
         }
     }
     if (PreviewClip* clip = pending_preview_.exchange(nullptr)) {
@@ -1203,20 +1581,40 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
                                    int offset, int n) noexcept
 {
     PlaybackSnapshot* s = current_;
+    const std::int64_t comp = s ? s->comp : 0;
     const bool stopping = stop_request_.exchange(false);
     const std::int64_t locate = locate_request_.exchange(-1);
-    if (play_request_.exchange(false) && s) s->seek(position_samples_.load());
+    if (stopping && rolling_) {
+        // Resume from what was heard, not from the render position ahead of it.
+        const std::int64_t heard = std::max(play_start_, position_samples_.load() - comp);
+        position_samples_ = heard;
+        if (s) s->seek(heard);
+    }
     if (s && (stopping || locate >= 0)) {
         for (auto& t : s->tracks)
             if (t.instrument) t.instrument->all_notes_off();
         if (locate >= 0) {
             position_samples_ = locate;
             s->seek(locate);
+            // Audio delayed from before the jump is not played after it.
+            s->for_each_strip([](PlaybackSnapshot::Strip& st) {
+                if (st.out_line) st.out_line->clear();
+                for (auto& line : st.send_lines)
+                    if (line) line->clear();
+            });
         }
+    }
+    if (locate >= 0) play_start_ = locate;
+    if (play_request_.exchange(false)) {
+        play_start_ = position_samples_.load();
+        if (s) s->seek(play_start_);
     }
     if (locate >= 0 && active_pass_ && active_pass_->recorded > 0) retire_active_pass();  // a jump ends the take
     const bool playing = playing_.load();
+    rolling_ = playing;
     const std::int64_t pos = position_samples_.load();
+    // The heard timeline: the render position minus the compensation.
+    const std::int64_t heard_pos = pos - comp;
 
     // Input meters.
     for (int ch = 0; ch < num_inputs && ch < static_cast<int>(input_meters_.size()); ++ch)
@@ -1227,19 +1625,21 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
 
     // Recording: inside the punch range when punch is on.
     bool record_range = false;
+    // Takes are placed against what the performer heard (the heard
+    // timeline); the device latency is taken off when the pass is placed.
     if (RecordPass* pass = active_pass_; pass && playing) {
-        std::int64_t a = pos, b = pos + n;
+        std::int64_t a = std::max<std::int64_t>(heard_pos, 0), b = heard_pos + n;
         if (pass->punch) {
             a = std::max(a, pass->punch_in);
             b = std::min(b, pass->punch_out);
         }
         if (b > a) {
             record_range = true;
-            pass->write(inputs, num_inputs, offset + static_cast<int>(a - pos), static_cast<int>(b - a), a);
+            pass->write(inputs, num_inputs, offset + static_cast<int>(a - heard_pos), static_cast<int>(b - a), a);
             recorded_samples_.store(pass->recorded, std::memory_order_relaxed);
         }
         recording_.store(record_range, std::memory_order_relaxed);
-        if (pass->punch && pos + n >= pass->punch_out) retire_active_pass();
+        if (pass->punch && heard_pos + n >= pass->punch_out) retire_active_pass();
     }
 
     if (s && n <= s->max_block) {
@@ -1249,6 +1649,7 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
             auto& t = s->tracks[i];
             juce::AudioBuffer<float> buf(t.buffer.getArrayOfWritePointers(), 2, n);
             buf.clear();
+            automate_strip(t.strip, pos, n, playing);
             if (t.instrument) {
                 t.midi.clear();
                 if (playing) gather(t.events, t.cursor, pos, n, t.midi);
@@ -1269,18 +1670,23 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
                 juce::FloatVectorOperations::add(l, in_l, n);
                 juce::FloatVectorOperations::add(r, in_r, n);
             }
-            process_strip(*s, t.strip, buf, n);
+            // Low-latency monitoring: what the performer plays skips the compensation.
+            const bool low_latency = monitor_input || (static_cast<int>(i) == s->live_track && (!playing || t.armed));
+            process_strip(*s, t.strip, buf, n, playing, low_latency);
         }
         for (int bi : s->bus_order) {
             auto& b = s->buses[static_cast<std::size_t>(bi)];
             juce::AudioBuffer<float> buf(b.buffer.getArrayOfWritePointers(), 2, n);
-            process_strip(*s, b.strip, buf, n);
+            automate_strip(b.strip, pos, n, playing);
+            process_strip(*s, b.strip, buf, n, playing, false);
         }
         if (playing && metronome_.load()) {
-            while (s->click_cursor < s->clicks.size() && s->clicks[s->click_cursor].first < pos + n) {
+            // Scheduled on the heard timeline, so the click lines up with the
+            // compensated mix.
+            while (s->click_cursor < s->clicks.size() && s->clicks[s->click_cursor].first < heard_pos + n) {
                 const auto click = s->clicks[s->click_cursor++];
-                if (click.first < pos) continue;
-                const int at = static_cast<int>(click.first - pos);
+                if (click.first < heard_pos) continue;
+                const int at = static_cast<int>(click.first - heard_pos);
                 const double f = click.second ? 1760.0 : 1320.0;
                 const int len = std::min(n - at, static_cast<int>(s->sample_rate * 0.03));
                 for (int k = 0; k < len; ++k) {
@@ -1292,7 +1698,7 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
             }
         } else if (s) {
             // Keep the click cursor in step while it is off.
-            while (s->click_cursor < s->clicks.size() && s->clicks[s->click_cursor].first < pos + n) ++s->click_cursor;
+            while (s->click_cursor < s->clicks.size() && s->clicks[s->click_cursor].first < heard_pos + n) ++s->click_cursor;
         }
         for (int ch = 0; ch < num_outputs && ch < 2; ++ch)
             if (outputs[ch]) juce::FloatVectorOperations::add(outputs[ch] + offset, s->out.getReadPointer(ch), n);
@@ -1339,18 +1745,367 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
     }
 
     if (playing) position_samples_.store(pos + n);
+    const std::int64_t heard = playing ? std::max(play_start_, pos + n - comp) : position_samples_.load();
+    heard_samples_.store(heard, std::memory_order_relaxed);
+    gestures_->heard.store(heard, std::memory_order_relaxed);
 }
 
-// --- Automation and delay compensation: STUBS (the engine work replaces these) -----------
+// --- Automation (message thread) ---------------------------------------------------------
 
-std::optional<double> PlaybackEngine::automated_value(const std::string&, const std::string&) const { return {}; }
-void PlaybackEngine::begin_touch(const std::string&, const std::string&) {}
-void PlaybackEngine::touch_value(const std::string&, const std::string&, double) {}
-void PlaybackEngine::end_touch(const std::string&, const std::string&) {}
-bool PlaybackEngine::writes_automation(const std::string&, const std::string&) const { return false; }
-void PlaybackEngine::set_delay_compensation(bool) {}
-bool PlaybackEngine::delay_compensation() const noexcept { return true; }
-int PlaybackEngine::latency_samples(const std::string&) const { return 0; }
-int PlaybackEngine::compensation_samples() const { return 0; }
+namespace {
+std::string slot_key(const std::string& owner, const std::string& param) { return owner + '\x1f' + param; }
+bool writing_mode(const std::string& m) { return m == "touch" || m == "latch" || m == "write"; }
+}  // namespace
+
+std::shared_ptr<AutoSlot> PlaybackEngine::slot_for(const std::string& owner, const std::string& param, bool* created)
+{
+    auto& slot = auto_slots_[slot_key(owner, param)];
+    if (created) *created = !slot;
+    if (!slot) slot = std::make_shared<AutoSlot>();
+    return slot;
+}
+
+std::string PlaybackEngine::mode_of(const std::string& owner) const
+{
+    const auto& d = session_.data();
+    if (const auto* t = d.find_track(owner)) return t->automation_mode;
+    if (const auto* b = d.find_bus(owner)) return b->automation_mode;
+    return "off";
+}
+
+std::optional<double> PlaybackEngine::static_of(const std::string& owner, const std::string& param) const
+{
+    const auto& d = session_.data();
+    // Plug-in parameters live in the plug-in: its current value.
+    juce::AudioPluginInstance* instance = nullptr;
+    int index = -1;
+    if (param.rfind("plugin:", 0) == 0) {
+        instance = plugin_for(owner);
+        index = std::atoi(param.c_str() + 7);
+    } else if (param.rfind("insert_plugin:", 0) == 0) {
+        const auto colon = param.find(':', 14);
+        if (colon != std::string::npos) {
+            instance = insert_plugin(owner, std::atoi(param.substr(14, colon - 14).c_str()));
+            index = std::atoi(param.c_str() + colon + 1);
+        }
+    }
+    if (instance) {
+        if (index < 0 || index >= instance->getParameters().size()) return std::nullopt;
+        return static_cast<double>(instance->getParameters()[index]->getValue());
+    }
+    if (const auto* t = d.find_track(owner)) return project::static_value(*t, param);
+    if (const auto* b = d.find_bus(owner)) return project::static_value(*b, param);
+    return std::nullopt;
+}
+
+std::string PlaybackEngine::owner_name(const std::string& owner) const
+{
+    const auto& d = session_.data();
+    if (const auto* t = d.find_track(owner)) return t->name;
+    if (const auto* b = d.find_bus(owner)) return b->name;
+    return owner;
+}
+
+std::string PlaybackEngine::param_name(const std::string& owner, const std::string& param) const
+{
+    // A plug-in parameter: the plug-in's own name for it.
+    const auto colon = param.rfind(':');
+    juce::AudioPluginInstance* instance = nullptr;
+    if (param.rfind("plugin:", 0) == 0) instance = plugin_for(owner);
+    else if (param.rfind("insert_plugin:", 0) == 0 && colon > 14)
+        instance = insert_plugin(owner, std::atoi(param.substr(14, colon - 14).c_str()));
+    if (instance && colon != std::string::npos) {
+        const int index = std::atoi(param.c_str() + colon + 1);
+        if (index >= 0 && index < instance->getParameters().size())
+            return instance->getParameters()[index]->getName(64).toStdString();
+    }
+    if (const auto* lanes = session_.lanes_of(owner))
+        if (const auto* lane = project::find_lane(*lanes, param); lane && !lane->name.empty()) return lane->name;
+    const auto& d = session_.data();
+    std::vector<project::ParamInfo> params;
+    if (const auto* t = d.find_track(owner)) params = project::automatable_params(*t, d);
+    else if (const auto* b = d.find_bus(owner)) params = project::automatable_params(*b, d);
+    for (const auto& p : params)
+        if (p.id == param) return p.name;
+    const auto info = project::param_info(param);
+    return info ? info->name : param;
+}
+
+Ticks PlaybackEngine::tick_at_sample(std::int64_t sample) const
+{
+    return session_.data().tempo.tick_at_seconds(static_cast<double>(std::max<std::int64_t>(0, sample)) / sample_rate_);
+}
+
+/// Appends a written value. The previous value is held up to it (what was
+/// heard); write_pass thins the hold points away where a control moved smoothly.
+void PlaybackEngine::add_point(WriteSegment& seg, Ticks tick, double value)
+{
+    if (!seg.points.empty() && seg.points.back().tick < tick - 1) seg.points.push_back({tick - 1, seg.value, "linear"});
+    if (!seg.points.empty() && seg.points.back().tick >= tick) seg.points.back().value = value;
+    else seg.points.push_back({tick, value, "linear"});
+    seg.value = value;
+}
+
+PlaybackEngine::WriteSegment* PlaybackEngine::find_segment(const std::string& key)
+{
+    for (auto& seg : segments_)
+        if (seg.key == key) return &seg;
+    return nullptr;
+}
+
+bool PlaybackEngine::open_segment(const std::string& owner, const std::string& param, double value, bool held,
+                                  bool from_static, std::int64_t at)
+{
+    if (!project::param_info(param)) return false;
+    bool created = false;
+    WriteSegment seg;
+    seg.key = slot_key(owner, param);
+    seg.owner = owner;
+    seg.param = param;
+    seg.name = param_name(owner, param);
+    // The pass starts a tick before the first written value, so the lane's
+    // own value is kept up to the moment the control was grabbed.
+    const Ticks tick = tick_at_sample(at);
+    seg.from = std::max<Ticks>(0, tick - 1);
+    seg.value = value;
+    seg.held = held;
+    seg.from_static = from_static;
+    seg.slot = slot_for(owner, param, &created);
+    seg.slot->value.store(value);
+    seg.slot->mode.store(from_static ? 2 : 1);
+    seg.points.push_back({tick, value, "linear"});
+    segments_.push_back(std::move(seg));
+    return created;  // a parameter the snapshot does not automate yet
+}
+
+void PlaybackEngine::close_segment(std::size_t index, std::int64_t at)
+{
+    WriteSegment seg = std::move(segments_[index]);
+    segments_.erase(segments_.begin() + static_cast<std::ptrdiff_t>(index));
+    Ticks to = std::max(seg.from, tick_at_sample(at));
+    add_point(seg, to, seg.from_static ? static_of(seg.owner, seg.param).value_or(seg.value) : seg.value);
+    seg.slot->mode.store(0);  // back to the lane
+    session::Session::AutomationWrite w;
+    w.owner_id = seg.owner;
+    w.param = seg.param;
+    w.name = seg.name;
+    w.from = seg.from;
+    w.to = to;
+    w.points = std::move(seg.points);
+    written_.push_back(std::move(w));
+}
+
+void PlaybackEngine::begin_touch(const std::string& owner, const std::string& param)
+{
+    begin_touch_at(owner, param, heard_samples_.load());
+}
+
+void PlaybackEngine::touch_value(const std::string& owner, const std::string& param, double value)
+{
+    touch_value_at(owner, param, value, heard_samples_.load());
+}
+
+void PlaybackEngine::end_touch(const std::string& owner, const std::string& param)
+{
+    end_touch_at(owner, param, heard_samples_.load());
+}
+
+void PlaybackEngine::begin_touch_at(const std::string& owner, const std::string& param, std::int64_t at)
+{
+    const std::string key = slot_key(owner, param);
+    touched_.insert(key);
+    if (!writes_automation(owner, param)) return;
+    if (WriteSegment* seg = find_segment(key)) {
+        seg->held = true;
+        if (seg->from_static) {
+            // Write mode: the static value was being written; the touch takes over.
+            seg->from_static = false;
+            if (const auto v = static_of(owner, param)) add_point(*seg, tick_at_sample(at), *v);
+            seg->slot->value.store(seg->value);
+            seg->slot->mode.store(1);
+        }
+        return;
+    }
+    // Starts from what is playing now, so grabbing a control does not jump.
+    const double v = automated_value(owner, param).value_or(static_of(owner, param).value_or(
+        project::param_info(param) ? project::param_info(param)->default_value : 0.0));
+    if (open_segment(owner, param, v, true, false, at)) rebuild_now();
+}
+
+void PlaybackEngine::touch_value_at(const std::string& owner, const std::string& param, double value, std::int64_t at)
+{
+    WriteSegment* seg = find_segment(slot_key(owner, param));
+    if (!seg) {
+        // A value without a begin_touch (a click on a switch): a short gesture.
+        if (!writes_automation(owner, param)) return;
+        begin_touch_at(owner, param, at);
+        seg = find_segment(slot_key(owner, param));
+        if (!seg) return;
+        touched_.erase(seg->key);
+        seg->held = false;
+    }
+    if (const auto info = project::param_info(param)) value = std::clamp(value, info->min, info->max);
+    const Ticks tick = tick_at_sample(at);
+    add_point(*seg, tick, value);
+    seg->from_static = false;
+    seg->slot->value.store(value);
+    seg->slot->mode.store(1);
+    if (!seg->held && !touched_.count(seg->key) && mode_of(owner) == "touch") {
+        // A one-off value in touch mode is written as a short step.
+        const auto index = static_cast<std::size_t>(seg - segments_.data());
+        close_segment(index, at);
+    }
+}
+
+void PlaybackEngine::end_touch_at(const std::string& owner, const std::string& param, std::int64_t at)
+{
+    const std::string key = slot_key(owner, param);
+    touched_.erase(key);
+    WriteSegment* seg = find_segment(key);
+    if (!seg) return;
+    seg->held = false;
+    // Touch returns to the lane on release; latch and write keep the value.
+    if (mode_of(owner) == "touch") close_segment(static_cast<std::size_t>(seg - segments_.data()), at);
+}
+
+void PlaybackEngine::start_automation_pass()
+{
+    writing_pass_ = true;
+    refresh_writes();
+}
+
+void PlaybackEngine::refresh_writes()
+{
+    if (!writing_pass_ || !playing_.load()) return;
+    const std::int64_t at = heard_samples_.load();
+    bool rebuild = false;
+    // Owners that left the writing modes stop writing.
+    for (std::size_t i = segments_.size(); i-- > 0;) {
+        const std::string mode = mode_of(segments_[i].owner);
+        if (!writing_mode(mode) || (mode == "touch" && !segments_[i].held)) close_segment(i, at);
+    }
+    auto owner = [&](const std::string& id, const std::string& mode, const std::vector<project::AutomationLane>& lanes) {
+        if (!writing_mode(mode)) return;
+        // Controls already held when the pass (re)starts.
+        for (const auto& key : touched_)
+            if (key.rfind(id + '\x1f', 0) == 0 && !find_segment(key)) {
+                const std::string param = key.substr(id.size() + 1);
+                const double v = static_of(id, param).value_or(0.0);
+                rebuild = open_segment(id, param, v, true, false, at) || rebuild;
+            }
+        if (mode != "write") return;
+        // Write: every lane of the strip, with the control's current (static) value.
+        for (const auto& lane : lanes) {
+            if (!lane.enabled) continue;
+            WriteSegment* seg = find_segment(slot_key(id, lane.param));
+            const auto v = static_of(id, lane.param);
+            if (!seg) {
+                if (v) rebuild = open_segment(id, lane.param, *v, false, true, at) || rebuild;
+            } else if (seg->from_static && v && !juce::exactlyEqual(*v, seg->value)) {
+                // The static value moved during the pass (a console edit): write it.
+                add_point(*seg, tick_at_sample(at), *v);
+            }
+        }
+    };
+    for (const auto& t : session_.data().tracks) owner(t.id, t.automation_mode, t.automation);
+    for (const auto& b : session_.data().buses) owner(b.id, b.automation_mode, b.automation);
+    if (rebuild) rebuild_now();
+}
+
+void PlaybackEngine::finish_automation_pass()
+{
+    drain_gestures();
+    const std::int64_t at = heard_samples_.load();
+    while (!segments_.empty()) close_segment(segments_.size() - 1, at);
+    writing_pass_ = false;
+    if (written_.empty()) return;
+    std::vector<session::Session::AutomationWrite> writes;
+    juce::StringArray names;
+    for (auto& w : written_) {
+        if (session_.lanes_of(w.owner_id) == nullptr) continue;  // the strip was deleted
+        names.addIfNotAlreadyThere(juce::String(param_name(w.owner_id, w.param)) + " (" + juce::String(owner_name(w.owner_id)) + ")");
+        writes.push_back(std::move(w));
+    }
+    written_.clear();
+    if (writes.empty()) return;
+    committing_ = true;
+    const bool ok = session_.commit_automation_pass(writes);
+    committing_ = false;
+    if (ok && on_automation_written) on_automation_written("Wrote automation: " + names.joinIntoString(", "));
+}
+
+std::optional<double> PlaybackEngine::automated_value(const std::string& owner, const std::string& param) const
+{
+    for (const auto& seg : segments_)
+        if (seg.owner == owner && seg.param == param) return seg.from_static ? static_of(owner, param) : seg.value;
+    if (mode_of(owner) == "off") return std::nullopt;
+    const auto* lanes = session_.lanes_of(owner);
+    const auto* lane = lanes ? project::find_lane(*lanes, param) : nullptr;
+    if (!lane || !lane->enabled || lane->points.empty()) return std::nullopt;
+    return project::value_at(*lane, position());
+}
+
+bool PlaybackEngine::writes_automation(const std::string& owner, const std::string& param) const
+{
+    return playing_.load() && writing_mode(mode_of(owner)) && project::param_info(param).has_value();
+}
+
+void PlaybackEngine::watch_plugin(juce::AudioPluginInstance& instance, const void* holder, bool has_watch,
+                                  const std::function<void(std::unique_ptr<ParameterWatch>)>& attach,
+                                  std::map<int, std::pair<std::string, std::string>>& targets,
+                                  const std::string& owner, const std::string& prefix)
+{
+    int& id = watch_ids_[holder];
+    if (!has_watch || id == 0) {
+        id = next_watch_++;
+        attach(std::make_unique<ParameterWatch>(instance, gestures_, id));
+    }
+    targets[id] = {owner, prefix};
+}
+
+void PlaybackEngine::drain_gestures()
+{
+    GestureEvent e;
+    while (gestures_->pop(e)) {
+        auto it = insert_watch_targets_.find(e.watch);
+        if (it == insert_watch_targets_.end()) {
+            it = instrument_watch_targets_.find(e.watch);
+            if (it == instrument_watch_targets_.end()) continue;
+        }
+        const std::string owner = it->second.first;
+        const std::string param = it->second.second + std::to_string(e.param);
+        const bool held = touched_.count(slot_key(owner, param)) > 0;
+        if (e.kind == 1) begin_touch_at(owner, param, e.at);
+        else if (e.kind == 2) end_touch_at(owner, param, e.at);
+        else if (held) touch_value_at(owner, param, e.value, e.at);  // values outside a gesture are not ours
+    }
+}
+
+std::vector<int> PlaybackEngine::current_latencies() const
+{
+    std::vector<int> out;
+    for (const auto& [id, slot] : instruments_) out.push_back(slot.instrument ? slot.instrument->latency_samples() : 0);
+    for (const auto& [key, insert] : inserts_) out.push_back(insert ? insert->latency_samples() : 0);
+    return out;
+}
+
+// --- Plug-in delay compensation ---------------------------------------------------------------
+
+void PlaybackEngine::set_delay_compensation(bool on)
+{
+    if (pdc_ == on) return;
+    pdc_ = on;
+    rebuild_now();
+}
+
+bool PlaybackEngine::delay_compensation() const noexcept { return pdc_; }
+
+int PlaybackEngine::latency_samples(const std::string& strip_id) const
+{
+    auto it = strip_latency_.find(strip_id);
+    return it == strip_latency_.end() ? 0 : it->second;
+}
+
+int PlaybackEngine::compensation_samples() const { return compensation_; }
 
 }  // namespace vcc::desktop
