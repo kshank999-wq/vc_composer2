@@ -1,1 +1,1 @@
-vcc_add_library(vcc_session DEPS vcc_cues vcc_picture vcc_templates vcc_project vcc_theory vcc_ostinato vcc_core)
+vcc_add_library(vcc_session DEPS vcc_interchange vcc_cues vcc_picture vcc_templates vcc_project vcc_theory vcc_ostinato vcc_core)

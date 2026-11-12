@@ -69,6 +69,7 @@ add_subdirectory(templates)
 add_subdirectory(picture)
 add_subdirectory(media)
 add_subdirectory(cues)
+add_subdirectory(interchange)
 add_subdirectory(session)
 
 if(VCC_BUILD_TOOLS)

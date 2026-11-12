@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "vcc/interchange/MusicXml.h"
 #include "vcc/ostinato/Ostinato.h"
 #include "vcc/project/Project.h"
 #include "vcc/templates/Templates.h"
@@ -39,6 +40,14 @@ struct Catalogs {
     static std::unique_ptr<Catalogs> load_from_documents(const std::map<std::string, std::string>& documents);
 
     int error_count() const noexcept;
+};
+
+/// What a MusicXML import did (Session::import_musicxml).
+struct ImportSummary {
+    bool ok = false;
+    std::string error;                    ///< Why nothing was imported.
+    std::vector<std::string> track_ids;   ///< One instrument track per part, in file order.
+    std::vector<std::string> warnings;    ///< What was approximated or left out.
 };
 
 enum class Change {
@@ -127,6 +136,23 @@ public:
     /// Ostinato Creator "Send to Track" (Supplement §10.1): one undo step.
     project::InsertResult send_ostinato(const std::string& track_id, const ostinato::Variant& variant,
                                         const std::string& preset_id, project::CollisionPolicy policy);
+
+    // --- MusicXML (interchange with Finale, Sibelius, Dorico, MuseScore) ----------
+    /// Imports a MusicXML document as one undo step ("Import MusicXML"): one
+    /// instrument track per part, its score as the track's active version,
+    /// the instrument guessed from the part name, transposition and MIDI
+    /// program. With `replace_project` the existing tracks (all but video)
+    /// are replaced and the project takes the file's title, composer, tempo,
+    /// meter and key; without it the parts are added, and the file's tempo,
+    /// meter and key are applied only when the project has no tracks yet.
+    ImportSummary import_musicxml(const std::string& xml, bool replace_project);
+    /// MusicXML 4.0 of the project; part abbreviations and MIDI programs not
+    /// given in `options.part_info` come from the instrument registry.
+    std::string export_musicxml(const interchange::ExportOptions& options = {},
+                                std::vector<std::string>* warnings = nullptr) const;
+    /// Registry id for an imported part (best effort; always an id that exists
+    /// when the registry has any instruments).
+    std::string guess_instrument(const interchange::ImportedPart& part) const;
 
     // --- Picture, markers and cues (Main Spec §13, §14) ------------------------------
     bool set_frame_rate(FrameRate rate);
