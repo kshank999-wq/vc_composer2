@@ -2,6 +2,7 @@
 
 #include "audio/PlaceholderSynth.h"
 #include "ui/AudioTrackStyle.h"
+#include "ui/SequencerView.h"
 #include "ui/Theme.h"
 
 namespace vcc::desktop {
@@ -561,6 +562,19 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
         });
     }
     m.addSeparator();
+    if (auto* seq = SequencerView::find(c)) {
+        const bool shown = seq->automation_shown(id);
+        m.addItem(shown ? "Hide Automation" : "Show Automation", [&c, id, shown] {
+            if (auto* sv = SequencerView::find(c)) {
+                sv->show_automation(id, !shown);
+                if (!shown) c.commands.invokeDirectly(cmd::showSequencer, true);
+            }
+        });
+        m.addItem("Hide All Automation", [&c] {
+            if (auto* sv = SequencerView::find(c)) sv->hide_all_automation();
+        });
+        m.addSeparator();
+    }
     m.addItem("Remove track", [&c, id] { c.session.remove_track(id); });
     m.showMenuAsync({});
 }

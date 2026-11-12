@@ -4,8 +4,10 @@
 #include <cmath>
 #include <type_traits>
 
+#include "audio/PlaybackEngine.h"
 #include "ui/Theme.h"
 #include "ui/TrackPanel.h"
+#include "vcc/project/Automation.h"
 
 namespace vcc::desktop::console {
 
@@ -17,6 +19,18 @@ constexpr int kLabel = 9;
 constexpr int kKnob = 26;
 constexpr int kSendRow = 30;
 constexpr int kInsertSlot = 15;
+constexpr int kDelayRow = 16;
+constexpr int kAutoRow = 20;
+
+/// The device rate (for showing delays in milliseconds); 48k without a device.
+double engine_rate(PlaybackEngine& engine)
+{
+    if (auto* device = engine.devices().getCurrentAudioDevice()) {
+        const double rate = device->getCurrentSampleRate();
+        if (rate > 0.0) return rate;
+    }
+    return 48000.0;
+}
 
 const juce::Colour kGroupColour{0xff5b8fd6};
 const juce::Colour kFxColour{0xffa07ad6};
@@ -174,7 +188,7 @@ const char* section_title(Section s)
 int ConsoleLayout::section_height(Section s) const noexcept
 {
     switch (s) {
-        case Section::Input: return kHeading + 19 + kRow + 2;
+        case Section::Input: return kHeading + 19 + kRow + kDelayRow + 2;
         case Section::Filters: return kHeading + kRow + 4;
         case Section::Eq: return kHeading + 33 + 4 * kRow + 20 + 2;
         case Section::Dynamics: return kHeading + 2 * kRow + 14 + kRow + 20 + 2;
@@ -279,6 +293,7 @@ Strip::Strip(AppContext& context, Kind kind, std::string id, const ConsoleLayout
       dyn_pre_("PRE", paint::led_white, "Dynamics before the EQ"),
       gate_in_("GATE IN", paint::led_amber, "Gate / expander in"),
       pan_(pan_knob()),
+      auto_mode_("Automation mode: Off / Read / Touch / Latch / Write - click to choose; alt-click sets every strip"),
       rec_("REC", paint::led_red, "Record arm"),
       monitor_("AUTO", paint::led_green, "Input monitoring: Auto, Input or Off"),
       mute_("MUTE", paint::led_amber, "Mute"),
@@ -294,7 +309,10 @@ Strip::Strip(AppContext& context, Kind kind, std::string id, const ConsoleLayout
     refresh();
 }
 
-Strip::~Strip() = default;
+Strip::~Strip()
+{
+    for (const auto& param : touching_) context_.engine.end_touch(id_, param);
+}
 
 juce::Component& Strip::top() noexcept { return *top_; }
 juce::Component& Strip::bottom() noexcept { return *bottom_; }
@@ -311,28 +329,68 @@ template <typename F> void Strip::edit(const juce::String& what, F&& change)
     else context_.session.update_bus(id_, label, [&](project::Bus& b) { change(b); });
 }
 
-void Strip::bind_strip_knob(Knob& knob, const juce::String& what, double project::ChannelStrip::*field)
+std::string Strip::engine_id() const { return kind_ == Kind::Master ? std::string("bus-master") : id_; }
+
+void Strip::bind(juce::Component& control, ControlType type, std::string param)
 {
-    knob.on_change = [this, what, field](double v) { edit(what, [&](auto& x) { x.strip.*field = v; }); };
-    knob.setTooltip(what + " - drag; shift for fine; double-click to reset");
+    bindings_.push_back({&control, type, std::move(param), false});
+}
+
+void Strip::bind_knob(Knob& knob, const juce::String& what, const std::string& param, std::function<void(double)> write)
+{
+    knob.on_start = [this, param] { start_touch(param); };
+    knob.on_change = [this, param, write = std::move(write)](double v) {
+        if (!touch(param, v)) write(v);
+    };
+    knob.on_end = [this, param] { end_touch(param); };
+    knob.on_menu = [this, &knob, param] { show_automation_menu(knob, param); };
+    knob.setTooltip(what + " - drag; shift for fine; double-click to reset; right-click for automation");
+    bind(knob, ControlType::Knob, param);
+}
+
+void Strip::bind_toggle(LedButton& button, const std::string& param, std::function<void(bool)> write)
+{
+    button.onClick = [this, &button, param, write = std::move(write)] {
+        begin_gesture();
+        const bool v = !button.getToggleState();
+        if (start_touch(param)) {
+            // A switch is a touch of its own: begin, the new value, end.
+            touch(param, v ? 1.0 : 0.0);
+            end_touch(param);
+            button.set_lit(v);
+            return;
+        }
+        write(v);
+    };
+    button.on_menu = [this, &button, param] { show_automation_menu(button, param); };
+    bind(button, ControlType::Button, param);
+}
+
+void Strip::bind_strip_knob(Knob& knob, const juce::String& what, double project::ChannelStrip::*field,
+                            const std::string& param)
+{
+    bind_knob(knob, what, param, [this, what, field](double v) { edit(what, [&](auto& x) { x.strip.*field = v; }); });
 }
 
 void Strip::bind_band_knob(Knob& knob, const juce::String& what, project::EqBand project::ChannelStrip::*band,
-                           double project::EqBand::*field)
+                           double project::EqBand::*field, const std::string& param)
 {
-    knob.on_change = [this, what, band, field](double v) {
-        edit(what, [&](auto& x) { (x.strip.*band).*field = v; });
-    };
-    knob.setTooltip(what + " - drag; shift for fine; double-click to reset");
+    bind_knob(knob, what, param,
+              [this, what, band, field](double v) { edit(what, [&](auto& x) { (x.strip.*band).*field = v; }); });
 }
 
-void Strip::bind_strip_button(LedButton& button, const juce::String& what, bool project::ChannelStrip::*field)
+void Strip::bind_strip_button(LedButton& button, const juce::String& what, bool project::ChannelStrip::*field,
+                              const std::string& param)
 {
-    button.onClick = [this, &button, what, field] {
-        begin_gesture();
-        const bool v = !button.getToggleState();
-        edit(what, [&](auto& x) { x.strip.*field = v; });
-    };
+    auto write = [this, what, field](bool v) { edit(what, [&](auto& x) { x.strip.*field = v; }); };
+    if (param.empty()) {
+        button.onClick = [&button, write] {
+            begin_gesture();
+            write(!button.getToggleState());
+        };
+        return;
+    }
+    bind_toggle(button, param, write);
 }
 
 void Strip::bind_band_button(LedButton& button, const juce::String& what, project::EqBand project::ChannelStrip::*band,
@@ -355,49 +413,50 @@ void Strip::setup_controls()
              &input_, &trim_, &phase_, &hpf_, &lpf_, &hpf_in_, &lpf_in_, &curve_, &hf_gain_, &hf_freq_, &hmf_gain_,
              &hmf_freq_, &hmf_q_, &lmf_gain_, &lmf_freq_, &lmf_q_, &lf_gain_, &lf_freq_, &hf_bell_, &lf_bell_, &eq_in_,
              &comp_threshold_, &comp_ratio_, &comp_makeup_, &comp_attack_, &comp_release_, &gate_threshold_,
-             &gate_range_, &gate_release_, &dyn_in_, &dyn_pre_, &gate_in_, &gr_, &inserts_, &output_})
+             &gate_range_, &gate_release_, &dyn_in_, &dyn_pre_, &gate_in_, &gr_, &inserts_, &output_, &delay_})
         T.addChildComponent(c);
     for (auto& row : sends_) {
         T.addChildComponent(row->knob);
         T.addChildComponent(row->pre);
         T.addChildComponent(row->mute);
     }
-    for (juce::Component* c : std::initializer_list<juce::Component*>{&pan_, &mute_, &fader_, &meter_, &readout_, &scribble_})
+    for (juce::Component* c :
+         std::initializer_list<juce::Component*>{&pan_, &auto_mode_, &mute_, &fader_, &meter_, &readout_, &scribble_})
         B.addAndMakeVisible(c);
     B.addChildComponent(rec_);
     B.addChildComponent(monitor_);
     B.addChildComponent(solo_);
 
-    bind_strip_knob(trim_, "Trim", &CS::trim_db);
-    bind_strip_button(phase_, "Phase", &CS::phase_invert);
-    bind_strip_knob(hpf_, "HPF", &CS::hpf_hz);
-    bind_strip_knob(lpf_, "LPF", &CS::lpf_hz);
-    bind_strip_button(hpf_in_, "HPF in", &CS::hpf_on);
-    bind_strip_button(lpf_in_, "LPF in", &CS::lpf_on);
-    bind_band_knob(hf_gain_, "HF gain", &CS::hf, &EB::gain_db);
-    bind_band_knob(hf_freq_, "HF freq", &CS::hf, &EB::freq);
-    bind_band_knob(hmf_gain_, "HMF gain", &CS::hmf, &EB::gain_db);
-    bind_band_knob(hmf_freq_, "HMF freq", &CS::hmf, &EB::freq);
-    bind_band_knob(hmf_q_, "HMF Q", &CS::hmf, &EB::q);
-    bind_band_knob(lmf_gain_, "LMF gain", &CS::lmf, &EB::gain_db);
-    bind_band_knob(lmf_freq_, "LMF freq", &CS::lmf, &EB::freq);
-    bind_band_knob(lmf_q_, "LMF Q", &CS::lmf, &EB::q);
-    bind_band_knob(lf_gain_, "LF gain", &CS::lf, &EB::gain_db);
-    bind_band_knob(lf_freq_, "LF freq", &CS::lf, &EB::freq);
-    bind_band_button(hf_bell_, "HF bell", &CS::hf, &EB::bell);
+    bind_strip_knob(trim_, "Trim", &CS::trim_db, "strip.trim_db");
+    bind_strip_button(phase_, "Phase", &CS::phase_invert, "strip.phase_invert");
+    bind_strip_knob(hpf_, "HPF", &CS::hpf_hz, "strip.hpf_hz");
+    bind_strip_knob(lpf_, "LPF", &CS::lpf_hz, "strip.lpf_hz");
+    bind_strip_button(hpf_in_, "HPF in", &CS::hpf_on, "strip.hpf_on");
+    bind_strip_button(lpf_in_, "LPF in", &CS::lpf_on, "strip.lpf_on");
+    bind_band_knob(hf_gain_, "HF gain", &CS::hf, &EB::gain_db, "strip.hf.gain_db");
+    bind_band_knob(hf_freq_, "HF freq", &CS::hf, &EB::freq, "strip.hf.freq");
+    bind_band_knob(hmf_gain_, "HMF gain", &CS::hmf, &EB::gain_db, "strip.hmf.gain_db");
+    bind_band_knob(hmf_freq_, "HMF freq", &CS::hmf, &EB::freq, "strip.hmf.freq");
+    bind_band_knob(hmf_q_, "HMF Q", &CS::hmf, &EB::q, "strip.hmf.q");
+    bind_band_knob(lmf_gain_, "LMF gain", &CS::lmf, &EB::gain_db, "strip.lmf.gain_db");
+    bind_band_knob(lmf_freq_, "LMF freq", &CS::lmf, &EB::freq, "strip.lmf.freq");
+    bind_band_knob(lmf_q_, "LMF Q", &CS::lmf, &EB::q, "strip.lmf.q");
+    bind_band_knob(lf_gain_, "LF gain", &CS::lf, &EB::gain_db, "strip.lf.gain_db");
+    bind_band_knob(lf_freq_, "LF freq", &CS::lf, &EB::freq, "strip.lf.freq");
+    bind_band_button(hf_bell_, "HF bell", &CS::hf, &EB::bell);  // shelf/bell is not automatable
     bind_band_button(lf_bell_, "LF bell", &CS::lf, &EB::bell);
-    bind_strip_button(eq_in_, "EQ in", &CS::eq_on);
-    bind_strip_knob(comp_threshold_, "Comp threshold", &CS::comp_threshold_db);
-    bind_strip_knob(comp_ratio_, "Comp ratio", &CS::comp_ratio);
-    bind_strip_knob(comp_makeup_, "Comp make-up", &CS::comp_makeup_db);
-    bind_strip_knob(comp_attack_, "Comp attack", &CS::comp_attack_ms);
-    bind_strip_knob(comp_release_, "Comp release", &CS::comp_release_ms);
-    bind_strip_knob(gate_threshold_, "Gate threshold", &CS::gate_threshold_db);
-    bind_strip_knob(gate_range_, "Gate range", &CS::gate_range_db);
-    bind_strip_knob(gate_release_, "Gate release", &CS::gate_release_ms);
-    bind_strip_button(dyn_in_, "Dynamics in", &CS::comp_on);
-    bind_strip_button(dyn_pre_, "Dynamics pre EQ", &CS::dynamics_pre_eq);
-    bind_strip_button(gate_in_, "Gate in", &CS::gate_on);
+    bind_strip_button(eq_in_, "EQ in", &CS::eq_on, "strip.eq_on");
+    bind_strip_knob(comp_threshold_, "Comp threshold", &CS::comp_threshold_db, "strip.comp_threshold_db");
+    bind_strip_knob(comp_ratio_, "Comp ratio", &CS::comp_ratio, "strip.comp_ratio");
+    bind_strip_knob(comp_makeup_, "Comp make-up", &CS::comp_makeup_db, "strip.comp_makeup_db");
+    bind_strip_knob(comp_attack_, "Comp attack", &CS::comp_attack_ms, "strip.comp_attack_ms");
+    bind_strip_knob(comp_release_, "Comp release", &CS::comp_release_ms, "strip.comp_release_ms");
+    bind_strip_knob(gate_threshold_, "Gate threshold", &CS::gate_threshold_db, "strip.gate_threshold_db");
+    bind_strip_knob(gate_range_, "Gate range", &CS::gate_range_db, "strip.gate_range_db");
+    bind_strip_knob(gate_release_, "Gate release", &CS::gate_release_ms, "strip.gate_release_ms");
+    bind_strip_button(dyn_in_, "Dynamics in", &CS::comp_on, "strip.comp_on");
+    bind_strip_button(dyn_pre_, "Dynamics pre EQ", &CS::dynamics_pre_eq, {});  // not automatable
+    bind_strip_button(gate_in_, "Gate in", &CS::gate_on, "strip.gate_on");
 
     input_.on_click = nullptr;
     output_.on_click = [this] { show_output_menu(); };
@@ -408,7 +467,7 @@ void Strip::setup_controls()
 
     for (auto& row : sends_) {
         auto* r = row.get();
-        r->knob.on_change = [this, r](double v) {
+        bind_knob(r->knob, "Send", "send:" + r->bus.id, [this, r](double v) {
             edit("Send " + juce::String(r->bus.name), [&](auto& x) {
                 auto it = std::find_if(x.sends.begin(), x.sends.end(), [&](const project::Send& s) { return s.bus_id == r->bus.id; });
                 if (it == x.sends.end()) {
@@ -417,7 +476,7 @@ void Strip::setup_controls()
                     it->level_db = v;
                 }
             });
-        };
+        });
         r->knob.on_menu = [this, r] { show_send_menu(r->bus.id); };
         r->knob.setTooltip("Send to " + juce::String(r->bus.name) + " - drag to set (creates the send); right-click for options");
         auto toggle = [this, r](bool pre) {
@@ -436,15 +495,20 @@ void Strip::setup_controls()
         r->mute.onClick = [toggle] { toggle(false); };
     }
 
-    pan_.on_change = [this](double v) { edit("Pan", [&](auto& x) { x.pan = v; }); };
-    pan_.setTooltip(kind_ == Kind::Master ? "Balance - double-click to centre" : "Pan - double-click to centre");
-    fader_.on_change = [this](double v) { edit("Fader", [&](auto& x) { x.gain_db = v; }); };
-    fader_.setTooltip("Level - drag (shift for fine); double-click or alt-click for 0 dB");
-    mute_.onClick = [this] {
-        begin_gesture();
-        const bool v = !mute_.getToggleState();
-        edit(v ? "Mute" : "Unmute", [&](auto& x) { x.mute = v; });
+    bind_knob(pan_, kind_ == Kind::Master ? "Balance" : "Pan", "pan", [this](double v) { edit("Pan", [&](auto& x) { x.pan = v; }); });
+    pan_.setTooltip(kind_ == Kind::Master ? "Balance - double-click to centre; right-click for automation"
+                                          : "Pan - double-click to centre; right-click for automation");
+    fader_.on_start = [this] { start_touch("volume"); };
+    fader_.on_change = [this](double v) {
+        if (!touch("volume", v)) edit("Fader", [&](auto& x) { x.gain_db = v; });
     };
+    fader_.on_end = [this] { end_touch("volume"); };
+    fader_.on_menu = [this] { show_automation_menu(fader_, "volume"); };
+    bind(fader_, ControlType::Fader, "volume");
+    fader_.setTooltip("Level - drag (shift for fine); double-click or alt-click for 0 dB; right-click for automation");
+    bind_toggle(mute_, "mute", [this](bool v) { edit(v ? "Mute" : "Unmute", [&](auto& x) { x.mute = v; }); });
+    auto_mode_.onClick = [this] { show_automation_mode_menu(juce::ModifierKeys::currentModifiers.isAltDown()); };
+    auto_mode_.on_menu = [this] { show_automation_mode_menu(false); };
     solo_.onClick = [this] {
         begin_gesture();
         const bool v = !solo_.getToggleState();
@@ -516,6 +580,8 @@ void Strip::refresh()
     bool mute = false, solo = false, dim = false;
     std::string output;
     juce::String badge, number;
+    const std::vector<project::AutomationLane>* lanes = nullptr;
+    std::string mode;
 
     if (is_track()) {
         const auto* t = d.find_track(id_);
@@ -528,6 +594,8 @@ void Strip::refresh()
         mute = t->mute;
         solo = t->solo;
         output = t->output_bus_id;
+        lanes = &t->automation;
+        mode = t->automation_mode;
         name_ = t->name;
         colour_ = colour_from_hex(t->color);
         track_kind_ = t->kind;
@@ -576,6 +644,8 @@ void Strip::refresh()
         mute = b->mute;
         solo = b->solo;
         output = b->output;
+        lanes = &b->automation;
+        mode = b->automation_mode;
         name_ = kind_ == Kind::Master ? std::string("MASTER") : b->name;
         const auto fallback = kind_ == Kind::Master ? kMasterColour : (kind_ == Kind::Fx ? kFxColour : kGroupColour);
         colour_ = b->color.empty() ? fallback : colour_from_hex(b->color, fallback);
@@ -611,16 +681,11 @@ void Strip::refresh()
     hf_bell_.set_lit(cs->hf.bell);
     lf_bell_.set_lit(cs->lf.bell);
     eq_in_.set_lit(cs->eq_on);
-    EqCurveParams ep;
-    ep.eq_on = cs->eq_on;
-    ep.hpf_on = cs->hpf_on;
-    ep.lpf_on = cs->lpf_on;
-    ep.hpf = cs->hpf_hz;
-    ep.lpf = cs->lpf_hz;
     const project::EqBand* bands[4] = {&cs->lf, &cs->lmf, &cs->hmf, &cs->hf};
-    for (std::size_t i = 0; i < 4; ++i)
-        ep.bands[i] = {bands[i]->freq, bands[i]->on ? bands[i]->gain_db : 0.0, bands[i]->q, i == 1 || i == 2 || bands[i]->bell};
-    curve_.set(ep);
+    for (std::size_t i = 0; i < 4; ++i) {
+        band_on_[i] = bands[i]->on;
+        band_q_[i] = bands[i]->q;
+    }
     // Dynamics
     comp_threshold_.set_value(cs->comp_threshold_db);
     comp_ratio_.set_value(cs->comp_ratio);
@@ -679,14 +744,199 @@ void Strip::refresh()
     fader_.set_value(gain);
     readout_.set(db_text(gain, false), paint::lcd_text, false);
     scribble_.set(name_, colour_, number, badge, dim);
+    // Automation: indicators, then whatever the lanes are playing now.
+    refresh_automation(*lanes, mode);
+    follow_automation();
+    update_curve();
+    delay_tick();
     update_selection();
 }
+
+void Strip::update_curve()
+{
+    // From the controls, so the curve moves with automated knobs too.
+    EqCurveParams ep;
+    ep.eq_on = eq_in_.getToggleState();
+    ep.hpf_on = hpf_in_.getToggleState();
+    ep.lpf_on = lpf_in_.getToggleState();
+    ep.hpf = hpf_.value();
+    ep.lpf = lpf_.value();
+    const std::array<const Knob*, 4> freq{&lf_freq_, &lmf_freq_, &hmf_freq_, &hf_freq_};
+    const std::array<const Knob*, 4> gain{&lf_gain_, &lmf_gain_, &hmf_gain_, &hf_gain_};
+    const std::array<double, 4> q{band_q_[0], lmf_q_.value(), hmf_q_.value(), band_q_[3]};
+    const std::array<bool, 4> bell{lf_bell_.getToggleState(), true, true, hf_bell_.getToggleState()};
+    for (std::size_t i = 0; i < 4; ++i)
+        ep.bands[i] = {freq[i]->value(), band_on_[i] ? gain[i]->value() : 0.0, q[i], bell[i]};
+    curve_.set(ep);
+}
+
+// --- Automation ------------------------------------------------------------------------------
+
+void set_all_automation_modes(AppContext& context, const std::string& mode)
+{
+    auto& session = context.session;
+    std::vector<std::string> tracks, buses;  // ids first: every edit replaces the document
+    for (const auto* t : session.music_tracks())
+        if (t->automation_mode != mode) tracks.push_back(t->id);
+    for (const auto& b : session.data().buses)
+        if (b.automation_mode != mode) buses.push_back(b.id);
+    if (tracks.empty() && buses.empty()) return;
+    begin_gesture();
+    const std::string label = "Automation " + mode + " (all strips)" + gesture_suffix();  // same label: one undo step
+    for (const auto& id : tracks) session.update_track_mix(id, label, [&](project::Track& t) { t.automation_mode = mode; });
+    for (const auto& id : buses) session.update_bus(id, label, [&](project::Bus& b) { b.automation_mode = mode; });
+}
+
+void Strip::refresh_automation(const std::vector<project::AutomationLane>& lanes, const std::string& mode)
+{
+    mode_ = mode;
+    lanes_.clear();
+    for (const auto& l : lanes) lanes_[l.param] = {l.id, l.enabled};
+    const bool off = mode_ == "off" || automation_colour(mode_).isTransparent();
+    const auto lamp = automation_colour(mode_);
+    followers_.clear();
+    for (std::size_t i = 0; i < bindings_.size(); ++i) {
+        auto& b = bindings_[i];
+        b.following = false;
+        const auto it = lanes_.find(b.param);
+        const bool active = !off && it != lanes_.end() && it->second.second;
+        const auto colour = active ? lamp : juce::Colours::transparentBlack;
+        switch (b.type) {
+            case ControlType::Knob: static_cast<Knob*>(b.control)->set_automation(colour); break;
+            case ControlType::Fader: static_cast<Fader*>(b.control)->set_automation(colour); break;
+            case ControlType::Button: static_cast<LedButton*>(b.control)->set_automation(colour); break;
+        }
+        if (active) followers_.push_back(i);
+    }
+    auto_mode_.set_mode(mode_);
+}
+
+void Strip::show_control_value(Binding& b, double value)
+{
+    switch (b.type) {
+        case ControlType::Knob: static_cast<Knob*>(b.control)->set_value(value); break;
+        case ControlType::Fader: static_cast<Fader*>(b.control)->set_value(value); break;
+        case ControlType::Button: static_cast<LedButton*>(b.control)->set_lit(value >= 0.5); break;
+    }
+    show_dependent(b.param, value);
+}
+
+void Strip::show_dependent(const std::string& param, double value)
+{
+    if (param == "volume") {
+        readout_.set(db_text(value, false), paint::lcd_text, false);
+    } else if (param == "pan" && std::abs(value - pan_value_) > 1e-9) {
+        pan_value_ = value;
+        bottom_->repaint(pan_text_area_);
+    }
+}
+
+void Strip::follow_automation()
+{
+    if (followers_.empty()) return;
+    bool stopped = false, strip_moved = false;
+    for (const auto i : followers_) {
+        auto& b = bindings_[i];
+        if (touching_.count(b.param) != 0) continue;  // the hand wins
+        if (const auto v = context_.engine.automated_value(id_, b.param)) {
+            show_control_value(b, *v);
+            b.following = true;
+            if (b.param.rfind("strip.", 0) == 0) strip_moved = true;
+        } else if (b.following) {
+            stopped = true;  // back to the static value
+        }
+    }
+    if (stopped) refresh();  // re-reads the static values (and follows again where a lane still plays)
+    else if (strip_moved) update_curve();
+}
+
+bool Strip::start_touch(const std::string& param)
+{
+    if (!context_.engine.writes_automation(id_, param)) return false;
+    context_.engine.begin_touch(id_, param);
+    touching_.insert(param);
+    return true;
+}
+
+bool Strip::touch(const std::string& param, double value)
+{
+    if (touching_.count(param) == 0) return false;
+    context_.engine.touch_value(id_, param, value);
+    show_dependent(param, value);
+    if (param.rfind("strip.", 0) == 0) update_curve();
+    return true;
+}
+
+void Strip::end_touch(const std::string& param)
+{
+    if (touching_.erase(param) != 0) context_.engine.end_touch(id_, param);
+}
+
+std::string Strip::param_of(const juce::Component* control) const
+{
+    for (const auto& b : bindings_)
+        if (b.control == control) return b.param;
+    return {};
+}
+
+juce::Component* Strip::control_for(const std::string& param) const
+{
+    for (const auto& b : bindings_)
+        if (b.param == param) return b.control;
+    return nullptr;
+}
+
+std::vector<std::pair<juce::Component*, std::string>> Strip::automation_controls() const
+{
+    std::vector<std::pair<juce::Component*, std::string>> out;
+    for (const auto& b : bindings_) out.emplace_back(b.control, b.param);
+    return out;
+}
+
+void Strip::choose_automation_mode(const std::string& mode, bool all_strips)
+{
+    if (all_strips) set_all_automation_modes(context_, mode);
+    else context_.session.set_automation_mode(id_, mode);  // may rebuild nothing: the strip stays
+}
+
+juce::String Strip::lane_name(const std::string& param) const
+{
+    if (param.rfind("send:", 0) == 0) {
+        const auto* b = context_.session.data().find_bus(param.substr(5));
+        return "Send " + juce::String(b ? b->name : param.substr(5));
+    }
+    if (param == "pan" && kind_ == Kind::Master) return "Balance";
+    if (const auto info = project::param_info(param)) return info->name;
+    return param;
+}
+
+void Strip::show_automation_lane(const std::string& param)
+{
+    if (context_.session.ensure_lane(id_, param, lane_name(param).toStdString()).empty())
+        context_.status("This control cannot be automated here");
+}
+
+void Strip::toggle_lane_enabled(const std::string& param)
+{
+    const auto it = lanes_.find(param);
+    if (it == lanes_.end()) return;
+    begin_gesture();
+    const bool on = !it->second.second;
+    const std::string lane = it->second.first;
+    context_.session.edit_lane(id_, lane,
+                               (on ? "Enable automation " : "Disable automation ") + lane_name(param).toStdString() +
+                                   gesture_suffix(),
+                               [on](project::AutomationLane& l) { l.enabled = on; });
+}
+
+void Strip::delay_tick() { delay_.set(context_.engine.latency_samples(engine_id()), engine_rate(context_.engine)); }
 
 void Strip::tick(int tick_count)
 {
     const auto m = context_.engine.take_meter(kind_ == Kind::Master ? std::string("bus-master") : id_);
     meter_.push(m.left, m.right, m.clipped);
     gr_.set(m.gain_reduction_db, m.gate_closed);
+    follow_automation();
     if (record_armed_ && can_record()) {
         // Armed: steady while recording, blinking while the transport is record-enabled but idle.
         const bool blink = context_.engine.record_enabled() && !context_.engine.recording();
@@ -759,6 +1009,9 @@ void Strip::layout_top()
                     fmt = "BUS";
                 }
                 label(col(2, y + 14.0f, 10.0f), fmt, paint::print_dim);
+                y += kRow;
+                delay_.setBounds(juce::Rectangle<float>(pad + 1.0f, y + 1.0f, w - 2.0f * pad - 2.0f, 13.0f).toNearestInt());
+                delay_.setVisible(true);
                 break;
             }
             case Section::Filters:
@@ -850,6 +1103,10 @@ void Strip::layout_bottom()
     pan_.setBounds(w / 2 - pd / 2, y + kLabel, pd, 34);
     pan_text_area_ = {0, y + kLabel + 34, w, 10};
     y += kLabel + 34 + 12;
+    const int auto_label = w < 90 ? 20 : 26;
+    auto_label_area_ = {pad, y, auto_label, 17};
+    auto_mode_.setBounds(pad + auto_label, y, w - 2 * pad - auto_label, 17);
+    y += kAutoRow;
     const int half = (w - 2 * pad - 3) / 2;
     rec_.setBounds(pad, y, half, 19);
     monitor_.setBounds(pad + half + 3, y, w - 2 * pad - half - 3, 19);
@@ -940,6 +1197,7 @@ void Strip::paint_bottom(juce::Graphics& g, juce::Rectangle<int> bounds)
     g.fillRect(0.0f, 0.0f, w, 1.0f);
     print_text(g, kind_ == Kind::Master ? "BAL" : "PAN", {0.0f, 3.0f, w, 9.0f}, 7.5f);
     print_text(g, pan_text(pan_value_), pan_text_area_.toFloat(), 8.0f, juce::Justification::centred, paint::print_dim.brighter(0.2f));
+    print_text(g, "AUTO", auto_label_area_.toFloat(), 7.0f, juce::Justification::centredLeft, paint::print_dim);
     if (kind_ == Kind::Master)
         print_text(g, "STEREO MASTER", rec_.getBounds().getUnion(monitor_.getBounds()).toFloat(), 8.0f,
                    juce::Justification::centred, paint::print_dim);
@@ -1144,10 +1402,14 @@ void Strip::show_insert_menu(int index, bool lamp)
 void Strip::show_send_menu(const std::string& bus_id)
 {
     juce::PopupMenu m;
+    const std::string param = "send:" + bus_id;
+    m.addSectionHeader(lane_name(param));
     m.addItem(1, "Send at 0 dB");
     m.addItem(2, "Remove send");
-    m.showMenuAsync(juce::PopupMenu::Options(), guarded(top_.get(), [this, bus_id](int r) {
-        if (r <= 0) return;
+    m.addSeparator();
+    add_automation_items(m, param);
+    m.showMenuAsync(juce::PopupMenu::Options(), guarded(top_.get(), [this, bus_id, param](int r) {
+        if (r <= 0 || handle_automation_item(r, param)) return;
         begin_gesture();
         edit(r == 2 ? "Remove send" : "Send", [&](auto& x) {
             auto it = std::find_if(x.sends.begin(), x.sends.end(), [&](const project::Send& s) { return s.bus_id == bus_id; });
@@ -1160,6 +1422,70 @@ void Strip::show_send_menu(const std::string& bus_id)
             }
         });
     }));
+}
+
+namespace {
+constexpr int kShowLaneItem = 901;
+constexpr int kLaneEnabledItem = 902;
+constexpr int kModeItem = 910;  // + index into automation_modes()
+}  // namespace
+
+void Strip::add_automation_items(juce::PopupMenu& m, const std::string& param) const
+{
+    m.addItem(kShowLaneItem, "Show automation lane");
+    const auto it = lanes_.find(param);
+    if (it != lanes_.end()) m.addItem(kLaneEnabledItem, "Automation enabled", true, it->second.second);
+    juce::PopupMenu modes;
+    const auto& list = project::automation_modes();
+    for (std::size_t i = 0; i < list.size(); ++i)
+        modes.addItem(kModeItem + static_cast<int>(i), automation_label(list[i]), true, list[i] == mode_);
+    m.addSubMenu("Automation mode (" + automation_label(mode_) + ")", modes);
+}
+
+bool Strip::handle_automation_item(int result, const std::string& param)
+{
+    const auto& list = project::automation_modes();
+    if (result == kShowLaneItem) show_automation_lane(param);
+    else if (result == kLaneEnabledItem) toggle_lane_enabled(param);
+    else if (result >= kModeItem && result < kModeItem + static_cast<int>(list.size()))
+        choose_automation_mode(list[static_cast<std::size_t>(result - kModeItem)], false);
+    else return false;
+    return true;
+}
+
+void Strip::show_automation_menu(juce::Component& target, const std::string& param)
+{
+    juce::PopupMenu m;
+    m.addSectionHeader(lane_name(param));
+    add_automation_items(m, param);
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&target),
+                    guarded(top_.get(), [this, param](int r) { handle_automation_item(r, param); }));
+}
+
+void Strip::show_automation_mode_menu(bool all_strips)
+{
+    juce::PopupMenu m;
+    m.addSectionHeader(all_strips ? juce::String("Automation mode - every strip") : "Automation mode - " + juce::String(name_));
+    const auto& list = project::automation_modes();
+    static const char* const hints[] = {"lanes ignored", "play the lanes", "write while held", "write until stop",
+                                        "write the whole pass"};
+    for (std::size_t i = 0; i < list.size(); ++i)
+        m.addColouredItem(1 + static_cast<int>(i), automation_label(list[i]) + "   " + hints[i],
+                          list[i] == "off" ? paint::print_dim : automation_colour(list[i]), true,
+                          !all_strips && list[i] == mode_);
+    if (!all_strips) {
+        m.addSeparator();
+        juce::PopupMenu all;
+        for (std::size_t i = 0; i < list.size(); ++i) all.addItem(101 + static_cast<int>(i), automation_label(list[i]));
+        m.addSubMenu("Every strip", all);
+    }
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&auto_mode_),
+                    guarded(top_.get(), [this, all_strips](int r) {
+                        const auto& modes = project::automation_modes();
+                        const int n = static_cast<int>(modes.size());
+                        if (r >= 1 && r <= n) choose_automation_mode(modes[static_cast<std::size_t>(r - 1)], all_strips);
+                        else if (r >= 101 && r < 101 + n) choose_automation_mode(modes[static_cast<std::size_t>(r - 101)], true);
+                    }));
 }
 
 void Strip::show_name_menu()
@@ -1218,7 +1544,13 @@ void Strip::edit_gain_text()
         double v = t.startsWith("-inf") || t.startsWith("off") ? kMinDb : t.retainCharacters("+-.0123456789").getDoubleValue();
         v = juce::jlimit(kMinDb, kMaxDb, v);
         begin_gesture();
-        edit("Fader", [&](auto& x) { x.gain_db = v; });
+        if (start_touch("volume")) {
+            touch("volume", v);
+            end_touch("volume");
+            fader_.set_value(v);
+        } else {
+            edit("Fader", [&](auto& x) { x.gain_db = v; });
+        }
         close();
     };
     e.onEscapeKey = close;

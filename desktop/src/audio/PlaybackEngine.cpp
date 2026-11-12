@@ -5,9 +5,11 @@
 #include <set>
 
 #include "audio/AudioFileCache.h"
+#include "audio/AutomationRt.h"
 #include "audio/ChannelDsp.h"
 #include "audio/PlaceholderSynth.h"
 #include "audio/Recorder.h"
+#include "vcc/project/Automation.h"
 #include "vcc/project/Render.h"
 
 namespace vcc::desktop {
@@ -28,13 +30,23 @@ float db_to_gain(double db) { return db <= -96.0 ? 0.0f : static_cast<float>(std
 constexpr int kMaxSends = 16;
 constexpr double kDeclickSeconds = 0.003;
 
+constexpr double kMuteFadeSeconds = 0.001;
+
 /// Every mix setting of one strip, computed on the message thread and sent
 /// to the audio thread through a Mailbox. Gains are final (fader, pan law,
-/// mute/solo folded in), so the audio thread only ramps to them.
+/// mute/solo folded in), so the audio thread only ramps to them. The raw
+/// settings travel too, so automation can override one and recompute the
+/// gains on the audio thread (finalize()).
 struct StripParams {
     project::ChannelStrip strip;
     float out_l = 0.0f, out_r = 0.0f;
     std::array<float, kMaxSends> send_l{}, send_r{};
+    // Raw settings.
+    double gain_db = 0.0, pan = 0.0;
+    bool mute = false, solo_ok = true, mono = false;
+    int num_sends = 0;
+    std::array<double, kMaxSends> send_db{}, send_pan{};
+    std::array<std::uint8_t, kMaxSends> send_flags{};  // 1 pre-fader, 2 muted, 4 pan follows
 };
 
 void store_max(std::atomic<float>& a, float v) noexcept
@@ -87,20 +99,56 @@ struct StripDsp {
     bool primed = false;
     float cur_l = 0.0f, cur_r = 0.0f;
     std::array<float, kMaxSends> cur_send_l{}, cur_send_r{};
+    // Audio thread: this block's automated settings.
+    StripParams eff;
+    bool use_eff = false;
+    int mute_mode = 0;  // 0 static, 1 lane (sample-accurate curve), 2 written value (ramped)
+    const Curve* mute_curve = nullptr;
+    std::int64_t mute_from = 0;
+    float mute_cur = 1.0f, mute_target = 1.0f;
     // Meters (audio thread writes, message thread takes).
     std::atomic<float> peak_l{0.0f}, peak_r{0.0f}, gr_db{0.0f};
     std::atomic<bool> gate_closed{false}, clipped{false};
 };
 
+/// The value being written for one (owner, param), shared by the message
+/// thread (writer) and the audio thread.
+struct AutoSlot {
+    std::atomic<int> mode{0};  // 0 play the lane, 1 play `value`, 2 play the static value
+    std::atomic<double> value{0.0};
+};
+
+namespace {
+enum class AutoKind : std::uint8_t { Volume, Pan, Mute, Send, Strip, Insert, Plugin };
+
+/// One automated parameter of a strip, ready for the audio thread.
+struct AutoParam {
+    AutoKind kind = AutoKind::Volume;
+    int a = -1, b = -1;  // send index / strip field / insert index + param index
+    juce::AudioProcessorParameter* param = nullptr;  // plug-in parameter
+    Curve curve;                                     // empty: written only
+    std::shared_ptr<AutoSlot> slot;
+    std::int64_t offset = 0;  // processing latency before this point of the strip
+    float last_sent = -1.0f;  // audio thread
+};
+}  // namespace
+
 struct PlaybackSnapshot {
     double sample_rate = 48000.0;
     int max_block = 512;
+    std::int64_t comp = 0;  // delay compensation: what is heard is the render position minus this
 
     struct Strip {
         std::shared_ptr<StripDsp> dsp;
         std::vector<std::shared_ptr<InsertProcessor>> inserts;
         std::vector<int> sends;  // destination bus per send (-1 = none), aligned with StripParams
         int output = -1;         // bus index; -1 = the device (master bus only)
+        std::vector<AutoParam> autos;
+        // Delay compensation per routing edge (0 = none).
+        int out_delay = 0;
+        std::shared_ptr<DelayLine> out_line;
+        std::array<int, kMaxSends> send_delay{};
+        std::array<std::shared_ptr<DelayLine>, kMaxSends> send_lines;
     };
     struct Clip {
         std::shared_ptr<const AudioData> data;
@@ -141,10 +189,17 @@ struct PlaybackSnapshot {
                 std::lower_bound(t.events.begin(), t.events.end(), sample,
                                  [](const Event& e, std::int64_t s) { return e.sample < s; }) -
                 t.events.begin());
+        // The click is scheduled against what is heard.
         click_cursor = static_cast<std::size_t>(
-            std::lower_bound(clicks.begin(), clicks.end(), sample,
+            std::lower_bound(clicks.begin(), clicks.end(), sample - comp,
                              [](const std::pair<std::int64_t, bool>& c, std::int64_t s) { return c.first < s; }) -
             clicks.begin());
+    }
+    template <class F>
+    void for_each_strip(F&& f) noexcept
+    {
+        for (auto& t : tracks) f(t.strip);
+        for (auto& b : buses) f(b.strip);
     }
 };
 
@@ -361,23 +416,44 @@ MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Trac
     return p;
 }
 
-StripParams make_params(const project::ChannelStrip& strip, double gain_db, double pan, bool audible, bool mono,
-                        const std::vector<project::Send>& sends)
+/// Folds the raw settings into final gains (either thread; no allocation).
+void finalize(StripParams& p) noexcept
 {
-    StripParams p;
-    p.strip = strip;
-    const float fader = audible ? db_to_gain(gain_db) : 0.0f;
-    const auto [pl, pr] = pan_gains(pan, mono);
+    const bool audible = p.solo_ok && !p.mute;
+    const float fader = audible ? db_to_gain(p.gain_db) : 0.0f;
+    const auto [pl, pr] = pan_gains(p.pan, p.mono);
     p.out_l = fader * pl;
     p.out_r = fader * pr;
-    for (std::size_t i = 0; i < sends.size() && i < static_cast<std::size_t>(kMaxSends); ++i) {
-        const auto& s = sends[i];
-        if (s.mute || !audible) continue;
-        const float level = db_to_gain(s.level_db) * (s.pre_fader ? 1.0f : fader);
-        const auto [sl, sr] = pan_gains(s.pan_follow ? pan : s.pan, mono);
+    p.send_l.fill(0.0f);
+    p.send_r.fill(0.0f);
+    for (std::size_t i = 0; i < static_cast<std::size_t>(p.num_sends); ++i) {
+        const auto flags = p.send_flags[i];
+        if ((flags & 2) || !audible) continue;
+        const float level = db_to_gain(p.send_db[i]) * ((flags & 1) ? 1.0f : fader);
+        const auto [sl, sr] = pan_gains((flags & 4) ? p.pan : p.send_pan[i], p.mono);
         p.send_l[i] = level * sl;
         p.send_r[i] = level * sr;
     }
+}
+
+StripParams make_params(const project::ChannelStrip& strip, double gain_db, double pan, bool mute, bool solo_ok,
+                        bool mono, const std::vector<project::Send>& sends)
+{
+    StripParams p;
+    p.strip = strip;
+    p.gain_db = gain_db;
+    p.pan = pan;
+    p.mute = mute;
+    p.solo_ok = solo_ok;
+    p.mono = mono;
+    p.num_sends = static_cast<int>(std::min(sends.size(), static_cast<std::size_t>(kMaxSends)));
+    for (std::size_t i = 0; i < static_cast<std::size_t>(p.num_sends); ++i) {
+        const auto& s = sends[i];
+        p.send_db[i] = s.level_db;
+        p.send_pan[i] = s.pan;
+        p.send_flags[i] = static_cast<std::uint8_t>((s.pre_fader ? 1 : 0) | (s.mute ? 2 : 0) | (s.pan_follow ? 4 : 0));
+    }
+    finalize(p);
     return p;
 }
 

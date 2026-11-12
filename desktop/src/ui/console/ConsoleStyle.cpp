@@ -111,6 +111,17 @@ juce::String ms_text(double ms)
     return juce::String(juce::roundToInt(ms)) + " ms";
 }
 
+juce::Colour automation_colour(const std::string& mode)
+{
+    if (mode == "read") return paint::led_green;
+    if (mode == "touch") return paint::led_yellow;
+    if (mode == "latch") return juce::Colour(0xffff8a1e);
+    if (mode == "write") return paint::led_red;
+    return juce::Colours::transparentBlack;
+}
+
+juce::String automation_label(const std::string& mode) { return juce::String(mode.empty() ? "off" : mode).toUpperCase(); }
+
 juce::Font print_font(float size, bool bold)
 {
     return juce::Font(juce::FontOptions(size, bold ? juce::Font::bold : juce::Font::plain)).withHorizontalScale(0.92f);

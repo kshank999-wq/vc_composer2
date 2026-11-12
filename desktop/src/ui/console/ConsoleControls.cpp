@@ -68,6 +68,27 @@ void Knob::set_dim(bool dim)
     repaint();
 }
 
+void Knob::set_automation(juce::Colour lamp)
+{
+    if (lamp == automation_) return;
+    automation_ = lamp;
+    repaint();
+}
+
+void Knob::open_gesture()
+{
+    if (gesture_) return;
+    gesture_ = true;
+    if (on_start) on_start();
+}
+
+void Knob::close_gesture()
+{
+    if (!gesture_) return;
+    gesture_ = false;
+    if (on_end) on_end();
+}
+
 void Knob::change_to(double v)
 {
     if (std::abs(v - value_) < 1e-9) return;
@@ -153,6 +174,19 @@ void Knob::paint(juce::Graphics& g)
     const auto cc = juce::Point<float>(std::round(c.x - size * 0.5f) + size * 0.5f, std::round(c.y - size * 0.5f) + size * 0.5f);
     g.setColour(juce::Colours::white.withAlpha(dim_ ? 0.4f : 0.95f));
     g.drawLine(juce::Line<float>(polar(cc, angle, R * 0.18f), polar(cc, angle, R - 0.6f)), juce::jmax(1.3f, R * 0.13f));
+    if (!automation_.isTransparent()) {
+        // Automation lamp in the scale's gap at six o'clock, with a little glow.
+        g.setOpacity(1.0f);
+        const juce::Point<float> p(cc.x, cc.y + R + 2.2f);
+        g.setColour(automation_.withAlpha(0.28f));
+        g.fillEllipse(p.x - 3.4f, p.y - 2.6f, 6.8f, 5.2f);
+        g.setColour(juce::Colours::black.withAlpha(0.8f));
+        g.fillEllipse(p.x - 2.0f, p.y - 1.6f, 4.0f, 3.2f);
+        g.setColour(automation_);
+        g.fillEllipse(p.x - 1.5f, p.y - 1.15f, 3.0f, 2.3f);
+        g.setColour(juce::Colours::white.withAlpha(0.55f));
+        g.fillEllipse(p.x - 0.7f, p.y - 0.9f, 1.2f, 0.8f);
+    }
 }
 
 void Knob::mouseDown(const juce::MouseEvent& e)
@@ -163,14 +197,15 @@ void Knob::mouseDown(const juce::MouseEvent& e)
     }
     begin_gesture();
     if (reset_click(e)) {
-        if (on_start) on_start();
+        open_gesture();
         change_to(spec_.def);
+        close_gesture();
         return;
     }
     dragging_ = true;
     drag_norm_ = to_norm(value_);
     last_ = e.position;
-    if (on_start) on_start();
+    open_gesture();
     show_tip(*this, spec_.text ? spec_.text(value_) : juce::String(value_, 2));
 }
 
@@ -189,14 +224,22 @@ void Knob::mouseUp(const juce::MouseEvent&)
 {
     dragging_ = false;
     hide_tip(*this);
+    close_gesture();
 }
 
 void Knob::mouseDoubleClick(const juce::MouseEvent& e)
 {
     if (e.mods.isPopupMenu()) return;
     dragging_ = false;
-    begin_gesture();
+    // Inside a click (down ... up) the gesture is already open and the
+    // mouse-up closes it; called on its own, it is a gesture by itself.
+    const bool open = gesture_;
+    if (!open) {
+        begin_gesture();
+        open_gesture();
+    }
     change_to(spec_.def);
+    if (!open) close_gesture();
     hide_tip(*this);
 }
 
@@ -210,6 +253,38 @@ LedButton::LedButton(const juce::String& label, juce::Colour lamp, const juce::S
 }
 
 void LedButton::set_lit(bool on) { setToggleState(on, juce::dontSendNotification); }
+
+void LedButton::set_automation(juce::Colour lamp)
+{
+    if (lamp == automation_) return;
+    automation_ = lamp;
+    repaint();
+}
+
+void LedButton::mouseDown(const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() && on_menu) {
+        menu_press_ = true;
+        on_menu();
+        return;
+    }
+    menu_press_ = false;
+    juce::Button::mouseDown(e);
+}
+
+void LedButton::mouseDrag(const juce::MouseEvent& e)
+{
+    if (!menu_press_) juce::Button::mouseDrag(e);
+}
+
+void LedButton::mouseUp(const juce::MouseEvent& e)
+{
+    if (menu_press_) {
+        menu_press_ = false;
+        return;
+    }
+    juce::Button::mouseUp(e);
+}
 
 void LedButton::set_lamp(juce::Colour lamp)
 {
@@ -257,11 +332,131 @@ void LedButton::paintButton(juce::Graphics& g, bool over, bool down)
     juce::Colour ink = paint::print_dim;
     if (on) ink = lamp_.getPerceivedBrightness() > 0.55f ? juce::Colour(0xff17181a) : juce::Colours::white;
     print_text(g, getButtonText(), lens.reduced(1.0f, 0.0f), size, juce::Justification::centred, ink);
+    if (!automation_.isTransparent()) {
+        // A pin-head lamp in the lens' top-right corner.
+        const juce::Point<float> p(lens.getRight() - 3.2f, lens.getY() + 3.0f);
+        g.setColour(juce::Colours::black.withAlpha(0.85f));
+        g.fillEllipse(p.x - 2.1f, p.y - 2.1f, 4.2f, 4.2f);
+        g.setColour(automation_);
+        g.fillEllipse(p.x - 1.5f, p.y - 1.5f, 3.0f, 3.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.5f));
+        g.fillEllipse(p.x - 0.8f, p.y - 1.1f, 1.1f, 0.8f);
+    }
+}
+
+// --- ModeSelector --------------------------------------------------------------------------
+
+ModeSelector::ModeSelector(const juce::String& tooltip) : juce::Button("READ")
+{
+    setTooltip(tooltip);
+    setClickingTogglesState(false);
+}
+
+void ModeSelector::set_mode(const std::string& mode)
+{
+    if (mode == mode_) return;
+    mode_ = mode;
+    setButtonText(automation_label(mode_));
+    repaint();
+}
+
+void ModeSelector::mouseDown(const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() && on_menu) {
+        menu_press_ = true;
+        on_menu();
+        return;
+    }
+    menu_press_ = false;
+    juce::Button::mouseDown(e);
+}
+
+void ModeSelector::mouseDrag(const juce::MouseEvent& e)
+{
+    if (!menu_press_) juce::Button::mouseDrag(e);
+}
+
+void ModeSelector::mouseUp(const juce::MouseEvent& e)
+{
+    if (menu_press_) {
+        menu_press_ = false;
+        return;
+    }
+    juce::Button::mouseUp(e);
+}
+
+void ModeSelector::paintButton(juce::Graphics& g, bool over, bool down)
+{
+    const auto lamp = automation_colour(mode_);
+    const bool off = lamp.isTransparent();
+    const bool writing = mode_ == "touch" || mode_ == "latch" || mode_ == "write";
+    auto r = getLocalBounds().toFloat().reduced(0.5f);
+    draw_well(g, r, 2.5f);
+    auto glass = r.reduced(1.5f);
+    const auto base = writing ? juce::Colour(0xff15100a).interpolatedWith(lamp, 0.30f) : paint::lcd_back;
+    juce::ColourGradient grad(base.brighter(0.25f), 0.0f, glass.getY(), base, 0.0f, glass.getBottom(), false);
+    g.setGradientFill(grad);
+    g.fillRoundedRectangle(glass, 1.5f);
+    if (writing) {
+        g.setColour(lamp.withAlpha(0.55f));
+        g.drawRoundedRectangle(glass, 1.5f, 0.8f);
+    }
+    // Status lamp.
+    auto text = glass.reduced(3.0f, 0.0f);
+    const auto dot = text.removeFromLeft(7.0f).withSizeKeepingCentre(5.0f, 5.0f);
+    if (!off) {
+        g.setColour(lamp.withAlpha(0.3f));
+        g.fillEllipse(dot.expanded(1.6f));
+    }
+    g.setColour(off ? juce::Colour(0xff2a2c30) : lamp);
+    g.fillEllipse(dot);
+    g.setColour(juce::Colours::white.withAlpha(off ? 0.08f : 0.5f));
+    g.fillEllipse(dot.getX() + 1.0f, dot.getY() + 0.8f, 2.0f, 1.4f);
+    // Menu arrow.
+    {
+        auto a = text.removeFromRight(6.0f);
+        juce::Path p;
+        const float cx = a.getCentreX(), cy = a.getCentreY();
+        p.addTriangle(cx - 2.2f, cy - 1.0f, cx + 2.2f, cy - 1.0f, cx, cy + 1.8f);
+        g.setColour((off ? paint::print_dim : lamp).withAlpha(0.6f));
+        g.fillPath(p);
+    }
+    const auto ink = off ? paint::print_dim : (writing ? lamp.brighter(0.5f) : lamp.brighter(0.15f));
+    g.setColour(ink);
+    g.setFont(print_font(juce::jmin(9.0f, glass.getHeight() * 0.62f)));
+    g.drawFittedText(getButtonText(), text.toNearestInt(), juce::Justification::centred, 1, 0.7f);
+    g.setColour(juce::Colours::white.withAlpha(0.05f));
+    g.fillRect(glass.withHeight(glass.getHeight() * 0.45f));
+    if (down || over) {
+        g.setColour(down ? juce::Colours::black.withAlpha(0.2f) : juce::Colours::white.withAlpha(0.04f));
+        g.fillRoundedRectangle(glass, 1.5f);
+    }
 }
 
 // --- Fader -----------------------------------------------------------------------------------
 
 Fader::Fader() { setMouseCursor(juce::MouseCursor::UpDownResizeCursor); }
+
+void Fader::set_automation(juce::Colour lamp)
+{
+    if (lamp == automation_) return;
+    automation_ = lamp;
+    repaint();
+}
+
+void Fader::open_gesture()
+{
+    if (gesture_) return;
+    gesture_ = true;
+    if (on_start) on_start();
+}
+
+void Fader::close_gesture()
+{
+    if (!gesture_) return;
+    gesture_ = false;
+    if (on_end) on_end();
+}
 
 void Fader::set_cap_colour(juce::Colour c)
 {
@@ -346,19 +541,31 @@ void Fader::paint(juce::Graphics& g)
     g.fillRect(cap.getRight() - 2.0f, cap.getY() + 2.0f, 1.0f, ch - 4.0f);
     g.setColour(juce::Colours::black.withAlpha(0.9f));
     g.drawRoundedRectangle(cap, 3.0f, 1.0f);
-    // Indicator line.
-    g.setColour(dragging_ ? paint::selected : juce::Colours::white);
+    // Indicator line: lit in the automation mode's colour while a lane drives the fader.
+    if (!dragging_ && !automation_.isTransparent()) {
+        g.setColour(automation_.withAlpha(0.35f));
+        g.fillRect(cap.getX() + 1.0f, y - 2.0f, cw - 2.0f, 4.0f);
+        g.setColour(automation_.brighter(0.25f));
+    } else {
+        g.setColour(dragging_ ? paint::selected : juce::Colours::white);
+    }
     g.fillRect(cap.getX() + 1.5f, y - 1.0f, cw - 3.0f, 2.0f);
 }
 
 void Fader::mouseDown(const juce::MouseEvent& e)
 {
-    if (e.mods.isPopupMenu()) return;
-    begin_gesture();
-    if (reset_click(e)) {
-        change_to(0.0);
+    if (e.mods.isPopupMenu()) {
+        if (on_menu) on_menu();
         return;
     }
+    begin_gesture();
+    if (reset_click(e)) {
+        open_gesture();
+        change_to(0.0);
+        close_gesture();
+        return;
+    }
+    open_gesture();
     dragging_ = true;
     drag_prop_ = fader_proportion(value_);
     last_y_ = e.position.y;
@@ -382,13 +589,20 @@ void Fader::mouseUp(const juce::MouseEvent&)
     dragging_ = false;
     repaint();
     hide_tip(*this);
+    close_gesture();
 }
 
-void Fader::mouseDoubleClick(const juce::MouseEvent&)
+void Fader::mouseDoubleClick(const juce::MouseEvent& e)
 {
+    if (e.mods.isPopupMenu()) return;
     dragging_ = false;
-    begin_gesture();
+    const bool open = gesture_;  // see Knob::mouseDoubleClick
+    if (!open) {
+        begin_gesture();
+        open_gesture();
+    }
     change_to(0.0);
+    if (!open) close_gesture();
     hide_tip(*this);
 }
 
@@ -581,6 +795,52 @@ void Lcd::mouseDown(const juce::MouseEvent& e)
 {
     if (on_click && !e.mods.isPopupMenu()) on_click();
     else if (auto* p = getParentComponent()) p->mouseDown(e.getEventRelativeTo(p));
+}
+
+// --- DelayReadout ----------------------------------------------------------------------------
+
+void DelayReadout::set(int samples, double sample_rate)
+{
+    if (sample_rate <= 0.0) sample_rate = 48000.0;
+    if (samples == samples_ && std::abs(sample_rate - rate_) < 1e-6) return;
+    samples_ = samples;
+    rate_ = sample_rate;
+    setTooltip("Processing delay (instrument and inserts): " + juce::String(samples_) + " samples / " +
+               juce::String(1000.0 * samples_ / rate_, 2) + " ms. Compensated when PDC is on");
+    repaint();
+}
+
+void DelayReadout::mouseEnter(const juce::MouseEvent&)
+{
+    hover_ = true;
+    repaint();
+}
+
+void DelayReadout::mouseExit(const juce::MouseEvent&)
+{
+    hover_ = false;
+    repaint();
+}
+
+void DelayReadout::paint(juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    const bool active = samples_ > 0;
+    auto label = r.removeFromLeft(juce::jmin(22.0f, r.getWidth() * 0.3f));
+    print_text(g, "DLY", label, 7.0f, juce::Justification::centredLeft, active ? paint::led_amber : paint::print_dim);
+    auto window = r.reduced(0.0f, 0.5f);
+    draw_well(g, window, 2.0f);
+    auto glass = window.reduced(1.5f);
+    g.setColour(active ? juce::Colour(0xff1d1404) : paint::lcd_back);
+    g.fillRoundedRectangle(glass, 1.5f);
+    juce::String text;
+    if (hover_) text = juce::String(1000.0 * samples_ / rate_, samples_ > 0 && 1000.0 * samples_ / rate_ < 10.0 ? 2 : 1) + " ms";
+    else text = juce::String(samples_) + (glass.getWidth() > 44.0f ? " smp" : "");
+    g.setColour(active ? paint::led_amber : paint::lcd_text.withAlpha(0.45f));
+    g.setFont(juce::Font(juce::FontOptions(juce::jmin(9.5f, glass.getHeight() * 0.8f), juce::Font::bold)));
+    g.drawFittedText(text, glass.reduced(2.0f, 0.0f).toNearestInt(), juce::Justification::centredRight, 1, 0.7f);
+    g.setColour(juce::Colours::white.withAlpha(0.05f));
+    g.fillRect(glass.withHeight(glass.getHeight() * 0.45f));
 }
 
 // --- EqCurve ---------------------------------------------------------------------------------

@@ -33,6 +33,10 @@ public:
     Strip* strip_for(const std::string& id) const;
     Strip* master() const noexcept { return master_.get(); }
     void set_narrow(bool narrow);
+    /// Header: plug-in delay compensation on/off and the engine's total delay.
+    LedButton& pdc_button() noexcept { return pdc_; }
+    Lcd& pdc_readout() noexcept { return pdc_readout_; }
+    void update_delay_compensation();
     void set_section_shown(Section s, bool shown);
     void scroll_to(int x, int y);
 
@@ -49,6 +53,7 @@ private:
     void save_settings() const;
     void update_header_buttons();
     void add_bus(bool fx);
+    void show_all_modes_menu();
 
     AppContext& context_;
     ConsoleLayout layout_;
@@ -63,6 +68,9 @@ private:
     LedButton narrow_button_{"NARROW", paint::led_amber, "Narrow strips"};
     LedButton add_fx_{"+ FX BUS", paint::led_white, "Add an FX (aux) bus, fed by sends"};
     LedButton add_group_{"+ GROUP", paint::led_white, "Add a group bus (subgroup / stem)"};
+    LedButton auto_all_{"AUTO ALL", paint::led_white, "Set the automation mode of every strip"};
+    LedButton pdc_{"PDC", paint::led_green, "Plug-in delay compensation: lines up every strip with the slowest path"};
+    Lcd pdc_readout_;
     std::unique_ptr<Tip> tip_;
 
     juce::Rectangle<int> header_, legend_, strips_area_;

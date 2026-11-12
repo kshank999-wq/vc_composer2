@@ -29,14 +29,19 @@ public:
 
     /// Called while the user turns the knob (and on reset).
     std::function<void(double)> on_change;
-    /// Called once at the start of a turn (before the first on_change).
+    /// Called once at the start of a turn (before the first on_change)...
     std::function<void()> on_start;
+    /// ...and once at its end (release, or after a reset).
+    std::function<void()> on_end;
     /// Right-click.
     std::function<void()> on_menu;
 
     void set_value(double v);
     double value() const noexcept { return value_; }
     void set_dim(bool dim);
+    /// Automation lamp under the knob (the mode's colour); transparent: none.
+    void set_automation(juce::Colour lamp);
+    juce::Colour automation_lamp() const noexcept { return automation_; }
     const Spec& spec() const noexcept { return spec_; }
     double to_norm(double v) const;
     double from_norm(double n) const;
@@ -49,12 +54,16 @@ public:
 
 private:
     void change_to(double v);
+    void open_gesture();
+    void close_gesture();
     Spec spec_;
     double value_ = 0.0;
     double drag_norm_ = 0.0;
     juce::Point<float> last_;
     bool dragging_ = false;
     bool dim_ = false;
+    bool gesture_ = false;
+    juce::Colour automation_ = juce::Colours::transparentBlack;
 };
 
 // --- Illuminated push-button -------------------------------------------------------------------
@@ -62,12 +71,43 @@ private:
 class LedButton final : public juce::Button {
 public:
     LedButton(const juce::String& label, juce::Colour lamp, const juce::String& tooltip = {});
+    /// Right-click (instead of a click) when set.
+    std::function<void()> on_menu;
     void set_lit(bool on);
     void set_lamp(juce::Colour lamp);
+    /// Small automation lamp in the lens corner; transparent: none.
+    void set_automation(juce::Colour lamp);
+    juce::Colour automation_lamp() const noexcept { return automation_; }
     void paintButton(juce::Graphics& g, bool over, bool down) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
 
 private:
     juce::Colour lamp_;
+    juce::Colour automation_ = juce::Colours::transparentBlack;
+    bool menu_press_ = false;
+};
+
+// --- Automation mode selector ------------------------------------------------------------------
+
+/// A backlit window with a status lamp showing a strip's automation mode,
+/// coloured by mode (read green, touch yellow, latch orange, write red, off
+/// dark); the writing modes light the whole window.
+class ModeSelector final : public juce::Button {
+public:
+    explicit ModeSelector(const juce::String& tooltip);
+    std::function<void()> on_menu;
+    void set_mode(const std::string& mode);
+    const std::string& mode() const noexcept { return mode_; }
+    void paintButton(juce::Graphics& g, bool over, bool down) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
+
+private:
+    std::string mode_ = "read";
+    bool menu_press_ = false;
 };
 
 // --- Fader -------------------------------------------------------------------------------------
@@ -76,9 +116,16 @@ class Fader final : public juce::Component, public juce::SettableTooltipClient {
 public:
     Fader();
     std::function<void(double)> on_change;
+    /// A move starts / ends (drag, reset click, double-click).
+    std::function<void()> on_start, on_end;
+    /// Right-click.
+    std::function<void()> on_menu;
     void set_value(double db);
     double value() const noexcept { return value_; }
     void set_cap_colour(juce::Colour c);
+    /// The cap's indicator line lights in the automation mode's colour; transparent: white.
+    void set_automation(juce::Colour lamp);
+    juce::Colour automation_lamp() const noexcept { return automation_; }
     /// The y (in this component) of a dB value on the travel.
     float y_for(double db) const;
 
@@ -91,11 +138,15 @@ public:
 private:
     float cap_height() const;
     void change_to(double db);
+    void open_gesture();
+    void close_gesture();
     double value_ = 0.0;
     double drag_prop_ = 0.0;
     float last_y_ = 0.0f;
     bool dragging_ = false;
+    bool gesture_ = false;
     juce::Colour cap_ = juce::Colour(0xff3a3d42);
+    juce::Colour automation_ = juce::Colours::transparentBlack;
 };
 
 // --- LED ladder meter --------------------------------------------------------------------------
@@ -155,6 +206,24 @@ private:
     juce::Colour colour_ = paint::lcd_text;
     juce::Colour dot_ = juce::Colours::transparentBlack;
     bool arrow_ = true;
+};
+
+// --- Delay compensation readout ----------------------------------------------------------------
+
+/// "DLY" and a strip's processing latency in a small window, in samples (in
+/// milliseconds while the pointer is over it). Lit amber when not zero.
+class DelayReadout final : public juce::Component, public juce::SettableTooltipClient {
+public:
+    void set(int samples, double sample_rate);
+    int samples() const noexcept { return samples_; }
+    void paint(juce::Graphics& g) override;
+    void mouseEnter(const juce::MouseEvent&) override;
+    void mouseExit(const juce::MouseEvent&) override;
+
+private:
+    int samples_ = 0;
+    double rate_ = 48000.0;
+    bool hover_ = false;
 };
 
 // --- EQ curve window -----------------------------------------------------------------------------

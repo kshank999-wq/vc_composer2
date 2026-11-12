@@ -7,9 +7,11 @@
 #include <set>
 
 #include "ui/AudioTrackStyle.h"
+#include "ui/AutomationLaneView.h"
 #include "ui/Theme.h"
 #include "ui/TrackPanel.h"
 #include "ui/WaveformCache.h"
+#include "vcc/project/Automation.h"
 #include "vcc/project/Render.h"
 
 namespace vcc::desktop {
@@ -29,6 +31,7 @@ constexpr int kKeyHeight = 11;
 constexpr int kTakeHeight = 40;   ///< One take lane under an audio track.
 constexpr int kEdge = 6;          ///< Grab width of a clip's trim edges and handles.
 constexpr double kMinClip = 0.01; ///< Shortest clip a trim leaves, seconds.
+constexpr int kBusHeight = 34;    ///< A bus row (automation only) at the bottom.
 
 const juce::String kScoreHint = "Written in the score - edit in the Composer view";
 
@@ -63,6 +66,18 @@ struct LaneView {
     std::vector<project::AudioClip> clips;  ///< Every lane, sorted by lane then start.
     std::vector<std::string> clip_paths;    ///< Resolved file of each clip.
     std::vector<int> takes;                 ///< Distinct take lanes (> 0) in use, ascending.
+    // Automation (Main Spec §12).
+    bool bus = false;                       ///< A bus row (master, fx, group): automation only.
+    juce::String bus_kind;
+    std::string mode = "read";
+    std::vector<project::AutomationLane> automation;
+};
+
+/// One automation row under a track or bus: a shown lane, or (lane null) the
+/// "choose a parameter" row of an owner whose automation is open but empty.
+struct AutomationRow {
+    const project::AutomationLane* lane = nullptr;
+    int height = 0;
 };
 
 /// A region note named so it survives the document being copied by an edit.
@@ -166,7 +181,7 @@ bool normalise_region(project::MidiRegion& r, const MeterMap& meter)
 
 // --- Shared timeline model ------------------------------------------------------------------------
 
-struct Model {
+struct Model final : AutomationTimeline {
     explicit Model(AppContext& c) : ctx(c) {}
 
     AppContext& ctx;
@@ -198,6 +213,75 @@ struct Model {
     bool recording = false;
     Ticks record_start = 0;
 
+    // Automation (view state: which owners show their lanes, row heights, pencil).
+    std::set<std::string> show_automation;
+    std::map<std::string, int> lane_heights;  ///< "owner/lane id" -> row height
+    bool pencil = false;
+    std::function<void()> automation_layout_changed;
+    std::function<void()> pencil_changed;
+
+    std::vector<AutomationRow> automation_rows(const LaneView& l) const
+    {
+        std::vector<AutomationRow> rows;
+        if (!show_automation.count(l.id)) return rows;
+        for (const auto& a : l.automation) {
+            if (!a.shown) continue;
+            auto it = lane_heights.find(l.id + "/" + a.id);
+            rows.push_back({&a, it == lane_heights.end() ? AutomationLaneView::kDefaultHeight : it->second});
+        }
+        if (rows.empty()) rows.push_back({nullptr, AutomationLaneView::kPlaceholderHeight});
+        return rows;
+    }
+    int base_height(const LaneView& l) const { return l.bus ? kBusHeight : kLaneHeight; }
+    int takes_height(const LaneView& l) const
+    {
+        const bool open = !l.takes.empty() && show_takes.count(l.id) > 0;
+        return open ? static_cast<int>(l.takes.size()) * kTakeHeight : 0;
+    }
+    int automation_height(const LaneView& l) const
+    {
+        int h = 0;
+        for (const auto& r : automation_rows(l)) h += r.height;
+        return h;
+    }
+    int track_count() const
+    {
+        int n = 0;
+        for (const auto& l : lanes) n += l.bus ? 0 : 1;
+        return n;
+    }
+
+    // AutomationTimeline
+    AppContext& context() const override { return ctx; }
+    int header_width() const override { return kHeader; }
+    double x_of_tick(double tick) const override { return x_of(tick); }
+    double tick_at_x(double x) const override { return tick_of(x); }
+    Ticks snap_tick(Ticks t) const override { return snap(t, clip_grid(), false); }
+    Ticks playhead_tick() const override { return playhead; }
+    std::pair<Ticks, Ticks> selected_range() const override { return {range_start, range_end}; }
+    bool range_is_punch() const override { return punch; }
+    void paint_timeline_grid(juce::Graphics& g, juce::Rectangle<int> area) const override;
+    bool pencil_mode() const override { return pencil; }
+    void set_pencil_mode(bool on) override
+    {
+        if (pencil == on) return;
+        pencil = on;
+        ctx.status(on ? "Pencil: drag in an automation lane to draw (P to switch off)" : "Pencil off");
+        if (pencil_changed) pencil_changed();
+    }
+    void set_lane_height(const std::string& owner_id, const std::string& lane_id, int height) override
+    {
+        lane_heights[owner_id + "/" + lane_id] = height;
+        if (automation_layout_changed) automation_layout_changed();
+    }
+    void set_automation_shown(const std::string& owner_id, bool on)
+    {
+        if (on == (show_automation.count(owner_id) > 0)) return;
+        if (on) show_automation.insert(owner_id);
+        else show_automation.erase(owner_id);
+        if (automation_layout_changed) automation_layout_changed();
+    }
+
     bool has_range() const { return range_end > range_start; }
     double x_of_seconds(double s) const { return x_of(static_cast<double>(tempo.tick_at_seconds(std::max(0.0, s)))); }
     double seconds_of_x(double x) const { return tempo.seconds_at(std::max<Ticks>(0, static_cast<Ticks>(tick_of(x)))); }
@@ -208,11 +292,7 @@ struct Model {
         if (px_of(kTicksPerQuarter) >= 10.0) return kTicksPerQuarter;
         return meter.at_bar(1).ticks_per_bar();
     }
-    int row_height(const LaneView& l) const
-    {
-        const bool open = !l.takes.empty() && show_takes.count(l.id) > 0;
-        return kLaneHeight + (open ? static_cast<int>(l.takes.size()) * kTakeHeight : 0);
-    }
+    int row_height(const LaneView& l) const { return base_height(l) + takes_height(l) + automation_height(l); }
     int lane_top(std::size_t index) const
     {
         int y = 0;
@@ -289,6 +369,8 @@ struct Model {
             l.audio = t->kind == project::TrackKind::Audio;
             l.stereo = t->input_stereo;
             l.armed = t->record_armed;
+            l.mode = t->automation_mode;
+            l.automation = t->automation;
             if (l.audio) l.colour = audio_track_colour(*t);
             if (v) {
                 l.clips = v->audio_clips;
@@ -333,6 +415,26 @@ struct Model {
             }
             l.lo = lo - 2;
             l.hi = hi + 2;
+            lanes.push_back(std::move(l));
+        }
+        // Buses at the bottom (automation only), the master last.
+        std::vector<const project::Bus*> buses;
+        for (const auto& b : d.buses)
+            if (b.kind != "master") buses.push_back(&b);
+        for (const auto& b : d.buses)
+            if (b.kind == "master") buses.push_back(&b);
+        for (const auto* b : buses) {
+            LaneView l;
+            l.bus = true;
+            l.id = b->id;
+            l.name = b->kind == "master" ? juce::String("Master") : juce::String(b->name);
+            l.bus_kind = juce::String(b->kind);
+            const juce::Colour kind_colour = b->kind == "master" ? juce::Colour(0xffc4cad3)
+                                             : b->kind == "fx"   ? juce::Colour(0xff9a8cf0)
+                                                                 : juce::Colour(0xff5fbfb2);
+            l.colour = colour_from_hex(b->color, kind_colour);
+            l.mode = b->automation_mode;
+            l.automation = b->automation;
             lanes.push_back(std::move(l));
         }
         if (audio_end > 0.0) {
@@ -412,13 +514,42 @@ void paint_playhead(juce::Graphics& g, const Model& m, juce::Rectangle<int> area
                                       static_cast<float>(area.getHeight())));
 }
 
+void Model::paint_timeline_grid(juce::Graphics& g, juce::Rectangle<int> area) const { paint_grid(g, *this, area, 0, true); }
+
+/// The "A" box in a track or bus header that shows its automation lanes.
+juce::Rectangle<int> automation_button(const LaneView& l, juce::Rectangle<int> row)
+{
+    return l.bus ? juce::Rectangle<int>(kHeader - 30, row.getY() + 10, 22, 15)
+                 : juce::Rectangle<int>(kHeader - 30, row.getY() + 24, 22, 15);
+}
+
+void paint_automation_button(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> row, bool open)
+{
+    const auto r = automation_button(l, row).toFloat();
+    const bool has = std::any_of(l.automation.begin(), l.automation.end(), [](const auto& a) { return a.points.size() > 1; });
+    const juce::Colour mc = automation_ui::mode_colour(l.mode);
+    const juce::Colour c = has ? mc : colours::text_dim;
+    g.setColour(open ? c.withAlpha(0.28f) : colours::panel_raised);
+    g.fillRoundedRectangle(r, 3.0f);
+    g.setColour(open || has ? c.withAlpha(0.85f) : colours::outline.brighter(0.2f));
+    g.drawRoundedRectangle(r.reduced(0.5f), 3.0f, 1.0f);
+    g.setColour(open ? colours::text : (has ? c : colours::text_dim));
+    g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+    g.drawText("A", r, juce::Justification::centred, false);
+}
+
 // --- Toolbar ---------------------------------------------------------------------------------------
 
 class Toolbar final : public juce::Component {
 public:
     explicit Toolbar(Model& m) : m_(m)
     {
-        for (auto* b : {&zoom_out_, &zoom_in_, &fit_, &roll_}) addAndMakeVisible(*b);
+        for (auto* b : {&zoom_out_, &zoom_in_, &fit_, &roll_, &pencil_}) addAndMakeVisible(*b);
+        pencil_.setTooltip("Pencil: draw automation freehand in a lane (P)");
+        pencil_.setClickingTogglesState(true);
+        pencil_.setComponentID("sequencer_pencil");
+        pencil_.setColour(juce::TextButton::buttonOnColourId, colours::accent.withAlpha(0.55f));
+        pencil_.onClick = [this] { m_.set_pencil_mode(pencil_.getToggleState()); };
         zoom_out_.setTooltip("Zoom out (Ctrl/Cmd + mouse wheel)");
         zoom_in_.setTooltip("Zoom in (Ctrl/Cmd + mouse wheel)");
         fit_.setTooltip("Fit the whole project in the window");
@@ -435,6 +566,7 @@ public:
     }
 
     juce::TextButton& roll_button() noexcept { return roll_; }
+    juce::TextButton& pencil_button() noexcept { return pencil_; }
 
     void paint(juce::Graphics& g) override
     {
@@ -446,10 +578,10 @@ public:
         g.drawText("SEQUENCER", juce::Rectangle<int>(12, 0, kHeader - 12, getHeight()), juce::Justification::centredLeft);
         g.setColour(colours::text_dim);
         g.setFont(juce::FontOptions(12.0f));
-        int lanes = static_cast<int>(m_.lanes.size());
+        int lanes = m_.track_count();
         juce::String info = juce::String(lanes) + (lanes == 1 ? " track" : " tracks") + juce::String::fromUTF8("  \xc2\xb7  ") +
                             juce::String(m_.meter.bar_at(std::max<Ticks>(0, m_.end - 1))) + " bars";
-        g.drawText(info, getLocalBounds().withTrimmedLeft(roll_.getRight() + 16).withTrimmedRight(12),
+        g.drawText(info, getLocalBounds().withTrimmedLeft(pencil_.getRight() + 16).withTrimmedRight(12),
                    juce::Justification::centredRight);
     }
 
@@ -463,11 +595,13 @@ public:
         fit_.setBounds(r.removeFromLeft(44));
         r.removeFromLeft(12);
         roll_.setBounds(r.removeFromLeft(92));
+        r.removeFromLeft(6);
+        pencil_.setBounds(r.removeFromLeft(64));
     }
 
 private:
     Model& m_;
-    juce::TextButton zoom_out_{"-"}, zoom_in_{"+"}, fit_{"Fit"}, roll_{"Piano Roll"};
+    juce::TextButton zoom_out_{"-"}, zoom_in_{"+"}, fit_{"Fit"}, roll_{"Piano Roll"}, pencil_{"Pencil"};
 };
 
 // --- Ruler -----------------------------------------------------------------------------------------
@@ -707,7 +841,11 @@ public:
         m_.waveforms.on_changed = [this] { repaint(); };
     }
 
-    ~LaneArea() override { m_.waveforms.on_changed = nullptr; }
+    ~LaneArea() override
+    {
+        m_.waveforms.on_changed = nullptr;
+        views_.clear();
+    }
 
     void update_scroll()
     {
@@ -716,6 +854,68 @@ public:
         scroll_y_ = juce::jlimit(0, std::max(0, content - visible), scroll_y_);
         vscroll_.setRangeLimits(0.0, std::max(content, visible));
         vscroll_.setCurrentRange(scroll_y_, visible, juce::dontSendNotification);
+        layout_automation(false);
+    }
+
+    /// Places an AutomationLaneView on every shown automation row (reusing
+    /// them, so selections survive edits); `refresh` hands them the document.
+    void layout_automation(bool refresh)
+    {
+        std::map<std::string, std::unique_ptr<AutomationLaneView>> next;
+        const int w = getWidth() - kScroll;
+        int top = -scroll_y_;
+        for (const auto& l : m_.lanes) {
+            int y = top + m_.base_height(l) + m_.takes_height(l);
+            for (const auto& row : m_.automation_rows(l)) {
+                const std::string key = l.id + "/" + (row.lane ? row.lane->id : std::string("+"));
+                auto it = views_.find(key);
+                std::unique_ptr<AutomationLaneView> view;
+                bool fresh = false;
+                if (it != views_.end()) {
+                    view = std::move(it->second);
+                    views_.erase(it);
+                } else {
+                    view = std::make_unique<AutomationLaneView>(m_);
+                    view->setComponentID("automation:" + key);
+                    addChildComponent(*view);
+                    fresh = true;
+                }
+                if (refresh || fresh) {
+                    AutomationLaneView::Data d;
+                    d.owner_id = l.id;
+                    d.owner_name = l.name;
+                    d.colour = l.colour;
+                    d.mode = l.mode;
+                    if (row.lane) d.lane = *row.lane;
+                    view->set_data(std::move(d));
+                }
+                view->setBounds(0, y, w, row.height);
+                view->setVisible(y + row.height > 0 && y < getHeight());
+                y += row.height;
+                next[key] = std::move(view);
+            }
+            top += m_.row_height(l);
+        }
+        // Views whose lane went away: removed now, deleted once any callback
+        // that led here (a click on their own header) has returned.
+        for (auto& [key, view] : views_) {
+            removeChildComponent(view.get());
+            graveyard_.push_back(std::move(view));
+        }
+        views_ = std::move(next);
+        if (!graveyard_.empty()) {
+            juce::Component::SafePointer<LaneArea> self(this);
+            juce::MessageManager::callAsync([self] {
+                if (self) self->graveyard_.clear();
+            });
+        }
+    }
+
+    /// The header readouts follow the playhead (only what changed repaints).
+    void automation_playhead()
+    {
+        for (auto& [key, view] : views_)
+            if (view->isVisible()) view->playhead_moved();
     }
 
     void ensure_visible(const std::string& id)
@@ -724,7 +924,8 @@ public:
             if (m_.lanes[i].id != id) continue;
             const int y = m_.lane_top(i);
             if (y < scroll_y_) scroll_y_ = y;
-            else if (y + kLaneHeight > scroll_y_ + getHeight()) scroll_y_ = y + kLaneHeight - getHeight();
+            else if (y + m_.base_height(m_.lanes[i]) > scroll_y_ + getHeight())
+                scroll_y_ = y + m_.base_height(m_.lanes[i]) - getHeight();
             update_scroll();
             repaint();
         }
@@ -750,11 +951,14 @@ public:
         int y = -scroll_y_;
         for (const auto& l : m_.lanes) {
             const int rh = m_.row_height(l);
-            if (y + rh >= 0 && y <= h)
-                paint_lane(g, l, juce::Rectangle<int>(0, y, w - kScroll, rh), timeline, l.id == selected);
+            const int own = rh - m_.automation_height(l);  // automation rows paint themselves
+            if (y + own >= 0 && y <= h) {
+                if (l.bus) paint_bus(g, l, juce::Rectangle<int>(0, y, w - kScroll, own), timeline);
+                else paint_lane(g, l, juce::Rectangle<int>(0, y, w - kScroll, own), timeline, l.id == selected);
+            }
             y += rh;
         }
-        if (m_.lanes.empty()) {
+        if (m_.track_count() == 0) {
             g.setColour(colours::text_dim);
             g.setFont(juce::FontOptions(14.0f));
             g.drawText("No tracks yet - add a track or a template", timeline, juce::Justification::centred);
@@ -787,6 +991,16 @@ public:
         }
         const std::string track = hit.lane->id;
         const LaneView lane = *hit.lane;  // the model is rebuilt by any edit below
+        if (e.x < kHeader && hit.take == 0 && automation_button(lane, hit.row).contains(e.getPosition()) &&
+            !e.mods.isPopupMenu()) {
+            m_.set_automation_shown(track, !m_.show_automation.count(track));
+            return;
+        }
+        if (lane.bus) {
+            select_clip({}, {});
+            if (e.mods.isPopupMenu()) show_bus_menu(lane);
+            return;
+        }
         m_.ctx.session.select_track(track);
         if (e.x < kHeader) {
             if (e.mods.isPopupMenu()) TrackPanel::show_track_menu(m_.ctx, track);
@@ -906,6 +1120,8 @@ public:
             }
         } else if (hit.lane && !hit.lane->takes.empty() && disclosure_rect(hit.row).contains(e.getPosition())) {
             shape = juce::MouseCursor::PointingHandCursor;
+        } else if (hit.lane && hit.take == 0 && automation_button(*hit.lane, hit.row).contains(e.getPosition())) {
+            shape = juce::MouseCursor::PointingHandCursor;
         }
         setMouseCursor(shape);
     }
@@ -913,7 +1129,7 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override
     {
         const Hit hit = hit_at(e.y);
-        if (hit.lane && !hit.lane->audio && hit.take == 0) {
+        if (hit.lane && !hit.lane->audio && !hit.lane->bus && hit.take == 0) {
             m_.ctx.session.select_track(hit.lane->id);
             if (m_.open_piano_roll) m_.open_piano_roll();
         }
@@ -921,6 +1137,10 @@ public:
 
     bool keyPressed(const juce::KeyPress& key) override
     {
+        if (!key.getModifiers().isAnyModifierKeyDown() && (key.getKeyCode() == 'P' || key.getKeyCode() == 'p')) {
+            m_.set_pencil_mode(!m_.pencil);
+            return true;
+        }
         if (m_.clip_id.empty()) return false;
         if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) {
             const std::string track = m_.clip_track, id = m_.clip_id;
@@ -952,6 +1172,8 @@ public:
             repaint();
         }
     }
+
+
 
     // --- Clip actions (also reachable from tests through the session) ----------------------
 
@@ -1019,7 +1241,47 @@ private:
     void scrollBarMoved(juce::ScrollBar*, double start) override
     {
         scroll_y_ = juce::roundToInt(start);
+        layout_automation(false);
         repaint();
+    }
+
+    void show_bus_menu(const LaneView& lane)
+    {
+        const std::string id = lane.id;
+        const bool open = m_.show_automation.count(id) > 0;
+        juce::PopupMenu menu;
+        menu.addSectionHeader(lane.name + (lane.bus_kind == "master" ? juce::String() : " (" + lane.bus_kind + " bus)"));
+        menu.addItem(open ? "Hide Automation" : "Show Automation", [this, id, open] { m_.set_automation_shown(id, !open); });
+        menu.showMenuAsync({});
+    }
+
+    void paint_bus(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> row, juce::Rectangle<int> timeline)
+    {
+        const bool master = l.bus_kind == "master";
+        auto header = row.withWidth(kHeader).withTrimmedRight(1);
+        g.setColour(colours::panel.darker(0.06f));
+        g.fillRect(header);
+        g.setColour(l.colour);
+        g.fillRect(header.withWidth(5));
+        auto text = header.reduced(14, 0).withTrimmedRight(26);
+        g.setColour(colours::text.withAlpha(0.9f));
+        g.setFont(juce::FontOptions(12.5f, master ? juce::Font::bold : juce::Font::plain));
+        g.drawText(l.name, text.removeFromTop(row.getHeight() / 2 + 3).withTrimmedTop(3), juce::Justification::bottomLeft,
+                   true);
+        g.setColour(colours::text_dim);
+        g.setFont(juce::FontOptions(10.0f));
+        g.drawText(master ? juce::String("Master bus") : juce::String(l.bus_kind == "fx" ? "FX bus" : "Group bus"), text,
+                   juce::Justification::topLeft, true);
+        paint_automation_button(g, l, row, m_.show_automation.count(l.id) > 0);
+        auto body = row.withLeft(kHeader).withRight(timeline.getRight());
+        g.setColour(colours::background.darker(0.2f).withAlpha(0.6f));
+        g.fillRect(body);
+        g.setColour(colours::outline.withAlpha(0.8f));
+        g.drawHorizontalLine(row.getBottom() - 1, 0.0f, static_cast<float>(row.getRight()));
+        if (master) {
+            g.setColour(colours::outline.brighter(0.1f));
+            g.drawHorizontalLine(row.getY(), 0.0f, static_cast<float>(row.getRight()));
+        }
     }
 
     Hit hit_at(int y) const
@@ -1030,12 +1292,16 @@ private:
             const int rh = m_.row_height(l);
             if (y >= top && y < top + rh) {
                 hit.lane = &l;
-                if (y < top + kLaneHeight) {
-                    hit.row = {0, top, getWidth() - kScroll, kLaneHeight};
-                } else {
-                    const int k = (y - top - kLaneHeight) / kTakeHeight;
+                const int base = m_.base_height(l);
+                if (y < top + base) {
+                    hit.row = {0, top, getWidth() - kScroll, base};
+                } else if (y < top + base + m_.takes_height(l)) {
+                    const int k = (y - top - base) / kTakeHeight;
                     hit.take = l.takes[static_cast<std::size_t>(std::min<int>(k, static_cast<int>(l.takes.size()) - 1))];
-                    hit.row = {0, top + kLaneHeight + k * kTakeHeight, getWidth() - kScroll, kTakeHeight};
+                    hit.row = {0, top + base + k * kTakeHeight, getWidth() - kScroll, kTakeHeight};
+                } else {
+                    hit.take = -1;  // an automation row (its own component normally takes the mouse)
+                    hit.row = {0, y, getWidth() - kScroll, 1};
                 }
                 return hit;
             }
@@ -1152,7 +1418,8 @@ private:
                            : l.audio   ? juce::String(l.stereo ? "Audio - stereo" : "Audio - mono")
                                        : l.version;
         if (l.armed) sub << "  - armed";
-        g.drawText(sub, text.removeFromTop(15), juce::Justification::centredLeft, true);
+        g.drawText(sub, text.removeFromTop(15).withTrimmedRight(26), juce::Justification::centredLeft, true);
+        paint_automation_button(g, l, row, m_.show_automation.count(l.id) > 0);
         if (!l.takes.empty()) {
             const bool open = m_.show_takes.count(l.id) > 0;
             auto d = disclosure_rect(row);
@@ -1422,6 +1689,8 @@ private:
     std::string drag_track_, drag_label_;
     project::AudioClip drag_clip_;
     double file_length_ = 0.0;  ///< Of the dragged clip's file, when known.
+    std::map<std::string, std::unique_ptr<AutomationLaneView>> views_;  ///< "owner/lane id" ("owner/+": empty row)
+    std::vector<std::unique_ptr<AutomationLaneView>> graveyard_;
 };
 
 // --- Divider between the lanes and the piano roll ----------------------------------------------
@@ -2364,6 +2633,13 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
         model.range_changed = [this] {
             if (owner.on_range_changed) owner.on_range_changed();
         };
+        model.automation_layout_changed = [this] {
+            lanes.update_scroll();
+            lanes.repaint();
+        };
+        model.pencil_changed = [this] {
+            toolbar.pencil_button().setToggleState(model.pencil, juce::dontSendNotification);
+        };
         ruler.setComponentID("sequencer_ruler");
         lanes.setComponentID("sequencer_lanes");
         divider.on_begin = [this] { drag_start_height = roll_height; };
@@ -2376,6 +2652,7 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
             if (change == session::Change::Document) {
                 model.rebuild();
                 lanes.update_scroll();
+                lanes.layout_automation(true);
                 roll.document_changed();
                 update_hscroll();
                 owner.repaint();
@@ -2386,6 +2663,7 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
             }
         });
         model.rebuild();
+        lanes.layout_automation(true);
     }
 
     ~Impl() override { model.ctx.session.remove_listener(listener); }
@@ -2460,6 +2738,7 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
         model.playhead = tick;
         model.playing = playing;
         if (recording) lanes.repaint();
+        lanes.automation_playhead();
         if (playing) {
             const double x = model.x_of(static_cast<double>(tick));
             const double right = kHeader + model.timeline_width;
@@ -2490,9 +2769,48 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
     int drag_start_height = 0;
 };
 
-SequencerView::SequencerView(AppContext& context) : impl_(std::make_unique<Impl>(*this, context)), context_(context) {}
+namespace {
+std::vector<SequencerView*>& instances()
+{
+    static std::vector<SequencerView*> list;
+    return list;
+}
+}  // namespace
 
-SequencerView::~SequencerView() = default;
+SequencerView::SequencerView(AppContext& context) : impl_(std::make_unique<Impl>(*this, context)), context_(context)
+{
+    instances().push_back(this);
+}
+
+SequencerView::~SequencerView()
+{
+    auto& list = instances();
+    list.erase(std::remove(list.begin(), list.end(), this), list.end());
+}
+
+SequencerView* SequencerView::find(const AppContext& context)
+{
+    for (auto* v : instances())
+        if (&v->context_ == &context) return v;
+    return nullptr;
+}
+
+void SequencerView::show_automation(const std::string& owner_id, bool show) { impl_->model.set_automation_shown(owner_id, show); }
+
+bool SequencerView::automation_shown(const std::string& owner_id) const
+{
+    return impl_->model.show_automation.count(owner_id) > 0;
+}
+
+void SequencerView::hide_all_automation()
+{
+    impl_->model.show_automation.clear();
+    if (impl_->model.automation_layout_changed) impl_->model.automation_layout_changed();
+}
+
+bool SequencerView::pencil_mode() const { return impl_->model.pencil; }
+
+void SequencerView::set_pencil_mode(bool on) { impl_->model.set_pencil_mode(on); }
 
 void SequencerView::set_playhead(Ticks tick, bool playing) { impl_->set_playhead(tick, playing); }
 

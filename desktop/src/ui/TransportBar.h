@@ -44,6 +44,7 @@ private:
     RecordButton record_;
     juce::TextButton punch_{"Punch"};
     juce::TextButton click_{"Click"};
+    juce::TextButton pdc_{"PDC"};  ///< Plug-in delay compensation on/off, with the delay added.
     juce::Label bars_, timecode_;
     juce::Label rec_label_{{}, "Rec"}, rec_time_;
     juce::Label tempo_label_{{}, "Tempo"}, meter_label_{{}, "Meter"}, key_label_{{}, "Key"};

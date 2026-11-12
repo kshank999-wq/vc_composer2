@@ -1,6 +1,7 @@
 #include "ui/console/ConsoleView.h"
 
 #include "AppResources.h"
+#include "audio/PlaybackEngine.h"
 
 namespace vcc::desktop::console {
 
@@ -12,6 +13,7 @@ constexpr int kBarThickness = 10;
 constexpr int kBusGap = 8;
 constexpr int kMasterGap = 6;
 constexpr int kTimerHz = 30;
+constexpr int kDelayTicks = kTimerHz / 2;  // delay readouts at 2 Hz
 
 const char* const kSectionShort[kSectionCount] = {"INPUT", "FILTER", "EQ", "DYN", "INSERT", "SENDS", "OUTPUT"};
 
@@ -85,7 +87,14 @@ ConsoleView::ConsoleView(AppContext& context) : context_(context), tip_(std::mak
     narrow_button_.onClick = [this] { set_narrow(!layout_.narrow); };
     add_fx_.onClick = [this] { add_bus(true); };
     add_group_.onClick = [this] { add_bus(false); };
-    for (auto* b : {&narrow_button_, &add_fx_, &add_group_}) addAndMakeVisible(*b);
+    for (auto* b : {&narrow_button_, &add_fx_, &add_group_, &auto_all_, &pdc_}) addAndMakeVisible(*b);
+    auto_all_.onClick = [this] { show_all_modes_menu(); };
+    pdc_.onClick = [this] {
+        context_.engine.set_delay_compensation(!context_.engine.delay_compensation());
+        update_delay_compensation();
+    };
+    addAndMakeVisible(pdc_readout_);
+    update_delay_compensation();
     addChildComponent(*tip_);
     update_header_buttons();
 
@@ -128,6 +137,7 @@ void ConsoleView::sync()
     if (keys == keys_ && master_) {
         for (auto& s : strips_) s->refresh();
         master_->refresh();
+        update_delay_compensation();
         return;
     }
     keys_ = std::move(keys);
@@ -190,6 +200,16 @@ void ConsoleView::layout_all()
         add_fx_.setBounds(h.removeFromRight(72));
         h.removeFromRight(14);
         narrow_button_.setBounds(h.removeFromRight(66));
+        // Automation and delay compensation, after the section switches.
+        h.removeFromRight(14);
+        h.removeFromLeft(14);
+        auto_all_.setBounds(h.removeFromLeft(70));
+        h.removeFromLeft(10);
+        pdc_.setBounds(h.removeFromLeft(42));
+        h.removeFromLeft(4);
+        const int lcd_w = juce::jmin(156, h.getWidth());
+        pdc_readout_.setVisible(lcd_w >= 70);
+        pdc_readout_.setBounds(h.removeFromLeft(juce::jmax(0, lcd_w)));
     }
 
     const int mw = layout_.master_width();
@@ -321,6 +341,44 @@ void ConsoleView::timerCallback()
     if (master_) master_->tick(ticks_);
     if (ticks_ % kTimerHz == 0)
         for (auto& s : strips_) s->slow_tick();
+    if (ticks_ % kDelayTicks == 0) {
+        for (auto& s : strips_) s->delay_tick();
+        if (master_) master_->delay_tick();
+        update_delay_compensation();
+    }
+}
+
+void ConsoleView::update_delay_compensation()
+{
+    auto& engine = context_.engine;
+    const bool on = engine.delay_compensation();
+    const int samples = engine.compensation_samples();
+    double rate = 48000.0;
+    if (auto* device = engine.devices().getCurrentAudioDevice(); device && device->getCurrentSampleRate() > 0.0)
+        rate = device->getCurrentSampleRate();
+    pdc_.set_lit(on);
+    const juce::String text = on ? "PDC " + juce::String(samples) + " smp / " + juce::String(1000.0 * samples / rate, 1) + " ms"
+                                 : juce::String("PDC OFF");
+    pdc_readout_.set(text, on ? (samples > 0 ? paint::led_amber : paint::lcd_text) : paint::print_dim, false);
+    pdc_readout_.setTooltip(on ? "The engine delays every strip to line up with the slowest path (" + juce::String(samples) +
+                                     " samples at " + juce::String(rate / 1000.0, 1) + " kHz)"
+                               : juce::String("Plug-in delay compensation is off: strips with latency play late"));
+}
+
+void ConsoleView::show_all_modes_menu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader("Automation mode - every strip");
+    const auto& modes = project::automation_modes();
+    for (std::size_t i = 0; i < modes.size(); ++i)
+        m.addColouredItem(1 + static_cast<int>(i), automation_label(modes[i]),
+                          modes[i] == "off" ? paint::print_dim : automation_colour(modes[i]));
+    juce::Component::SafePointer<ConsoleView> self(this);
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&auto_all_), [self](int r) {
+        const auto& list = project::automation_modes();
+        if (self && r >= 1 && r <= static_cast<int>(list.size()))
+            set_all_automation_modes(self->context_, list[static_cast<std::size_t>(r - 1)]);
+    });
 }
 
 void ConsoleView::resized() { layout_all(); }
@@ -366,8 +424,9 @@ void ConsoleView::paint(juce::Graphics& g)
         g.setColour(juce::Colours::black);
         g.fillRect(l.getX(), by, l.getWidth(), 1.0f);
         vertical_text(g, "PAN", {l.getX(), by + 4.0f, l.getWidth(), 50.0f}, paint::print_dim);
-        vertical_text(g, "M / S", {l.getX(), by + 58.0f, l.getWidth(), 46.0f}, paint::print_dim);
-        vertical_text(g, "FADER", {l.getX(), by + 110.0f, l.getWidth(), static_cast<float>(bottom_h_) - 180.0f}, paint::print_dim);
+        vertical_text(g, "AUTO", {l.getX(), by + 54.0f, l.getWidth(), 24.0f}, paint::print_dim);
+        vertical_text(g, "M / S", {l.getX(), by + 78.0f, l.getWidth(), 46.0f}, paint::print_dim);
+        vertical_text(g, "FADER", {l.getX(), by + 130.0f, l.getWidth(), static_cast<float>(bottom_h_) - 200.0f}, paint::print_dim);
         vertical_text(g, "NAME", {l.getX(), by + static_cast<float>(bottom_h_) - 46.0f, l.getWidth(), 44.0f}, paint::print_dim);
     }
 

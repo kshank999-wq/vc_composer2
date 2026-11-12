@@ -64,6 +64,14 @@ juce::String freq_text(double hz);
 juce::String pan_text(double pan);
 juce::String ms_text(double ms);
 
+// --- Automation ------------------------------------------------------------------------------
+
+/// The lamp colour of an automation mode: read green, touch yellow, latch
+/// orange, write red; "off" (and anything unknown) is transparent.
+juce::Colour automation_colour(const std::string& mode);
+/// "OFF", "READ", "TOUCH", "LATCH", "WRITE".
+juce::String automation_label(const std::string& mode);
+
 // --- Drawing ---------------------------------------------------------------------------------
 
 juce::Font print_font(float size, bool bold = true);

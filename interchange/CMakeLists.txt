@@ -1,0 +1,1 @@
+vcc_add_library(vcc_interchange DEPS vcc_project vcc_notation vcc_core)

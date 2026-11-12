@@ -16,6 +16,15 @@ TransportBar::TransportBar(AppContext& context) : context_(context)
         addAndMakeVisible(*b);
     addAndMakeVisible(record_);
     addAndMakeVisible(punch_);
+    addAndMakeVisible(pdc_);
+    pdc_.setComponentID("transport_pdc");
+    pdc_.setClickingTogglesState(true);
+    pdc_.setColour(juce::TextButton::buttonOnColourId, colours::accent.withAlpha(0.45f));
+    pdc_.setTooltip("Plug-in delay compensation: delays everything to line up with the slowest plug-in path");
+    pdc_.onClick = [this] {
+        context_.engine.set_delay_compensation(pdc_.getToggleState());
+        update_position();
+    };
     record_.setTooltip("Record enable (R): recording runs while playing, onto every armed track");
     record_.setComponentID("transport_record");
     record_.onClick = [this] { context_.commands.invokeDirectly(cmd::toggleRecord, true); };
@@ -137,6 +146,20 @@ void TransportBar::update_position()
                           juce::String(static_cast<int>((secs - whole) * 10.0)),
                       juce::dontSendNotification);
     rec_time_.setColour(juce::Label::textColourId, recording ? colours::playhead : colours::text_dim);
+
+    // Delay compensation and how much it adds.
+    const bool pdc = context_.engine.delay_compensation();
+    juce::String pdc_text = "PDC";
+    if (pdc) {
+        const int samples = context_.engine.compensation_samples();
+        double rate = 48000.0;
+        if (auto* device = context_.engine.devices().getCurrentAudioDevice()) rate = device->getCurrentSampleRate();
+        if (samples > 0 && rate > 0.0) pdc_text << " " << juce::String(1000.0 * samples / rate, 1) << " ms";
+    } else {
+        pdc_text << " off";
+    }
+    if (pdc_.getToggleState() != pdc) pdc_.setToggleState(pdc, juce::dontSendNotification);
+    if (pdc_.getButtonText() != pdc_text) pdc_.setButtonText(pdc_text);
 }
 
 void TransportBar::set_punch_state(bool on) { punch_.setToggleState(on, juce::dontSendNotification); }
@@ -202,6 +225,7 @@ void TransportBar::resized()
     record_.setBounds(take(40));
     punch_.setBounds(take(54));
     click_.setBounds(take(50));
+    pdc_.setBounds(take(84));
     r.removeFromLeft(6);
     bars_.setBounds(take(112));
     timecode_.setBounds(take(160));

@@ -25,6 +25,17 @@ public:
     /// Called when the user changes the range.
     std::function<void()> on_range_changed;
 
+    // --- Automation lanes (Main Spec §12) --------------------------------------------
+    /// Opens or closes a track's or bus's automation lanes under it ("bus-master": the master row).
+    void show_automation(const std::string& owner_id, bool show);
+    bool automation_shown(const std::string& owner_id) const;
+    void hide_all_automation();
+    /// Pencil: dragging in an automation lane draws freehand (key P).
+    bool pencil_mode() const;
+    void set_pencil_mode(bool on);
+    /// The sequencer showing this context's document (for menus elsewhere), or null.
+    static SequencerView* find(const AppContext& context);
+
     /// The selected audio clip: {track id, clip id}, empty when none.
     std::pair<std::string, std::string> selected_clip() const;
 

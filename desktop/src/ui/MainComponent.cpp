@@ -744,6 +744,21 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             for (auto id : {cmd::duplicateVersion, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::removeTrack})
                 m.addCommandItem(c, id);
+            m.addSeparator();
+            {
+                const std::string track = context_.session.selected_track();
+                const bool shown = !track.empty() && sequencer_.automation_shown(track);
+                m.addItem(shown ? "Hide Automation" : "Show Automation", !track.empty(), false, [this, track, shown] {
+                    sequencer_.show_automation(track, !shown);
+                    if (!shown) show_workspace(Workspace::Sequencer);
+                });
+                m.addItem("Show Master Automation", true, sequencer_.automation_shown("bus-master"), [this] {
+                    const bool on = !sequencer_.automation_shown("bus-master");
+                    sequencer_.show_automation("bus-master", on);
+                    if (on) show_workspace(Workspace::Sequencer);
+                });
+                m.addItem("Hide All Automation", [this] { sequencer_.hide_all_automation(); });
+            }
             break;
         case 5:
             for (auto id : {cmd::chordExplorer, cmd::ostinatoCreator, cmd::addTemplate}) m.addCommandItem(c, id);
