@@ -32,6 +32,14 @@ bool operator!=(const NoteEvent& a, const NoteEvent& b) noexcept;
 /// Orders by start, then pitch, then duration - a stable canonical order.
 bool operator<(const NoteEvent& a, const NoteEvent& b) noexcept;
 
+/// A control change at a tick (dynamics on CC1/CC11, articulation CCs).
+struct ControllerEvent {
+    Ticks tick = 0;
+    int channel = 0;
+    int controller = 1;
+    int value = 0;
+};
+
 /// Checks the invariants every generator must keep: positive durations,
 /// pitch/velocity/channel in range, nothing before `range_start` or past
 /// `range_end`, and no two notes of the same pitch and channel overlapping
@@ -43,6 +51,7 @@ struct MidiFileTrack {
     std::string name;
     std::vector<NoteEvent> notes;
     int program = -1;  ///< General MIDI program, or -1 for none.
+    std::vector<ControllerEvent> controllers;
 };
 
 struct MidiFileOptions {

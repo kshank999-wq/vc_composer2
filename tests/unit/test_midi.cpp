@@ -18,7 +18,7 @@ TEST_CASE("midi file has header, conductor and note tracks")
 {
     MidiFileOptions o;
     o.tempo = TempoMap(96.0);
-    MidiFileTrack t{"Strings", {{0, kTicksPerQuarter, 60, 90, 0, {}}}, 48};
+    MidiFileTrack t{"Strings", {{0, kTicksPerQuarter, 60, 90, 0, {}}}, 48, {{0, 0, 11, 64}}};
     std::string f = write_midi_file({t}, o);
     REQUIRE(f.size() > 30);
     CHECK_EQ(f.substr(0, 4), std::string("MThd"));
@@ -27,4 +27,8 @@ TEST_CASE("midi file has header, conductor and note tracks")
     CHECK(f.find("Strings") != std::string::npos);
     // Note-on 0x90 60 90 present.
     CHECK(f.find(std::string("\x90\x3C\x5A", 3)) != std::string::npos);
+    // CC11 = 64 on channel 1 is written, ahead of the note at the same tick.
+    auto cc = f.find(std::string("\xB0\x0B\x40", 3));
+    CHECK(cc != std::string::npos);
+    CHECK(cc < f.find(std::string("\x90\x3C\x5A", 3)));
 }

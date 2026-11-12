@@ -129,6 +129,14 @@ std::string write_midi_file(const std::vector<MidiFileTrack>& tracks, const Midi
         int channel = t.notes.empty() ? 0 : std::clamp(t.notes.front().channel, 0, 15);
         if (t.program >= 0 && t.program <= 127)
             ev.push_back({0, 0, {static_cast<std::uint8_t>(0xC0 | channel), static_cast<std::uint8_t>(t.program)}});
+        for (const auto& c : t.controllers) {
+            // Controllers sort before notes at the same tick, so a dynamic
+            // is in force when the note it shapes starts.
+            ev.push_back({to_file_ticks(c.tick), 0,
+                          {static_cast<std::uint8_t>(0xB0 | std::clamp(c.channel, 0, 15)),
+                           static_cast<std::uint8_t>(std::clamp(c.controller, 0, 127)),
+                           static_cast<std::uint8_t>(std::clamp(c.value, 0, 127))}});
+        }
         for (const auto& n : t.notes) {
             auto ch = static_cast<std::uint8_t>(std::clamp(n.channel, 0, 15));
             auto p = static_cast<std::uint8_t>(std::clamp(n.pitch, 0, 127));

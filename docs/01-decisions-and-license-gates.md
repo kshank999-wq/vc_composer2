@@ -21,6 +21,8 @@ before it ships. Nothing here is legal advice.
 | D8 | Instrument resolution is exact, then approved fallback, then labelled GM placeholder, and never fails. | Supplement §8 "never make missing patches fatal"; Main Spec §11 "no silent remapping". |
 | D9 | Template Replace removes only orchestration tracks and the buses fed only by them. Reference/temp tracks, cues and user buses always survive. | Supplement §2, §15 acceptance 15. |
 | D10 | No living-artist presets. Historical composer palettes are educational and carry authenticity notes. Regional packs carry review status and "cinematic approximation" flags. North American Indigenous material is `curation_required`. | Supplement §5, §7, §13. |
+| D11 | The original VC Composer's notation, engraving, editing, composer, MIDI, audio and scheduler code is ported, not rewritten. Its JSON and atomic-write libraries are merged into `vcc_core`. | Tested, mature code for the hardest parts of Main Spec §7–§8 (see 02). One JSON and one file writer in the product. |
+| D12 | The project's meter map and key are canonical and are pushed into every score after each edit. | Composer and Sequencer can never disagree about bars (Main Spec §20). |
 
 ## Open: needs a decision from the product owner
 
@@ -37,11 +39,9 @@ stack (RtAudio/PortAudio) and the VST3 SDK hosting classes, or a fully native
 UI per platform. Recommendation: **JUCE commercial**, because of plug-in
 hosting, audio devices and the existing code.
 
-### O2: Porting the original VC Composer code
+### O2: Porting the original VC Composer code (resolved)
 
-See `02-original-vc-composer-reuse-audit.md`. This needs your go-ahead to
-build and run that repository's code in this environment. The automated
-safety check here blocked running it without explicit approval.
+Approved by the product owner and done. See `02-original-vc-composer-reuse-audit.md`.
 
 ## Dependency licence gates
 

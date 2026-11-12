@@ -4,6 +4,7 @@
 // generate and audition a 16-bar ostinato, and mix the resulting project."
 #include "vcc/core/Files.h"
 #include "vcc/ostinato/Ostinato.h"
+#include "vcc/project/Render.h"
 #include "vcc/templates/Templates.h"
 #include "vcc/theory/Progression.h"
 #include "vcc_test.h"
@@ -107,24 +108,10 @@ TEST_CASE("template -> chords -> ostinato -> save -> reopen -> export")
     CHECK(reopened->data().find_track(temp) != nullptr);
 
     // 7. Export: deliverables exclude the temp track; the MIDI file is well formed.
-    std::vector<MidiFileTrack> tracks;
-    for (const auto* t : reopened->export_tracks()) {
-        if (t->kind != project::TrackKind::Instrument) continue;
-        MidiFileTrack mt{t->name, {}, t->assignment.placeholder_program};
-        for (const auto& r : t->active_version()->regions)
-            for (auto n : r.notes) {
-                n.channel = t->midi_channel;
-                mt.notes.push_back(n);
-            }
-        tracks.push_back(mt);
-        CHECK(t->kind != project::TrackKind::Reference);
-    }
-    MidiFileOptions mo;
-    mo.meter = reopened->data().meter;
-    mo.tempo = reopened->data().tempo;
-    mo.markers = {{preview->start, "Chords in"}};
-    std::string smf = write_midi_file(tracks, mo);
+    for (const auto* t : reopened->export_tracks()) CHECK(t->kind != project::TrackKind::Reference);
+    std::string smf = project::export_project_midi(*reopened);
     CHECK_EQ(smf.substr(0, 4), std::string("MThd"));
     CHECK(smf.find("Temp Score") == std::string::npos);
+    CHECK(smf.find(p.data().find_track(ostinato_track)->name) != std::string::npos);
     REQUIRE(files::write_file_atomic(std::string(VCC_TEST_TMP_DIR) + "/workflow.mid", smf, &err));
 }

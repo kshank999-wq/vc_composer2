@@ -6,6 +6,13 @@
 // Inserting a 40-track template, sending 8 bars of chords to a track, or
 // switching a track to Version 2 is each one entry in the history.
 //
+// Each track version owns a notation score (the composer's written intent,
+// from the notation engine ported from the original VC Composer) plus MIDI
+// regions (performance material and generated MIDI not yet notated). The
+// project's meter map and key are canonical: every edit pushes them into
+// every score, so the Composer view and the Sequencer can never disagree
+// about where a bar starts.
+//
 // Undo currently keeps a copy of the document per step. That is simple and
 // obviously correct, which is what the foundation needs; when the notation
 // score model from the original VC Composer is ported in, note-level edits
@@ -25,6 +32,7 @@
 #include "vcc/core/Json.h"
 #include "vcc/core/Midi.h"
 #include "vcc/core/Time.h"
+#include "vcc/notation/Score.h"
 
 namespace vcc::project {
 
@@ -79,6 +87,8 @@ struct TrackVersion {
     std::string id;
     std::string name;  ///< "Version 1", renamable.
     std::string notes; ///< Composer's notes about this version.
+    /// Written notation: staves, notes, articulations, dynamics, slurs.
+    notation::Score score;
     std::vector<MidiRegion> regions;
     std::vector<std::string> articulation_overrides;
     std::optional<double> gain_db;  ///< Optional per-version mix setting.
@@ -97,6 +107,9 @@ struct Track {
     std::vector<std::string> fallback_instruments;
     std::vector<std::string> plugin_requirements;
     InstrumentAssignment assignment;
+    /// How notation becomes MIDI for this track's patch: "default" or
+    /// "orchestral_cc" (built in), or a user map by name.
+    std::string expression_map = "default";
     std::string output_bus_id;
     std::vector<std::pair<std::string, double>> sends;  ///< bus id, level dB
     double gain_db = 0.0;
@@ -171,6 +184,10 @@ struct ProjectData {
     /// "Horn" -> "Horn" if free, else "Horn (2)", "Horn (3)"...
     std::string unique_track_name(const std::string& wanted) const;
     std::string unique_bus_name(const std::string& wanted) const;
+
+    /// Pushes the project's meter map and key into every track version's
+    /// score. Called after every edit; cheap when nothing changed.
+    void sync_scores();
 };
 
 /// What to do when Send to Track lands on material already there

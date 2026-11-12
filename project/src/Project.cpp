@@ -4,6 +4,8 @@
 #include <set>
 
 #include "vcc/core/Files.h"
+#include "vcc/notation/ScoreFile.h"
+#include "vcc/theory/Pitch.h"
 
 namespace vcc::project {
 
@@ -117,6 +119,66 @@ std::string ProjectData::unique_bus_name(const std::string& wanted) const
     return unique_name(wanted, [&](const std::string& n) { return find_bus_by_name(n) != nullptr; });
 }
 
+// --- Score synchronisation ----------------------------------------------------------
+
+namespace {
+
+void sync_score(notation::Score& score, const MeterMap& meter, const std::optional<notation::KeySignature>& key)
+{
+    std::vector<std::pair<Ticks, music::TimeSignature>> wanted;
+    for (const auto& c : meter.changes())
+        wanted.emplace_back(meter.bar_start(c.bar),
+                            music::TimeSignature{static_cast<std::uint16_t>(c.signature.numerator),
+                                                 static_cast<std::uint16_t>(c.signature.denominator)});
+    const auto& have = score.time_signature_changes();
+    bool same = have.size() == wanted.size();
+    for (std::size_t i = 0; same && i < have.size(); ++i)
+        same = have[i].tick == wanted[i].first &&
+               have[i].time_signature.numerator == wanted[i].second.numerator &&
+               have[i].time_signature.denominator == wanted[i].second.denominator;
+    if (!same) {
+        // Clear and rebuild in order, so each change lands on a barline of
+        // the meter before it.
+        std::vector<Ticks> old;
+        for (const auto& c : have)
+            if (c.tick > 0) old.push_back(c.tick);
+        for (Ticks t : old) score.remove_time_signature(t);
+        for (const auto& w : wanted) score.set_time_signature(w.first, w.second);
+    }
+    if (key) {
+        notation::KeySignature current = score.key_signature_at(0);
+        if (current.fifths != key->fifths || current.is_minor != key->is_minor) score.set_key_signature(0, *key);
+    }
+}
+
+std::optional<notation::KeySignature> key_signature_for(const std::string& key_text)
+{
+    auto key = theory::Key::parse(key_text);
+    if (!key) return std::nullopt;
+    notation::KeySignature ks;
+    ks.fifths = static_cast<std::int8_t>(key->fifths());
+    ks.is_minor = theory::is_minor_family(key->mode);
+    return ks;
+}
+
+notation::Score score_for_track(const std::string& name)
+{
+    notation::Score score;
+    notation::Staff staff = score.staff(0);
+    staff.name = name;
+    score.set_staff(0, staff);
+    return score;
+}
+
+}  // namespace
+
+void ProjectData::sync_scores()
+{
+    auto ks = key_signature_for(key);
+    for (auto& t : tracks)
+        for (auto& v : t.versions) sync_score(v.score, meter, ks);
+}
+
 // --- History --------------------------------------------------------------------
 
 Project::Project()
@@ -140,6 +202,7 @@ bool Project::edit(const std::string& label, const std::function<bool(ProjectDat
         return false;
     }
     if (!ok) return false;
+    working.sync_scores();
     undo_.push_back({label, std::move(data_), {}});
     data_ = std::move(working);
     redo_.clear();
@@ -183,7 +246,7 @@ std::string Project::add_track(const std::string& name, TrackKind kind, const st
         t.include_in_export = kind != TrackKind::Reference;
         t.output_bus_id = "bus-master";
         if (kind != TrackKind::Folder) {
-            t.versions.push_back({version, "Version 1", {}, {}, {}, std::nullopt});
+            t.versions.push_back({version, "Version 1", {}, score_for_track(t.name), {}, {}, std::nullopt});
             t.active_version_id = version;
         }
         d.tracks.push_back(t);
@@ -448,6 +511,7 @@ json::Value Project::to_json() const
                                          {"placeholder_program", a.placeholder_program},
                                          {"unsupported_articulations", string_array(a.unsupported_articulations)},
                                          {"message", a.message}});
+        o.set("expression_map", t.expression_map);
         o.set("output_bus_id", t.output_bus_id);
         o.set("sends", sends_to_json(t.sends));
         o.set("gain_db", t.gain_db);
@@ -464,7 +528,8 @@ json::Value Project::to_json() const
                 regions.emplace_back(json::Object{{"id", r.id}, {"start", r.start}, {"end", r.end},
                                                   {"lane", r.lane}, {"source", r.source},
                                                   {"notes", notes_to_json(r.notes)}});
-            json::Object vo{{"id", v.id}, {"name", v.name}, {"notes", v.notes}, {"regions", regions},
+            json::Object vo{{"id", v.id}, {"name", v.name}, {"notes", v.notes},
+                            {"score", notation::score_to_json(v.score)}, {"regions", regions},
                             {"articulation_overrides", string_array(v.articulation_overrides)}};
             if (v.gain_db) vo.set("gain_db", *v.gain_db);
             versions.emplace_back(vo);
@@ -580,6 +645,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
             t.assignment.unsupported_articulations = a->get_string_array("unsupported_articulations");
             t.assignment.message = a->get_string("message");
         }
+        t.expression_map = j.get_string("expression_map", "default");
         t.output_bus_id = j.get_string("output_bus_id");
         t.sends = sends_from_json(j.get("sends"));
         t.gain_db = j.get_double("gain_db");
@@ -597,6 +663,10 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
             v.notes = vj.get_string("notes");
             v.articulation_overrides = vj.get_string_array("articulation_overrides");
             if (const auto* g = vj.get("gain_db")) v.gain_db = g->as_double();
+            if (const auto* sj = vj.get("score")) {
+                notation::ScoreLoadResult loaded = notation::score_from_json(*sj, v.score);
+                if (!loaded.ok) return fail("version " + v.id + " score: " + loaded.error);
+            }
             for (const auto& rj : vj.get("regions") ? vj.get("regions")->as_array() : json::Array{}) {
                 MidiRegion r;
                 r.id = rj.get_string("id");
@@ -660,6 +730,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
             return fail("track " + t.id + " is in missing folder " + t.folder_id);
     }
 
+    d.sync_scores();
     auto next = static_cast<std::uint64_t>(std::max<std::int64_t>(1, doc.get_int("next_id", 1)));
     return Project(std::move(d), next);
 }

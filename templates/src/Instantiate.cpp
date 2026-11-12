@@ -92,6 +92,51 @@ std::string snake(const std::string& s)
     return out;
 }
 
+notation::Clef clef_for(const std::string& c)
+{
+    if (c == "bass") return notation::Clef::Bass;
+    if (c == "alto") return notation::Clef::Alto;
+    if (c == "tenor") return notation::Clef::Tenor;
+    if (c == "treble_8vb") return notation::Clef::TrebleOctaveDown;
+    if (c == "treble_8va") return notation::Clef::TrebleOctaveUp;
+    if (c == "bass_8vb") return notation::Clef::BassOctaveDown;
+    if (c == "percussion") return notation::Clef::Percussion;
+    return notation::Clef::Treble;
+}
+
+/// Octave clefs carry their octave as a sounding shift, the way the
+/// original notation engine models them: a guitar reads treble 8vb and
+/// sounds an octave below what is written.
+std::int8_t octave_shift_for(const std::string& c)
+{
+    if (c == "treble_8vb" || c == "bass_8vb") return -1;
+    if (c == "treble_8va") return 1;
+    return 0;
+}
+
+/// The staves an instrument reads, ready before a note is entered
+/// (clef, transposition, grand staff).
+notation::Score score_for_instrument(const InstrumentDef& def, const std::string& track_name)
+{
+    notation::Score score;
+    if (def.grand_staff) score.make_grand_staff();
+    notation::Staff upper = score.staff(0);
+    upper.clef = clef_for(def.clef);
+    upper.octave_shift = octave_shift_for(def.clef);
+    upper.transposition_semitones = static_cast<std::int8_t>(std::clamp(def.transposition, -48, 48));
+    upper.name = def.grand_staff ? track_name + " (upper)" : track_name;
+    score.set_staff(0, upper);
+    if (def.grand_staff && score.staff_count() > 1) {
+        notation::Staff lower = score.staff(1);
+        lower.clef = clef_for(def.lower_clef);
+        lower.octave_shift = octave_shift_for(def.lower_clef);
+        lower.transposition_semitones = upper.transposition_semitones;
+        lower.name = track_name + " (lower)";
+        score.set_staff(1, lower);
+    }
+    return score;
+}
+
 int family_rank(const std::string& f)
 {
     const auto& order = family_order();
@@ -289,7 +334,8 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
                 warnings.push_back(t.name + ": patch has no mapping for " + list);
             }
 
-            t.versions.push_back({track_ids[i].second, "Version 1", {}, {}, {}, std::nullopt});
+            t.versions.push_back({track_ids[i].second, "Version 1", {}, score_for_instrument(def, t.name), {}, {},
+                                  std::nullopt});
             t.active_version_id = track_ids[i].second;
             d.tracks.push_back(std::move(t));
         }

@@ -1,59 +1,109 @@
-# Original VC Composer: reuse audit
+# Original VC Composer: reuse audit and port record
 
 Main Spec §19 Phase 0 and §21 ask for "a feature-by-feature parity audit"
-of the original VC Composer. The original repository (`kshank999-wq/COMPOSER`,
-about 390 files and 50k lines of tests) was written as a Pro Tools AAX bridge.
-A standalone companion window plus a plug-in fed MIDI into Pro Tools. That
-route is abandoned, but most of the musical engine inside it is exactly what
-VC Composer 2 needs.
+of the original VC Composer. The original repository (`kshank999-wq/COMPOSER`)
+was a Pro Tools AAX bridge: a standalone companion window plus a plug-in that
+fed MIDI into Pro Tools. That route is abandoned. Its musical engine is what
+VC Composer 2 needs, and has been ported.
 
-This audit comes from reading the source. The code was **not** built or run in
-this session: the environment's safety check blocked executing that
-repository without explicit approval. Its README reports 52 suites passing
-under `-Werror`, ASan, UBSan and TSan. Re-establish that on import before
-relying on it.
+**Port source:** `kshank999-wq/COMPOSER` at `726c4bd`. Before porting, its own
+suite was built and run unmodified: 67 of 67 tests passed.
 
-## Module by module
+## What was ported, and how
 
-| Original module | Size (lines) | What it does | VC Composer 2 |
-|---|---|---|---|
-| `notation/` | ~6.5k | Score model (staves, grand staff, voices, chords, ties, tuplets incl. nested, stable event IDs); pitch with spelling, keys, clefs; markings; expression maps; score → MIDI renderer (dynamics, articulations, keyswitches, hairpins, transposition, tempo-aware); event diff; MIDI import with voice separation; score file | **Port as-is.** It is the canonical event model Main Spec §8 asks for. Same 2880 PPQ as `vcc_core`. |
-| `engraving/` | ~5.8k | Layout engine (clefs, keys, meters, noteheads, accidentals, ledger lines, stems, beams, rests, dots, ties, slurs, dynamics, hairpins, articulations, cross-staff, grace notes), hit testing, SMuFL metadata, SVG renderer, print layout | **Port.** Extend from the timeline-driven strip to page layout and parts (Main Spec §7). |
-| `editing/` | ~2.9k | Keyboard/mouse entry, durations, tuplets, accidentals, voices, chords, transpose/respell, articulations, dynamics, slurs, copy/paste, key/meter/clef changes, undo as a journal of inverses | **Port.** Becomes the Composer view's command layer. Its undo keeps note IDs stable, which is better than D6 for note edits. |
-| `composer/` | ~3.3k | Shortcut profiles (Finale-style, Sibelius-style, default; platform modifier; remapping), instrument definitions, library catalogue with favorites, session template generator, settings store and migrations | **Partly port.** Port shortcuts and settings migration (review profiles per 01). The instrument catalogue and session templates are superseded by `content/instruments` and `vcc_templates`; merge its favorites concept into `InstalledPatch`. |
-| `shared/music` | ~1.5k | MIDI events, Standard MIDI File read/write, musical time | **Port MIDI file reading** (VC Composer 2 only has a writer). Unify time types with `vcc_core`. |
-| `shared/files` | ~0.2k | Atomic save | Superseded by `vcc_core/Files`. |
-| `shared/json` | ~0.8k | JSON | Superseded by `vcc_core/Json`. |
-| `shared/audio` | ~0.6k | Lock-free real-time queues and primitives | **Port** into the realtime engine. |
-| `plugins/aax/core` | part of ~2.4k | Host-agnostic sample-accurate MIDI scheduler, transport handling, real-time discipline (allocation-counting test) | **Port the scheduler and its tests** into the realtime engine. Drop the host-context code. |
-| `ui/juce` | ~6.7k | Companion window, notation view, renderer, SMuFL font loader, Bravura embedding, headless pixel tests | **Port the notation view, renderer and font embedding** into the Composer workspace. Rework the window shell into the VC Composer 2 layout. |
-| `app/` | ~12.5k | Companion window state: per-track documents bound to Pro Tools tracks, view model, settings, recent files | **Mine selectively.** Track binding to Pro Tools goes. The view-model and headless UI-test patterns carry over. |
-| `bridge/`, `shared/protocol` | ~6.1k | IPC between the app and the plug-in | **Drop.** VC Composer 2 is one process. Keep the plug-in sandbox/scan isolation ideas for the VST3 scanner. |
-| `session-control/` | ~2.9k | Pro Tools Scripting SDK (PTSL) client | **Drop.** |
-| `plugins/aax/juce`, AAX docs, signing | — | AAX/VST3/AU wrapper | **Drop** the wrapper. Keep the macOS packaging and notarisation scripts (Main Spec §3 signed installers). |
-| `resources/fonts/Bravura` | — | SMuFL font (OFL) | **Port.** |
-| `tests/` | ~49k | Unit, fuzz, stress, real-time discipline, host and pixel tests | Port with each module. |
+| Original | Now | Notes |
+|---|---|---|
+| `shared/music` | `music/` (`vcc_music`) | MIDI events, Standard MIDI File read/write, host-time types (960 PPQ). Unchanged. |
+| `shared/audio` | `audio/` (`vcc_audio`) | Lock-free SPSC ring buffer, audio config, metronome. Unchanged. |
+| `notation/` | `notation/` (`vcc_notation`) | Score model, pitch/spelling, markings, expression maps, score→MIDI renderer, event diff, MIDI import, score file. Only change: the score file's JSON include. |
+| `engraving/` | `engraving/` (`vcc_engraving`) | Layout, SMuFL, hit testing, SVG, print layout; `smufl-font-gen` tool. Unchanged. |
+| `editing/` | `editing/` (`vcc_editing`) | Note entry, editing commands, undo journal. Unchanged. |
+| `composer/` | `composer/` (`vcc_composer`) | Shortcut profiles, settings store and migrations, instrument catalogue, session template. |
+| `app/ExpressionMapLibrary`, `app/ShortcutProfileLibrary` | `composer/` | Lifted out of the companion app. Namespace `vcc::app` → `vcc::composer`. |
+| `plugins/aax/core` MIDI scheduler | `engine/` (`vcc_engine`) | Sample-accurate scheduler. Namespace `vcc::plugin` → `vcc::engine`. |
+| `shared/json` | merged into `vcc_core` JSON | Core JSON now also provides the original API (`make_*`, `set`, `push_back`, `at`, `size`, `has`, null-safe `operator[]`, `to_text`, `Kind`, `parse_value`, depth limit 64). Integral numbers write as integers, so score files are byte-for-byte as before. |
+| `shared/files` | merged into `vcc_core` Files | One atomic writer for both APIs. It keeps the original's path-free error messages and adds `fsync` of the file and its directory. |
+| `resources/fonts/Bravura` | `resources/fonts/Bravura` | SIL OFL; licence and FONTLOG included. |
+| `scripts/make-test-music-font.py` | `tools/fonts/` | Generates the SMuFL test font. |
+| 25 test suites | `tests/ported/` | Kept with their own harness (`VCC_TEST`/`VCC_CHECK`). `test_json` is now `test_json_compat` and runs against the merged core JSON. |
 
-## Order of port
+Changes made to ported tests:
 
-1. `notation` + `shared/music` (time types unified with `vcc_core`). Then attach
-   a score part to `project::TrackVersion`, so a track version holds notation
-   plus MIDI regions.
-2. `editing` → Composer command layer; `engraving` + Bravura.
-3. `shared/audio` + scheduler → realtime engine skeleton.
-4. `ui/juce` notation view → Composer workspace in the new JUCE shell.
-5. Shortcut profiles and settings migration.
+- Two library cases that round-tripped through the companion app's settings
+  file were removed with that file (one each in the expression-map and
+  shortcut-profile suites).
+- An unused constant that Clang rejects under `-Werror` was deleted.
 
-## Feature parity checklist (original → VC Composer 2)
+All ported suites pass under GCC 13 and Clang, both with `-Werror`, and under
+ASan + UBSan. The ported code also compiles cleanly under VC Composer 2's
+stricter warning set (`-Wold-style-cast`).
 
-- [ ] Notation entry (keyboard, mouse, step-time), voices, chords, grace notes, tuplets incl. nested
-- [ ] Engraving: beams, slurs/ties, cross-staff, dynamics/hairpins by voice, print/SVG pages
-- [ ] Score → MIDI with expression maps, keyswitches, CC chase on locate
-- [ ] MIDI import with voice separation and keyboard split
-- [ ] Shortcut profiles (Finale-style, Sibelius-style, default), customizable
-- [ ] Instrument transposition and grand staff from the catalog (now `content/instruments`)
-- [ ] Library favorites (now via `InstalledPatch.favorite`)
-- [ ] Settings persistence and migration
-- [ ] Undo/redo preserving note IDs
-- [ ] MIDI file export with markers. Done in `vcc_core` (`write_midi_file`)
-- [ ] Atomic, crash-safe save. Done in `vcc_core` (`write_file_atomic`)
+## Integrated into VC Composer 2
+
+- **Track versions own a score.** `project::TrackVersion::score` is a
+  `notation::Score`; MIDI regions sit beside it for performance material and
+  generated MIDI. Duplicating a version copies its score, and switching
+  versions swaps notation and MIDI together (Main Spec §8 "Versions").
+- **One meter, one key.** The project's meter map and key are canonical. Every
+  edit writes them into every score (`ProjectData::sync_scores`), so the
+  Composer view's bars and the Sequencer's bars cannot drift apart.
+- **Staves from the instrument registry.** Template instantiation sets each
+  staff's clef, transposition, octave-clef shift and grand staff from
+  `content/instruments`. Examples: viola reads alto; B♭ clarinet −2; horn −7;
+  guitar treble-8vb, sounding −12; double bass −12; piano two staves; drums
+  percussion clef.
+- **Rendering.** `project::render_track` renders the score through the track's
+  expression map (`default` or `orchestral_cc`) and adds the MIDI regions.
+  Keyswitches are kept apart from the notes, which are pitched music.
+  `export_project_midi` writes deliverable MIDI with notes and dynamics
+  controllers and leaves temp tracks out. The `vcc export-midi` command uses it.
+- **Persistence.** Each version's score is saved with the original score-file
+  format inside the project file. Older project files without scores still
+  load, and a corrupt score is refused by name.
+- **Tests:** `tests/unit/test_score_integration.cpp` covers:
+  - the Main Spec §22 vertical slice (three notes, staccato, dynamics → MIDI);
+  - written versus sounding pitch;
+  - ten edit/save/reopen cycles keeping articulations and stable note IDs
+    (Main Spec §20);
+  - independent version scores;
+  - meter and key propagation;
+  - backward compatibility;
+  - controller export.
+
+## Not ported
+
+| Original | Why |
+|---|---|
+| `bridge/`, `shared/protocol` | IPC between the companion and the plug-in. VC Composer 2 is one process. |
+| `session-control/` | Pro Tools Scripting SDK client. |
+| `plugins/aax/juce`, AAX docs and signing | Plug-in wrapper for Pro Tools. The macOS packaging/notarisation approach is reusable when installers are built (Main Spec §3). |
+| `app/` (rest) | Companion-window state bound to Pro Tools tracks. Its view-model and headless UI-test patterns are the model for the VC Composer 2 shell. |
+| `ui/juce` | The notation view, renderer, SMuFL font loader and Bravura embedding come over with the JUCE desktop shell. That waits on the JUCE licence decision (`01-decisions-and-license-gates.md`, O1). |
+| `test_realtime_discipline` | Its allocation-counting harness drives the plug-in core and bridge. It is to be rebuilt around `vcc_engine` with the realtime engine. |
+
+## Still to consolidate
+
+Two kinds of duplication remain from the port. Neither changes behaviour, and
+both should be resolved when the code around them is next touched:
+
+- **Two time bases.** `vcc_music` keeps the host's 960-PPQ types. `vcc_core` and
+  `vcc_notation` use 2880. Conversion happens at the scheduler and MIDI-file
+  boundary, as in the original.
+- **Two instrument lists.** `composer::InstrumentCatalog` and
+  `content/instruments`. The catalogue's library-patch favorites should merge
+  into `templates::InstalledPatch`.
+
+## Feature parity checklist
+
+| Feature | Engine | In VC Composer 2 projects |
+|---|---|---|
+| Notation entry (keyboard, mouse, step), voices, chords, grace notes, nested tuplets | ✅ ported (`ScoreEditor`) | ✅ edits a track version's score as one undo step; UI pending |
+| Engraving: beams, slurs/ties, cross-staff, dynamics/hairpins by voice, print/SVG | ✅ ported | Composer view pending (JUCE shell) |
+| Score → MIDI with expression maps, keyswitches, hairpins, transposition | ✅ ported | ✅ `render_track`, `export_project_midi` |
+| MIDI import with voice separation and keyboard split | ✅ ported | Import command pending |
+| Shortcut profiles (Finale-style, Sibelius-style, default) | ✅ ported | Shell pending; profiles to be reviewed per 01 |
+| Settings store and migration | ✅ ported | VC Composer 2 settings file pending |
+| Undo preserving note IDs | ✅ ported (editor journal) | ✅ project undo; note IDs survive save/load |
+| MIDI file export with markers | ✅ | ✅ cue markers |
+| Atomic, crash-safe save | ✅ merged | ✅ |
+| Sample-accurate MIDI scheduler | ✅ ported (`vcc_engine`) | Realtime engine pending |

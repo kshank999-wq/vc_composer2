@@ -6,8 +6,9 @@ mirrored MIDI, mix through professional routing, score to picture, compare
 track and cue versions, and export deliverables, all in one desktop
 application for macOS and Windows.
 
-This replaces the original VC Composer, a Pro Tools AAX companion. Its notation
-engine is carried forward; the Pro Tools bridge is not
+This replaces the original VC Composer, a Pro Tools AAX companion. Its
+notation engine, engraver, editor, MIDI-file and scheduler code has been
+ported here with its tests. The Pro Tools bridge has not
 (see [`docs/02-original-vc-composer-reuse-audit.md`](docs/02-original-vc-composer-reuse-audit.md)).
 
 ## Specifications
@@ -24,8 +25,10 @@ The framework-free domain layer, built and tested on every commit:
 | `vcc_core` | Ordered JSON; exact musical time (2880 PPQ); meter and tempo maps; film/TV timecode incl. 29.97/59.94 drop frame; crash-safe atomic saves; stable IDs; note events; Standard MIDI File export |
 | `vcc_theory` | Spelled pitch; 17 modes; historical tunings and cent-based pitch collections (maqam, raga, gamelan...); 32 chord qualities; Roman numerals with inversions, pedals and applied chords; voicings (closed/open/drop-2/drop-3/spread) with deterministic voice leading; progression catalog and renderer |
 | `vcc_ostinato` | Portable seeded generator; A/B/C variants; one-aspect re-rolls with locks; chord-follow; evolving 4-bar segments; call/response; drum mode; exact N bars in any meter |
-| `vcc_project` | One track list for all views; instrument/MIDI/audio/aux/reference/video/folder tracks; non-destructive track versions; cue snapshots; buses, sends, inserts; cues; undo/redo per action; replace/merge/new-lane collision policy; versioned, migrating, atomic save/load |
-| `vcc_templates` | Instrument registry, template validation and search, library resolver (exact → fallback → labelled placeholder), one-step template instantiation (create/merge/replace), custom templates, pack import/export |
+| `vcc_project` | One track list for all views; instrument/MIDI/audio/aux/reference/video/folder tracks; non-destructive track versions, each holding a notation score and MIDI regions; cue snapshots; buses, sends, inserts; cues; undo/redo per action; replace/merge/new-lane collision policy; versioned, migrating, atomic save/load; track rendering and deliverable MIDI export |
+| `vcc_templates` | Instrument registry, template validation and search, library resolver (exact → fallback → labelled placeholder), one-step template instantiation (create/merge/replace) with staves set from each instrument, custom templates, pack import/export |
+| `vcc_notation` · `vcc_engraving` · `vcc_editing` | *Ported.* Score model, spelling, markings, expression maps, score → MIDI, event diff, MIDI import; engraving layout, SMuFL/Bravura, SVG and print; keyboard/mouse note entry and editing with an undo journal |
+| `vcc_composer` · `vcc_engine` · `vcc_music` · `vcc_audio` | *Ported.* Finale-/Sibelius-style and default shortcut profiles, settings and migrations, expression-map library; sample-accurate MIDI scheduler; MIDI file read/write; lock-free ring buffer and metronome |
 
 Content in `content/`:
 

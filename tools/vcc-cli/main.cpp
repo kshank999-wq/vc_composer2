@@ -25,6 +25,7 @@
 
 #include "vcc/core/Files.h"
 #include "vcc/ostinato/Ostinato.h"
+#include "vcc/project/Render.h"
 #include "vcc/templates/Templates.h"
 #include "vcc/theory/Progression.h"
 
@@ -220,7 +221,7 @@ int cmd_chords(const Args& a, const Catalogs& c)
         std::printf("\n");
     }
     if (!a.opt("midi").empty())
-        return write_midi(a.opt("midi"), {{prog->name, r->notes, 0}}, meter, std::atof(a.opt("bpm", "90").c_str())) ? 0 : 1;
+        return write_midi(a.opt("midi"), {{prog->name, r->notes, 0, {}}}, meter, std::atof(a.opt("bpm", "90").c_str())) ? 0 : 1;
     return 0;
 }
 
@@ -270,7 +271,7 @@ int cmd_ostinato(const Args& a, const Catalogs& c)
         std::printf("...\n");
         auto notes = v.notes;
         for (auto& n : notes) n.channel = static_cast<int>(tracks.size());
-        tracks.push_back({std::string(preset->get_string("name")) + " " + v.id, notes, o.percussion ? -1 : 48});
+        tracks.push_back({std::string(preset->get_string("name")) + " " + v.id, notes, o.percussion ? -1 : 48, {}});
     }
     if (!a.opt("midi").empty())
         return write_midi(a.opt("midi"), tracks, o.meter, std::atof(a.opt("bpm", "110").c_str())) ? 0 : 1;
@@ -296,28 +297,19 @@ int cmd_validate(const Catalogs& c)
 
 int cmd_export_midi(const Args& a)
 {
-    if (a.positional.size() < 2) return fail("usage: vcc export-midi <project.json> <out.mid>");
+    if (a.positional.size() < 2) return fail("usage: vcc export-midi <project.json> <out.mid> [--keyswitches]");
     std::string err;
     auto p = project::Project::load(a.positional[0], &err);
     if (!p) return fail(err);
-    std::vector<MidiFileTrack> tracks;
+    // Written notation and MIDI regions together, through each track's
+    // expression map; temp/reference tracks are left out.
+    std::string smf = project::export_project_midi(*p, !a.opt("keyswitches").empty());
+    if (!files::write_file_atomic(a.positional[1], smf, &err)) return fail(err);
     for (const auto* t : p->export_tracks()) {
         if (t->kind != project::TrackKind::Instrument && t->kind != project::TrackKind::MidiOnly) continue;
-        MidiFileTrack mt{t->name, {}, t->midi_channel == 9 ? -1 : t->assignment.placeholder_program};
-        if (const auto* v = t->active_version())
-            for (const auto& r : v->regions)
-                for (auto n : r.notes) {
-                    n.channel = t->midi_channel;
-                    mt.notes.push_back(n);
-                }
-        tracks.push_back(mt);
+        for (const auto& w : project::render_track(*t).warnings) std::printf("  ! %s: %s\n", t->name.c_str(), w.c_str());
     }
-    MidiFileOptions o;
-    o.meter = p->data().meter;
-    o.tempo = p->data().tempo;
-    for (const auto& cue : p->data().cues) o.markers.emplace_back(cue.start, cue.code + " " + cue.title);
-    if (!files::write_file_atomic(a.positional[1], write_midi_file(tracks, o), &err)) return fail(err);
-    std::printf("wrote %zu tracks to %s\n", tracks.size(), a.positional[1].c_str());
+    std::printf("wrote %s\n", a.positional[1].c_str());
     return 0;
 }
 
