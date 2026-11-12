@@ -1164,6 +1164,101 @@ int main(int argc, char** argv)
             check(again.size() == 1 && again[0].skipped_protected, "an approved cue's deliverable is not overwritten unasked");
         }
 
+        // Disk streaming (Main Spec 11): a long file plays sample-exactly far past
+        // the read-ahead, after a locate into it, and with the real disk thread.
+        {
+            const auto file = dir.getChildFile("streaming-ramp.wav");
+            file.deleteFile();
+            constexpr int rate = 48000, seconds = 20;
+            auto value_at = [](std::int64_t i) { return 0.05f + 0.4f * static_cast<float>(i % 4801) / 4800.0f; };
+            {
+                juce::WavAudioFormat wav;
+                std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+                auto w = wav.createWriterFor(stream, juce::AudioFormatWriterOptions{}
+                                                         .withSampleRate(rate)
+                                                         .withNumChannels(1)
+                                                         .withBitsPerSample(32)
+                                                         .withSampleFormat(juce::AudioFormatWriterOptions::SampleFormat::floatingPoint));
+                juce::AudioBuffer<float> b(1, rate);
+                for (int s2 = 0; s2 < seconds; ++s2) {
+                    for (int i = 0; i < rate; ++i) b.setSample(0, i, value_at(static_cast<std::int64_t>(s2) * rate + i));
+                    w->writeFromAudioSampleBuffer(b, 0, rate);
+                }
+            }
+            session::Session solo(ctx.catalogs);
+            solo.new_empty();
+            const auto tid = solo.add_audio_track("Ramp", false);
+            project::AudioClip c;
+            c.file = file.getFullPathName().toStdString();
+            c.start_seconds = 1.0;
+            c.source_offset = 2.0;
+            c.length = 15.0;
+            c.channels = 1;
+            c.file_sample_rate = rate;
+            solo.add_audio_clips({{tid, c}}, "Import", false);
+            PlaybackEngine e(solo, ctx.plugins);
+            e.prepare_offline(rate, 512);
+            juce::AudioBuffer<float> out(2, 512);
+            // Expected left sample at timeline sample t (mono, centre pan: -3 dB).
+            auto expected = [&](std::int64_t at) { return value_at(at - rate + 2 * rate) * 0.70710678f; };
+            auto play_and_compare = [&](double from_seconds, int blocks, double& worst) {
+                std::int64_t ts = static_cast<std::int64_t>(from_seconds * rate);
+                for (int b = 0; b < blocks; ++b, ts += 512) {
+                    e.render_offline(out, 512);
+                    for (int i = 0; i < 512; ++i) {
+                        const std::int64_t at = ts + i;
+                        if (at < rate + 200 || at > 16 * rate - 200) continue;  // clip edges (de-click)
+                        worst = std::max(worst, static_cast<double>(std::abs(out.getSample(0, i) - expected(at))));
+                    }
+                }
+            };
+            double worst = 0.0;
+            e.locate(solo.data().tempo.tick_at_seconds(11.0));
+            e.play();
+            play_and_compare(11.0, 400, worst);  // 11 s to ~15.3 s: far past the 0.75 s read-ahead
+            e.stop();
+            check(worst < 1.0e-5, "a long clip streams sample-exactly after a locate into it (worst error " +
+                                      juce::String(worst, 8) + ")");
+
+            // The real disk thread: cue while stopped, then play: no dropouts.
+            e.set_disk_synchronous(false);
+            e.take_disk_underruns();
+            e.locate(solo.data().tempo.tick_at_seconds(6.0));
+            for (int b = 0; b < 20; ++b) {
+                e.render_offline(out, 512);  // stopped: cues the stream
+                juce::Thread::sleep(3);
+            }
+            e.play();
+            double worst_rt = 0.0;
+            for (int b = 0; b < 200; ++b) {
+                std::int64_t t0 = static_cast<std::int64_t>(6.0 * rate) + static_cast<std::int64_t>(b) * 512;
+                e.render_offline(out, 512);
+                for (int i = 0; i < 512; ++i)
+                    worst_rt = std::max(worst_rt, static_cast<double>(std::abs(out.getSample(0, i) - expected(t0 + i))));
+                juce::Thread::sleep(2);  // faster than real time, but the disk keeps up
+            }
+            const int underruns = e.take_disk_underruns();
+            check(underruns == 0 && worst_rt < 1.0e-5,
+                  "the disk thread keeps a cued stream ahead of playback (" + juce::String(underruns) +
+                      " dropouts, worst error " + juce::String(worst_rt, 8) + ")");
+            // A jump while playing is a counted dropout, and the stream recovers.
+            e.locate(solo.data().tempo.tick_at_seconds(13.0));
+            std::int64_t ts = static_cast<std::int64_t>(13.0 * rate);
+            double worst_after = 0.0;
+            for (int b = 0; b < 60; ++b, ts += 512) {
+                e.render_offline(out, 512);
+                if (b >= 10)
+                    for (int i = 0; i < 512; ++i)
+                        worst_after = std::max(worst_after, static_cast<double>(std::abs(out.getSample(0, i) - expected(ts + i))));
+                juce::Thread::sleep(3);
+            }
+            const int jump_underruns = e.take_disk_underruns();
+            check(jump_underruns == 0 && worst_after < 1.0e-5,
+                  "a jump while playing recovers within a few blocks and is not mistaken for a slow disk (" +
+                      juce::String(jump_underruns) + " starved blocks, then worst error " + juce::String(worst_after, 8) + ")");
+            e.stop();
+        }
+
         // Stems (Main Spec 16): the mix and every stem, adding back up to the mix.
         {
             auto stems = session.stems();

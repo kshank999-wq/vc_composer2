@@ -4,7 +4,7 @@
 #include <cmath>
 #include <set>
 
-#include "audio/AudioFileCache.h"
+#include "audio/DiskStreamer.h"
 #include "audio/AutomationRt.h"
 #include "audio/ChannelDsp.h"
 #include "audio/PlaceholderSynth.h"
@@ -151,7 +151,7 @@ struct PlaybackSnapshot {
         std::array<std::shared_ptr<DelayLine>, kMaxSends> send_lines;
     };
     struct Clip {
-        std::shared_ptr<const AudioData> data;
+        std::shared_ptr<ClipStream> stream;
         std::int64_t start = 0, length = 0, offset = 0;  // timeline / file samples at sample_rate
         std::int64_t fade_in = 0, fade_out = 0, declick = 0;
         float gain = 1.0f;
@@ -478,31 +478,32 @@ void render_clip(const PlaybackSnapshot::Clip& c, float* l, float* r, std::int64
 {
     const std::int64_t a = std::max(pos, c.start), b = std::min(pos + n, c.start + c.length);
     if (b <= a) return;
-    const AudioData& d = *c.data;
-    const std::int64_t available = d.length();
-    const float* src_l = d.samples.getReadPointer(0);
-    const bool stereo = d.channels() > 1;
-    const float* src_r = stereo ? d.samples.getReadPointer(1) : src_l;
     constexpr float half_pi = juce::MathConstants<float>::halfPi;
-    for (std::int64_t t = a; t < b; ++t) {
-        const std::int64_t k = t - c.start;
-        const std::int64_t src = c.offset + k;
-        if (src < 0) continue;
-        if (src >= available) break;
-        const std::int64_t remaining = c.length - 1 - k;
-        float g = c.gain;
-        if (k < c.fade_in) g *= std::sin(half_pi * (static_cast<float>(k) + 0.5f) / static_cast<float>(c.fade_in));
-        if (remaining < c.fade_out)
-            g *= std::sin(half_pi * (static_cast<float>(remaining) + 0.5f) / static_cast<float>(c.fade_out));
-        if (k < c.declick) g *= (static_cast<float>(k) + 0.5f) / static_cast<float>(c.declick);
-        if (remaining < c.declick) g *= (static_cast<float>(remaining) + 0.5f) / static_cast<float>(c.declick);
-        const auto idx = static_cast<std::size_t>(src);
-        float vl = src_l[idx], vr = src_r[idx];
-        if (mono && stereo) vl = vr = 0.5f * (vl + vr);
-        const auto i = static_cast<std::size_t>(t - pos);
-        l[i] += vl * g;
-        r[i] += vr * g;
+    constexpr int kChunk = 256;
+    std::array<float, kChunk> gains{};
+    for (std::int64_t from = a; from < b; from += kChunk) {
+        const int count = static_cast<int>(std::min<std::int64_t>(kChunk, b - from));
+        for (int i = 0; i < count; ++i) {
+            const std::int64_t k = from + i - c.start;
+            const std::int64_t remaining = c.length - 1 - k;
+            float g = c.gain;
+            if (k < c.fade_in) g *= std::sin(half_pi * (static_cast<float>(k) + 0.5f) / static_cast<float>(c.fade_in));
+            if (remaining < c.fade_out)
+                g *= std::sin(half_pi * (static_cast<float>(remaining) + 0.5f) / static_cast<float>(c.fade_out));
+            if (k < c.declick) g *= (static_cast<float>(k) + 0.5f) / static_cast<float>(c.declick);
+            if (remaining < c.declick) g *= (static_cast<float>(remaining) + 0.5f) / static_cast<float>(c.declick);
+            gains[static_cast<std::size_t>(i)] = g;
+        }
+        const auto at = static_cast<std::size_t>(from - pos);
+        c.stream->read(from - c.start, count, gains.data(), l + at, r + at, mono && c.stream->channels() > 1);
     }
+}
+
+/// Audio thread, while stopped: positions a clip's stream for a play from
+/// `pos`, so starting playback finds its audio already read.
+void cue_clip(const PlaybackSnapshot::Clip& c, std::int64_t pos) noexcept
+{
+    if (pos < c.start + c.length) c.stream->cue(std::max<std::int64_t>(0, pos - c.start));
 }
 
 /// Audio thread, before a strip's instrument and processing: evaluates its
@@ -662,7 +663,7 @@ private:
 };
 
 PlaybackEngine::PlaybackEngine(session::Session& session, PluginHost& plugins)
-    : session_(session), plugins_(plugins), files_(std::make_unique<AudioFileCache>())
+    : session_(session), plugins_(plugins), files_(std::make_unique<DiskStreamer>())
 {
     for (auto& m : input_meters_) m.store(0.0f);
     listener_ = session_.add_listener([this](session::Change c) {
@@ -727,6 +728,7 @@ juce::String PlaybackEngine::open_default_device()
 
 void PlaybackEngine::prepare_offline(double sample_rate, int block_size)
 {
+    files_->set_synchronous(true);  // offline: reads fill their own buffers
     prepare_all(sample_rate, block_size);
     latency_samples_ = 0;
     rebuild_now();
@@ -751,6 +753,7 @@ void PlaybackEngine::render_offline_with_input(const juce::AudioBuffer<float>& i
 
 void PlaybackEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 {
+    files_->set_synchronous(false);
     // Called before callbacks (re)start, on the thread that opened the
     // device, so instruments can be re-prepared without racing the audio thread.
     prepare_all(device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples());
@@ -775,7 +778,7 @@ void PlaybackEngine::prepare_all(double sr, int bs)
         if (slot.instrument) slot.instrument->prepare(sample_rate_, block_size_);
     for (auto& [id, strip] : strips_) strip->channel.prepare(sample_rate_);
     for (auto& [key, insert] : inserts_) insert->prepare(sample_rate_, block_size_);
-    files_->keep_only_rate(sample_rate_);
+    // Streams are keyed by rate; ones at the old rate go when unused.
 }
 
 void PlaybackEngine::request_rebuild() { rebuild_pending_ = true; }
@@ -910,6 +913,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
     const auto& d = session_.data();
     const MixPlan plan = make_plan(d, played_tracks(session_, export_mode_), render_override_ ? &*render_override_ : nullptr);
     auto snap = std::make_unique<PlaybackSnapshot>();
+    std::map<std::string, std::shared_ptr<ClipStream>> live_streams;
     snap->sample_rate = sample_rate_;
     snap->max_block = block_size_;
     snap->out.setSize(2, block_size_);
@@ -956,17 +960,29 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
             juce::StringArray problems;
             for (const auto& c : v->audio_clips) {
                 if (c.lane != 0 || c.muted || c.length <= 0.0) continue;
-                juce::String error;
-                auto data = files_->get(session_.resolve_audio_path(c.file), sample_rate_, error);
-                if (!data) {
-                    problems.addIfNotAlreadyThere(error);
-                    continue;
+                const std::int64_t length = std::llround(c.length * sample_rate_);
+                const std::int64_t offset = std::llround(std::max(0.0, c.source_offset) * sample_rate_);
+                const std::string path = session_.resolve_audio_path(c.file);
+                // The same clip keeps its stream (and its buffered audio) across rebuilds.
+                const std::string key = t->id + "|" + c.id + "|" + path + "|" + std::to_string(offset) + "|" +
+                                        std::to_string(length) + "|" + std::to_string(static_cast<long long>(sample_rate_));
+                std::shared_ptr<ClipStream> stream;
+                if (auto it = streams_.find(key); it != streams_.end()) {
+                    stream = it->second;
+                } else {
+                    juce::String error;
+                    stream = files_->open(path, sample_rate_, offset, length, error);
+                    if (!stream) {
+                        problems.addIfNotAlreadyThere(error);
+                        continue;
+                    }
                 }
+                live_streams[key] = stream;
                 PlaybackSnapshot::Clip clip;
-                clip.data = std::move(data);
+                clip.stream = std::move(stream);
                 clip.start = std::llround(c.start_seconds * sample_rate_);
-                clip.length = std::llround(c.length * sample_rate_);
-                clip.offset = std::llround(std::max(0.0, c.source_offset) * sample_rate_);
+                clip.length = length;
+                clip.offset = offset;
                 clip.fade_in = std::llround(std::max(0.0, c.fade_in) * sample_rate_);
                 clip.fade_out = std::llround(std::max(0.0, c.fade_out) * sample_rate_);
                 clip.declick = std::max<std::int64_t>(1, std::llround(kDeclickSeconds * sample_rate_));
@@ -1174,6 +1190,8 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
             snap->clicks.emplace_back(static_cast<std::int64_t>(std::llround(d.tempo.seconds_at(t) * sample_rate_)), i == 0);
     }
     snap->seek(position_samples_.load());
+    // Streams no clip uses any more go when the snapshots holding them retire.
+    streams_ = std::move(live_streams);
     return snap;
 }
 
@@ -1288,6 +1306,9 @@ void PlaybackEngine::set_render_override(std::optional<RenderOverride> override_
     render_override_ = std::move(override_settings);
     rebuild_now();
 }
+
+int PlaybackEngine::take_disk_underruns() noexcept { return files_->take_underruns(); }
+void PlaybackEngine::set_disk_synchronous(bool on) { files_->set_synchronous(on); }
 
 void PlaybackEngine::set_export_mode(bool on)
 {
@@ -1504,7 +1525,6 @@ void PlaybackEngine::finalize_pass(std::unique_ptr<RecordPass> pass)
         c.file_sample_rate = pass->sample_rate;
         if (c.length <= 0.0) continue;
         longest = std::max(longest, c.length);
-        files_->forget(take.file.getFullPathName().toStdString());
         clips.emplace_back(take.track_id, std::move(c));
     }
     recording_ = false;
@@ -1679,6 +1699,8 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
             float* r = buf.getWritePointer(1);
             if (playing && !monitor_input)
                 for (const auto& clip : t.clips) render_clip(clip, l, r, pos, n, t.mono);
+            else if (!playing)
+                for (const auto& clip : t.clips) cue_clip(clip, pos);
             if (monitor_input && inputs && t.input >= 0 && t.input < num_inputs && inputs[t.input]) {
                 const float* in_l = inputs[t.input] + offset;
                 const int right = t.input_stereo && t.input + 1 < num_inputs && inputs[t.input + 1] ? t.input + 1 : t.input;

@@ -148,6 +148,10 @@ void MainComponent::timerCallback()
     transport_.update_position();
     if (composer_.isVisible()) composer_.set_playhead(tick, playing);
     if (sequencer_.isVisible()) sequencer_.set_playhead(tick, playing);
+    // Never silent: a disk that cannot keep up with the audio clips is said.
+    if (const int dropouts = context_.engine.take_disk_underruns(); dropouts > 0)
+        context_.status("The disk could not keep up with the audio clips (" + juce::String(dropouts) +
+                        " short dropout" + (dropouts == 1 ? "" : "s") + ")");
 
     // Crash protection: an autosave every minute while there are unsaved changes.
     if (++ticks_ >= 30 * 60) {

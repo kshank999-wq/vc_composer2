@@ -26,8 +26,8 @@
 // soloed strip keeps the buses it feeds (and the strips feeding a soloed bus)
 // audible, fx returns are solo-safe.
 //
-// Audio clips (Main Spec §11) play from memory (AudioFileCache.h) at the
-// device rate. Recording writes each armed track's input to a 24-bit WAV
+// Audio clips (Main Spec §11) stream from disk (DiskStreamer.h), converted to
+// the device rate as they are read. Recording writes each armed track's input to a 24-bit WAV
 // through ThreadedWriter (lock-free from the audio thread); the pass is
 // placed as one "Record" undo step on the message thread when it ends.
 //
@@ -85,7 +85,8 @@ struct StripDsp;
 struct RecordPass;
 struct AutoSlot;  // per automated (owner, param): the value being written, lock-free
 class InsertProcessor;
-class AudioFileCache;
+class DiskStreamer;
+class ClipStream;
 
 class PlaybackEngine final : public juce::AudioIODeviceCallback, private juce::Timer {
 public:
@@ -172,6 +173,12 @@ public:
     /// Deliverable rendering: only the tracks a deliverable includes play
     /// (reference/temp tracks are left out unless opted in).
     void set_export_mode(bool on);
+    /// Blocks where a clip had to play silence because the disk had not
+    /// delivered its audio yet, since the last call (0 in a healthy session).
+    int take_disk_underruns() noexcept;
+    /// Offline rendering streams synchronously (prepare_offline turns it
+    /// on); the checks turn it off to exercise the real-time disk thread.
+    void set_disk_synchronous(bool on);
     /// Stem printing: while set, these strips (track or bus ids) are the
     /// only ones soloed - the document's own solo switches are ignored, mute
     /// switches still count - and with `mute_effects` every fx return is
@@ -300,7 +307,8 @@ private:
     std::map<std::string, std::shared_ptr<StripDsp>> strips_;                 // strip id -> processing, meters
     std::map<std::string, std::shared_ptr<InsertProcessor>> inserts_;         // strip/kind/plugin#n -> processor
     std::map<std::string, std::vector<std::string>> insert_keys_;             // strip id -> key per slot
-    std::unique_ptr<AudioFileCache> files_;
+    std::unique_ptr<DiskStreamer> files_;
+    std::map<std::string, std::shared_ptr<ClipStream>> streams_;  // clip key -> stream, message thread
     std::map<std::string, juce::String> audio_status_;
     bool export_mode_ = false;
     std::optional<RenderOverride> render_override_;
