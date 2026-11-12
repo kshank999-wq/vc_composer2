@@ -5,6 +5,7 @@
 #include <set>
 
 #include "audio/DiskStreamer.h"
+#include "audio/RemotePlugin.h"
 #include "audio/AutomationRt.h"
 #include "audio/ChannelDsp.h"
 #include "audio/PlaceholderSynth.h"
@@ -1268,7 +1269,67 @@ void PlaybackEngine::stop_preview()
 juce::String PlaybackEngine::instrument_status(const std::string& id) const
 {
     auto it = instruments_.find(id);
-    return it == instruments_.end() ? juce::String("No instrument") : it->second.status;
+    if (it == instruments_.end()) return "No instrument";
+    if (auto* pi = dynamic_cast<PluginInstrument*>(it->second.instrument.get()))
+        if (auto* remote = dynamic_cast<RemotePluginInstance*>(&pi->instance()); remote && remote->crashed())
+            return "Crashed: " + remote->getName().upToLastOccurrenceOf(" (crashed)", false, false) +
+                   " - Tools > Reload Crashed Plug-ins";
+    return it->second.status;
+}
+
+namespace {
+RemotePluginInstance* remote_of(juce::AudioPluginInstance* instance)
+{
+    return dynamic_cast<RemotePluginInstance*>(instance);
+}
+}  // namespace
+
+juce::StringArray PlaybackEngine::take_newly_crashed_plugins()
+{
+    juce::StringArray names;
+    auto note = [&](RemotePluginInstance* r) {
+        if (r && r->crashed() && crash_reported_.insert(r).second)
+            names.add(r->getName().upToLastOccurrenceOf(" (crashed)", false, false));
+    };
+    for (auto& [id, slot] : instruments_)
+        if (auto* pi = dynamic_cast<PluginInstrument*>(slot.instrument.get())) note(remote_of(&pi->instance()));
+    for (auto& [key, proc] : inserts_)
+        if (proc) note(remote_of(proc->plugin()));
+    return names;
+}
+
+int PlaybackEngine::take_late_plugin_blocks()
+{
+    int late = 0;
+    for (auto& [id, slot] : instruments_)
+        if (auto* pi = dynamic_cast<PluginInstrument*>(slot.instrument.get()))
+            if (auto* r = remote_of(&pi->instance())) late += r->take_late_blocks();
+    for (auto& [key, proc] : inserts_)
+        if (proc)
+            if (auto* r = remote_of(proc->plugin())) late += r->take_late_blocks();
+    return late;
+}
+
+int PlaybackEngine::reload_crashed_plugins()
+{
+    int count = 0;
+    for (auto& [id, slot] : instruments_)
+        if (auto* pi = dynamic_cast<PluginInstrument*>(slot.instrument.get()))
+            if (auto* r = remote_of(&pi->instance()); r && r->crashed()) {
+                slot.key.clear();  // instrument_for builds a new one from the saved state
+                ++count;
+            }
+    for (auto it = inserts_.begin(); it != inserts_.end();) {
+        auto* r = it->second ? remote_of(it->second->plugin()) : nullptr;
+        if (r && r->crashed()) {
+            it = inserts_.erase(it);  // the snapshot still holding it keeps it alive until retired
+            ++count;
+        } else {
+            ++it;
+        }
+    }
+    if (count > 0) rebuild_now();
+    return count;
 }
 
 juce::AudioPluginInstance* PlaybackEngine::plugin_for(const std::string& id) const

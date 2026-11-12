@@ -115,6 +115,24 @@ add_custom_command(TARGET VCComposer2 POST_BUILD
             "$<TARGET_FILE_DIR:VCComposer2>/$<TARGET_FILE_NAME:vcc_plugin_scanner>"
     COMMENT "Placing the plug-in scanner beside the app")
 
+# --- Out-of-process plug-in host ---------------------------------------------------
+# Runs one plug-in instance per process, so a crash in a plug-in cannot take the
+# app down. Ships beside the app, like the scanner.
+juce_add_console_app(vcc_plugin_host PRODUCT_NAME "vcc_plugin_host")
+target_sources(vcc_plugin_host PRIVATE host/PluginHostServer.cpp src/audio/PluginIpc.cpp)
+target_include_directories(vcc_plugin_host PRIVATE src)
+target_compile_definitions(vcc_plugin_host PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1
+                                                   JUCE_PLUGINHOST_AU=1 JUCE_PLUGINHOST_LADSPA=0
+                                                   JUCE_DISPLAY_SPLASH_SCREEN=0)
+target_link_libraries(vcc_plugin_host PRIVATE juce::juce_audio_utils
+                                      PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+set_target_properties(vcc_plugin_host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_dependencies(VCComposer2 vcc_plugin_host)
+add_custom_command(TARGET VCComposer2 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:vcc_plugin_host>"
+            "$<TARGET_FILE_DIR:VCComposer2>/$<TARGET_FILE_NAME:vcc_plugin_host>"
+    COMMENT "Placing the plug-in host beside the app")
+
 # --- Test instrument plug-in (used by the headless check only) ---------------------
 juce_add_plugin(VccTestInstrument
     FORMATS VST3
@@ -150,13 +168,16 @@ target_link_libraries(VccTestEffect PRIVATE juce::juce_audio_utils
                                     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
 # Plug-ins that crash or hang as soon as they load, for the scanning check.
-foreach(trouble crash hang)
+foreach(trouble crash hang crashplay)
     if(trouble STREQUAL "crash")
         set(code Vcxc)
         set(value 1)
-    else()
+    elseif(trouble STREQUAL "hang")
         set(code Vcxh)
         set(value 2)
+    else()
+        set(code Vcxp)
+        set(value 3)
     endif()
     juce_add_plugin(VccTest_${trouble}
         FORMATS VST3
@@ -179,13 +200,15 @@ endforeach()
 add_executable(vcc_desktop_check check/DesktopCheck.cpp)
 target_link_libraries(vcc_desktop_check PRIVATE vcc_desktop)
 add_dependencies(vcc_desktop_check VccTestInstrument_VST3 VccTestEffect_VST3 VccTest_crash_VST3 VccTest_hang_VST3
-                 vcc_plugin_scanner)
+                 VccTest_crashplay_VST3 vcc_plugin_scanner vcc_plugin_host)
 target_compile_definitions(vcc_desktop_check PRIVATE
     VCC_TEST_PLUGIN="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTestInstrument_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>"
     VCC_TEST_EFFECT="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTestEffect_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>"
     VCC_TEST_CRASH_PLUGIN="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTest_crash_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>"
     VCC_TEST_HANG_PLUGIN="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTest_hang_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>"
-    VCC_PLUGIN_SCANNER_TOOL="$<TARGET_FILE:vcc_plugin_scanner>")
+    VCC_PLUGIN_SCANNER_TOOL="$<TARGET_FILE:vcc_plugin_scanner>"
+    VCC_TEST_CRASHPLAY_PLUGIN="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTest_crashplay_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>"
+    VCC_PLUGIN_HOST_TOOL="$<TARGET_FILE:vcc_plugin_host>")
 if(VCC_BUILD_TESTS)
     add_test(NAME desktop_check COMMAND vcc_desktop_check "${CMAKE_BINARY_DIR}/screenshots")
 endif()

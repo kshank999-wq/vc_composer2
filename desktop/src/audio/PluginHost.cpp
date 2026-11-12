@@ -1,5 +1,7 @@
 #include "audio/PluginHost.h"
 
+#include "audio/RemotePlugin.h"
+
 namespace vcc::desktop {
 
 namespace {
@@ -57,6 +59,34 @@ juce::String tool_name()
 }
 
 }  // namespace
+
+juce::File PluginHost::host_tool() const
+{
+    std::lock_guard<std::mutex> lock(scan_lock_);
+    if (host_override_ != juce::File()) return host_override_;
+    if (const auto env = juce::SystemStats::getEnvironmentVariable("VCC_PLUGIN_HOST", {}); env.isNotEmpty())
+        return juce::File(env);
+#if JUCE_WINDOWS
+    const juce::String name = "vcc_plugin_host.exe";
+#else
+    const juce::String name = "vcc_plugin_host";
+#endif
+    return juce::File::getSpecialLocation(juce::File::currentExecutableFile).getSiblingFile(name);
+}
+
+void PluginHost::set_host_tool(const juce::File& tool)
+{
+    std::lock_guard<std::mutex> lock(scan_lock_);
+    host_override_ = tool;
+}
+
+void PluginHost::set_out_of_process(bool on)
+{
+    properties_->setValue("outOfProcessHosting", on);
+    properties_->saveIfNeeded();
+}
+
+bool PluginHost::out_of_process() const { return properties_->getBoolValue("outOfProcessHosting", true); }
 
 juce::File PluginHost::scanner_tool() const
 {
@@ -197,6 +227,13 @@ std::unique_ptr<juce::AudioPluginInstance> PluginHost::create(const project::Plu
     auto description = known_.getTypeForIdentifierString(juce::String(ref.identifier));
     if (description == nullptr) {
         error = juce::String(ref.name) + " is not installed (or not scanned) on this computer";
+        return nullptr;
+    }
+    if (hosts_out_of_process()) {
+        // In its own process: a crash there leaves the session playing.
+        auto remote = RemotePluginInstance::create(host_tool(), *description, ref.state_base64, sample_rate, block_size,
+                                                   error);
+        if (remote) return remote;
         return nullptr;
     }
     auto instance = formats_.createPluginInstance(*description, sample_rate, block_size, error);

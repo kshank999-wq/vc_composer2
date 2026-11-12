@@ -8,6 +8,8 @@
 // callback, the way a plug-in switching to a look-ahead mode would.
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <csignal>
+
 namespace {
 
 class TestEffect final : public juce::AudioProcessor {
@@ -56,7 +58,15 @@ public:
     }
     void releaseResources() override {}
 
-    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override { run(buffer, gain_->get()); }
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+    {
+#if defined(VCC_SCAN_TROUBLE) && VCC_SCAN_TROUBLE == 3
+        // The hosting check's crasher: turning the gain all the way down
+        // crashes it while it plays, the way a buggy plug-in would.
+        if (gain_->get() < 0.01f) std::raise(SIGSEGV);
+#endif
+        run(buffer, gain_->get());
+    }
     // Bypassed: no gain, but the same delay, so compensation stays aligned.
     void processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override { run(buffer, 1.0f); }
 

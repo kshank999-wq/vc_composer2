@@ -148,6 +148,14 @@ void MainComponent::timerCallback()
     transport_.update_position();
     if (composer_.isVisible()) composer_.set_playhead(tick, playing);
     if (sequencer_.isVisible()) sequencer_.set_playhead(tick, playing);
+    // A plug-in that crashed in its own process: the session plays on without it.
+    if (const auto crashed = context_.engine.take_newly_crashed_plugins(); !crashed.isEmpty())
+        context_.status(crashed.joinIntoString(", ") + (crashed.size() == 1 ? " has" : " have") +
+                        " crashed and gone silent; everything else keeps playing. Tools > Reload Crashed Plug-ins "
+                        "starts it again from its last state.");
+    if (const int late = context_.engine.take_late_plugin_blocks(); late > 0 && playing)
+        context_.status("A plug-in could not keep up (" + juce::String(late) + " short dropout" +
+                        (late == 1 ? "" : "s") + "); a larger audio buffer gives it more time");
     // Never silent: a disk that cannot keep up with the audio clips is said.
     if (const int dropouts = context_.engine.take_disk_underruns(); dropouts > 0)
         context_.status("The disk could not keep up with the audio clips (" + juce::String(dropouts) +
@@ -484,6 +492,16 @@ void MainComponent::show_plugin_scanner()
             failures_.setColour(juce::TextEditor::backgroundColourId, colours::panel);
             failures_.setColour(juce::TextEditor::textColourId, colours::accent_warm);
             addAndMakeVisible(failures_);
+            hosting_.setButtonText("Run each plug-in in its own process (a crash cannot take VC Composer down)");
+            hosting_.setToggleState(c.plugins.out_of_process(), juce::dontSendNotification);
+            hosting_.setEnabled(c.plugins.host_tool().existsAsFile());
+            hosting_.onClick = [this] {
+                context_.plugins.set_out_of_process(hosting_.getToggleState());
+                context_.status(hosting_.getToggleState()
+                                    ? juce::String("Plug-ins loaded from now on run in their own processes")
+                                    : juce::String("Plug-ins loaded from now on run inside VC Composer"));
+            };
+            addAndMakeVisible(hosting_);
             retry_.setButtonText("Retry failed plug-ins");
             retry_.setTooltip("Forget the failures, so the next scan tries them again");
             retry_.onClick = [this] {
@@ -508,7 +526,8 @@ void MainComponent::show_plugin_scanner()
         void resized() override
         {
             auto r = getLocalBounds();
-            auto foot = r.removeFromBottom(failures_.isVisible() ? 150 : 34).reduced(8, 4);
+            auto foot = r.removeFromBottom(failures_.isVisible() ? 180 : 64).reduced(8, 4);
+            hosting_.setBounds(foot.removeFromTop(26));
             auto top = foot.removeFromTop(24);
             retry_.setBounds(top.removeFromRight(170));
             mode_.setBounds(top);
@@ -545,6 +564,7 @@ void MainComponent::show_plugin_scanner()
         juce::Label mode_;
         juce::TextEditor failures_;
         juce::TextButton retry_;
+        juce::ToggleButton hosting_;
     };
     juce::DialogWindow::LaunchOptions o;
     o.content.setOwned(new Scanner(context_));
@@ -742,7 +762,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
-                cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::about});
+                cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
+                cmd::about});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -829,6 +850,9 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::openInstrumentWindow: info.setInfo("Open Instrument Window", "", "Track", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); break;
         case cmd::audioSettings: info.setInfo("Audio and MIDI Settings...", "", "Tools", 0); info.addDefaultKeypress(',', cmdKey); break;
         case cmd::scanPlugins: info.setInfo("Plug-ins...", "", "Tools", 0); break;
+        case cmd::reloadCrashedPlugins:
+            info.setInfo("Reload Crashed Plug-ins", "Starts crashed plug-ins again from their last state", "Tools", 0);
+            break;
         case cmd::about: info.setInfo("About VC Composer 2", "", "Help", 0); break;
         default: break;
     }
@@ -919,6 +943,12 @@ bool MainComponent::perform(const InvocationInfo& info)
             break;
         case cmd::audioSettings: show_audio_settings(); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;
+        case cmd::reloadCrashedPlugins: {
+            const int n = context_.engine.reload_crashed_plugins();
+            context_.status(n == 0 ? juce::String("No plug-in has crashed")
+                                   : "Reloaded " + juce::String(n) + " crashed plug-in" + (n == 1 ? "" : "s"));
+            break;
+        }
         case cmd::about: show_about(); break;
         default: return false;
     }
@@ -987,7 +1017,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         case 5:
             for (auto id : {cmd::chordExplorer, cmd::ostinatoCreator, cmd::addTemplate}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::audioSettings, cmd::scanPlugins}) m.addCommandItem(c, id);
+            for (auto id : {cmd::audioSettings, cmd::scanPlugins, cmd::reloadCrashedPlugins}) m.addCommandItem(c, id);
             break;
         case 6: m.addCommandItem(c, cmd::about); break;
         default: break;

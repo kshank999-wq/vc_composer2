@@ -64,6 +64,7 @@ enum : juce::CommandID {
     scanPlugins,
     loadInstrument,
     openInstrumentWindow,
+    reloadCrashedPlugins,
     showVideo = 0x1310,
     showCueManager,
     importPicture,

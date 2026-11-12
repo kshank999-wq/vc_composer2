@@ -1,5 +1,7 @@
 #include "audio/ChannelDsp.h"
 
+#include "audio/RemotePlugin.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -498,7 +500,10 @@ private:
 
 class PluginInsert final : public InsertProcessor {
 public:
-    explicit PluginInsert(std::unique_ptr<juce::AudioPluginInstance> instance) : instance_(std::move(instance)) {}
+    explicit PluginInsert(std::unique_ptr<juce::AudioPluginInstance> instance)
+        : instance_(std::move(instance)), remote_(dynamic_cast<RemotePluginInstance*>(instance_.get()))
+    {
+    }
     ~PluginInsert() override
     {
         if (instance_) instance_->releaseResources();
@@ -519,6 +524,13 @@ public:
     void process(float* l, float* r, int n) noexcept override { run(l, r, n, false); }
     void process_bypassed(float* l, float* r, int n) noexcept override { run(l, r, n, true); }
     int latency_samples() const noexcept override { return instance_->getLatencySamples(); }
+    juce::String status() const override
+    {
+        if (remote_ && remote_->crashed())
+            return "Crashed: " + remote_->getName().upToLastOccurrenceOf(" (crashed)", false, false) +
+                   " - passing audio through until reloaded";
+        return {};
+    }
     void set_watch(std::unique_ptr<ParameterWatch> w) override { watch_ = std::move(w); }
     bool has_watch() const noexcept override { return watch_ != nullptr; }
     juce::AudioPluginInstance* plugin() noexcept override { return instance_.get(); }
@@ -527,6 +539,7 @@ private:
     void run(float* l, float* r, int n, bool bypassed) noexcept
     {
         if (n > buffer_.getNumSamples()) return;
+        if (remote_ && remote_->crashed()) return;  // crashed: the audio passes through
         juce::AudioBuffer<float> view(buffer_.getArrayOfWritePointers(), buffer_.getNumChannels(), n);
         view.clear();
         const int ins = instance_->getTotalNumInputChannels();
@@ -547,6 +560,7 @@ private:
     }
 
     std::unique_ptr<juce::AudioPluginInstance> instance_;
+    RemotePluginInstance* remote_ = nullptr;  // when it runs in its own process
     std::unique_ptr<ParameterWatch> watch_;  // destroyed before the instance
     juce::AudioBuffer<float> buffer_;
     juce::MidiBuffer midi_;

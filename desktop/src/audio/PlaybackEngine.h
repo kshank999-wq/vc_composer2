@@ -176,6 +176,15 @@ public:
     /// Blocks where a clip had to play silence because the disk had not
     /// delivered its audio yet, since the last call (0 in a healthy session).
     int take_disk_underruns() noexcept;
+    // --- Plug-ins in their own processes ------------------------------------------------
+    /// Plug-ins whose process has died since the last call (names, each
+    /// reported once), and blocks played as silence because a plug-in was
+    /// late. The main window turns these into a status message.
+    juce::StringArray take_newly_crashed_plugins();
+    int take_late_plugin_blocks();
+    /// Starts every crashed plug-in again from its last state. Returns how many.
+    int reload_crashed_plugins();
+
     /// Offline rendering streams synchronously (prepare_offline turns it
     /// on); the checks turn it off to exercise the real-time disk thread.
     void set_disk_synchronous(bool on);
@@ -308,6 +317,7 @@ private:
     std::map<std::string, std::shared_ptr<InsertProcessor>> inserts_;         // strip/kind/plugin#n -> processor
     std::map<std::string, std::vector<std::string>> insert_keys_;             // strip id -> key per slot
     std::unique_ptr<DiskStreamer> files_;
+    std::set<const void*> crash_reported_;  // message thread
     std::map<std::string, std::shared_ptr<ClipStream>> streams_;  // clip key -> stream, message thread
     std::map<std::string, juce::String> audio_status_;
     bool export_mode_ = false;

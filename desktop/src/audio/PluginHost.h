@@ -64,6 +64,15 @@ public:
 
     project::PluginRef ref_for(const juce::PluginDescription& description) const;
 
+    // --- Out-of-process hosting -----------------------------------------------------
+    /// Plug-ins run in their own processes (vcc_plugin_host, one per
+    /// instance) when the tool is installed and this is on (the default).
+    juce::File host_tool() const;
+    void set_host_tool(const juce::File& tool);
+    void set_out_of_process(bool on);
+    bool out_of_process() const;
+    bool hosts_out_of_process() const { return out_of_process() && host_tool().existsAsFile(); }
+
     /// Creates and prepares a plug-in instance for a saved reference,
     /// restoring its state. Returns nullptr with a reason when the plug-in is
     /// not installed on this machine (Main Spec §15: show it missing, keep
@@ -82,6 +91,7 @@ private:
     std::unique_ptr<juce::PropertiesFile> properties_;
     mutable std::mutex scan_lock_;
     juce::File scanner_override_;
+    juce::File host_override_;
     std::atomic<int> scan_timeout_ms_{60000};
     std::map<juce::String, juce::String> failures_;
 };

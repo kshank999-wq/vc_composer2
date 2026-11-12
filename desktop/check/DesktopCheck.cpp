@@ -15,6 +15,7 @@
 #include "ui/CueManager.h"
 #include "ui/ScoreExchange.h"
 #include "audio/StemRenderer.h"
+#include "audio/RemotePlugin.h"
 #include "ui/StemExport.h"
 #include "vcc/project/Stems.h"
 #include "vcc/interchange/MusicXml.h"
@@ -888,7 +889,8 @@ void delay_compensation_checks(AppContext& ctx, const juce::File& dir, const std
         instance->getParameters()[0]->setValueNotifyingHost(2000.0f / 8192.0f);
         engine.render_offline(rig.out, 512);  // the plug-in sees the change and reports it
         engine.render_offline(rig.out, 512);
-        pump(120);                             // the engine notices on its timer
+        // The engine notices on its 30 Hz timer; allow for a busy machine.
+        for (int waited = 0; waited < 1000 && engine.compensation_samples() != 2000; waited += 40) pump(40);
         const auto out = play(1.0);
         const int l = loudest(out, 0), r = loudest(out, 1);
         check(engine.compensation_samples() == 2000 && l == r && l == 12000 + 2000,
@@ -979,6 +981,126 @@ void delay_compensation_checks(AppContext& ctx, const juce::File& dir, const std
         check(n == 0 && active, "automation playback + a pass being written + PDC delay lines allocate nothing (" +
                                     juce::String(n) + " allocations in 150 blocks)");
     }
+}
+
+/// Out-of-process hosting (Main Spec 20): plug-ins run in their own
+/// processes; one that crashes while playing leaves the session playing.
+void hosting_checks(AppContext& ctx, const juce::File& dir)
+{
+    auto& host = ctx.plugins;
+    check(host.hosts_out_of_process(), "plug-ins run in their own processes (" + host.host_tool().getFileName() + ")");
+    const auto crasher = scan(ctx, VCC_TEST_CRASHPLAY_PLUGIN);
+    const auto effect = scan(ctx, VCC_TEST_EFFECT);
+    if (!crasher || !effect) {
+        check(false, "the hosting test plug-ins scan");
+        return;
+    }
+    session::Session s(ctx.catalogs);
+    s.new_empty();
+    std::string error;
+    s.save_as(dir.getChildFile("hosting-check.vcc2").getFullPathName().toStdString(), &error);
+    // A steady tone on an audio track, through the plug-in that crashes when
+    // its gain is turned all the way down.
+    const auto file = dir.getChildFile("Audio Files").getChildFile("tone.wav");
+    file.getParentDirectory().createDirectory();
+    file.deleteFile();
+    {
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(24));
+        juce::AudioBuffer<float> wave(1, 48000 * 10);
+        for (int i = 0; i < wave.getNumSamples(); ++i)
+            wave.setSample(0, i, 0.3f * std::sin(2.0f * juce::MathConstants<float>::pi * 220.0f * static_cast<float>(i) / 48000.0f));
+        if (writer) writer->writeFromAudioSampleBuffer(wave, 0, wave.getNumSamples());
+    }
+    const auto track = s.add_audio_track("Tone", false);
+    project::AudioClip clip;
+    clip.file = "Audio Files/tone.wav";
+    clip.length = 10.0;
+    clip.channels = 1;
+    clip.file_sample_rate = 48000.0;
+    s.add_audio_clips({{track, clip}}, "Import");
+    s.update_track_mix(track, "inserts", [&](project::Track& t) {
+        project::InsertSlot slot;
+        slot.kind = "plugin";
+        slot.suggestion = false;
+        slot.plugin = *crasher;
+        t.inserts = {slot};
+    });
+    PlaybackEngine e(s, host);
+    e.prepare_offline(48000.0, 512);
+    juce::AudioBuffer<float> out(2, 512);
+    auto render = [&](int blocks) {
+        double energy = 0.0;
+        for (int b = 0; b < blocks; ++b) {
+            e.render_offline(out, 512);
+            energy += out.getRMSLevel(0, 0, 512);
+        }
+        return energy / blocks;
+    };
+    e.play();
+    const double before = render(40);
+    auto* plugin = e.insert_plugin(track, 0);
+    const bool remote = dynamic_cast<RemotePluginInstance*>(plugin) != nullptr;
+    check(remote && before > 0.05, "an effect runs in its own process and the track plays through it (level " +
+                                       juce::String(before, 3) + ")");
+    if (!plugin) return;
+
+    // Crash it while playing: the session keeps going, the audio passes through.
+    plugin->getParameters()[1]->setValue(0.0f);
+    const double during = render(40);
+    const auto crashed = e.take_newly_crashed_plugins();
+    check(crashed.size() == 1 && e.take_newly_crashed_plugins().isEmpty() &&
+              e.insert_status(track, 0).startsWith("Crashed"),
+          "a plug-in that crashes while playing is reported once (" + e.insert_status(track, 0) + ")");
+    const double after = render(40);
+    check(after > 0.05, "the session plays on through the crash, audio passing the crashed insert (level " +
+                            juce::String(during, 3) + " then " + juce::String(after, 3) + ")");
+    juce::MemoryBlock state;
+    plugin->getStateInformation(state);
+    check(state.getSize() > 0, "a crashed plug-in still gives back its last state for saving");
+
+    // Reload: a fresh process, from the last state.
+    check(e.reload_crashed_plugins() == 1, "Reload Crashed Plug-ins starts it again");
+    auto* again = e.insert_plugin(track, 0);
+    auto* again_remote = dynamic_cast<RemotePluginInstance*>(again);
+    const double reloaded = render(40);
+    check(again_remote && !again_remote->crashed() && again != plugin && e.insert_status(track, 0).isEmpty() &&
+              reloaded > 0.05,
+          "the reloaded plug-in plays again (level " + juce::String(reloaded, 3) + ")");
+    e.stop();
+
+    // The real-time path: blocks driven from an audio-like thread must make
+    // their deadlines (the offline path above waits; this one may not).
+    s.update_track_mix(track, "inserts", [&](project::Track& t) {
+        project::InsertSlot slot;
+        slot.kind = "plugin";
+        slot.suggestion = false;
+        slot.plugin = *effect;
+        t.inserts = {slot};
+    });
+    e.rebuild_now();
+    e.take_late_plugin_blocks();
+    std::atomic<double> rt_energy{0.0};
+    std::thread audio([&] {
+        juce::AudioBuffer<float> buffer(2, 512);
+        double sum = 0.0;
+        for (int b = 0; b < 200; ++b) {
+            e.render_offline(buffer, 512);
+            sum += buffer.getRMSLevel(0, 0, 512);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        rt_energy = sum / 200.0;
+    });
+    e.play();
+    audio.join();
+    e.stop();
+    const int late = e.take_late_plugin_blocks();
+    check(late == 0 && rt_energy.load() > 0.05, "a plug-in in its own process keeps up on the real-time path (" +
+                                                    juce::String(late) + " late blocks, level " +
+                                                    juce::String(rt_energy.load(), 3) + ")");
+    auto* shown = dynamic_cast<RemotePluginInstance*>(e.insert_plugin(track, 0));
+    check(shown && shown->show_editor(true) && shown->show_editor(false), "the plug-in's window opens in its own process");
 }
 
 }  // namespace
@@ -1564,6 +1686,7 @@ int main(int argc, char** argv)
         console_and_recording_checks(ctx, dir);
         automation_checks(ctx, dir, plugin_track.empty() ? std::nullopt : std::optional<project::PluginRef>(plugin_ref));
         delay_compensation_checks(ctx, dir, plugin_track.empty() ? std::nullopt : std::optional<project::PluginRef>(plugin_ref));
+        hosting_checks(ctx, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);
