@@ -2,7 +2,10 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include "ui/CueManager.h"
 #include "ui/Dialogs.h"
+#include "ui/VideoWindow.h"
+#include "vcc/picture/Picture.h"
 #include "ui/Theme.h"
 #include "vcc/core/Files.h"
 #include "vcc/engraving/PrintLayout.h"
@@ -91,6 +94,7 @@ MainComponent::MainComponent(AppContext& context)
 MainComponent::~MainComponent()
 {
     stopTimer();
+    close_video_window();
     context_.session.remove_listener(listener_);
     context_.engine.on_transport_changed = nullptr;
     plugin_windows_.clear();
@@ -355,7 +359,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
 {
     c.addArray({cmd::newProject, cmd::newFromTemplate, cmd::open, cmd::save, cmd::saveAs, cmd::exportMidi,
                 cmd::exportScoreSvg, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
-                cmd::toggleMetronome, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::chordExplorer,
+                cmd::toggleMetronome, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
+                cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::about});
 }
@@ -399,6 +404,10 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.addDefaultKeypress('2', cmdKey);
             break;
         case cmd::showMixer: info.setInfo("Mixer", "", "View", 0); info.addDefaultKeypress('m', cmdKey); break;
+        case cmd::showVideo: info.setInfo("Picture", "", "View", 0); info.addDefaultKeypress('3', cmdKey); break;
+        case cmd::showCueManager: info.setInfo("Cue Manager", "", "View", 0); info.addDefaultKeypress('4', cmdKey); break;
+        case cmd::importPicture: info.setInfo("Import Picture...", "", "File", 0); info.addDefaultKeypress('i', cmdKey | shift); break;
+        case cmd::addHit: info.setInfo("Mark Hit at Playhead", "", "Transport", 0); info.addDefaultKeypress('h', cmdKey | shift); break;
         case cmd::chordExplorer: info.setInfo("Chord Explorer...", "", "Tools", 0); info.addDefaultKeypress('h', cmdKey | shift); break;
         case cmd::ostinatoCreator: info.setInfo("Ostinato Creator...", "", "Tools", 0); info.addDefaultKeypress('o', cmdKey | shift); break;
         case cmd::addTemplate: info.setInfo("Add Template to Project...", "", "Tools", 0); break;
@@ -451,6 +460,25 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showComposer: show_workspace(Workspace::Composer); break;
         case cmd::showSequencer: show_workspace(Workspace::Sequencer); break;
         case cmd::showMixer: show_mixer(); break;
+        case cmd::showVideo: show_video_window(context_); break;
+        case cmd::showCueManager: show_cue_manager(context_); break;
+        case cmd::importPicture:
+            chooser_ = std::make_unique<juce::FileChooser>("Import picture", juce::File(), "*.mov;*.mp4;*.m4v;*.mxf;*.avi;*.mkv");
+            chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [this](const juce::FileChooser& fc) {
+                                      if (fc.getResult() == juce::File()) return;
+                                      juce::String error;
+                                      if (import_picture_file(context_, fc.getResult(), error)) show_video_window(context_);
+                                      else juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                                                  "Could not import picture", error);
+                                  });
+            break;
+        case cmd::addHit: {
+            const double now = context_.engine.position_seconds();
+            s.add_marker(now, "hit");
+            context_.status("Hit at " + juce::String(picture::project_timecode(s.data(), now)));
+            break;
+        }
         case cmd::chordExplorer: show_chord_explorer(context_); break;
         case cmd::ostinatoCreator: show_ostinato_creator(context_); break;
         case cmd::addTemplate: show_template_browser(context_, false); break;
@@ -487,6 +515,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         case 0:
             for (auto id : {cmd::newFromTemplate, cmd::newProject, cmd::open}) m.addCommandItem(c, id);
             m.addSeparator();
+            m.addCommandItem(c, cmd::importPicture);
+            m.addSeparator();
             for (auto id : {cmd::save, cmd::saveAs, cmd::saveAsTemplate}) m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::exportMidi, cmd::exportScoreSvg}) m.addCommandItem(c, id);
@@ -496,9 +526,10 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addCommandItem(c, cmd::redo);
             break;
         case 2:
-            for (auto id : {cmd::showComposer, cmd::showSequencer, cmd::showMixer}) m.addCommandItem(c, id);
+            for (auto id : {cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo, cmd::showCueManager})
+                m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::play, cmd::rewind, cmd::toggleMetronome}) m.addCommandItem(c, id);
+            for (auto id : {cmd::play, cmd::rewind, cmd::toggleMetronome, cmd::addHit}) m.addCommandItem(c, id);
             break;
         case 3:
             for (auto id : {cmd::addTrack, cmd::duplicateVersion, cmd::loadInstrument, cmd::openInstrumentWindow,

@@ -39,8 +39,8 @@ Content in `content/`:
 
 The schema is in [`docs/04-template-content-schema.md`](docs/04-template-content-schema.md).
 
-Not built yet: video and picture sync, audio recording and editing, effect
-plug-in inserts, MusicXML and PDF export, and collaboration sync. See
+Not built yet: audio recording and editing, effect plug-in inserts, picture
+export, MusicXML and PDF export, and collaboration sync. See
 [`docs/00-architecture-and-roadmap.md`](docs/00-architecture-and-roadmap.md).
 
 ## The desktop app
@@ -52,6 +52,10 @@ commercial JUCE licence. It contains:
 - the track and library panel;
 - a detachable mixer;
 - the template browser, Chord Explorer and Ostinato Creator;
+- a picture window locked to the transport: timecode burn-in, hits,
+  streamers and punches, cut versions with offsets, and cut comparison;
+- a cue manager (production, reel, scene, cue) with statuses, deadlines,
+  spotting, cue sheets, spotting notes and render-by-cue WAV bounces;
 - VST3 instrument hosting (and AU on macOS);
 - a built-in placeholder synth, so templates play before any library is
   assigned;
@@ -63,13 +67,18 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DVCC_BUILD_DESKTOP=ON
 cmake --build build --config Release --parallel
 ```
 
+Picture import needs FFmpeg's development libraries at build time (on macOS
+`brew install ffmpeg pkg-config`). Without them the app builds and works
+without video decoding. Shipping builds need an LGPL-configured FFmpeg
+(docs/01).
+
 The app is `build/desktop/VCComposer2_artefacts/Release/`: `VC Composer 2.app`
 on macOS, `VC Composer 2.exe` on Windows, `VC Composer 2` on Linux.
 
 On Linux, install the JUCE dependencies first:
 
 ```sh
-sudo apt-get install libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libfreetype-dev libgl1-mesa-dev
+sudo apt-get install libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libfreetype-dev libgl1-mesa-dev libavformat-dev libavcodec-dev libswscale-dev libavutil-dev
 ```
 
 `vcc_desktop_check` (CTest `desktop_check`) drives the real window headlessly.

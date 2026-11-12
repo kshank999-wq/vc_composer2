@@ -12,7 +12,7 @@ const char* const kTonics[] = {"C", "G", "D", "A", "E", "B", "F#", "Db", "Ab", "
 
 TransportBar::TransportBar(AppContext& context) : context_(context)
 {
-    for (auto* b : {&rewind_, &play_, &click_, &composer_, &sequencer_, &mixer_, &chords_, &ostinato_})
+    for (auto* b : {&rewind_, &play_, &click_, &composer_, &sequencer_, &mixer_, &picture_, &cues_, &chords_, &ostinato_})
         addAndMakeVisible(*b);
     rewind_.setTooltip("Return to the start (Home)");
     play_.setTooltip("Play / Stop (Space)");
@@ -25,6 +25,8 @@ TransportBar::TransportBar(AppContext& context) : context_(context)
     composer_.onClick = invoke(cmd::showComposer);
     sequencer_.onClick = invoke(cmd::showSequencer);
     mixer_.onClick = invoke(cmd::showMixer);
+    picture_.onClick = invoke(cmd::showVideo);
+    cues_.onClick = invoke(cmd::showCueManager);
     chords_.onClick = invoke(cmd::chordExplorer);
     ostinato_.onClick = invoke(cmd::ostinatoCreator);
 
@@ -144,8 +146,8 @@ void TransportBar::resized()
     field(key_label_, key_, 140);
 
     auto right = getLocalBounds().reduced(8, 6);
-    for (auto* b : {&ostinato_, &chords_, &mixer_, &sequencer_, &composer_}) {
-        b->setBounds(right.removeFromRight(b == &sequencer_ ? 86 : 70));
+    for (auto* b : {&ostinato_, &chords_, &cues_, &picture_, &mixer_, &sequencer_, &composer_}) {
+        b->setBounds(right.removeFromRight(b == &sequencer_ ? 86 : 64));
         right.removeFromRight(6);
     }
 }

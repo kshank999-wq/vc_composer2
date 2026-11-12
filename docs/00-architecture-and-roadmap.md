@@ -14,15 +14,19 @@ boundaries, build system, test infrastructure and targets.
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ Presentation (JUCE)  Composer · Sequencer · Mixer · Track & Library panel · │  built
 │   desktop/src/ui     template browser · Chord Explorer · Ostinato Creator   │
-│                      (Cue manager · Video window: not yet)                  │
+│                      picture window · cue manager                           │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ Services             Audition · VST3/AU instrument hosting with crash-safe  │  built
 │   desktop/src/audio  scanning · plug-in state in the project · autosave     │
-│                      (Media/video · collaboration sync: not yet)            │
+│                      FFmpeg picture decoding · render-by-cue bounces        │
+│                      (collaboration sync: not yet)                          │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ Realtime engine      Snapshot-driven playback · placeholder synth · group/  │  built
 │   PlaybackEngine     fx buses with reverb · click · live MIDI · offline     │
 │                      render (PDC · automation · recording: not yet)         │
+├──────────────────────────────────────────────────────────────────────────┤
+│ vcc_picture/cues/media  picture sync, hit-point tempo fit, cut comparison, │  built
+│                      cue hierarchy, cue sheets, spotting notes, decoding   │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ vcc_session          the open document for the app: edits, undo, file,     │  built
 │                      autosave/recovery, change notification, generators   │
@@ -189,6 +193,9 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
    - plug-in delay compensation;
    - effect plug-in inserts on buses;
    - automation lanes.
-3. Video window and timecode-locked picture (Main Spec §13), and the cue
-   manager (§14).
+3. Picture follow-ups:
+   - picture + score draft export (needs an encoder);
+   - automated conform;
+   - Windows FFmpeg in CI;
+   - an LGPL FFmpeg for distribution.
 4. MusicXML import/export and PDF parts (§16). SVG part pages already export.

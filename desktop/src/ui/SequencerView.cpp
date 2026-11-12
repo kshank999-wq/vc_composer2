@@ -166,6 +166,9 @@ struct Model {
     MeterMap meter;
     double bpm = 120.0;
     std::vector<project::Cue> cues;
+    TempoMap tempo;
+    std::vector<project::Marker> markers;               ///< hits, sync points (picture time)
+    std::vector<project::FlaggedRegion> changed_regions; ///< from comparing cuts
     Ticks end = kTicksPerWhole * 32;
     std::vector<LaneView> lanes;
 
@@ -215,6 +218,9 @@ struct Model {
         meter = d.meter;
         bpm = d.tempo.bpm_at(0);
         cues = d.cues;
+        tempo = d.tempo;
+        markers = d.markers;
+        changed_regions = d.active_picture() ? d.active_picture()->changed_regions : std::vector<project::FlaggedRegion>{};
         end = session.content_end();
         lanes.clear();
         for (const auto* t : session.music_tracks()) {
@@ -462,6 +468,33 @@ public:
             g.setColour(colours::text);
             g.drawText(label, juce::Rectangle<float>(x + 5.0f, 1.0f, std::max(60.0f, x2 - x - 6.0f), 12.0f),
                        juce::Justification::centredLeft, true);
+        }
+
+        // Picture changes flagged by comparing cuts (Main Spec 13).
+        for (const auto& r : m_.changed_regions) {
+            const float x = static_cast<float>(m_.x_of(static_cast<double>(m_.tempo.tick_at_seconds(std::max(0.0, r.start_seconds)))));
+            const float x2 = static_cast<float>(m_.x_of(static_cast<double>(m_.tempo.tick_at_seconds(std::max(0.0, r.end_seconds)))));
+            if (x2 < area.getX() || x > area.getRight()) continue;
+            g.setColour(colours::playhead.withAlpha(0.35f));
+            g.fillRect(juce::Rectangle<float>(x, fh - 5.0f, std::max(2.0f, x2 - x), 4.0f));
+        }
+
+        // Hits and sync points: picture time, drawn where the music now meets them.
+        for (const auto& mk : m_.markers) {
+            const float x = static_cast<float>(m_.x_of(static_cast<double>(m_.tempo.tick_at_seconds(std::max(0.0, mk.seconds)))));
+            if (x < area.getX() - 6 || x > area.getRight() + 6) continue;
+            const juce::Colour c = mk.kind == "hit"    ? colours::playhead
+                                   : mk.kind == "sync" ? colours::accent
+                                                       : colours::accent_warm;
+            juce::Path diamond;
+            diamond.addQuadrilateral(x, fh - 16.0f, x + 5.0f, fh - 11.0f, x, fh - 6.0f, x - 5.0f, fh - 11.0f);
+            g.setColour(c);
+            g.fillPath(diamond);
+            if (!mk.label.empty()) {
+                g.setFont(juce::FontOptions(10.0f));
+                g.drawText(juce::String(mk.label), juce::Rectangle<float>(x + 6.0f, fh - 17.0f, 120.0f, 11.0f),
+                           juce::Justification::centredLeft, true);
+            }
         }
 
         g.setColour(colours::outline);

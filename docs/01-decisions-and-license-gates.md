@@ -26,6 +26,8 @@ before it ships. Nothing here is legal advice.
 | D13 | The desktop application is built on JUCE 8 under the **commercial JUCE 8 licence** (product-owner decision). JUCE is never vendored: `VCC_JUCE_DIR` points at a checkout, or the build fetches the pinned release (`VCC_JUCE_VERSION`, 8.0.9). | Plug-in hosting, audio/MIDI devices and the original VC Composer's JUCE notation view in one framework; resolves O1. |
 | D14 | Instruments with no library assigned play through a built-in placeholder synth whose voice follows the instrument family and GM program, and every such track is labelled "Placeholder". | A template is audible on a machine with no libraries, without ever implying the real sound (Main Spec §20, Supplement §8). |
 | D15 | The audio thread receives immutable playback snapshots through an atomic hand-off and returns them through the ported lock-free queue. It never allocates, locks or destroys an instrument. | The original VC Composer's real-time discipline, applied to a whole mixer. |
+| D16 | Picture is decoded with FFmpeg (`vcc_media`), not the platform players. When FFmpeg is absent the build has a stub decoder and picture import says why. | Frame-accurate stepping and seeking on every platform, which JUCE's `VideoComponent` does not offer (and it has no Linux backend). Licence gate below. |
+| D17 | Picture events (hits, sync points, streamers, punches) are stored in seconds of project time. Cues keep both a music range (ticks) and the spotted timecodes, and the cue manager shows the drift between them. | A tempo change moves the music to the picture, never the picture to the music (Main Spec §13). The composer decides when to move a cue's music to its spotting. |
 
 ## Open: needs a decision from the product owner
 
@@ -63,7 +65,7 @@ Approved by the product owner and done. See `02-original-vc-composer-reuse-audit
 | Core Audio / AudioUnit | macOS audio, optional AU hosting | Apple SDK terms | AU hosting optional (Main Spec §3) |
 | VST2 | Legacy plug-in hosting | Steinberg no longer licenses VST2 to new developers. **Verify** | Conditional; do not promise (Main Spec §3, §21) |
 | Bravura (SMuFL) | Music font | SIL Open Font License; already embedded in the original VC Composer | Bundling OK with OFL notice |
-| Video decode | Picture playback | Platform frameworks (AVFoundation, Media Foundation) avoid codec licensing; FFmpeg is LGPL/GPL depending on build. **Verify** codec patents | Before Main Phase 2 video |
+| FFmpeg (libavformat, libavcodec, libswscale, libavutil) | Picture decoding (D16) | LGPL 2.1+ **only when built without `--enable-gpl` / `--enable-nonfree`**. Distribution builds must link an LGPL-configured FFmpeg dynamically and ship its source offer. Ubuntu's packages are GPL-configured, so they are fine for development and CI but **not for shipping**. Codec patents (H.264/HEVC) also need checking. **Verify** | Before any public build with picture |
 | Time-stretch | Warp/stretch | Rubber Band (GPL/commercial), Signalsmith Stretch (MIT). **Verify** | Before Main Phase 3 warp |
 | MusicXML | Notation interchange | W3C Community Group specification | Implement natively |
 | Loudness (BS.1770 / EBU R128) | Mastering meters | Public standards | Implement natively |

@@ -57,6 +57,10 @@ enum : juce::CommandID {
     scanPlugins,
     loadInstrument,
     openInstrumentWindow,
+    showVideo = 0x1310,
+    showCueManager,
+    importPicture,
+    addHit,
     about = 0x1600,
 };
 }  // namespace cmd

@@ -49,11 +49,18 @@ native plug-in GUI and user mappings are the supported path (Main Spec §10).
 
 ## Video
 
-| Container / codec | macOS | Windows | Status |
-|---|---|---|---|
-| QuickTime ProRes | Planned (AVFoundation) | Investigate | Phase 2 |
-| MP4 H.264 | Planned | Planned (Media Foundation) | Phase 2 |
-| DNxHD/HR (MXF/MOV) | Investigate | Investigate | Phase 2 |
+Decoding is through FFmpeg (D16), so the codec list depends on the FFmpeg
+build that ships. Frame-accurate decoding is tested on Linux with a
+generated PNG-in-MOV movie (`test_video_decoder`), and the desktop check
+imports an MPEG-4 movie with source timecode.
+
+| Container / codec | Linux (dev) | macOS | Windows | Status |
+|---|---|---|---|---|
+| MOV / PNG (test) | Tested | CI pending | Not built (no FFmpeg in Windows CI yet) | Frame-exact |
+| MOV / MPEG-4 Part 2 | Tested in desktop check | CI pending | Not built | |
+| MOV / ProRes | Untested | Untested | Untested | Depends on FFmpeg build |
+| MP4 / H.264 | Untested | Untested | Untested | Patent licence gate (01) |
+| MXF / DNxHD/HR | Untested | Untested | Untested | |
 
 ## Frame rates (engine)
 

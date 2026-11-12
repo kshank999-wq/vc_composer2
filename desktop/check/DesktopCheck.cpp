@@ -10,7 +10,11 @@
 
 #include "MainWindow.h"
 #include "PlatformFixes.h"
+#include "audio/CueRenderer.h"
+#include "ui/CueManager.h"
 #include "ui/Dialogs.h"
+#include "ui/VideoWindow.h"
+#include "vcc/media/VideoDecoder.h"
 #include "vcc/project/Render.h"
 
 using namespace vcc;
@@ -210,6 +214,61 @@ int main(int argc, char** argv)
             }
         }
 
+        // Picture (Main Spec 13): import a generated movie with source
+        // timecode, mark a hit, and park inside its streamer.
+        std::string cue_id;
+        {
+            const auto movie = dir.getChildFile("check-picture.mov");
+            juce::ChildProcess probe;
+            const bool tool = probe.start("ffmpeg -version") && probe.readAllProcessOutput().contains("ffmpeg");
+            if (media::available() && tool) {
+                movie.deleteFile();
+                juce::ChildProcess make;
+                make.start(juce::StringArray{"ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                                             "testsrc2=size=640x360:rate=24:d=12", "-c:v", "mpeg4", "-q:v", "4",
+                                             "-timecode", "00:59:58:00", movie.getFullPathName()});
+                make.waitForProcessToFinish(60000);
+                juce::String error;
+                check(import_picture_file(ctx, movie, error), "a movie imports as the active cut " + error);
+                const auto* pic = session.data().active_picture();
+                check(pic && pic->start_timecode == "00:59:58:00" && pic->duration_frames == 12 * 24,
+                      "the cut keeps the movie's source timecode and length");
+                session.add_marker(4.0, "hit", "door slam");
+                show_video_window(ctx);
+                ctx.engine.locate(session.data().tempo.tick_at_seconds(3.5));  // mid-streamer
+                pump(800);
+                if (auto* w = video_window_if_open()) {
+                    w->setSize(1024, 640);
+                    shoot(*w, dir, "07-picture");
+                }
+            } else {
+                std::printf("  skip  picture import (no FFmpeg in this build or no ffmpeg tool to make a test movie)\n");
+            }
+        }
+
+        // Cues (Main Spec 14): a reel, an approved cue, the manager, render-by-cue.
+        {
+            const std::string reel = session.add_reel("Reel 1");
+            cue_id = session.add_cue(0, 4 * kTicksPerWhole, reel, "Opening");
+            check(session.data().find_cue(cue_id) && session.data().find_cue(cue_id)->code == "1M1", "the first cue is 1M1");
+            session.update_cue(cue_id, [](project::Cue& c) { c.status = "approved"; });
+            show_cue_manager(ctx);
+            pump(300);
+            if (auto* w = find_dialog("Cue Manager")) shoot(*w, dir, "08-cue-manager");
+
+            CueRenderRequest request;
+            request.cue_ids = {cue_id};
+            request.folder = dir.getChildFile("bounces");
+            request.tail_seconds = 1.0;
+            request.folder.deleteRecursively();
+            auto results = render_cues(ctx, request);
+            check(results.size() == 1 && results[0].ok && results[0].file.getSize() > 1000,
+                  "render-by-cue writes the cue's WAV (" + (results.empty() ? juce::String() : results[0].message) + ")");
+            check(!results.empty() && results[0].peak > 1.0e-4f, "the bounced cue is not silent");
+            auto again = render_cues(ctx, request);
+            check(again.size() == 1 && again[0].skipped_protected, "an approved cue's deliverable is not overwritten unasked");
+        }
+
         // Save and reopen.
         const auto file = dir.getChildFile("check.vcc2");
         std::string error;
@@ -219,6 +278,8 @@ int main(int argc, char** argv)
                   session.data().find_track(track)->active_version()->score.total_note_count() == 5,
               "the typed notes survived save and reopen");
 
+        check(session.data().find_cue(cue_id) != nullptr && session.data().find_cue(cue_id)->status == "approved",
+              "cues survived save and reopen");
         if (!plugin_track.empty()) {
             const auto* pt = session.data().find_track(plugin_track);
             check(pt && pt->instrument_plugin.identifier == plugin_ref.identifier, "the plug-in assignment survived reopen");

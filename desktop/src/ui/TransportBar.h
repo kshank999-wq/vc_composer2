@@ -29,7 +29,7 @@ private:
     juce::Label tempo_label_{{}, "Tempo"}, meter_label_{{}, "Meter"}, key_label_{{}, "Key"};
     juce::Label tempo_;
     juce::ComboBox meter_, key_;
-    juce::TextButton composer_{"Score"}, sequencer_{"Sequencer"}, mixer_{"Mixer"};
+    juce::TextButton composer_{"Score"}, sequencer_{"Sequencer"}, mixer_{"Mixer"}, picture_{"Picture"}, cues_{"Cues"};
     juce::TextButton chords_{"Chords"}, ostinato_{"Ostinato"};
 };
 

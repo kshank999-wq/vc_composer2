@@ -76,14 +76,15 @@ target_include_directories(vcc_desktop PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # shortcut-command enum even with a default case. Per-source so it lands after
 # JUCE's own flags on the command line.
 if(NOT MSVC)
-    set_source_files_properties(${vcc_desktop_sources} PROPERTIES COMPILE_OPTIONS "-Wno-switch-enum")
+    set_source_files_properties(${vcc_desktop_sources} ${vcc_ui_notation_sources}
+                                PROPERTIES COMPILE_OPTIONS "-Wno-switch-enum")
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(X11 REQUIRED)
     target_link_libraries(vcc_desktop PRIVATE X11::X11)
 endif()
 target_link_libraries(vcc_desktop
-    PUBLIC vcc_ui_notation vcc_session vcc_templates vcc_project vcc_theory vcc_ostinato vcc_engine vcc_audio vcc_juce
+    PUBLIC vcc_ui_notation vcc_session vcc_media vcc_picture vcc_cues vcc_templates vcc_project vcc_theory vcc_ostinato vcc_engine vcc_audio vcc_juce
     PRIVATE vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data)
 
 juce_add_gui_app(VCComposer2
