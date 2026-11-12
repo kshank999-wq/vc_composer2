@@ -167,3 +167,137 @@ TEST_CASE("a reference track is selectable, holds no MIDI and stays out of deliv
     CHECK(!s.insert_notes(ref, 0, kTicksPerWhole, {{0, 100, 60, 80, 0, {}}}, project::CollisionPolicy::Ask, "x").ok);
     for (const auto* e : s.project().export_tracks()) CHECK(e->id != ref);
 }
+
+TEST_CASE("console settings, buses and sends round-trip and undo as one step per control")
+{
+    Session s(catalogs());
+    s.new_empty();
+    const std::string t = s.add_track("Violins", "strings.violins");
+    const std::string fx = s.add_bus("Hall", "fx");
+    const std::string grp = s.add_bus("Strings", "group");
+    REQUIRE(!fx.empty());
+    REQUIRE(!grp.empty());
+    CHECK_EQ(s.data().find_bus(fx)->inserts.size(), 1u);
+    CHECK(s.add_bus("x", "master").empty());
+
+    // A knob drag: many calls, one undo step.
+    for (int i = 1; i <= 10; ++i)
+        CHECK(s.update_track_mix(t, "HMF gain Violins", [&](project::Track& x) { x.strip.hmf.gain_db = i * 0.5; }));
+    CHECK(s.update_track_mix(t, "Send Violins", [&](project::Track& x) {
+        x.sends.emplace_back(fx, -6.0);
+        x.sends.back().pre_fader = true;
+        x.output_bus_id = grp;
+        x.strip.eq_on = true;
+        x.strip.trim_db = 99.0;  // clamped
+        project::InsertSlot comp;
+        comp.kind = "compressor";
+        comp.suggestion = false;
+        comp.params["ratio"] = 4.0;
+        x.inserts.push_back(comp);
+    }));
+    CHECK_EQ(s.data().find_track(t)->strip.trim_db, 20.0);
+    CHECK(s.update_bus(grp, "Pan Strings", [](project::Bus& b) {
+        b.pan = -0.25;
+        b.solo = true;
+        b.kind = "fx";  // ignored
+    }));
+    CHECK_EQ(s.data().find_bus(grp)->kind, std::string("group"));
+
+    REQUIRE(s.save_as(tmp("console.vcc2")));
+    Session r(catalogs());
+    REQUIRE(r.open(tmp("console.vcc2")));
+    const auto* rt = r.data().find_track(t);
+    REQUIRE(rt);
+    CHECK_EQ(rt->strip.hmf.gain_db, 5.0);
+    CHECK(rt->strip.eq_on);
+    REQUIRE(rt->sends.size() == 1u);
+    CHECK(rt->sends[0].pre_fader);
+    CHECK_EQ(rt->sends[0].level_db, -6.0);
+    CHECK_EQ(rt->output_bus_id, grp);
+    REQUIRE(rt->inserts.size() == 1u);
+    CHECK_EQ(rt->inserts[0].params.at("ratio"), 4.0);
+    CHECK_EQ(r.data().find_bus(grp)->pan, -0.25);
+    CHECK(r.data().find_bus(grp)->solo);
+
+    // Undo peels the bus pan, the send/routing step, then the whole knob drag.
+    CHECK(s.undo());
+    CHECK(s.undo());
+    CHECK_EQ(s.data().find_track(t)->strip.hmf.gain_db, 5.0);
+    CHECK(s.undo());
+    CHECK_EQ(s.data().find_track(t)->strip.hmf.gain_db, 0.0);
+    CHECK(s.redo());
+    CHECK(s.redo());
+
+    // Removing a bus re-routes what fed it and drops sends to it.
+    CHECK(s.remove_bus(grp));
+    CHECK(s.remove_bus(fx));
+    CHECK_EQ(s.data().find_track(t)->output_bus_id, std::string("bus-master"));
+    CHECK(s.data().find_track(t)->sends.empty());
+    CHECK(!s.remove_bus("bus-master"));
+}
+
+TEST_CASE("recorded clips land on the playlist as takes, one undo step per pass")
+{
+    Session s(catalogs());
+    s.new_empty();
+    const std::string a = s.add_audio_track("Vox", false);
+    const std::string b = s.add_audio_track("Gtr", true);
+    CHECK(s.data().find_track(a)->kind == project::TrackKind::Audio);
+    CHECK(s.data().find_track(b)->input_stereo);
+    CHECK(s.audio_folder().empty());
+
+    s.set_record_armed(a, true);
+    CHECK(s.data().find_track(a)->record_armed);
+    CHECK(!s.can_undo() || s.undo_label() != "Arm");
+
+    project::AudioClip c;
+    c.file = "Audio Files/Vox_01.wav";
+    c.start_seconds = 2.0;
+    c.length = 4.0;
+    c.channels = 1;
+    project::AudioClip d = c;
+    d.file = "Audio Files/Gtr_01.wav";
+    d.channels = 2;
+    auto ids = s.add_audio_clips({{a, c}, {b, d}}, "Record");
+    REQUIRE(ids.size() == 2u);
+    CHECK_EQ(s.undo_label(), std::string("Record"));
+
+    // A second pass over the first: the first becomes take lane 1.
+    project::AudioClip c2 = c;
+    c2.file = "Audio Files/Vox_02.wav";
+    c2.start_seconds = 3.0;
+    auto ids2 = s.add_audio_clips({{a, c2}}, "Record");
+    REQUIRE(ids2.size() == 1u);
+    const auto& clips = s.data().find_track(a)->active_version()->audio_clips;
+    REQUIRE(clips.size() == 2u);
+    CHECK_EQ(clips[0].id, ids2[0]);
+    CHECK_EQ(clips[0].lane, 0);
+    CHECK_EQ(clips[1].lane, 1);
+
+    CHECK(s.update_audio_clip(a, ids2[0], "Fade", [](project::AudioClip& x) {
+        x.fade_in = 10.0;  // clamped to the clip
+        x.gain_db = -3.0;
+    }));
+    CHECK_EQ(s.data().find_track(a)->active_version()->audio_clips[0].fade_in, 4.0);
+    CHECK(!s.add_audio_clips({{a, project::AudioClip{}}}, "Record").size());
+
+    std::filesystem::create_directories(tmp("audio"));
+    REQUIRE(s.save_as(tmp("audio/session.vcc2")));
+    CHECK_EQ(s.audio_folder(), tmp("audio") + "/Audio Files");
+    CHECK_EQ(s.resolve_audio_path("Audio Files/x.wav"), tmp("audio") + "/Audio Files/x.wav");
+    CHECK_EQ(s.resolve_audio_path("/abs/x.wav"), std::string("/abs/x.wav"));
+    Session r(catalogs());
+    REQUIRE(r.open(tmp("audio/session.vcc2")));
+    const auto& rc = r.data().find_track(a)->active_version()->audio_clips;
+    REQUIRE(rc.size() == 2u);
+    CHECK_EQ(rc[0].gain_db, -3.0);
+    CHECK_EQ(rc[0].file, std::string("Audio Files/Vox_02.wav"));
+    CHECK(!r.data().find_track(a)->record_armed);  // arming is not saved state worth trusting
+
+    CHECK(s.remove_audio_clip(a, ids2[0]));
+    CHECK(s.undo());
+    CHECK(s.undo());  // the fade
+    CHECK(s.undo());  // the second pass
+    CHECK_EQ(s.data().find_track(a)->active_version()->audio_clips.size(), 1u);
+    CHECK_EQ(s.data().find_track(a)->active_version()->audio_clips[0].lane, 0);
+}

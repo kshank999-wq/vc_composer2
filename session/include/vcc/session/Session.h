@@ -161,6 +161,40 @@ public:
     /// moved to the spotted timecodes through the tempo map.
     bool spot_cue(const std::string& cue_id, const std::string& in_tc, const std::string& out_tc, bool move_music);
 
+    // --- Console and recording (Main Spec §11, §12) ---------------------------------------
+    /// Edits a track's console settings (strip, inserts, sends, routing,
+    /// input). Repeated calls with the same `label` merge into one undo step,
+    /// so a knob drag is undone in one go; give each control its own label.
+    bool update_track_mix(const std::string& track_id, const std::string& label,
+                          const std::function<void(project::Track&)>& change);
+    /// The same for a bus (including the master bus).
+    bool update_bus(const std::string& bus_id, const std::string& label,
+                    const std::function<void(project::Bus&)>& change);
+    /// A new bus feeding the master: kind "group" (subgroup/stem) or "fx"
+    /// (an aux return fed by sends). Returns its id.
+    std::string add_bus(const std::string& name, const std::string& kind);
+    /// Removes a bus; whatever fed it is re-routed to the master and sends to
+    /// it are dropped. The master bus cannot be removed.
+    bool remove_bus(const std::string& bus_id);
+    /// A new audio track (mono or stereo input) with an empty playlist.
+    std::string add_audio_track(const std::string& name, bool stereo);
+    /// Record-arms a track. Not an undo step and does not dirty the project.
+    void set_record_armed(const std::string& track_id, bool armed);
+    /// Places clips (one recording pass, or an import) as one undo step. With
+    /// `as_takes`, clips already on lane 0 that a new clip overlaps move to
+    /// the next free take lane, so nothing recorded is ever lost. Ids are
+    /// assigned here and returned in order.
+    std::vector<std::string> add_audio_clips(const std::vector<std::pair<std::string, project::AudioClip>>& clips,
+                                             const std::string& label, bool as_takes = true);
+    bool update_audio_clip(const std::string& track_id, const std::string& clip_id, const std::string& label,
+                           const std::function<void(project::AudioClip&)>& change);
+    bool remove_audio_clip(const std::string& track_id, const std::string& clip_id);
+    /// Where recordings go: "<project folder>/Audio Files", or empty while the
+    /// project is untitled (the app then uses a scratch folder).
+    std::string audio_folder() const;
+    /// Resolves a clip's stored file name to a path on disk.
+    std::string resolve_audio_path(const std::string& file) const;
+
     // --- Selection ----------------------------------------------------------------
     const std::string& selected_track() const noexcept { return selected_track_; }
     void select_track(const std::string& track_id);

@@ -82,6 +82,28 @@ struct MidiRegion {
     std::string source;  ///< "chord_explorer:pop_uplift", "ostinato:urgent_string_spiccato/B", "manual"...
 };
 
+/// A piece of an audio file placed on the timeline (Main Spec §11). Audio is
+/// placed in project seconds, not ticks, so a tempo edit never moves or
+/// stretches a recording. The file is never modified (non-destructive).
+struct AudioClip {
+    std::string id;
+    std::string name;
+    /// Relative to the project's folder when inside it ("Audio Files/Vln_01.wav"),
+    /// otherwise absolute.
+    std::string file;
+    double start_seconds = 0.0;   ///< Timeline position, project seconds.
+    double source_offset = 0.0;   ///< Seconds into the file where the clip starts.
+    double length = 0.0;          ///< Seconds.
+    double gain_db = 0.0;
+    double fade_in = 0.0;         ///< Seconds.
+    double fade_out = 0.0;
+    int lane = 0;                 ///< Take lane; 0 is the main lane.
+    bool muted = false;
+    int channels = 0;             ///< Of the file, for display (1 or 2).
+    double file_sample_rate = 0.0;
+    double end_seconds() const noexcept { return start_seconds + length; }
+};
+
 /// A non-destructive alternative of a track's content (Main Spec §15).
 struct TrackVersion {
     std::string id;
@@ -92,6 +114,9 @@ struct TrackVersion {
     std::vector<MidiRegion> regions;
     std::vector<std::string> articulation_overrides;
     std::optional<double> gain_db;  ///< Optional per-version mix setting.
+    /// Audio on this version's playlist (audio and reference tracks; any
+    /// track may carry printed audio).
+    std::vector<AudioClip> audio_clips;
 };
 
 /// A hosted instrument plug-in on a track (Main Spec §10.6: "persist plugin
@@ -104,6 +129,67 @@ struct PluginRef {
     std::string vendor;
     std::string state_base64;
     bool empty() const noexcept { return identifier.empty(); }
+};
+
+/// One equaliser band of a console channel.
+struct EqBand {
+    bool on = true;
+    double freq = 1000.0;  ///< Hz
+    double gain_db = 0.0;
+    double q = 0.7;
+    bool bell = false;     ///< LF/HF: shelf unless `bell`.
+};
+
+/// The processing built into every console channel, modelled on a large-
+/// format analogue console strip (Main Spec §12): input trim and polarity,
+/// filters, a four-band EQ and a dynamics section. The engine runs it before
+/// the inserts; each section has its own in/out switch.
+struct ChannelStrip {
+    double trim_db = 0.0;        ///< Input gain, -20..+20 dB.
+    bool phase_invert = false;
+    bool hpf_on = false;
+    double hpf_hz = 80.0;        ///< 20..400 Hz, 12 dB/oct.
+    bool lpf_on = false;
+    double lpf_hz = 12000.0;     ///< 3k..20k Hz.
+    bool eq_on = false;
+    EqBand lf{true, 100.0, 0.0, 0.7, false};
+    EqBand lmf{true, 400.0, 0.0, 1.0, true};
+    EqBand hmf{true, 2500.0, 0.0, 1.0, true};
+    EqBand hf{true, 8000.0, 0.0, 0.7, false};
+    bool comp_on = false;
+    double comp_threshold_db = -18.0;
+    double comp_ratio = 3.0;
+    double comp_attack_ms = 10.0;
+    double comp_release_ms = 120.0;
+    double comp_makeup_db = 0.0;
+    bool gate_on = false;
+    double gate_threshold_db = -50.0;
+    double gate_range_db = 40.0;  ///< How far a closed gate turns down.
+    double gate_release_ms = 150.0;
+    bool dynamics_pre_eq = false; ///< Dynamics before EQ (console "DYN PRE").
+};
+
+/// A send from a channel or bus to an aux/fx bus.
+struct Send {
+    std::string bus_id;
+    double level_db = -12.0;
+    bool pre_fader = false;
+    bool mute = false;
+    double pan = 0.0;  ///< -1..+1; follows the channel pan when `pan_follow`.
+    bool pan_follow = true;
+    Send() = default;
+    Send(std::string bus, double level) : bus_id(std::move(bus)), level_db(level) {}
+};
+
+/// An insert slot: a built-in processor ("eq", "compressor", "reverb",
+/// "delay", "limiter", "gate") or a hosted effect plug-in ("plugin").
+struct InsertSlot {
+    std::string kind;        ///< Generic processor kind, or "plugin".
+    std::string plugin_ref;  ///< Installed plug-in assigned, empty while a suggestion.
+    bool suggestion = true;
+    bool bypass = false;
+    PluginRef plugin;        ///< kind == "plugin": the hosted effect and its state.
+    std::map<std::string, double> params;  ///< Built-in processor settings by name.
 };
 
 struct Track {
@@ -125,11 +211,18 @@ struct Track {
     /// Instrument plug-in; empty means the built-in placeholder plays.
     PluginRef instrument_plugin;
     std::string output_bus_id;
-    std::vector<std::pair<std::string, double>> sends;  ///< bus id, level dB
+    std::vector<Send> sends;
+    ChannelStrip strip;
+    std::vector<InsertSlot> inserts;
     double gain_db = 0.0;
     double pan = 0.0;
     bool mute = false;
     bool solo = false;
+    // Recording (Main Spec §11). Arming is not an undo step.
+    int input = 0;              ///< First device input channel (0-based); -1 = none.
+    bool input_stereo = false;  ///< Records input, input + 1.
+    bool record_armed = false;
+    std::string monitor = "auto";  ///< "auto" (input while armed and stopped/recording), "input", "off".
     bool include_in_export = true;  ///< False for Reference tracks unless the user opts in.
     int midi_channel = 0;           ///< 0-15; 9 for drum policy.
     std::string template_origin;    ///< template_id/track id it came from, if any.
@@ -140,21 +233,19 @@ struct Track {
     TrackVersion* active_version() noexcept;
 };
 
-struct InsertSlot {
-    std::string kind;        ///< Generic processor kind: "eq", "compressor", "reverb", "limiter".
-    std::string plugin_ref;  ///< Installed plug-in assigned, empty while a suggestion.
-    bool suggestion = true;
-    bool bypass = false;
-};
-
 struct Bus {
     std::string id;
     std::string name;
     std::string kind = "group";  ///< "group", "fx", "master".
     std::string output;          ///< Bus id or "master"/"" for the master bus itself.
-    std::vector<std::pair<std::string, double>> sends;
+    std::vector<Send> sends;
     std::vector<InsertSlot> inserts;
     double gain_db = 0.0;
+    double pan = 0.0;
+    bool mute = false;
+    bool solo = false;
+    ChannelStrip strip;
+    std::string color;  ///< Empty: the console's colour for the bus kind.
 };
 
 /// Spec §14 hierarchy: Production -> Reel/Episode -> Scene -> Cue.

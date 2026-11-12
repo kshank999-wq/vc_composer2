@@ -794,4 +794,198 @@ std::pair<int, int> Session::range_for(const project::Track& track) const
     return {21, 108};
 }
 
+// --- Console and recording ---------------------------------------------------------------
+
+bool Session::update_track_mix(const std::string& id, const std::string& label,
+                               const std::function<void(project::Track&)>& change)
+{
+    if (!project_.edit_coalescing(label, on_track(id, [&](project::Track& t) {
+            change(t);
+            t.gain_db = std::clamp(t.gain_db, -96.0, 12.0);
+            t.pan = std::clamp(t.pan, -1.0, 1.0);
+            t.strip.trim_db = std::clamp(t.strip.trim_db, -20.0, 20.0);
+            return true;
+        })))
+        return false;
+    document_changed();
+    return true;
+}
+
+bool Session::update_bus(const std::string& bus_id, const std::string& label,
+                         const std::function<void(project::Bus&)>& change)
+{
+    if (!project_.edit_coalescing(label, [&](project::ProjectData& d) {
+            project::Bus* b = d.find_bus(bus_id);
+            if (!b) return false;
+            const std::string kind = b->kind, id = b->id;
+            change(*b);
+            b->id = id;  // identity and kind are not editable here
+            b->kind = kind;
+            b->gain_db = std::clamp(b->gain_db, -96.0, 12.0);
+            b->pan = std::clamp(b->pan, -1.0, 1.0);
+            if (b->output == b->id) b->output = "bus-master";
+            return true;
+        }))
+        return false;
+    document_changed();
+    return true;
+}
+
+std::string Session::add_bus(const std::string& name, const std::string& kind)
+{
+    if (kind != "group" && kind != "fx") return {};
+    const std::string id = project_.ids().next("bus");
+    const bool ok = edit("Add bus " + name, [&](project::ProjectData& d) {
+        project::Bus b;
+        b.id = id;
+        b.name = d.unique_bus_name(name.empty() ? (kind == "fx" ? "FX" : "Group") : name);
+        b.kind = kind;
+        b.output = d.find_bus("bus-master") ? "bus-master" : "";
+        if (kind == "fx") {
+            project::InsertSlot reverb;
+            reverb.kind = "reverb";
+            reverb.suggestion = false;
+            b.inserts.push_back(reverb);
+        }
+        d.buses.push_back(b);
+        return true;
+    });
+    return ok ? id : std::string{};
+}
+
+bool Session::remove_bus(const std::string& bus_id)
+{
+    const project::Bus* b = data().find_bus(bus_id);
+    if (!b || b->kind == "master") return false;
+    return edit("Remove bus " + b->name, [&](project::ProjectData& d) {
+        auto drop = [&](std::vector<project::Send>& sends) {
+            sends.erase(std::remove_if(sends.begin(), sends.end(),
+                                       [&](const project::Send& s) { return s.bus_id == bus_id; }),
+                        sends.end());
+        };
+        for (auto& t : d.tracks) {
+            if (t.output_bus_id == bus_id) t.output_bus_id = "bus-master";
+            drop(t.sends);
+        }
+        for (auto& x : d.buses) {
+            if (x.output == bus_id) x.output = "bus-master";
+            drop(x.sends);
+        }
+        d.buses.erase(std::remove_if(d.buses.begin(), d.buses.end(),
+                                     [&](const project::Bus& x) { return x.id == bus_id; }),
+                      d.buses.end());
+        return true;
+    });
+}
+
+std::string Session::add_audio_track(const std::string& name, bool stereo)
+{
+    std::string id = project_.add_track(name.empty() ? "Audio" : name, project::TrackKind::Audio);
+    project_.modify_unrecorded([&](project::ProjectData& d) {
+        if (project::Track* t = d.find_track(id)) {
+            t->input_stereo = stereo;
+            t->family = "audio";
+        }
+    });
+    document_changed();
+    select_track(id);
+    return id;
+}
+
+void Session::set_record_armed(const std::string& id, bool armed)
+{
+    const project::Track* t = data().find_track(id);
+    if (!t || t->record_armed == armed) return;
+    project_.modify_unrecorded([&](project::ProjectData& d) {
+        if (project::Track* x = d.find_track(id)) x->record_armed = armed;
+    });
+    notify(Change::Document);
+}
+
+std::vector<std::string> Session::add_audio_clips(
+    const std::vector<std::pair<std::string, project::AudioClip>>& clips, const std::string& label, bool as_takes)
+{
+    std::vector<std::string> ids;
+    for (std::size_t i = 0; i < clips.size(); ++i) ids.push_back(project_.ids().next("clip"));
+    const bool ok = edit(label, [&](project::ProjectData& d) {
+        for (std::size_t i = 0; i < clips.size(); ++i) {
+            project::Track* t = d.find_track(clips[i].first);
+            if (!t) return false;
+            project::TrackVersion* v = t->active_version();
+            if (!v) return false;
+            project::AudioClip c = clips[i].second;
+            if (c.length <= 0.0 || c.file.empty()) return false;
+            c.id = ids[i];
+            c.lane = 0;
+            if (as_takes) {
+                int free_lane = 1;
+                for (const auto& x : v->audio_clips) free_lane = std::max(free_lane, x.lane + 1);
+                for (auto& x : v->audio_clips)
+                    if (x.lane == 0 && x.start_seconds < c.end_seconds() && c.start_seconds < x.end_seconds())
+                        x.lane = free_lane;
+            }
+            v->audio_clips.push_back(std::move(c));
+            std::stable_sort(v->audio_clips.begin(), v->audio_clips.end(),
+                             [](const project::AudioClip& a, const project::AudioClip& b) {
+                                 return a.lane != b.lane ? a.lane < b.lane : a.start_seconds < b.start_seconds;
+                             });
+        }
+        return true;
+    });
+    if (!ok) ids.clear();
+    return ids;
+}
+
+bool Session::update_audio_clip(const std::string& track_id, const std::string& clip_id, const std::string& label,
+                                const std::function<void(project::AudioClip&)>& change)
+{
+    if (!project_.edit_coalescing(label, on_track(track_id, [&](project::Track& t) {
+            project::TrackVersion* v = t.active_version();
+            if (!v) return false;
+            for (auto& c : v->audio_clips)
+                if (c.id == clip_id) {
+                    change(c);
+                    c.id = clip_id;
+                    c.source_offset = std::max(0.0, c.source_offset);
+                    c.fade_in = std::clamp(c.fade_in, 0.0, c.length);
+                    c.fade_out = std::clamp(c.fade_out, 0.0, c.length - c.fade_in);
+                    return c.length > 0.0 && !c.file.empty();
+                }
+            return false;
+        })))
+        return false;
+    document_changed();
+    return true;
+}
+
+bool Session::remove_audio_clip(const std::string& track_id, const std::string& clip_id)
+{
+    return edit("Delete clip", on_track(track_id, [&](project::Track& t) {
+        project::TrackVersion* v = t.active_version();
+        if (!v) return false;
+        const auto before = v->audio_clips.size();
+        v->audio_clips.erase(std::remove_if(v->audio_clips.begin(), v->audio_clips.end(),
+                                            [&](const project::AudioClip& c) { return c.id == clip_id; }),
+                             v->audio_clips.end());
+        return v->audio_clips.size() != before;
+    }));
+}
+
+std::string Session::audio_folder() const
+{
+    if (path_.empty()) return {};
+    const auto slash = path_.find_last_of("/\\");
+    const std::string dir = slash == std::string::npos ? std::string(".") : path_.substr(0, slash);
+    return dir + "/Audio Files";
+}
+
+std::string Session::resolve_audio_path(const std::string& file) const
+{
+    if (file.empty()) return {};
+    const bool absolute = file[0] == '/' || file[0] == '\\' || (file.size() > 2 && file[1] == ':');
+    if (absolute || path_.empty()) return file;
+    const auto slash = path_.find_last_of("/\\");
+    return (slash == std::string::npos ? std::string(".") : path_.substr(0, slash)) + "/" + file;
+}
+
 }  // namespace vcc::session

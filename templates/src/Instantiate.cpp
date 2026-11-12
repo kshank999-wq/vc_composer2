@@ -229,7 +229,7 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
             for (const auto& t : d.tracks) {
                 auto& set = removed_kind(t) ? fed_by_removed : fed_by_kept;
                 set.insert(t.output_bus_id);
-                for (const auto& s : t.sends) set.insert(s.first);
+                for (const auto& s : t.sends) set.insert(s.bus_id);
             }
             std::set<std::string> doomed;
             for (bool grew = true; grew;) {
@@ -239,7 +239,7 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
                     if (!fed_by_removed.count(b.id)) continue;
                     doomed.insert(b.id);
                     fed_by_removed.insert(b.output);
-                    for (const auto& s : b.sends) fed_by_removed.insert(s.first);
+                    for (const auto& s : b.sends) fed_by_removed.insert(s.bus_id);
                     grew = true;
                 }
             }
@@ -271,7 +271,11 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
             pb.kind = b.kind;
             pb.output = map_bus(b.output);
             for (const auto& s : b.sends) pb.sends.emplace_back(map_bus(s.first), s.second);
-            for (const auto& i : b.insert_suggestions) pb.inserts.push_back({i, "", true, false});
+            for (const auto& i : b.insert_suggestions) {
+                project::InsertSlot slot;
+                slot.kind = i;
+                pb.inserts.push_back(slot);
+            }
             d.buses.push_back(pb);
         }
 
@@ -337,7 +341,7 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
             }
 
             t.versions.push_back({track_ids[i].second, "Version 1", {}, score_for_instrument(def, t.name), {}, {},
-                                  std::nullopt});
+                                  std::nullopt, {}});
             t.active_version_id = track_ids[i].second;
             d.tracks.push_back(std::move(t));
         }
@@ -405,7 +409,7 @@ Template save_user_template(const project::Project& proj, const std::string& tem
         TemplateBus tb{bus_ids[b.id], b.name, b.kind, "master", {}, {}};
         if (bus_ids.count(b.output)) tb.output = bus_ids[b.output];
         for (const auto& s : b.sends)
-            if (bus_ids.count(s.first)) tb.sends.emplace_back(bus_ids[s.first], s.second);
+            if (bus_ids.count(s.bus_id)) tb.sends.emplace_back(bus_ids[s.bus_id], s.level_db);
         for (const auto& i : b.inserts) tb.insert_suggestions.push_back(i.kind);
         t.buses.push_back(tb);
     }

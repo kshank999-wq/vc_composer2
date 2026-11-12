@@ -300,7 +300,7 @@ std::string Project::add_track(const std::string& name, TrackKind kind, const st
         t.include_in_export = kind != TrackKind::Reference;
         t.output_bus_id = "bus-master";
         if (kind != TrackKind::Folder) {
-            t.versions.push_back({version, "Version 1", {}, score_for_track(t.name), {}, {}, std::nullopt});
+            t.versions.push_back({version, "Version 1", {}, score_for_track(t.name), {}, {}, std::nullopt, {}});
             t.active_version_id = version;
         }
         d.tracks.push_back(t);
@@ -500,18 +500,152 @@ json::Value string_array(const std::vector<std::string>& v)
     return a;
 }
 
-json::Value sends_to_json(const std::vector<std::pair<std::string, double>>& sends)
+json::Value sends_to_json(const std::vector<Send>& sends)
 {
     json::Array a;
-    for (const auto& s : sends) a.emplace_back(json::Object{{"to", s.first}, {"level_db", s.second}});
+    for (const auto& s : sends)
+        a.emplace_back(json::Object{{"to", s.bus_id}, {"level_db", s.level_db}, {"pre_fader", s.pre_fader},
+                                    {"mute", s.mute}, {"pan", s.pan}, {"pan_follow", s.pan_follow}});
     return a;
 }
 
-std::vector<std::pair<std::string, double>> sends_from_json(const json::Value* v)
+std::vector<Send> sends_from_json(const json::Value* v)
 {
-    std::vector<std::pair<std::string, double>> out;
+    std::vector<Send> out;
     if (v)
-        for (const auto& s : v->as_array()) out.emplace_back(s.get_string("to"), s.get_double("level_db", -12.0));
+        for (const auto& j : v->as_array()) {
+            Send s(j.get_string("to"), j.get_double("level_db", -12.0));
+            s.pre_fader = j.get_bool("pre_fader");
+            s.mute = j.get_bool("mute");
+            s.pan = j.get_double("pan");
+            s.pan_follow = j.get_bool("pan_follow", true);
+            out.push_back(std::move(s));
+        }
+    return out;
+}
+
+json::Value band_to_json(const EqBand& b)
+{
+    return json::Object{{"on", b.on}, {"freq", b.freq}, {"gain_db", b.gain_db}, {"q", b.q}, {"bell", b.bell}};
+}
+
+EqBand band_from_json(const json::Value* v, const EqBand& fallback)
+{
+    if (!v) return fallback;
+    EqBand b;
+    b.on = v->get_bool("on", fallback.on);
+    b.freq = v->get_double("freq", fallback.freq);
+    b.gain_db = v->get_double("gain_db", fallback.gain_db);
+    b.q = v->get_double("q", fallback.q);
+    b.bell = v->get_bool("bell", fallback.bell);
+    return b;
+}
+
+json::Value strip_to_json(const ChannelStrip& s)
+{
+    return json::Object{{"trim_db", s.trim_db},
+                        {"phase_invert", s.phase_invert},
+                        {"hpf_on", s.hpf_on},
+                        {"hpf_hz", s.hpf_hz},
+                        {"lpf_on", s.lpf_on},
+                        {"lpf_hz", s.lpf_hz},
+                        {"eq_on", s.eq_on},
+                        {"lf", band_to_json(s.lf)},
+                        {"lmf", band_to_json(s.lmf)},
+                        {"hmf", band_to_json(s.hmf)},
+                        {"hf", band_to_json(s.hf)},
+                        {"comp_on", s.comp_on},
+                        {"comp_threshold_db", s.comp_threshold_db},
+                        {"comp_ratio", s.comp_ratio},
+                        {"comp_attack_ms", s.comp_attack_ms},
+                        {"comp_release_ms", s.comp_release_ms},
+                        {"comp_makeup_db", s.comp_makeup_db},
+                        {"gate_on", s.gate_on},
+                        {"gate_threshold_db", s.gate_threshold_db},
+                        {"gate_range_db", s.gate_range_db},
+                        {"gate_release_ms", s.gate_release_ms},
+                        {"dynamics_pre_eq", s.dynamics_pre_eq}};
+}
+
+ChannelStrip strip_from_json(const json::Value* v)
+{
+    ChannelStrip s;
+    if (!v) return s;
+    const ChannelStrip d;
+    s.trim_db = v->get_double("trim_db", d.trim_db);
+    s.phase_invert = v->get_bool("phase_invert", d.phase_invert);
+    s.hpf_on = v->get_bool("hpf_on", d.hpf_on);
+    s.hpf_hz = v->get_double("hpf_hz", d.hpf_hz);
+    s.lpf_on = v->get_bool("lpf_on", d.lpf_on);
+    s.lpf_hz = v->get_double("lpf_hz", d.lpf_hz);
+    s.eq_on = v->get_bool("eq_on", d.eq_on);
+    s.lf = band_from_json(v->get("lf"), d.lf);
+    s.lmf = band_from_json(v->get("lmf"), d.lmf);
+    s.hmf = band_from_json(v->get("hmf"), d.hmf);
+    s.hf = band_from_json(v->get("hf"), d.hf);
+    s.comp_on = v->get_bool("comp_on", d.comp_on);
+    s.comp_threshold_db = v->get_double("comp_threshold_db", d.comp_threshold_db);
+    s.comp_ratio = v->get_double("comp_ratio", d.comp_ratio);
+    s.comp_attack_ms = v->get_double("comp_attack_ms", d.comp_attack_ms);
+    s.comp_release_ms = v->get_double("comp_release_ms", d.comp_release_ms);
+    s.comp_makeup_db = v->get_double("comp_makeup_db", d.comp_makeup_db);
+    s.gate_on = v->get_bool("gate_on", d.gate_on);
+    s.gate_threshold_db = v->get_double("gate_threshold_db", d.gate_threshold_db);
+    s.gate_range_db = v->get_double("gate_range_db", d.gate_range_db);
+    s.gate_release_ms = v->get_double("gate_release_ms", d.gate_release_ms);
+    s.dynamics_pre_eq = v->get_bool("dynamics_pre_eq", d.dynamics_pre_eq);
+    return s;
+}
+
+json::Value plugin_to_json(const PluginRef& p)
+{
+    return json::Object{{"format", p.format}, {"identifier", p.identifier}, {"name", p.name},
+                        {"vendor", p.vendor}, {"state", p.state_base64}};
+}
+
+PluginRef plugin_from_json(const json::Value& pj)
+{
+    PluginRef p;
+    p.format = pj.get_string("format");
+    p.identifier = pj.get_string("identifier");
+    p.name = pj.get_string("name");
+    p.vendor = pj.get_string("vendor");
+    p.state_base64 = pj.get_string("state");
+    return p;
+}
+
+json::Value inserts_to_json(const std::vector<InsertSlot>& inserts)
+{
+    json::Array a;
+    for (const auto& i : inserts) {
+        json::Object o{{"kind", i.kind}, {"plugin_ref", i.plugin_ref}, {"suggestion", i.suggestion},
+                       {"bypass", i.bypass}};
+        if (!i.plugin.empty()) o.set("plugin", plugin_to_json(i.plugin));
+        if (!i.params.empty()) {
+            json::Object params;
+            for (const auto& [k, val] : i.params) params.set(k, val);
+            o.set("params", params);
+        }
+        a.emplace_back(o);
+    }
+    return a;
+}
+
+std::vector<InsertSlot> inserts_from_json(const json::Value* v)
+{
+    std::vector<InsertSlot> out;
+    if (!v) return out;
+    for (const auto& j : v->as_array()) {
+        InsertSlot i;
+        i.kind = j.get_string("kind");
+        i.plugin_ref = j.get_string("plugin_ref");
+        i.suggestion = j.get_bool("suggestion", true);
+        i.bypass = j.get_bool("bypass");
+        if (const auto* pj = j.get("plugin")) i.plugin = plugin_from_json(*pj);
+        if (const auto* pj = j.get("params"))
+            for (const auto& [k, val] : pj->as_object()) i.params[k] = val.as_double();
+        out.push_back(std::move(i));
+    }
     return out;
 }
 
@@ -574,10 +708,15 @@ json::Value Project::to_json() const
                                                     {"state", t.instrument_plugin.state_base64}});
         o.set("output_bus_id", t.output_bus_id);
         o.set("sends", sends_to_json(t.sends));
+        o.set("strip", strip_to_json(t.strip));
+        o.set("inserts", inserts_to_json(t.inserts));
         o.set("gain_db", t.gain_db);
         o.set("pan", t.pan);
         o.set("mute", t.mute);
         o.set("solo", t.solo);
+        o.set("input", t.input);
+        o.set("input_stereo", t.input_stereo);
+        o.set("monitor", t.monitor);
         o.set("include_in_export", t.include_in_export);
         o.set("midi_channel", t.midi_channel);
         o.set("template_origin", t.template_origin);
@@ -592,6 +731,24 @@ json::Value Project::to_json() const
                             {"score", notation::score_to_json(v.score)}, {"regions", regions},
                             {"articulation_overrides", string_array(v.articulation_overrides)}};
             if (v.gain_db) vo.set("gain_db", *v.gain_db);
+            if (!v.audio_clips.empty()) {
+                json::Array clips;
+                for (const auto& c : v.audio_clips)
+                    clips.emplace_back(json::Object{{"id", c.id},
+                                                    {"name", c.name},
+                                                    {"file", c.file},
+                                                    {"start_seconds", c.start_seconds},
+                                                    {"source_offset", c.source_offset},
+                                                    {"length", c.length},
+                                                    {"gain_db", c.gain_db},
+                                                    {"fade_in", c.fade_in},
+                                                    {"fade_out", c.fade_out},
+                                                    {"lane", c.lane},
+                                                    {"muted", c.muted},
+                                                    {"channels", c.channels},
+                                                    {"file_sample_rate", c.file_sample_rate}});
+                vo.set("audio_clips", clips);
+            }
             versions.emplace_back(vo);
         }
         o.set("versions", versions);
@@ -602,13 +759,18 @@ json::Value Project::to_json() const
 
     json::Array buses;
     for (const auto& b : d.buses) {
-        json::Array inserts;
-        for (const auto& i : b.inserts)
-            inserts.emplace_back(json::Object{{"kind", i.kind}, {"plugin_ref", i.plugin_ref},
-                                              {"suggestion", i.suggestion}, {"bypass", i.bypass}});
-        buses.emplace_back(json::Object{{"id", b.id}, {"name", b.name}, {"kind", b.kind}, {"output", b.output},
-                                        {"sends", sends_to_json(b.sends)}, {"inserts", inserts},
-                                        {"gain_db", b.gain_db}});
+        buses.emplace_back(json::Object{{"id", b.id},
+                                        {"name", b.name},
+                                        {"kind", b.kind},
+                                        {"output", b.output},
+                                        {"sends", sends_to_json(b.sends)},
+                                        {"inserts", inserts_to_json(b.inserts)},
+                                        {"gain_db", b.gain_db},
+                                        {"pan", b.pan},
+                                        {"mute", b.mute},
+                                        {"solo", b.solo},
+                                        {"strip", strip_to_json(b.strip)},
+                                        {"color", b.color}});
     }
     root.set("buses", buses);
 
@@ -743,19 +905,20 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
             t.assignment.message = a->get_string("message");
         }
         t.expression_map = j.get_string("expression_map", "default");
-        if (const auto* pj = j.get("instrument_plugin")) {
-            t.instrument_plugin.format = pj->get_string("format");
-            t.instrument_plugin.identifier = pj->get_string("identifier");
-            t.instrument_plugin.name = pj->get_string("name");
-            t.instrument_plugin.vendor = pj->get_string("vendor");
-            t.instrument_plugin.state_base64 = pj->get_string("state");
-        }
+        if (const auto* pj = j.get("instrument_plugin")) t.instrument_plugin = plugin_from_json(*pj);
         t.output_bus_id = j.get_string("output_bus_id");
         t.sends = sends_from_json(j.get("sends"));
+        t.strip = strip_from_json(j.get("strip"));
+        t.inserts = inserts_from_json(j.get("inserts"));
         t.gain_db = j.get_double("gain_db");
         t.pan = j.get_double("pan");
         t.mute = j.get_bool("mute");
         t.solo = j.get_bool("solo");
+        t.input = static_cast<int>(j.get_int("input", 0));
+        t.input_stereo = j.get_bool("input_stereo");
+        t.monitor = j.get_string("monitor", "auto");
+        if (t.monitor != "auto" && t.monitor != "input" && t.monitor != "off")
+            return fail("track " + t.id + ": unknown monitor mode '" + t.monitor + "'");
         t.include_in_export = j.get_bool("include_in_export", t.kind != TrackKind::Reference);
         t.midi_channel = static_cast<int>(j.get_int("midi_channel"));
         t.template_origin = j.get_string("template_origin");
@@ -785,6 +948,26 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
                 if (r.end <= r.start) return fail("region " + r.id + ": empty range");
                 v.regions.push_back(std::move(r));
             }
+            for (const auto& cj : vj.get("audio_clips") ? vj.get("audio_clips")->as_array() : json::Array{}) {
+                AudioClip c;
+                c.id = cj.get_string("id");
+                if (!unique(c.id)) return fail("missing or duplicate audio clip id '" + c.id + "'");
+                c.name = cj.get_string("name");
+                c.file = cj.get_string("file");
+                c.start_seconds = cj.get_double("start_seconds");
+                c.source_offset = cj.get_double("source_offset");
+                c.length = cj.get_double("length");
+                c.gain_db = cj.get_double("gain_db");
+                c.fade_in = cj.get_double("fade_in");
+                c.fade_out = cj.get_double("fade_out");
+                c.lane = static_cast<int>(cj.get_int("lane"));
+                c.muted = cj.get_bool("muted");
+                c.channels = static_cast<int>(cj.get_int("channels"));
+                c.file_sample_rate = cj.get_double("file_sample_rate");
+                if (c.file.empty()) return fail("audio clip " + c.id + ": no file");
+                if (c.length <= 0.0 || c.source_offset < 0.0) return fail("audio clip " + c.id + ": empty range");
+                v.audio_clips.push_back(std::move(c));
+            }
             t.versions.push_back(std::move(v));
         }
         t.active_version_id = j.get_string("active_version_id");
@@ -806,9 +989,12 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         b.output = j.get_string("output");
         b.sends = sends_from_json(j.get("sends"));
         b.gain_db = j.get_double("gain_db");
-        for (const auto& i : j.get("inserts") ? j.get("inserts")->as_array() : json::Array{})
-            b.inserts.push_back({i.get_string("kind"), i.get_string("plugin_ref"), i.get_bool("suggestion", true),
-                                 i.get_bool("bypass")});
+        b.pan = j.get_double("pan");
+        b.mute = j.get_bool("mute");
+        b.solo = j.get_bool("solo");
+        b.strip = strip_from_json(j.get("strip"));
+        b.color = j.get_string("color");
+        b.inserts = inserts_from_json(j.get("inserts"));
         d.buses.push_back(std::move(b));
     }
     if (const auto* pj = doc.get("production")) {

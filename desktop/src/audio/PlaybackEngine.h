@@ -82,6 +82,38 @@ public:
     float take_peak(const std::string& track_id);
     float take_master_peak();
 
+    // --- Console metering (Main Spec §12) -----------------------------------------
+    struct StripMeter {
+        float left = 0.0f, right = 0.0f;  ///< Peak since the last call, linear (1.0 = 0 dBFS).
+        float gain_reduction_db = 0.0f;   ///< Channel compressor, 0 or negative.
+        bool gate_closed = false;
+        bool clipped = false;             ///< Went over 0 dBFS since the last call.
+    };
+    /// For a track id, a bus id or "bus-master". Unknown ids read silent.
+    StripMeter take_meter(const std::string& strip_id);
+    /// Device inputs (for input selectors and meters).
+    int num_inputs() const;
+    juce::String input_name(int channel) const;
+    float take_input_peak(int channel);
+
+    // --- Recording (Main Spec §11) -------------------------------------------------
+    /// Transport record arm. Recording runs while playing with this on, onto
+    /// every record-armed track (inside the punch range when punch is on).
+    void set_record_enabled(bool on);
+    bool record_enabled() const noexcept;
+    bool recording() const noexcept;
+    void set_punch(bool on, Ticks in, Ticks out);
+    bool punch() const noexcept;
+    /// Seconds recorded in the current pass.
+    double record_seconds() const noexcept;
+    /// Called on the message thread after a pass is placed (one undo step),
+    /// or with an error ("disk full", "no input device").
+    std::function<void(const juce::String& message, bool ok)> on_recording_finished;
+    /// Offline rendering with a given input (tests and the headless check):
+    /// `input` stands in for the device's input channels.
+    void render_offline_with_input(const juce::AudioBuffer<float>& input, juce::AudioBuffer<float>& out,
+                                   int num_samples);
+
     /// Re-render the snapshot now (normally debounced after document changes).
     void rebuild_now();
 

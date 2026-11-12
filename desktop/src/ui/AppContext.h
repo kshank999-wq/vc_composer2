@@ -44,6 +44,8 @@ enum : juce::CommandID {
     play = 0x1200,
     rewind,
     toggleMetronome,
+    toggleRecord,
+    togglePunch,
     showComposer = 0x1300,
     showSequencer,
     showMixer,
@@ -61,6 +63,10 @@ enum : juce::CommandID {
     showCueManager,
     importPicture,
     addHit,
+    addAudioTrack = 0x1420,
+    importAudio,
+    addAuxBus,
+    addGroupBus,
     about = 0x1600,
 };
 }  // namespace cmd

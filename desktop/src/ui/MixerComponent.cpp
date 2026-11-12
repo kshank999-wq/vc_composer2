@@ -698,7 +698,9 @@ public:
                                     (s.suggestion ? " (suggested)" : (s.bypass ? " (bypassed)" : "")),
                                 s.suggestion || s.bypass});
         sends_.clear();
-        for (const auto& [to, level] : b->sends) {
+        for (const auto& send : b->sends) {
+            const auto& to = send.bus_id;
+            const double level = send.level_db;
             const auto* target = d.find_bus(to);
             sends_.push_back(juce::String(juce::CharPointer_UTF8("\xe2\x86\x92 ")) + (target ? juce::String(target->name) : juce::String(to)) +
                              " " + short_db(level));

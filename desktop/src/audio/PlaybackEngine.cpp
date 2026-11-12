@@ -296,8 +296,8 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         sb.output = out == bus_index.end() ? -1 : out->second;
         if (sb.output == it->second) sb.output = -1;
         for (const auto& s : b.sends) {
-            auto to = bus_index.find(s.first);
-            if (to != bus_index.end() && to->second != it->second) sb.sends.emplace_back(to->second, db_to_gain(s.second));
+            auto to = bus_index.find(s.bus_id);
+            if (to != bus_index.end() && to->second != it->second) sb.sends.emplace_back(to->second, db_to_gain(s.level_db));
         }
         for (const auto& ins : b.inserts)
             if (ins.kind == "reverb" && !ins.bypass) {
@@ -608,6 +608,31 @@ void PlaybackEngine::process_chunk(float* const* outputs, int num_outputs, int o
     }
 
     if (playing) position_samples_.store(pos + n);
+}
+
+// --- Console and recording: STUBS (the engine work replaces these) ----------------------
+
+PlaybackEngine::StripMeter PlaybackEngine::take_meter(const std::string& strip_id)
+{
+    StripMeter m;
+    const float p = strip_id == "bus-master" ? take_master_peak() : take_peak(strip_id);
+    m.left = m.right = p;
+    m.clipped = p > 1.0f;
+    return m;
+}
+int PlaybackEngine::num_inputs() const { return 0; }
+juce::String PlaybackEngine::input_name(int channel) const { return "In " + juce::String(channel + 1); }
+float PlaybackEngine::take_input_peak(int) { return 0.0f; }
+void PlaybackEngine::set_record_enabled(bool) {}
+bool PlaybackEngine::record_enabled() const noexcept { return false; }
+bool PlaybackEngine::recording() const noexcept { return false; }
+void PlaybackEngine::set_punch(bool, Ticks, Ticks) {}
+bool PlaybackEngine::punch() const noexcept { return false; }
+double PlaybackEngine::record_seconds() const noexcept { return 0.0; }
+void PlaybackEngine::render_offline_with_input(const juce::AudioBuffer<float>&, juce::AudioBuffer<float>& out,
+                                               int num_samples)
+{
+    render_offline(out, num_samples);
 }
 
 }  // namespace vcc::desktop
