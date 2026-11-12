@@ -12,7 +12,6 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-#include "audio/AutomationRt.h"
 #include "audio/Instrument.h"
 #include "vcc/project/Project.h"
 
@@ -63,16 +62,11 @@ public:
     void all_notes_off() noexcept override;
     bool wants_keyswitches() const noexcept override { return true; }
     juce::String display_name() const override;
-    int latency_samples() const noexcept override { return instance_->getLatencySamples(); }
 
     juce::AudioPluginInstance& instance() noexcept { return *instance_; }
-    /// Listens to the plug-in's parameter gestures (message thread).
-    void set_watch(std::unique_ptr<ParameterWatch> watch) { watch_ = std::move(watch); }
-    bool has_watch() const noexcept { return watch_ != nullptr; }
 
 private:
     std::unique_ptr<juce::AudioPluginInstance> instance_;
-    std::unique_ptr<ParameterWatch> watch_;  // destroyed before the instance
     juce::AudioBuffer<float> buffer_;
     juce::MidiBuffer panic_;
     std::atomic<bool> panic_pending_{false};

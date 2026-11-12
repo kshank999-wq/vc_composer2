@@ -27,10 +27,6 @@ public:
     /// a keyswitch is an instruction to a sample player, never music.
     virtual bool wants_keyswitches() const noexcept { return false; }
 
-    /// Processing delay of the instrument's output, samples (plug-ins report
-    /// theirs; the placeholder is 0). Read on the message thread.
-    virtual int latency_samples() const noexcept { return 0; }
-
     virtual juce::String display_name() const = 0;
 };
 

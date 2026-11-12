@@ -152,13 +152,9 @@ private:
     bool gate_closed_ = false;
 };
 
-class ParameterWatch;
-
 /// An insert slot's processor.
 class InsertProcessor {
 public:
-    static constexpr int kMaxAutomated = 16;
-
     virtual ~InsertProcessor() = default;
     /// Message thread. Must keep processing state when nothing changed.
     virtual void prepare(double sr, int max_block) = 0;
@@ -166,44 +162,12 @@ public:
     virtual void set_params(const project::InsertSlot& slot) = 0;
     /// Audio thread: stereo in place.
     virtual void process(float* l, float* r, int n) noexcept = 0;
-    /// Audio thread, while bypassed: built-ins pass audio through untouched;
-    /// a plug-in is asked for its own bypass (which keeps its latency, so
-    /// delay compensation stays aligned).
-    virtual void process_bypassed(float*, float*, int) noexcept {}
     /// Why it is not processing ("Missing: ..."), or empty.
     virtual juce::String status() const { return {}; }
     virtual juce::AudioPluginInstance* plugin() noexcept { return nullptr; }
-    /// Processing delay in samples (plug-ins report theirs; built-ins 0).
-    virtual int latency_samples() const noexcept { return 0; }
-    /// Message thread: listens to a hosted plug-in's parameter gestures
-    /// (kept until the processor is destroyed, and released before the plug-in).
-    virtual void set_watch(std::unique_ptr<ParameterWatch>) {}
-    virtual bool has_watch() const noexcept { return false; }
-
-    /// Audio thread: automation overrides one built-in parameter (index from
-    /// insert_automation_index) until clear_automation().
-    void automate(int index, float value) noexcept
-    {
-        if (index < 0 || index >= kMaxAutomated) return;
-        automated_[static_cast<std::size_t>(index)] = value;
-        automated_mask_ |= 1u << index;
-    }
-    void clear_automation() noexcept { automated_mask_ = 0; }
 
     std::atomic<bool> bypass{false};
-
-protected:
-    float automated(int index, float fallback) const noexcept
-    {
-        return (automated_mask_ & (1u << index)) ? automated_[static_cast<std::size_t>(index)] : fallback;
-    }
-    std::array<float, kMaxAutomated> automated_{};
-    std::uint32_t automated_mask_ = 0;
 };
-
-/// The automation index of a built-in insert's parameter (as named in
-/// InsertSlot::params and the table above), or -1.
-int insert_automation_index(const std::string& kind, const std::string& name);
 
 /// Whether `kind` names a built-in processor (or "plugin").
 bool is_known_insert_kind(const std::string& kind) noexcept;

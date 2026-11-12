@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstring>
 
-#include "audio/AutomationRt.h"
 #include "audio/PluginHost.h"
 
 namespace vcc::desktop {
@@ -240,38 +239,6 @@ double insert_param(const project::InsertSlot& slot, const char* name, double fa
 }
 
 namespace {
-// Automatable parameters per built-in kind, in automation-index order.
-const char* const kEqParams[] = {"lf_gain", "lf_freq", "lmf_gain", "lmf_freq", "hmf_gain", "hmf_freq", "hf_gain",
-                                 "hf_freq", "lf_q",    "lmf_q",   "hmf_q",    "hf_q",     "hpf_hz",   "lpf_hz"};
-const char* const kCompParams[] = {"threshold_db", "ratio", "attack_ms", "release_ms", "makeup_db"};
-const char* const kGateParams[] = {"threshold_db", "range_db", "release_ms"};
-const char* const kReverbParams[] = {"room", "damping", "width", "mix"};
-const char* const kDelayParams[] = {"time_ms", "feedback", "mix"};
-const char* const kLimiterParams[] = {"ceiling_db", "release_ms"};
-const char* const kSaturationParams[] = {"drive_db", "mix", "output_db"};
-
-template <std::size_t N>
-int index_in(const char* const (&names)[N], const std::string& name)
-{
-    for (std::size_t i = 0; i < N; ++i)
-        if (name == names[i]) return static_cast<int>(i);
-    return -1;
-}
-}  // namespace
-
-int insert_automation_index(const std::string& kind, const std::string& name)
-{
-    if (kind == "eq") return index_in(kEqParams, name);
-    if (kind == "compressor") return index_in(kCompParams, name);
-    if (kind == "gate") return index_in(kGateParams, name);
-    if (kind == "reverb") return index_in(kReverbParams, name);
-    if (kind == "delay") return index_in(kDelayParams, name);
-    if (kind == "limiter") return index_in(kLimiterParams, name);
-    if (kind == "saturation") return index_in(kSaturationParams, name);
-    return -1;
-}
-
-namespace {
 
 /// eq, compressor and gate inserts reuse the channel strip's processing.
 class StripInsert final : public InsertProcessor {
@@ -281,7 +248,6 @@ public:
     {
         project::ChannelStrip s;
         auto p = [&](const char* name, double d) { return insert_param(slot, name, d); };
-        kind_ = slot.kind == "eq" ? 0 : slot.kind == "compressor" ? 1 : 2;
         if (slot.kind == "eq") {
             s.eq_on = true;
             s.lf = {true, p("lf_freq", 100), p("lf_gain", 0), p("lf_q", 0.7), p("lf_bell", 0) > 0.5};
@@ -307,35 +273,11 @@ public:
         }
         box_.write(s);
     }
-    void process(float* l, float* r, int n) noexcept override
-    {
-        if (automated_mask_ == 0) {
-            channel_.process(l, r, n, box_.latest());
-            return;
-        }
-        project::ChannelStrip s = box_.latest();
-        auto a = [&](int i, double& field) {
-            if (automated_mask_ & (1u << i)) field = automated_[static_cast<std::size_t>(i)];
-        };
-        if (kind_ == 0) {
-            a(0, s.lf.gain_db), a(1, s.lf.freq), a(2, s.lmf.gain_db), a(3, s.lmf.freq), a(4, s.hmf.gain_db);
-            a(5, s.hmf.freq), a(6, s.hf.gain_db), a(7, s.hf.freq), a(8, s.lf.q), a(9, s.lmf.q), a(10, s.hmf.q);
-            a(11, s.hf.q), a(12, s.hpf_hz), a(13, s.lpf_hz);
-            s.hpf_on = s.hpf_hz > 0;
-            s.lpf_on = s.lpf_hz > 0;
-        } else if (kind_ == 1) {
-            a(0, s.comp_threshold_db), a(1, s.comp_ratio), a(2, s.comp_attack_ms), a(3, s.comp_release_ms);
-            a(4, s.comp_makeup_db);
-        } else {
-            a(0, s.gate_threshold_db), a(1, s.gate_range_db), a(2, s.gate_release_ms);
-        }
-        channel_.process(l, r, n, s);
-    }
+    void process(float* l, float* r, int n) noexcept override { channel_.process(l, r, n, box_.latest()); }
 
 private:
     Mailbox<project::ChannelStrip> box_;
     ChannelProcessor channel_;
-    int kind_ = 0;  // 0 eq, 1 compressor, 2 gate
 };
 
 class ReverbInsert final : public InsertProcessor {
@@ -349,19 +291,18 @@ public:
     }
     void set_params(const project::InsertSlot& slot) override
     {
-        box_.write({static_cast<float>(insert_param(slot, "room", 0.82)), static_cast<float>(insert_param(slot, "damping", 0.4)),
-                    static_cast<float>(insert_param(slot, "width", 1.0)), static_cast<float>(insert_param(slot, "mix", 1.0))});
+        juce::Reverb::Parameters p;
+        p.roomSize = static_cast<float>(std::clamp(insert_param(slot, "room", 0.82), 0.0, 1.0));
+        p.damping = static_cast<float>(std::clamp(insert_param(slot, "damping", 0.4), 0.0, 1.0));
+        p.width = static_cast<float>(std::clamp(insert_param(slot, "width", 1.0), 0.0, 1.0));
+        const float mix = static_cast<float>(std::clamp(insert_param(slot, "mix", 1.0), 0.0, 1.0));
+        p.wetLevel = mix / 3.0f;            // juce::Reverb scales wet by 3: about unity at mix 1
+        p.dryLevel = (1.0f - mix) * 0.5f;  // and dry by 2
+        box_.write(p);
     }
     void process(float* l, float* r, int n) noexcept override
     {
-        const Raw& raw = box_.latest();
-        juce::Reverb::Parameters p;
-        p.roomSize = std::clamp(automated(0, raw.room), 0.0f, 1.0f);
-        p.damping = std::clamp(automated(1, raw.damping), 0.0f, 1.0f);
-        p.width = std::clamp(automated(2, raw.width), 0.0f, 1.0f);
-        const float mix = std::clamp(automated(3, raw.mix), 0.0f, 1.0f);
-        p.wetLevel = mix / 3.0f;            // juce::Reverb scales wet by 3: about unity at mix 1
-        p.dryLevel = (1.0f - mix) * 0.5f;  // and dry by 2
+        const auto& p = box_.latest();
         if (std::memcmp(&p, &applied_, sizeof(p)) != 0) {
             applied_ = p;
             reverb_.setParameters(p);
@@ -370,10 +311,7 @@ public:
     }
 
 private:
-    struct Raw {
-        float room = 0.82f, damping = 0.4f, width = 1.0f, mix = 1.0f;
-    };
-    Mailbox<Raw> box_;
+    Mailbox<juce::Reverb::Parameters> box_;
     juce::Reverb::Parameters applied_{-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
     juce::Reverb reverb_;
     double sr_ = 0.0;
@@ -400,12 +338,7 @@ public:
     {
         const int size = buffer_.getNumSamples();
         if (size == 0) return;
-        Params p = box_.latest();
-        if (automated_mask_ != 0) {
-            p.time_ms = std::clamp(automated(0, p.time_ms), 1.0f, 2000.0f);
-            p.feedback = std::clamp(automated(1, p.feedback), 0.0f, 0.95f);
-            p.mix = std::clamp(automated(2, p.mix), 0.0f, 1.0f);
-        }
+        const Params& p = box_.latest();
         const float target = p.time_ms * 0.001f * static_cast<float>(sr_);
         if (delay_ < 0.0f) delay_ = target;
         const float smooth = 1.0f - std::exp(-1.0f / (0.05f * static_cast<float>(sr_)));  // 50 ms glide
@@ -450,9 +383,8 @@ public:
     void process(float* l, float* r, int n) noexcept override
     {
         const Params& p = box_.latest();
-        const float ceiling = db_to_lin(std::clamp(automated(0, p.ceiling_db), -60.0f, 0.0f));
-        const float release_ms = std::clamp(automated(1, p.release_ms), 1.0f, 5000.0f);
-        const float rel = std::exp(-1.0f / (release_ms * 0.001f * static_cast<float>(sr_)));
+        const float ceiling = db_to_lin(p.ceiling_db);
+        const float rel = std::exp(-1.0f / (p.release_ms * 0.001f * static_cast<float>(sr_)));
         for (int i = 0; i < n; ++i) {
             const float peak = std::max(std::abs(l[i]), std::abs(r[i]));
             const float needed = peak > ceiling ? ceiling / peak : 1.0f;
@@ -476,22 +408,20 @@ public:
     void prepare(double, int) override {}
     void set_params(const project::InsertSlot& slot) override
     {
-        box_.write({static_cast<float>(insert_param(slot, "drive_db", 6.0)), static_cast<float>(insert_param(slot, "mix", 1.0)),
-                    static_cast<float>(insert_param(slot, "output_db", 0.0))});
+        box_.write({db_to_lin(static_cast<float>(std::clamp(insert_param(slot, "drive_db", 6.0), 0.0, 36.0))),
+                    static_cast<float>(std::clamp(insert_param(slot, "mix", 1.0), 0.0, 1.0)),
+                    db_to_lin(static_cast<float>(std::clamp(insert_param(slot, "output_db", 0.0), -24.0, 24.0)))});
     }
     void process(float* l, float* r, int n) noexcept override
     {
-        const Params& raw = box_.latest();
-        const float drive = db_to_lin(std::clamp(automated(0, raw.drive_db), 0.0f, 36.0f));
-        const float mix = std::clamp(automated(1, raw.mix), 0.0f, 1.0f);
-        const float output = db_to_lin(std::clamp(automated(2, raw.output_db), -24.0f, 24.0f));
+        const Params& p = box_.latest();
         for (float* d : {l, r})
-            for (int i = 0; i < n; ++i) d[i] = (d[i] * (1.0f - mix) + std::tanh(d[i] * drive) * mix) * output;
+            for (int i = 0; i < n; ++i) d[i] = (d[i] * (1.0f - p.mix) + std::tanh(d[i] * p.drive) * p.mix) * p.output;
     }
 
 private:
     struct Params {
-        float drive_db = 6.0f, mix = 1.0f, output_db = 0.0f;
+        float drive = 2.0f, mix = 1.0f, output = 1.0f;
     };
     Mailbox<Params> box_;
 };
@@ -516,15 +446,7 @@ public:
         midi_.ensureSize(256);
     }
     void set_params(const project::InsertSlot&) override {}
-    void process(float* l, float* r, int n) noexcept override { run(l, r, n, false); }
-    void process_bypassed(float* l, float* r, int n) noexcept override { run(l, r, n, true); }
-    int latency_samples() const noexcept override { return instance_->getLatencySamples(); }
-    void set_watch(std::unique_ptr<ParameterWatch> w) override { watch_ = std::move(w); }
-    bool has_watch() const noexcept override { return watch_ != nullptr; }
-    juce::AudioPluginInstance* plugin() noexcept override { return instance_.get(); }
-
-private:
-    void run(float* l, float* r, int n, bool bypassed) noexcept
+    void process(float* l, float* r, int n) noexcept override
     {
         if (n > buffer_.getNumSamples()) return;
         juce::AudioBuffer<float> view(buffer_.getArrayOfWritePointers(), buffer_.getNumChannels(), n);
@@ -538,16 +460,16 @@ private:
             view.copyFrom(1, 0, r, n);
         }
         midi_.clear();
-        if (bypassed) instance_->processBlockBypassed(view, midi_);
-        else instance_->processBlock(view, midi_);
+        instance_->processBlock(view, midi_);
         const int outs = instance_->getTotalNumOutputChannels();
         if (outs <= 0) return;
         juce::FloatVectorOperations::copy(l, view.getReadPointer(0), n);
         juce::FloatVectorOperations::copy(r, view.getReadPointer(outs == 1 ? 0 : 1), n);
     }
+    juce::AudioPluginInstance* plugin() noexcept override { return instance_.get(); }
 
+private:
     std::unique_ptr<juce::AudioPluginInstance> instance_;
-    std::unique_ptr<ParameterWatch> watch_;  // destroyed before the instance
     juce::AudioBuffer<float> buffer_;
     juce::MidiBuffer midi_;
     double sr_ = 0.0;
