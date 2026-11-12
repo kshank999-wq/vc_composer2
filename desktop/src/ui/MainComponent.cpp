@@ -4,6 +4,7 @@
 
 #include "ui/CueManager.h"
 #include "ui/Dialogs.h"
+#include "ui/ScoreExchange.h"
 #include "ui/VideoWindow.h"
 #include "ui/WaveformCache.h"
 #include "vcc/picture/Picture.h"
@@ -220,6 +221,98 @@ bool MainComponent::save(bool save_as)
     }
     context_.status("Saved " + juce::File(path).getFileName());
     return true;
+}
+
+void MainComponent::import_musicxml()
+{
+    chooser_ = std::make_unique<juce::FileChooser>("Import MusicXML", juce::File(), "*.musicxml;*.mxl;*.xml");
+    chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this](const juce::FileChooser& fc) {
+                              const auto file = fc.getResult();
+                              if (file == juce::File()) return;
+                              auto finish = [this, file](bool replace) {
+                                  juce::String message;
+                                  const bool ok = import_musicxml_file(context_, file, replace, message);
+                                  context_.status(message);
+                                  if (!ok)
+                                      juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                                             "Import MusicXML", message);
+                              };
+                              if (context_.session.data().tracks.empty()) {
+                                  finish(true);
+                                  return;
+                              }
+                              juce::AlertWindow::showAsync(
+                                  juce::MessageBoxOptions()
+                                      .withIconType(juce::MessageBoxIconType::QuestionIcon)
+                                      .withTitle("Import MusicXML")
+                                      .withMessage("Add the score's parts to this project as new tracks, or start a "
+                                                   "new project from the score (tempo, meter and key from the file)?")
+                                      .withButton("Add Tracks")
+                                      .withButton("Replace Project")
+                                      .withButton("Cancel"),
+                                  [finish](int r) {
+                                      if (r == 1) finish(false);
+                                      else if (r == 2) finish(true);
+                                  });
+                          });
+}
+
+void MainComponent::export_musicxml()
+{
+    chooser_ = std::make_unique<juce::FileChooser>(
+        "Export MusicXML",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+            .getChildFile(juce::File::createLegalFileName(context_.session.data().name) + ".musicxml"),
+        "*.musicxml;*.mxl");
+    chooser_->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [this](const juce::FileChooser& fc) {
+                              auto file = fc.getResult();
+                              if (file == juce::File()) return;
+                              if (!file.hasFileExtension("mxl") && !file.hasFileExtension("musicxml") &&
+                                  !file.hasFileExtension("xml"))
+                                  file = file.withFileExtension("musicxml");
+                              juce::String message;
+                              export_musicxml_file(context_, file, false, message);
+                              context_.status(message);
+                          });
+}
+
+void MainComponent::export_parts_pdf_dialog()
+{
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(juce::MessageBoxIconType::QuestionIcon)
+            .withTitle("Export Parts (PDF)")
+            .withMessage("Print each part to its own PDF in a folder, or every part into one PDF with a bookmark per "
+                         "part?")
+            .withButton("One PDF per Part")
+            .withButton("All Parts in One PDF")
+            .withButton("Cancel"),
+        [this](int r) {
+            if (r == 0) return;
+            const bool one_file = r == 2;
+            const auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+            chooser_ = one_file ? std::make_unique<juce::FileChooser>(
+                                      "Save all parts as",
+                                      docs.getChildFile(juce::File::createLegalFileName(context_.session.data().name) +
+                                                        " - parts.pdf"),
+                                      "*.pdf")
+                                : std::make_unique<juce::FileChooser>("Choose a folder for the parts", docs);
+            const int mode = one_file ? juce::FileBrowserComponent::saveMode |
+                                             juce::FileBrowserComponent::warnAboutOverwriting
+                                       : juce::FileBrowserComponent::openMode |
+                                             juce::FileBrowserComponent::canSelectDirectories;
+            chooser_->launchAsync(mode, [this, one_file](const juce::FileChooser& fc) {
+                auto target = fc.getResult();
+                if (target == juce::File()) return;
+                if (one_file) target = target.withFileExtension("pdf");
+                else if (!target.isDirectory()) return;
+                juce::String message;
+                export_parts_pdf(context_, target, message);
+                context_.status(message);
+            });
+        });
 }
 
 void MainComponent::export_midi()
@@ -538,7 +631,7 @@ void MainComponent::show_about()
 void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
 {
     c.addArray({cmd::newProject, cmd::newFromTemplate, cmd::open, cmd::save, cmd::saveAs, cmd::exportMidi,
-                cmd::exportScoreSvg, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
+                cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
                 cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::addAudioTrack, cmd::importAudio,
                 cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
@@ -560,6 +653,16 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::saveAs: info.setInfo("Save As...", "", "File", 0); info.addDefaultKeypress('s', cmdKey | shift); break;
         case cmd::exportMidi: info.setInfo("Export MIDI...", "", "File", 0); info.addDefaultKeypress('e', cmdKey); break;
         case cmd::exportScoreSvg: info.setInfo("Export Parts (SVG pages)...", "", "File", 0); break;
+        case cmd::importMusicXml:
+            info.setInfo("Import MusicXML...", "Adds a MusicXML or .mxl score's parts as tracks", "File", 0);
+            break;
+        case cmd::exportMusicXml:
+            info.setInfo("Export MusicXML...", "For Sibelius, Finale, Dorico, MuseScore and engravers", "File", 0);
+            break;
+        case cmd::exportPartsPdf:
+            info.setInfo("Export Parts (PDF)...", "Printed parts, one PDF each or all in one", "File", 0);
+            info.addDefaultKeypress('p', cmdKey | juce::ModifierKeys::shiftModifier);
+            break;
         case cmd::saveAsTemplate: info.setInfo("Save as Template...", "", "File", 0); break;
         case cmd::undo:
             info.setInfo(context_.session.can_undo() ? "Undo " + juce::String(context_.session.undo_label()) : juce::String("Undo"),
@@ -646,6 +749,9 @@ bool MainComponent::perform(const InvocationInfo& info)
                                       if (fc.getResult().isDirectory()) export_parts_svg(context_, fc.getResult());
                                   });
             break;
+        case cmd::importMusicXml: import_musicxml(); break;
+        case cmd::exportMusicXml: export_musicxml(); break;
+        case cmd::exportPartsPdf: export_parts_pdf_dialog(); break;
         case cmd::saveAsTemplate: save_as_template(); break;
         case cmd::undo: s.undo(); break;
         case cmd::redo: s.redo(); break;
@@ -718,10 +824,12 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             m.addCommandItem(c, cmd::importPicture);
             m.addCommandItem(c, cmd::importAudio);
+            m.addCommandItem(c, cmd::importMusicXml);
             m.addSeparator();
             for (auto id : {cmd::save, cmd::saveAs, cmd::saveAsTemplate}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::exportMidi, cmd::exportScoreSvg}) m.addCommandItem(c, id);
+            for (auto id : {cmd::exportMidi, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportScoreSvg})
+                m.addCommandItem(c, id);
             break;
         case 1:
             m.addCommandItem(c, cmd::undo);

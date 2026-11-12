@@ -13,6 +13,8 @@
 #include "PlatformFixes.h"
 #include "audio/CueRenderer.h"
 #include "ui/CueManager.h"
+#include "ui/ScoreExchange.h"
+#include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
 #include "ui/VideoWindow.h"
 #include "vcc/media/VideoDecoder.h"
@@ -1157,6 +1159,68 @@ int main(int argc, char** argv)
             check(!results.empty() && results[0].peak > 1.0e-4f, "the bounced cue is not silent");
             auto again = render_cues(ctx, request);
             check(again.size() == 1 && again[0].skipped_protected, "an approved cue's deliverable is not overwritten unasked");
+        }
+
+        // Notation out and in (Main Spec 16): printed parts as PDF, MusicXML.
+        {
+            const auto parts_dir = dir.getChildFile("parts");
+            parts_dir.deleteRecursively();
+            juce::String message;
+            const int pages = export_parts_pdf(ctx, parts_dir, message);
+            const auto pdfs = parts_dir.findChildFiles(juce::File::findFiles, false, "*.pdf");
+            juce::MemoryBlock first;
+            if (!pdfs.isEmpty()) pdfs[0].loadFileAsData(first);
+            check(pages > 0 && !pdfs.isEmpty() && first.getSize() > 10000 &&
+                      juce::String(static_cast<const char*>(first.getData()), 5) == "%PDF-",
+                  "printed parts are written as PDF (" + message + ")");
+            const auto all = dir.getChildFile("all-parts.pdf");
+            all.deleteFile();
+            const int all_pages = export_parts_pdf(ctx, all, message);
+            juce::MemoryBlock all_bytes;
+            all.loadFileAsData(all_bytes);
+            const std::string all_text(static_cast<const char*>(all_bytes.getData()), all_bytes.getSize());
+            check(all_pages == pages && all_text.find("/Outlines") != std::string::npos &&
+                      all_text.find("/Title (") != std::string::npos,
+                  "every part prints into one PDF with a bookmark per part (" + juce::String(pages) + " pages)");
+            // Look at a printed page, when poppler is installed.
+            const juce::File pdftoppm("/usr/bin/pdftoppm");
+            if (pdftoppm.existsAsFile() && !pdfs.isEmpty()) {
+                // The part with the typed notes, else the first.
+                juce::File page = pdfs[0];
+                const juce::String typed = juce::File::createLegalFileName(session.data().find_track(track)->name);
+                for (const auto& f : pdfs)
+                    if (f.getFileNameWithoutExtension().endsWith(typed)) page = f;
+                juce::ChildProcess p;
+                const auto out = dir.getChildFile("09-part-pdf");
+                if (p.start(juce::StringArray{pdftoppm.getFullPathName(), "-r", "90", "-png", "-singlefile", "-f", "1",
+                                              page.getFullPathName(), out.getFullPathName()})) {
+                    p.waitForProcessToFinish(20000);
+                    check(out.withFileExtension("png").getSize() > 5000, "a printed page renders (09-part-pdf)");
+                }
+            }
+
+            const int parts_exported = static_cast<int>(
+                interchange::musicxml_export_tracks(session.data()).size());
+            for (const char* ext : {"musicxml", "mxl"}) {
+                const auto xml_file = dir.getChildFile(juce::String("check.") + ext);
+                xml_file.deleteFile();
+                const bool exported = export_musicxml_file(ctx, xml_file, false, message);
+                check(exported && xml_file.getSize() > 500,
+                      juce::String("MusicXML exports as .") + ext + " (" + message + ")");
+                std::string xml;
+                juce::String why;
+                check(read_musicxml_file(xml_file, xml, why) && xml.find("<score-partwise") != std::string::npos,
+                      juce::String("the .") + ext + " file reads back");
+                session::Session other(ctx.catalogs);
+                other.new_empty();
+                const auto imported = other.import_musicxml(xml, true);
+                std::size_t notes = 0;
+                for (const auto& id : imported.track_ids)
+                    if (const auto* it = other.data().find_track(id)) notes += it->active_version()->score.total_note_count();
+                check(imported.ok && static_cast<int>(imported.track_ids.size()) == parts_exported && notes >= 5,
+                      juce::String("the .") + ext + " export imports back: " + juce::String(static_cast<int>(imported.track_ids.size())) +
+                          " parts, " + juce::String(static_cast<int>(notes)) + " notes");
+            }
         }
 
         // Save and reopen.

@@ -31,6 +31,9 @@ public:
     void open_file(const juce::File& file);
     bool save(bool save_as);
     void show_mixer();
+    void import_musicxml();
+    void export_musicxml();
+    void export_parts_pdf_dialog();
     void show_plugin_window(const std::string& track_id);
 
     /// Places audio files at the playhead on the selected audio track (or a

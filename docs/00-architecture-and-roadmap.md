@@ -15,7 +15,8 @@ boundaries, build system, test infrastructure and targets.
 │ Presentation (JUCE)  Composer · Sequencer · Mixer · Track & Library panel · │  built
 │   desktop/src/ui     template browser · Chord Explorer · Ostinato Creator   │
 │                      picture window · cue manager · console mixer ·         │
-│                      recording, audio clips with waveforms and takes        │
+│                      recording, audio clips with waveforms and takes ·      │
+│                      automation lanes · MusicXML and PDF parts menus        │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ Services             Audition · VST3/AU instrument hosting with crash-safe  │  built
 │   desktop/src/audio  scanning · plug-in state in the project · autosave     │
@@ -25,8 +26,10 @@ boundaries, build system, test infrastructure and targets.
 │ Realtime engine      Snapshot-driven playback · placeholder synth · group/  │  built
 │   PlaybackEngine     console strip DSP on every track/bus · inserts · sends │
 │                      solo-in-place · meters · clip playback · recording ·   │
-│                      click · live MIDI · offline render (PDC, automation:   │
-│                      not yet)                                               │
+│                      automation read/touch/latch/write · plug-in delay      │
+│                      compensation · click · live MIDI · offline render      │
+├──────────────────────────────────────────────────────────────────────────┤
+│ vcc_interchange      XML parser/writer · MusicXML 4.0 import and export    │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ vcc_picture/cues/media  picture sync, hit-point tempo fit, cut comparison, │  built
 │                      cue hierarchy, cue sheets, spotting notes, decoding   │
@@ -44,7 +47,8 @@ boundaries, build system, test infrastructure and targets.
 │   vcc_theory     spelling · keys/modes · tunings · chords · Roman          │  built
 │                  numerals · voicing/voice leading · progressions           │
 │   vcc_editing    note entry · editing commands · undo journal              │  ported
-│   vcc_engraving  layout · SMuFL · hit testing · SVG · print                │  ported
+│   vcc_engraving  layout · SMuFL · hit testing · SVG · print · PDF with the  │  ported
+│                  music font embedded (own deflate and OpenType reader)     │
 │   vcc_notation   score model · spelling · markings · expression maps ·     │  ported
 │                  score→MIDI · event diff · MIDI import · score file        │
 │   vcc_composer   shortcut profiles · settings · expression-map library     │  ported
@@ -182,7 +186,7 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 | Main 0: discovery | Reuse audit, framework/licensing decision, VST3 host spike | Reuse audit and port done (02). **Framework licence needs a decision** (01) |
 | Main 1: core scoring MVP | Desktop shell, notation entry, shared track panel, MIDI mirror, playback, shortcuts, save/reload, basic VST3 | **Done** in `desktop/`: Composer view with keyboard and mouse entry, track panel, Sequencer, playback via the placeholder synth or VST3/AU instruments, save/reload/autosave. Verified headlessly on Linux; macOS/Windows built in CI |
 | Main 2: scoring workflow | Template wizard UI, library search/mapping UI, articulation engine, video + timecode, temp tracks, cues | Data model and timecode done; UI and media pending |
-| Main 3: DAW production | Audio record/edit, mixer/buses/inserts/sends, automation, device I/O, PDC, stems/score export | **Console mixer, channel DSP, buses/sends, audio recording with punch and takes, clip editing done.** Automation, plug-in delay compensation, disk streaming and stem export pending |
+| Main 3: DAW production | Audio record/edit, mixer/buses/inserts/sends, automation, device I/O, PDC, stems/score export | **Console mixer, channel DSP, buses/sends, audio recording with punch and takes, clip editing, automation (read/touch/latch/write, lanes for every strip control, sends, inserts and plug-in parameters) and plug-in delay compensation done.** MusicXML import/export and PDF parts done. Disk streaming and stem export pending |
 | Main 4: collaboration | Versions, snapshots, A/B review, sync, roles, comments, packaging | Versions and snapshots done (local); sync pending |
 | Main 5: hardening | Performance, plug-in matrix, video sync, recovery, accessibility, signed installers | Pending |
 
@@ -192,13 +196,14 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
    path (see above).
 2. Engine hardening:
    - out-of-process plug-in scanning;
-   - plug-in delay compensation (effect inserts are not compensated yet);
    - disk streaming for audio clips (they are held in memory today);
-   - automation lanes;
-   - opening an effect insert's own window from the console.
+   - opening an effect insert's own window from the console;
+   - saving the delay-compensation switch with the project.
 3. Picture follow-ups:
    - picture + score draft export (needs an encoder);
    - automated conform;
    - Windows FFmpeg in CI;
    - an LGPL FFmpeg for distribution.
-4. MusicXML import/export and PDF parts (§16). SVG part pages already export.
+4. Notation exchange follow-ups (§16): a full-score PDF (all staves on one
+   system), repeats/endings and lyrics in MusicXML, font subsetting to shrink
+   part PDFs.
