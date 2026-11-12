@@ -82,9 +82,9 @@ bool Value::as_bool(bool fallback) const noexcept { return type_ == Type::Bool ?
 std::int64_t Value::as_int(std::int64_t fallback) const noexcept
 {
     if (type_ == Type::Int) return int_;
-    if (type_ == Type::Double && std::isfinite(double_) && std::floor(double_) == double_ &&
-        std::fabs(double_) < 9.0e15)
-        return static_cast<std::int64_t>(double_);
+    // A double rounds to the nearest integer, as the original library did.
+    if (type_ == Type::Double && std::isfinite(double_) && std::fabs(double_) < 9.0e18)
+        return static_cast<std::int64_t>(std::llround(double_));
     return fallback;
 }
 
@@ -163,6 +163,92 @@ std::vector<std::string> Value::get_string_array(const std::string& key) const
     return out;
 }
 
+const char* to_string(Kind kind) noexcept
+{
+    switch (kind) {
+        case Kind::Null: return "null";
+        case Kind::Bool: return "bool";
+        case Kind::Number: return "number";
+        case Kind::String: return "string";
+        case Kind::Array: return "array";
+        case Kind::Object: return "object";
+    }
+    return "null";
+}
+
+Value Value::make_number(double d)
+{
+    if (std::isfinite(d) && std::floor(d) == d && std::fabs(d) <= 9007199254740992.0 && !(d == 0.0 && std::signbit(d)))
+        return Value(static_cast<long long>(d));
+    return Value(d);
+}
+
+Kind Value::kind() const noexcept
+{
+    switch (type_) {
+        case Type::Null: return Kind::Null;
+        case Type::Bool: return Kind::Bool;
+        case Type::Int:
+        case Type::Double: return Kind::Number;
+        case Type::String: return Kind::String;
+        case Type::Array: return Kind::Array;
+        case Type::Object: return Kind::Object;
+    }
+    return Kind::Null;
+}
+
+std::string Value::as_string_or(const std::string& fallback) const
+{
+    return type_ == Type::String ? string_ : fallback;
+}
+
+std::size_t Value::size() const noexcept
+{
+    if (type_ == Type::Array) return as_array().size();
+    if (type_ == Type::Object) return as_object().size();
+    return 0;
+}
+
+namespace {
+const Value& null_value() noexcept
+{
+    static const Value v;
+    return v;
+}
+}  // namespace
+
+const Value& Value::at(std::size_t index) const noexcept
+{
+    const Array& a = as_array();
+    return index < a.size() ? a[index] : null_value();
+}
+
+const Value& Value::operator[](const std::string& key) const noexcept
+{
+    const Value* v = get(key);
+    return v ? *v : null_value();
+}
+
+bool Value::remove(const std::string& key)
+{
+    if (type_ != Type::Object) return false;
+    return object_->erase(key);
+}
+
+std::vector<std::string> Value::keys() const
+{
+    std::vector<std::string> out;
+    for (const auto& m : as_object()) out.push_back(m.first);
+    return out;
+}
+
+std::string Value::to_text(int indent) const
+{
+    std::string s = write(*this, WriteOptions{indent, false});
+    if (indent > 0 && !s.empty() && s.back() == '\n') s.pop_back();
+    return s;
+}
+
 bool operator==(const Value& a, const Value& b) noexcept
 {
     if (a.is_number() && b.is_number()) {
@@ -198,8 +284,6 @@ std::string ParseError::to_string() const
 
 namespace {
 
-constexpr int kMaxDepth = 256;
-
 class Parser {
 public:
     explicit Parser(const std::string& text) : s_(text) {}
@@ -222,6 +306,8 @@ private:
     {
         if (error) {
             error->message = message_;
+            error->failed = true;
+            error->offset = err_pos_;
             error->line = 1;
             error->column = 1;
             for (std::size_t i = 0; i < err_pos_ && i < s_.size(); ++i) {
@@ -622,6 +708,26 @@ void write_value(std::string& out, const Value& v, const WriteOptions& opt, int 
 }
 
 }  // namespace
+
+Value parse_value(const std::string& text, ParseError& error)
+{
+    error = ParseError{};
+    auto v = parse(text, &error);
+    return v ? std::move(*v) : Value();
+}
+
+Value parse_value(const std::string& text)
+{
+    ParseError ignored;
+    return parse_value(text, ignored);
+}
+
+std::string escape(const std::string& text)
+{
+    std::string quoted;
+    write_string(quoted, text);
+    return quoted.substr(1, quoted.size() - 2);
+}
 
 std::optional<Value> parse(const std::string& text, ParseError* error)
 {

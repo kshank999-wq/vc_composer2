@@ -1,11 +1,10 @@
 #include "vcc/core/Files.h"
 
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <random>
 #include <sstream>
 
 #if defined(_WIN32)
@@ -27,13 +26,13 @@ std::optional<std::string> read_file(const std::string& path, std::string* error
 {
     std::ifstream in(fs::u8path(path), std::ios::binary);
     if (!in) {
-        if (error) *error = "cannot open " + path;
+        if (error) *error = "the file could not be opened";
         return std::nullopt;
     }
     std::ostringstream ss;
     ss << in.rdbuf();
     if (in.bad()) {
-        if (error) *error = "read failed: " + path;
+        if (error) *error = "reading the file failed";
         return std::nullopt;
     }
     return ss.str();
@@ -41,14 +40,7 @@ std::optional<std::string> read_file(const std::string& path, std::string* error
 
 namespace {
 
-std::string temp_name_for(const fs::path& target)
-{
-    std::random_device rd;
-    std::uniform_int_distribution<unsigned> dist(0, 0xFFFFFF);
-    char suffix[16];
-    std::snprintf(suffix, sizeof suffix, ".%06x.tmp", dist(rd));
-    return target.string() + suffix;
-}
+std::atomic<unsigned> g_counter{0};
 
 bool flush_to_disk(std::FILE* f)
 {
@@ -60,56 +52,73 @@ bool flush_to_disk(std::FILE* f)
 #endif
 }
 
-bool replace_file(const fs::path& from, const fs::path& to)
+bool replace_file(const std::string& from, const std::string& to)
 {
 #if defined(_WIN32)
-    return MoveFileExW(from.wstring().c_str(), to.wstring().c_str(),
+    return MoveFileExW(fs::u8path(from).wstring().c_str(), fs::u8path(to).wstring().c_str(),
                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
 #else
     return std::rename(from.c_str(), to.c_str()) == 0;
 #endif
 }
 
-}  // namespace
-
-bool write_file_atomic(const std::string& path, const std::string& contents, std::string* error)
+void sync_directory_of(const std::string& path)
 {
-    const fs::path target = fs::u8path(path);
-    const fs::path temp = fs::u8path(temp_name_for(target));
-
-    std::FILE* f = std::fopen(temp.string().c_str(), "wb");
-    if (!f) {
-        if (error) *error = "cannot create temporary beside " + path + ": " + std::strerror(errno);
-        return false;
-    }
-    bool ok = contents.empty() || std::fwrite(contents.data(), 1, contents.size(), f) == contents.size();
-    ok = ok && flush_to_disk(f);
-    int saved_errno = errno;
-    ok = (std::fclose(f) == 0) && ok;
-    if (!ok) {
-        std::error_code ec;
-        fs::remove(temp, ec);
-        if (error) *error = "write failed for " + path + ": " + std::strerror(saved_errno);
-        return false;
-    }
-    if (!replace_file(temp, target)) {
-        saved_errno = errno;
-        std::error_code ec;
-        fs::remove(temp, ec);
-        if (error) *error = "cannot replace " + path + ": " + std::strerror(saved_errno);
-        return false;
-    }
 #if !defined(_WIN32)
-    // Make the rename itself durable.
-    fs::path dir = target.parent_path();
+    fs::path dir = fs::u8path(path).parent_path();
     if (dir.empty()) dir = ".";
     int dfd = ::open(dir.c_str(), O_RDONLY);
     if (dfd >= 0) {
         ::fsync(dfd);
         ::close(dfd);
     }
+#else
+    (void)path;
 #endif
-    return true;
+}
+
+}  // namespace
+
+std::string temporary_path_for(const std::string& path) { return path + ".vcc-partial"; }
+
+FileWriteResult write_file_atomically(const std::string& path, const std::string& body)
+{
+    FileWriteResult result;
+    if (path.empty()) {
+        result.error = "no file was chosen";
+        return result;
+    }
+    const std::string temporary = temporary_path_for(path) + "." + std::to_string(g_counter.fetch_add(1));
+
+    std::FILE* f = std::fopen(temporary.c_str(), "wb");
+    if (!f) {
+        result.error = "could not open that folder for writing";
+        return result;
+    }
+    bool ok = body.empty() || std::fwrite(body.data(), 1, body.size(), f) == body.size();
+    ok = flush_to_disk(f) && ok;
+    ok = (std::fclose(f) == 0) && ok;
+    if (!ok) {
+        std::remove(temporary.c_str());
+        result.error = "writing the file failed";
+        return result;
+    }
+    if (!replace_file(temporary, path)) {
+        std::remove(temporary.c_str());
+        result.error = "could not put the finished file in place";
+        return result;
+    }
+    sync_directory_of(path);
+    result.ok = true;
+    result.byte_count = body.size();
+    return result;
+}
+
+bool write_file_atomic(const std::string& path, const std::string& contents, std::string* error)
+{
+    FileWriteResult r = write_file_atomically(path, contents);
+    if (!r.ok && error) *error = r.error;
+    return r.ok;
 }
 
 }  // namespace vcc::files

@@ -9,6 +9,11 @@
 //     cleanly and a re-saved file is byte-identical when nothing changed.
 //   * Integers survive exactly. A tick position or a 64-bit id read back from
 //     disk is the integer that was written, never a rounded double.
+//
+// It also carries the API of the original VC Composer's JSON library
+// (make_*, set, push_back, at, size, has, operator[], to_text, Kind,
+// parse_value), so the ported notation score file reads and writes exactly
+// as it did. There is one JSON implementation in the product, not two.
 #pragma once
 
 #include <cstdint>
@@ -23,6 +28,14 @@
 namespace vcc::json {
 
 enum class Type : std::uint8_t { Null, Bool, Int, Double, String, Array, Object };
+
+/// The original library's coarser kinds: integers and doubles are both Number.
+enum class Kind : std::uint8_t { Null = 0, Bool, Number, String, Array, Object };
+const char* to_string(Kind kind) noexcept;
+
+/// Nesting deeper than this is refused, so a hostile file cannot exhaust the
+/// stack. Real documents (projects, scores, content) stay under ten levels.
+constexpr int kMaxDepth = 64;
 
 class Value;
 using Array = std::vector<Value>;
@@ -110,6 +123,34 @@ public:
     bool get_bool(const std::string& key, bool fallback = false) const noexcept;
     std::vector<std::string> get_string_array(const std::string& key) const;
 
+    // --- Original VC Composer API -------------------------------------------
+    static Value make_null() { return Value(); }
+    static Value make_bool(bool b) { return Value(b); }
+    /// Integral values within 2^53 are stored as integers, so 3.0 writes as
+    /// "3" - the original library's output, which saved scores rely on.
+    static Value make_number(double d);
+    static Value make_string(std::string s) { return Value(std::move(s)); }
+    static Value make_array() { return Value(Array{}); }
+    static Value make_object() { return Value(Object{}); }
+
+    Kind kind() const noexcept;
+    double as_number(double fallback = 0.0) const noexcept { return as_double(fallback); }
+    std::string as_string_or(const std::string& fallback) const;
+    /// Elements of an array or members of an object; 0 otherwise.
+    std::size_t size() const noexcept;
+    /// Array element, or a null value when out of range or not an array.
+    const Value& at(std::size_t index) const noexcept;
+    /// Member, or a null value when absent - safe to chain: v["a"]["b"].
+    const Value& operator[](const std::string& key) const noexcept;
+    bool has(const std::string& key) const noexcept { return get(key) != nullptr; }
+    void push_back(Value value) { array().push_back(std::move(value)); }
+    void set(const std::string& key, Value value) { object().set(key, std::move(value)); }
+    /// False when absent or not an object (the value is left as it was).
+    bool remove(const std::string& key);
+    std::vector<std::string> keys() const;
+    /// indent 0 = compact single line.
+    std::string to_text(int indent = 0) const;
+
     friend bool operator==(const Value& a, const Value& b) noexcept;
     friend bool operator!=(const Value& a, const Value& b) noexcept { return !(a == b); }
 
@@ -127,13 +168,21 @@ struct ParseError {
     std::string message;
     std::size_t line = 0;    ///< 1-based.
     std::size_t column = 0;  ///< 1-based, in bytes.
+    bool failed = false;
+    std::size_t offset = 0;  ///< Byte offset where parsing gave up.
     std::string to_string() const;
 };
 
 /// Parses a complete JSON document. Trailing non-whitespace is an error.
-/// Nesting deeper than 256 levels is refused, so a hostile file cannot
-/// exhaust the stack.
+/// Nesting deeper than kMaxDepth levels is refused.
 std::optional<Value> parse(const std::string& text, ParseError* error = nullptr);
+
+/// The original library's form: a null Value on failure, with `error.failed`.
+Value parse_value(const std::string& text, ParseError& error);
+Value parse_value(const std::string& text);
+
+/// The text of a JSON string literal for `text`, without the quotes.
+std::string escape(const std::string& text);
 
 struct WriteOptions {
     int indent = 2;          ///< 0 writes compact single-line JSON.

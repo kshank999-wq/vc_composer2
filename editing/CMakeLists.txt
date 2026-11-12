@@ -1,0 +1,1 @@
+vcc_add_library(vcc_editing DEPS vcc_notation vcc_composer)
