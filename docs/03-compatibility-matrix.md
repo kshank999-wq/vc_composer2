@@ -9,26 +9,27 @@ only with a recorded test run (date, build, machine). Until then it is
 
 | OS | Arch | Domain libs (CI) | Desktop app | Notes |
 |---|---|---|---|---|
-| macOS (recent supported) | Apple Silicon | CI build + tests | Planned | Minimum version decided after validation (Main Spec §3) |
-| macOS (recent supported) | Intel | CI build + tests | Planned | "where technically feasible" |
-| Windows 11 | x64 | CI build + tests (MSVC) | Planned | |
+| macOS (recent supported) | Apple Silicon | CI build + tests | CI job configured, first run pending | Not yet run by a person; minimum version decided after validation (Main Spec §3). Unsigned until notarisation is set up |
+| macOS (recent supported) | Intel | CI build + tests | Untested | "where technically feasible" |
+| Windows 11 | x64 | CI build + tests (MSVC) | CI job configured, first run pending | Not yet run by a person; unsigned |
 | Windows 11 | ARM64 | Untested | Not planned for v1 | |
-| Linux | x64 | Dev/CI only | Not a product target | Used for headless tests |
+| Linux | x64 | Dev/CI | Built and checked headlessly (Xvfb) | Development platform, not a product target |
 
 ## Audio drivers
 
 | Driver | Status | Gate |
 |---|---|---|
-| Core Audio (macOS) | Planned | Phase 1 |
-| ASIO (Windows) | Planned | ASIO SDK licence (01) |
-| WASAPI (Windows) | Planned (fallback) | Phase 1 |
+| Core Audio (macOS) | Enabled through JUCE; untested on hardware | |
+| ASIO (Windows) | Not enabled | ASIO SDK licence (01) |
+| WASAPI / DirectSound (Windows) | Enabled through JUCE; untested on hardware | |
+| ALSA (Linux) | Enabled through JUCE | Development only |
 
 ## Plug-in formats
 
 | Format | Instruments | Effects | Status |
 |---|---|---|---|
-| VST3 | Planned | Planned | Phase 1; at least one tested plug-in from multiple vendors (Main Spec §20) |
-| AU (macOS) | Optional | Optional | Conditional |
+| VST3 | **Hosted**: scan with crash blacklist, load, play, save/restore state (tested with the built-in test instrument) | Not yet (bus inserts are suggestions) | Main Spec §20 still needs real plug-ins from multiple vendors |
+| AU (macOS) | Enabled in the macOS build, untested | Not yet | Conditional |
 | VST2 | Not promised | Not promised | Conditional on licensing (01) |
 
 ## Library / player providers
@@ -38,13 +39,13 @@ native plug-in GUI and user mappings are the supported path (Main Spec §10).
 
 | Provider / player | Detect installed | Metadata | Patch state restore | Status |
 |---|---|---|---|---|
-| Generic VST3 instrument | Planned | Plug-in name only | VST3 state chunk | Phase 1 |
+| Generic VST3 instrument | Scanned list | Plug-in name and vendor | VST3 state chunk (tested) | Hosted |
 | Native Instruments Kontakt | Investigate | Investigate | VST3 state chunk | Untested |
 | Spitfire Audio | Investigate | Investigate | VST3 state chunk | Untested |
 | Vienna Synchron | Investigate | Investigate | VST3 state chunk | Untested |
 | Orchestral Tools SINE | Investigate | Investigate | VST3 state chunk | Untested |
 | EastWest Opus/PLAY | Investigate | Investigate | VST3 state chunk | Untested |
-| Built-in GM placeholder | n/a | n/a | n/a | Engine resolves to it today; synth pending |
+| Built-in placeholder synth | n/a | n/a | n/a | **Shipping**: family-aware voices, drum kit, labelled "Placeholder" |
 
 ## Video
 

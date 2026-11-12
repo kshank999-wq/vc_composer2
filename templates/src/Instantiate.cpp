@@ -275,19 +275,21 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
             d.buses.push_back(pb);
         }
 
-        for (const auto& k : folder_keys) {
-            project::Track f;
-            f.id = folder_map[k];
-            f.kind = project::TrackKind::Folder;
-            f.name = d.unique_track_name(family_display(k));
-            f.family = k;
-            f.color = family_color(k);
-            f.include_in_export = false;
-            d.tracks.push_back(f);
-        }
-
         int next_channel = 0;
+        std::string open_folder;
         for (std::size_t i = 0; i < planned.size(); ++i) {
+            // Each family folder sits directly above its tracks.
+            if (planned[i].folder_key != open_folder) {
+                open_folder = planned[i].folder_key;
+                project::Track f;
+                f.id = folder_map[open_folder];
+                f.kind = project::TrackKind::Folder;
+                f.name = d.unique_track_name(family_display(open_folder));
+                f.family = open_folder;
+                f.color = family_color(open_folder);
+                f.include_in_export = false;
+                d.tracks.push_back(f);
+            }
             const TemplateTrack& tt = *planned[i].spec;
             const InstrumentDef& def = *planned[i].def;
             project::Track t;

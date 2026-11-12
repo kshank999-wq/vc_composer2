@@ -23,10 +23,20 @@ before it ships. Nothing here is legal advice.
 | D10 | No living-artist presets. Historical composer palettes are educational and carry authenticity notes. Regional packs carry review status and "cinematic approximation" flags. North American Indigenous material is `curation_required`. | Supplement §5, §7, §13. |
 | D11 | The original VC Composer's notation, engraving, editing, composer, MIDI, audio and scheduler code is ported, not rewritten. Its JSON and atomic-write libraries are merged into `vcc_core`. | Tested, mature code for the hardest parts of Main Spec §7–§8 (see 02). One JSON and one file writer in the product. |
 | D12 | The project's meter map and key are canonical and are pushed into every score after each edit. | Composer and Sequencer can never disagree about bars (Main Spec §20). |
+| D13 | The desktop application is built on JUCE 8 under the **commercial JUCE 8 licence** (product-owner decision). JUCE is never vendored: `VCC_JUCE_DIR` points at a checkout, or the build fetches the pinned release (`VCC_JUCE_VERSION`, 8.0.9). | Plug-in hosting, audio/MIDI devices and the original VC Composer's JUCE notation view in one framework; resolves O1. |
+| D14 | Instruments with no library assigned play through a built-in placeholder synth whose voice follows the instrument family and GM program, and every such track is labelled "Placeholder". | A template is audible on a machine with no libraries, without ever implying the real sound (Main Spec §20, Supplement §8). |
+| D15 | The audio thread receives immutable playback snapshots through an atomic hand-off and returns them through the ported lock-free queue. It never allocates, locks or destroys an instrument. | The original VC Composer's real-time discipline, applied to a whole mixer. |
 
 ## Open: needs a decision from the product owner
 
-### O1: Application framework licence (blocks the desktop shell)
+### O1: Application framework licence (resolved: JUCE commercial, D13)
+
+**Action for the product owner:** accept the JUCE 8 EULA and hold the JUCE
+licence tier that matches the company's revenue before distributing builds.
+JUCE's tiers (Starter, Indie, Pro) have revenue limits. **Verify** the current
+terms at juce.com. Nothing in the build checks this.
+
+The original analysis follows.
 
 The spec names JUCE as a plausible candidate (Main Spec §17), and the original
 VC Composer already uses JUCE for its window, notation view and plug-in wrapper.

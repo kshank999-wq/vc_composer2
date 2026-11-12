@@ -610,8 +610,13 @@ bool PresetCatalog::load_file(const std::string& path, std::string* error)
         if (error) *error = path + ": " + pe.to_string();
         return false;
     }
+    return load(*doc, error);
+}
+
+bool PresetCatalog::load(const json::Value& doc, std::string* error)
+{
     presets_.clear();
-    for (const auto& p : doc->get("presets") ? doc->get("presets")->as_array() : json::Array{}) {
+    for (const auto& p : doc.get("presets") ? doc.get("presets")->as_array() : json::Array{}) {
         std::string id = p.get_string("id");
         if (id.empty() || find(id)) {
             if (error) *error = "preset with empty or duplicate id '" + id + "'";

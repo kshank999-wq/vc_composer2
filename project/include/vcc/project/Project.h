@@ -94,6 +94,18 @@ struct TrackVersion {
     std::optional<double> gain_db;  ///< Optional per-version mix setting.
 };
 
+/// A hosted instrument plug-in on a track (Main Spec §10.6: "persist plugin
+/// state via supported state chunks"). The state is the plug-in's own opaque
+/// chunk, base64-encoded; the host never interprets it.
+struct PluginRef {
+    std::string format;      ///< "VST3", "AudioUnit".
+    std::string identifier;  ///< Host's identifier string (format + path + uid).
+    std::string name;        ///< "Kontakt 8", shown when the plug-in is missing.
+    std::string vendor;
+    std::string state_base64;
+    bool empty() const noexcept { return identifier.empty(); }
+};
+
 struct Track {
     std::string id;
     std::string name;
@@ -110,6 +122,8 @@ struct Track {
     /// How notation becomes MIDI for this track's patch: "default" or
     /// "orchestral_cc" (built in), or a user map by name.
     std::string expression_map = "default";
+    /// Instrument plug-in; empty means the built-in placeholder plays.
+    PluginRef instrument_plugin;
     std::string output_bus_id;
     std::vector<std::pair<std::string, double>> sends;  ///< bus id, level dB
     double gain_db = 0.0;
@@ -214,6 +228,14 @@ public:
     /// becomes current and one undo step labelled `label` is recorded; if it
     /// returns false (or throws) the document is unchanged.
     bool edit(const std::string& label, const std::function<bool(ProjectData&)>& change);
+
+    /// Like edit(), but when the previous undo step has the same label the
+    /// change folds into it: a fader drag is one undo step, not hundreds.
+    bool edit_coalescing(const std::string& label, const std::function<bool(ProjectData&)>& change);
+
+    /// Changes the current document without recording an undo step, for
+    /// state that is not the composer's edit (a plug-in's own state chunk).
+    void modify_unrecorded(const std::function<void(ProjectData&)>& change);
 
     bool can_undo() const noexcept { return !undo_.empty(); }
     bool can_redo() const noexcept { return !redo_.empty(); }

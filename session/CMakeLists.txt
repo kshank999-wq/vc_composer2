@@ -1,0 +1,1 @@
+vcc_add_library(vcc_session DEPS vcc_templates vcc_project vcc_theory vcc_ostinato vcc_core)

@@ -12,11 +12,20 @@ boundaries, build system, test infrastructure and targets.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ Presentation (JUCE)  Composer · Sequencer · Mixer · Library · Cue · Video  │  not yet built
+│ Presentation (JUCE)  Composer · Sequencer · Mixer · Track & Library panel · │  built
+│   desktop/src/ui     template browser · Chord Explorer · Ostinato Creator   │
+│                      (Cue manager · Video window: not yet)                  │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ Services             Audition · Plug-in host (VST3) · Media/video · Sync    │  not yet built
+│ Services             Audition · VST3/AU instrument hosting with crash-safe  │  built
+│   desktop/src/audio  scanning · plug-in state in the project · autosave     │
+│                      (Media/video · collaboration sync: not yet)            │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ Realtime engine      Audio graph · MIDI scheduler · PDC · offline bounce   │  not yet built
+│ Realtime engine      Snapshot-driven playback · placeholder synth · group/  │  built
+│   PlaybackEngine     fx buses with reverb · click · live MIDI · offline     │
+│                      render (PDC · automation · recording: not yet)         │
+├──────────────────────────────────────────────────────────────────────────┤
+│ vcc_session          the open document for the app: edits, undo, file,     │  built
+│                      autosave/recovery, change notification, generators   │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ Domain (this repo, no framework dependency)                                │
 │   vcc_templates  instrument registry · template registry · resolver ·      │  built
@@ -164,7 +173,7 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 | Supplement P3: Ostinato engine | Seeded generator, 16-bar variants, insertion | **Done** (engine); UI pending |
 | Supplement P4: polish | Custom/save/import/export, mapper warnings, favorites | Engine done; favorites/UI pending |
 | Main 0: discovery | Reuse audit, framework/licensing decision, VST3 host spike | Reuse audit and port done (02). **Framework licence needs a decision** (01) |
-| Main 1: core scoring MVP | Desktop shell, notation entry, shared track panel, MIDI mirror, playback, shortcuts, save/reload, basic VST3 | Engine side done: notation in projects, entry, engraving, MIDI mirror render, shortcuts, save/reload. Next: JUCE shell, playback, VST3 |
+| Main 1: core scoring MVP | Desktop shell, notation entry, shared track panel, MIDI mirror, playback, shortcuts, save/reload, basic VST3 | **Done** in `desktop/`: Composer view with keyboard and mouse entry, track panel, Sequencer, playback via the placeholder synth or VST3/AU instruments, save/reload/autosave. Verified headlessly on Linux; macOS/Windows built in CI |
 | Main 2: scoring workflow | Template wizard UI, library search/mapping UI, articulation engine, video + timecode, temp tracks, cues | Data model and timecode done; UI and media pending |
 | Main 3: DAW production | Audio record/edit, mixer/buses/inserts/sends, automation, device I/O, PDC, stems/score export | Bus/routing model done; engine pending |
 | Main 4: collaboration | Versions, snapshots, A/B review, sync, roles, comments, packaging | Versions and snapshots done (local); sync pending |
@@ -172,14 +181,14 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 
 ### Immediate next steps
 
-1. Decide the JUCE licence (01). Then stand up the desktop shell: track panel,
-   Composer view (port the original `ui/juce` notation view onto the ported
-   engraver), and a Sequencer piano roll on `ProjectData`.
-2. Build the Main Spec §8 performance-override layer and the MIDI → notation
+1. Build the Main Spec §8 performance-override layer and the MIDI → notation
    path (see above).
-3. Build the realtime engine around the ported `vcc_engine` scheduler: device
-   I/O, a rebuilt real-time discipline (allocation-counting) test, a
-   GM/placeholder synth for templates with no libraries, and a VST3 instrument
-   host with sandboxed scanning.
-4. Build the Chord Explorer and Ostinato Creator pop-ups on the finished
-   engines, with audition through the placeholder synth.
+2. Engine hardening:
+   - an allocation-counting real-time test around `PlaybackEngine::process`;
+   - out-of-process plug-in scanning;
+   - plug-in delay compensation;
+   - effect plug-in inserts on buses;
+   - automation lanes.
+3. Video window and timecode-locked picture (Main Spec §13), and the cue
+   manager (§14).
+4. MusicXML import/export and PDF parts (§16). SVG part pages already export.

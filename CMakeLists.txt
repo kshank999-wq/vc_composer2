@@ -9,7 +9,7 @@ cmake_minimum_required(VERSION 3.22)
 project(VCComposer2
     VERSION 0.1.0
     DESCRIPTION "VC Composer 2 - scoring workstation"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
@@ -29,6 +29,12 @@ endif()
 
 option(VCC_BUILD_TESTS "Build the test suites" ON)
 option(VCC_BUILD_TOOLS "Build the vcc command-line tool" ON)
+option(VCC_BUILD_DESKTOP "Build the desktop application (needs JUCE)" OFF)
+# JUCE is never vendored. Point VCC_JUCE_DIR at a checkout, or let the build
+# fetch the pinned release. VC Composer 2 uses JUCE under the commercial
+# JUCE 8 licence (docs/01-decisions-and-license-gates.md, D13).
+set(VCC_JUCE_DIR "" CACHE PATH "Path to a JUCE source tree")
+set(VCC_JUCE_VERSION "8.0.9" CACHE STRING "JUCE release fetched when VCC_JUCE_DIR is empty")
 option(VCC_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 set(VCC_SANITIZE "" CACHE STRING "Sanitizers to enable, e.g. address,undefined")
 
@@ -60,9 +66,34 @@ add_subdirectory(theory)
 add_subdirectory(ostinato)
 add_subdirectory(project)
 add_subdirectory(templates)
+add_subdirectory(session)
 
 if(VCC_BUILD_TOOLS)
     add_subdirectory(tools/vcc-cli)
+endif()
+
+if(VCC_BUILD_DESKTOP)
+    if(VCC_JUCE_DIR)
+        if(NOT EXISTS "${VCC_JUCE_DIR}/CMakeLists.txt")
+            message(FATAL_ERROR "VCC_JUCE_DIR does not look like a JUCE source tree: ${VCC_JUCE_DIR}")
+        endif()
+        add_subdirectory("${VCC_JUCE_DIR}" "${CMAKE_BINARY_DIR}/_juce" EXCLUDE_FROM_ALL)
+    else()
+        include(FetchContent)
+        FetchContent_Declare(juce
+            GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+            GIT_TAG ${VCC_JUCE_VERSION}
+            GIT_SHALLOW TRUE)
+        FetchContent_GetProperties(juce)
+        if(NOT juce_POPULATED)
+            if(POLICY CMP0169)
+                cmake_policy(SET CMP0169 OLD)  # keep EXCLUDE_FROM_ALL on CMake < 3.28
+            endif()
+            FetchContent_Populate(juce)
+            add_subdirectory(${juce_SOURCE_DIR} ${juce_BINARY_DIR} EXCLUDE_FROM_ALL)
+        endif()
+    endif()
+    add_subdirectory(desktop)
 endif()
 
 if(VCC_BUILD_TESTS)

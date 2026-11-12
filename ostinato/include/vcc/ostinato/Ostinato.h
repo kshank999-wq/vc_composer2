@@ -183,6 +183,7 @@ private:
 class PresetCatalog {
 public:
     bool load_file(const std::string& path, std::string* error = nullptr);
+    bool load(const json::Value& doc, std::string* error = nullptr);
     const json::Value* find(const std::string& id) const noexcept;
     std::vector<std::string> ids() const;
 

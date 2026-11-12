@@ -39,8 +39,43 @@ Content in `content/`:
 
 The schema is in [`docs/04-template-content-schema.md`](docs/04-template-content-schema.md).
 
-Not built yet: the desktop UI, the audio engine, VST3 hosting and video. See
+Not built yet: video and picture sync, audio recording and editing, effect
+plug-in inserts, MusicXML and PDF export, and collaboration sync. See
 [`docs/00-architecture-and-roadmap.md`](docs/00-architecture-and-roadmap.md).
+
+## The desktop app
+
+`desktop/` is the VC Composer 2 application, built on JUCE 8 under the
+commercial JUCE licence. It contains:
+
+- the Composer (score) and Sequencer workspaces;
+- the track and library panel;
+- a detachable mixer;
+- the template browser, Chord Explorer and Ostinato Creator;
+- VST3 instrument hosting (and AU on macOS);
+- a built-in placeholder synth, so templates play before any library is
+  assigned;
+- crash-safe autosave.
+
+```sh
+# Fetches the pinned JUCE release, or pass -DVCC_JUCE_DIR=/path/to/JUCE
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DVCC_BUILD_DESKTOP=ON
+cmake --build build --config Release --parallel
+```
+
+The app is `build/desktop/VCComposer2_artefacts/Release/`: `VC Composer 2.app`
+on macOS, `VC Composer 2.exe` on Windows, `VC Composer 2` on Linux.
+
+On Linux, install the JUCE dependencies first:
+
+```sh
+sudo apt-get install libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libfreetype-dev libgl1-mesa-dev
+```
+
+`vcc_desktop_check` (CTest `desktop_check`) drives the real window headlessly.
+It creates a project from a template, types notes, opens every workspace and
+tool, renders audio offline and checks it is audible, saves and reopens, and
+writes screenshots to `build/screenshots/`.
 
 ## Build and test
 

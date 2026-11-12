@@ -209,6 +209,28 @@ bool Project::edit(const std::string& label, const std::function<bool(ProjectDat
     return true;
 }
 
+bool Project::edit_coalescing(const std::string& label, const std::function<bool(ProjectData&)>& change)
+{
+    if (undo_.empty() || undo_.back().label != label || !redo_.empty()) return edit(label, change);
+    ProjectData working = data_;
+    bool ok = false;
+    try {
+        ok = change(working);
+    } catch (...) {
+        return false;
+    }
+    if (!ok) return false;
+    working.sync_scores();
+    data_ = std::move(working);  // the existing step's "before" stays as it was
+    return true;
+}
+
+void Project::modify_unrecorded(const std::function<void(ProjectData&)>& change)
+{
+    change(data_);
+    data_.sync_scores();
+}
+
 std::string Project::undo_label() const { return undo_.empty() ? std::string{} : undo_.back().label; }
 
 bool Project::undo()
@@ -512,6 +534,12 @@ json::Value Project::to_json() const
                                          {"unsupported_articulations", string_array(a.unsupported_articulations)},
                                          {"message", a.message}});
         o.set("expression_map", t.expression_map);
+        if (!t.instrument_plugin.empty())
+            o.set("instrument_plugin", json::Object{{"format", t.instrument_plugin.format},
+                                                    {"identifier", t.instrument_plugin.identifier},
+                                                    {"name", t.instrument_plugin.name},
+                                                    {"vendor", t.instrument_plugin.vendor},
+                                                    {"state", t.instrument_plugin.state_base64}});
         o.set("output_bus_id", t.output_bus_id);
         o.set("sends", sends_to_json(t.sends));
         o.set("gain_db", t.gain_db);
@@ -646,6 +674,13 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
             t.assignment.message = a->get_string("message");
         }
         t.expression_map = j.get_string("expression_map", "default");
+        if (const auto* pj = j.get("instrument_plugin")) {
+            t.instrument_plugin.format = pj->get_string("format");
+            t.instrument_plugin.identifier = pj->get_string("identifier");
+            t.instrument_plugin.name = pj->get_string("name");
+            t.instrument_plugin.vendor = pj->get_string("vendor");
+            t.instrument_plugin.state_base64 = pj->get_string("state");
+        }
         t.output_bus_id = j.get_string("output_bus_id");
         t.sends = sends_from_json(j.get("sends"));
         t.gain_db = j.get_double("gain_db");

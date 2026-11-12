@@ -1,0 +1,153 @@
+#include "ui/TransportBar.h"
+
+#include "ui/Theme.h"
+#include "vcc/theory/Pitch.h"
+
+namespace vcc::desktop {
+
+namespace {
+const char* const kMeters[] = {"2/4", "3/4", "4/4", "5/4", "6/4", "3/8", "5/8", "6/8", "7/8", "9/8", "12/8", "2/2"};
+const char* const kTonics[] = {"C", "G", "D", "A", "E", "B", "F#", "Db", "Ab", "Eb", "Bb", "F"};
+}  // namespace
+
+TransportBar::TransportBar(AppContext& context) : context_(context)
+{
+    for (auto* b : {&rewind_, &play_, &click_, &composer_, &sequencer_, &mixer_, &chords_, &ostinato_})
+        addAndMakeVisible(*b);
+    rewind_.setTooltip("Return to the start (Home)");
+    play_.setTooltip("Play / Stop (Space)");
+    click_.setClickingTogglesState(true);
+    click_.setTooltip("Metronome");
+    rewind_.onClick = [this] { context_.engine.locate(0); };
+    play_.onClick = [this] { context_.engine.toggle_play(); update_position(); };
+    click_.onClick = [this] { context_.engine.set_metronome(click_.getToggleState()); };
+    auto invoke = [this](juce::CommandID id) { return [this, id] { context_.commands.invokeDirectly(id, true); }; };
+    composer_.onClick = invoke(cmd::showComposer);
+    sequencer_.onClick = invoke(cmd::showSequencer);
+    mixer_.onClick = invoke(cmd::showMixer);
+    chords_.onClick = invoke(cmd::chordExplorer);
+    ostinato_.onClick = invoke(cmd::ostinatoCreator);
+
+    for (auto* l : {&bars_, &timecode_}) {
+        addAndMakeVisible(*l);
+        l->setJustificationType(juce::Justification::centred);
+        l->setColour(juce::Label::backgroundColourId, colours::background);
+        l->setColour(juce::Label::outlineColourId, colours::outline);
+    }
+    bars_.setFont(juce::FontOptions(20.0f, juce::Font::bold));
+    timecode_.setFont(juce::FontOptions(15.0f));
+    timecode_.setColour(juce::Label::textColourId, colours::accent_warm);
+
+    for (auto* l : {&tempo_label_, &meter_label_, &key_label_}) {
+        addAndMakeVisible(*l);
+        l->setFont(juce::FontOptions(11.0f));
+        l->setColour(juce::Label::textColourId, colours::text_dim);
+    }
+    addAndMakeVisible(tempo_);
+    tempo_.setEditable(true);
+    tempo_.setJustificationType(juce::Justification::centred);
+    tempo_.setColour(juce::Label::outlineColourId, colours::outline);
+    tempo_.onTextChange = [this] {
+        const double bpm = tempo_.getText().getDoubleValue();
+        if (!context_.session.set_tempo(bpm)) context_.status("Tempo must be between 20 and 400");
+        update_from_document();
+    };
+
+    addAndMakeVisible(meter_);
+    for (int i = 0; i < static_cast<int>(std::size(kMeters)); ++i) meter_.addItem(kMeters[i], i + 1);
+    meter_.onChange = [this] {
+        if (auto sig = TimeSignature::parse(meter_.getText().toStdString())) context_.session.set_meter(*sig);
+    };
+
+    addAndMakeVisible(key_);
+    int id = 1;
+    for (const char* mode : {"major", "minor"})
+        for (const char* tonic : kTonics) key_.addItem(juce::String(tonic) + " " + mode, id++);
+    for (const char* mode : {"dorian", "phrygian", "lydian", "mixolydian"})
+        for (const char* tonic : {"C", "D", "E", "F", "G", "A"}) key_.addItem(juce::String(tonic) + " " + mode, id++);
+    key_.onChange = [this] { context_.session.set_key(key_.getText().toStdString()); };
+
+    listener_ = context_.session.add_listener([this](session::Change c) {
+        if (c == session::Change::Document) update_from_document();
+    });
+    update_from_document();
+    update_position();
+}
+
+TransportBar::~TransportBar() { context_.session.remove_listener(listener_); }
+
+void TransportBar::update_from_document()
+{
+    const auto& d = context_.session.data();
+    const double bpm = d.tempo.bpm_at(0);
+    const bool whole = std::abs(bpm - std::round(bpm)) < 0.005;
+    tempo_.setText(juce::String(bpm, whole ? 0 : 2) + " bpm", juce::dontSendNotification);
+    meter_.setText(d.meter.at_bar(1).to_string(), juce::dontSendNotification);
+    key_.setText(d.key, juce::dontSendNotification);
+}
+
+void TransportBar::update_position()
+{
+    const auto& d = context_.session.data();
+    const Ticks tick = context_.engine.position();
+    const int bar = d.meter.bar_at(tick);
+    const TimeSignature sig = d.meter.at_bar(bar);
+    const Ticks in_bar = tick - d.meter.bar_start(bar);
+    const int beat = static_cast<int>(in_bar / sig.beat_ticks()) + 1;
+    const int sixteenth = static_cast<int>((in_bar % sig.beat_ticks()) * 4 / sig.beat_ticks()) + 1;
+    bars_.setText(juce::String(bar) + " . " + juce::String(beat) + " . " + juce::String(sixteenth),
+                  juce::dontSendNotification);
+
+    // Timecode from the project's start timecode and frame rate (Main Spec §13).
+    const FrameRate rate = d.frame_rate;
+    std::int64_t start_frames = 0;
+    if (auto tc = Timecode::parse(d.start_timecode))
+        if (auto f = timecode_to_frames(*tc, rate)) start_frames = *f;
+    const std::int64_t frames = start_frames + seconds_to_frames(context_.engine.position_seconds(), rate);
+    timecode_.setText(frames_to_timecode(frames, rate).to_string(rate) + "  " + to_string(rate),
+                      juce::dontSendNotification);
+
+    const bool playing = context_.engine.playing();
+    play_.setButtonText(playing ? "Stop" : "Play");
+    play_.setColour(juce::TextButton::buttonColourId, playing ? colours::accent : colours::panel_raised);
+}
+
+void TransportBar::paint(juce::Graphics& g)
+{
+    g.fillAll(colours::panel);
+    g.setColour(colours::outline);
+    g.drawHorizontalLine(getHeight() - 1, 0.0f, static_cast<float>(getWidth()));
+}
+
+void TransportBar::resized()
+{
+    auto r = getLocalBounds().reduced(8, 6);
+    auto take = [&](int w) {
+        auto a = r.removeFromLeft(w);
+        r.removeFromLeft(6);
+        return a;
+    };
+    rewind_.setBounds(take(40));
+    play_.setBounds(take(64));
+    click_.setBounds(take(52));
+    r.removeFromLeft(6);
+    bars_.setBounds(take(120));
+    timecode_.setBounds(take(170));
+    r.removeFromLeft(6);
+    auto field = [&](juce::Label& label, juce::Component& c, int w) {
+        auto a = take(w);
+        label.setBounds(a.removeFromTop(12));
+        c.setBounds(a);
+    };
+    field(tempo_label_, tempo_, 84);
+    field(meter_label_, meter_, 70);
+    field(key_label_, key_, 140);
+
+    auto right = getLocalBounds().reduced(8, 6);
+    for (auto* b : {&ostinato_, &chords_, &mixer_, &sequencer_, &composer_}) {
+        b->setBounds(right.removeFromRight(b == &sequencer_ ? 86 : 70));
+        right.removeFromRight(6);
+    }
+}
+
+}  // namespace vcc::desktop
