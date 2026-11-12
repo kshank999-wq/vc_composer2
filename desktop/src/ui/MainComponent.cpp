@@ -315,6 +315,44 @@ void MainComponent::export_parts_pdf_dialog()
         });
 }
 
+void MainComponent::export_full_score_dialog()
+{
+    auto* w = new juce::AlertWindow("Export Full Score (PDF)", "Every instrument track that holds notation, in track "
+                                    "order, bracketed by section.",
+                                    juce::MessageBoxIconType::NoIcon);
+    w->addComboBox("pitch", {"Transposed score", "Score in C (concert pitch)"}, "Pitch");
+    w->addComboBox("paper", {"A3", "Tabloid", "A4", "Letter"}, "Paper");
+    w->addComboBox("bars", {"2", "3", "4", "5", "6", "8"}, "Bars per system");
+    w->getComboBoxComponent("bars")->setSelectedItemIndex(2);
+    w->addComboBox("hide", {"Hide staves where a part rests", "Show every staff on every system"}, "Empty staves");
+    w->addComboBox("order", {"Orchestral score order", "Track order"}, "Order");
+    w->addButton("Export...", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int r) {
+        if (r != 1) return;
+        FullScoreSettings settings;
+        settings.concert_pitch = w->getComboBoxComponent("pitch")->getSelectedItemIndex() == 1;
+        settings.paper = w->getComboBoxComponent("paper")->getText().toStdString();
+        settings.bars_per_system = w->getComboBoxComponent("bars")->getText().getIntValue();
+        settings.hide_empty_staves = w->getComboBoxComponent("hide")->getSelectedItemIndex() == 0;
+        settings.score_order = w->getComboBoxComponent("order")->getSelectedItemIndex() == 0;
+        const auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+        chooser_ = std::make_unique<juce::FileChooser>(
+            "Save the full score as",
+            docs.getChildFile(juce::File::createLegalFileName(context_.session.data().name) +
+                              (settings.concert_pitch ? " - score in C.pdf" : " - full score.pdf")),
+            "*.pdf");
+        chooser_->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
+                              [this, settings](const juce::FileChooser& fc) {
+                                  auto file = fc.getResult();
+                                  if (file == juce::File()) return;
+                                  juce::String message;
+                                  export_full_score_pdf(context_, file.withFileExtension("pdf"), settings, message);
+                                  context_.status(message);
+                              });
+    }), true);
+}
+
 void MainComponent::export_midi()
 {
     chooser_ = std::make_unique<juce::FileChooser>("Export MIDI", juce::File(), "*.mid");
@@ -631,7 +669,7 @@ void MainComponent::show_about()
 void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
 {
     c.addArray({cmd::newProject, cmd::newFromTemplate, cmd::open, cmd::save, cmd::saveAs, cmd::exportMidi,
-                cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
+                cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportFullScorePdf, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
                 cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::addAudioTrack, cmd::importAudio,
                 cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
@@ -658,6 +696,9 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             break;
         case cmd::exportMusicXml:
             info.setInfo("Export MusicXML...", "For Sibelius, Finale, Dorico, MuseScore and engravers", "File", 0);
+            break;
+        case cmd::exportFullScorePdf:
+            info.setInfo("Export Full Score (PDF)...", "Every part on one system, transposed or in C", "File", 0);
             break;
         case cmd::exportPartsPdf:
             info.setInfo("Export Parts (PDF)...", "Printed parts, one PDF each or all in one", "File", 0);
@@ -752,6 +793,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::importMusicXml: import_musicxml(); break;
         case cmd::exportMusicXml: export_musicxml(); break;
         case cmd::exportPartsPdf: export_parts_pdf_dialog(); break;
+        case cmd::exportFullScorePdf: export_full_score_dialog(); break;
         case cmd::saveAsTemplate: save_as_template(); break;
         case cmd::undo: s.undo(); break;
         case cmd::redo: s.redo(); break;
@@ -828,7 +870,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             for (auto id : {cmd::save, cmd::saveAs, cmd::saveAsTemplate}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::exportMidi, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportScoreSvg})
+            for (auto id : {cmd::exportMidi, cmd::exportMusicXml, cmd::exportFullScorePdf, cmd::exportPartsPdf,
+                            cmd::exportScoreSvg})
                 m.addCommandItem(c, id);
             break;
         case 1:

@@ -41,6 +41,7 @@ enum : juce::CommandID {
     importMusicXml = 0x1020,
     exportMusicXml,
     exportPartsPdf,
+    exportFullScorePdf,
     saveAsTemplate,
     undo = 0x1100,
     redo,

@@ -47,7 +47,8 @@ boundaries, build system, test infrastructure and targets.
 │   vcc_theory     spelling · keys/modes · tunings · chords · Roman          │  built
 │                  numerals · voicing/voice leading · progressions           │
 │   vcc_editing    note entry · editing commands · undo journal              │  ported
-│   vcc_engraving  layout · SMuFL · hit testing · SVG · print · PDF with the  │  ported
+│   vcc_engraving  layout · SMuFL · hit testing · SVG · print · full score · │  ported
+│                  PDF with the
 │                  music font embedded (own deflate and OpenType reader)     │
 │   vcc_notation   score model · spelling · markings · expression maps ·     │  ported
 │                  score→MIDI · event diff · MIDI import · score file        │
@@ -204,6 +205,6 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
    - automated conform;
    - Windows FFmpeg in CI;
    - an LGPL FFmpeg for distribution.
-4. Notation exchange follow-ups (§16): a full-score PDF (all staves on one
-   system), repeats/endings and lyrics in MusicXML, font subsetting to shrink
-   part PDFs.
+4. Notation exchange follow-ups (§16): repeats/endings and lyrics in
+   MusicXML, font subsetting to shrink PDFs, collision-aware vertical
+   spacing in the full score.

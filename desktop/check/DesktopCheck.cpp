@@ -1199,6 +1199,26 @@ int main(int argc, char** argv)
                 }
             }
 
+            // The full score, transposed and in C.
+            for (const bool concert : {false, true}) {
+                FullScoreSettings fs;
+                fs.concert_pitch = concert;
+                const auto score_file = dir.getChildFile(concert ? "score-in-c.pdf" : "full-score.pdf");
+                score_file.deleteFile();
+                const int score_pages = export_full_score_pdf(ctx, score_file, fs, message);
+                check(score_pages > 0 && score_file.getSize() > 10000,
+                      juce::String("the full score prints ") + (concert ? "in C" : "transposed") + " (" + message + ")");
+                if (!concert && pdftoppm.existsAsFile()) {
+                    juce::ChildProcess p;
+                    const auto out = dir.getChildFile("10-full-score");
+                    if (p.start(juce::StringArray{pdftoppm.getFullPathName(), "-r", "60", "-png", "-singlefile", "-f",
+                                                  "1", score_file.getFullPathName(), out.getFullPathName()})) {
+                        p.waitForProcessToFinish(20000);
+                        check(out.withFileExtension("png").getSize() > 5000, "a full-score page renders (10-full-score)");
+                    }
+                }
+            }
+
             const int parts_exported = static_cast<int>(
                 interchange::musicxml_export_tracks(session.data()).size());
             for (const char* ext : {"musicxml", "mxl"}) {

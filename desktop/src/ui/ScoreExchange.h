@@ -25,4 +25,20 @@ bool export_musicxml_file(AppContext& context, const juce::File& file, bool conc
 /// bookmark per part when `target` is a .pdf file. Returns the pages written.
 int export_parts_pdf(AppContext& context, const juce::File& target, juce::String& message);
 
+/// How the full score is printed.
+struct FullScoreSettings {
+    bool concert_pitch = false;  ///< Sounding pitch; false: transposed score.
+    std::string paper = "A3";    ///< "A3", "Tabloid", "A4", "Letter".
+    bool hide_empty_staves = true;
+    int bars_per_system = 4;
+    /// Orchestral order (woodwinds, brass, percussion, keyboards, voices,
+    /// strings, then the rest) instead of track order.
+    bool score_order = true;
+};
+
+/// Prints the full score (every instrument track that holds notation, in
+/// track order, bracketed by family) to one PDF. Returns the pages written.
+int export_full_score_pdf(AppContext& context, const juce::File& file, const FullScoreSettings& settings,
+                          juce::String& message);
+
 }  // namespace vcc::desktop

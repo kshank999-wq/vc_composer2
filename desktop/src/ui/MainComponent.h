@@ -34,6 +34,7 @@ public:
     void import_musicxml();
     void export_musicxml();
     void export_parts_pdf_dialog();
+    void export_full_score_dialog();
     void show_plugin_window(const std::string& track_id);
 
     /// Places audio files at the playhead on the selected audio track (or a
