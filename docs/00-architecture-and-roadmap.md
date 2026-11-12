@@ -48,8 +48,8 @@ boundaries, build system, test infrastructure and targets.
 │                  numerals · voicing/voice leading · progressions           │
 │   vcc_editing    note entry · editing commands · undo journal              │  ported
 │   vcc_engraving  layout · SMuFL · hit testing · SVG · print · full score · │  ported
-│                  PDF with the
-│                  music font embedded (own deflate and OpenType reader)     │
+│                  PDF with the music font embedded (own deflate and         │
+│                  OpenType reader)                                          │
 │   vcc_notation   score model · spelling · markings · expression maps ·     │  ported
 │                  score→MIDI · event diff · MIDI import · score file        │
 │   vcc_composer   shortcut profiles · settings · expression-map library     │  ported
