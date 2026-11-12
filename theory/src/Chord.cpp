@@ -320,7 +320,9 @@ std::string degree_numeral(int degree, bool upper)
 {
     static const char* up[] = {"I", "II", "III", "IV", "V", "VI", "VII"};
     static const char* lo[] = {"i", "ii", "iii", "iv", "v", "vi", "vii"};
-    return (upper ? up : lo)[(degree - 1) % 7];
+    const int i = ((degree - 1) % 7 + 7) % 7;
+    const char* text = upper ? up[i] : lo[i];
+    return std::string(text);
 }
 
 bool same_tones(const std::vector<ChordInterval>& a, const std::vector<ChordInterval>& b)
