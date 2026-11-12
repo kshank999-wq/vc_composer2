@@ -465,23 +465,86 @@ void MainComponent::show_audio_settings()
 
 void MainComponent::show_plugin_scanner()
 {
-    class Scanner final : public juce::PluginListComponent {
+    // JUCE's plug-in list, with what our scanner knows underneath: how it
+    // scans, and why each failed plug-in failed.
+    class Scanner final : public juce::Component, private juce::ChangeListener, private juce::Timer {
     public:
-        Scanner(AppContext& c)
-            : juce::PluginListComponent(c.plugins.formats(), c.plugins.known(), c.plugins.dead_mans_pedal(),
-                                        c.plugins.properties(), true),
-              context_(c)
+        explicit Scanner(AppContext& c)
+            : context_(c),
+              list_(c.plugins.formats(), c.plugins.known(), c.plugins.dead_mans_pedal(), c.plugins.properties(), true)
         {
-            setSize(640, 480);
+            // Out of process, plug-ins are scanned four at a time: one that
+            // crashes or hangs only ends its own scanner process.
+            if (c.plugins.scans_out_of_process()) list_.setNumberOfThreadsForScanning(4);
+            addAndMakeVisible(list_);
+            mode_.setFont(juce::FontOptions(12.0f));
+            addAndMakeVisible(mode_);
+            failures_.setMultiLine(true);
+            failures_.setReadOnly(true);
+            failures_.setColour(juce::TextEditor::backgroundColourId, colours::panel);
+            failures_.setColour(juce::TextEditor::textColourId, colours::accent_warm);
+            addAndMakeVisible(failures_);
+            retry_.setButtonText("Retry failed plug-ins");
+            retry_.setTooltip("Forget the failures, so the next scan tries them again");
+            retry_.onClick = [this] {
+                for (const auto& [target, reason] : context_.plugins.scan_failures())
+                    context_.plugins.clear_scan_failure(target);
+                context_.plugins.known().clearBlacklistedFiles();
+                refresh();
+            };
+            addAndMakeVisible(retry_);
+            c.plugins.known().addChangeListener(this);
+            refresh();
+            startTimer(1000);  // failures arrive from scanning threads
+            setSize(720, 560);
         }
         ~Scanner() override
         {
+            context_.plugins.known().removeChangeListener(this);
             context_.plugins.save_list();
             context_.engine.rebuild_now();
         }
+        void paint(juce::Graphics& g) override { g.fillAll(colours::background); }
+        void resized() override
+        {
+            auto r = getLocalBounds();
+            auto foot = r.removeFromBottom(failures_.isVisible() ? 150 : 34).reduced(8, 4);
+            auto top = foot.removeFromTop(24);
+            retry_.setBounds(top.removeFromRight(170));
+            mode_.setBounds(top);
+            failures_.setBounds(foot.withTrimmedTop(4));
+            list_.setBounds(r);
+        }
 
     private:
+        void changeListenerCallback(juce::ChangeBroadcaster*) override { refresh(); }
+        void timerCallback() override { refresh(); }
+        void refresh()
+        {
+            const bool out = context_.plugins.scans_out_of_process();
+            mode_.setText(out ? "Plug-ins are scanned in a separate process: one that crashes or hangs cannot take VC "
+                                "Composer down."
+                              : "The plug-in scanner tool is missing, so plug-ins are scanned inside the app (a crasher "
+                                "is skipped on the next launch). Reinstall to restore safe scanning.",
+                          juce::dontSendNotification);
+            mode_.setColour(juce::Label::textColourId, out ? colours::text_dim : colours::missing);
+            juce::String text;
+            for (const auto& [target, reason] : context_.plugins.scan_failures())
+                text << juce::File::createFileWithoutCheckingPath(target).getFileName() << ": " << reason << "\n";
+            const bool show = text.isNotEmpty();
+            if (failures_.getText() != text) failures_.setText(text, false);
+            retry_.setVisible(show || context_.plugins.known().getBlacklistedFiles().size() > 0);
+            if (failures_.isVisible() != show) {
+                failures_.setVisible(show);
+                resized();
+            }
+        }
+
         AppContext& context_;
+        juce::PluginListComponent list_;
+        juce::Label mode_;
+        juce::TextEditor failures_;
+        juce::TextButton retry_;
     };
     juce::DialogWindow::LaunchOptions o;
     o.content.setOwned(new Scanner(context_));

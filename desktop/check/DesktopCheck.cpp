@@ -989,6 +989,16 @@ int main(int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI gui;
     const juce::File dir(argc > 1 ? juce::String(argv[1]) : juce::File::getCurrentWorkingDirectory().getChildFile("screenshots").getFullPathName());
     dir.createDirectory();
+    // The plug-in list and scan failures go to a throwaway settings folder,
+    // never the user's own.
+    const auto settings = dir.getChildFile("settings");
+    settings.deleteRecursively();
+    settings.createDirectory();
+#if JUCE_WINDOWS
+    _putenv_s("VCC_SETTINGS_DIR", settings.getFullPathName().toRawUTF8());
+#else
+    setenv("VCC_SETTINGS_DIR", settings.getFullPathName().toRawUTF8(), 1);
+#endif
 
     {
         MainWindow window({}, false);
@@ -1072,6 +1082,98 @@ int main(int argc, char** argv)
         ctx.engine.stop();
         check(energy > 0.01, "playback through the placeholder synth is audible (energy " + juce::String(energy, 3) + ")");
         check(ctx.engine.instrument_status(track).startsWith("Placeholder"), "the track is labelled as a placeholder sound");
+
+        // Out-of-process scanning (Main Spec 20): a plug-in that crashes or
+        // hangs while it loads is blacklisted with the reason; the app lives on.
+        {
+            auto& host = ctx.plugins;
+            host.set_scanner_tool(juce::File(VCC_PLUGIN_SCANNER_TOOL));
+            host.set_scan_timeout_ms(4000);
+            check(host.scans_out_of_process(), "plug-ins are scanned out of process (" +
+                                                   host.scanner_tool().getFileName() + ")");
+            juce::VST3PluginFormat vst3;
+            auto& known = host.known();
+            for (const char* p : {VCC_TEST_PLUGIN, VCC_TEST_CRASH_PLUGIN, VCC_TEST_HANG_PLUGIN}) {
+                known.removeFromBlacklist(p);
+                host.clear_scan_failure(p);
+            }
+            juce::OwnedArray<juce::PluginDescription> found;
+            known.scanAndAddFile(VCC_TEST_PLUGIN, false, found, vst3);
+            check(found.size() == 1 && found[0]->name == "VCC Test Instrument" && found[0]->isInstrument,
+                  "a good plug-in scans in its own process (" +
+                      (found.isEmpty() ? juce::String("nothing found") : found[0]->name) + ")");
+
+            found.clear();
+            known.scanAndAddFile(VCC_TEST_CRASH_PLUGIN, false, found, vst3);
+            auto failures = host.scan_failures();
+            const auto crash_reason = failures.count(VCC_TEST_CRASH_PLUGIN) ? failures[VCC_TEST_CRASH_PLUGIN] : juce::String();
+            check(found.isEmpty() && known.getBlacklistedFiles().contains(VCC_TEST_CRASH_PLUGIN) &&
+                      crash_reason.contains("crashed"),
+                  "a plug-in that crashes while loading is blacklisted and the app carries on (" + crash_reason + ")");
+
+            found.clear();
+            const auto t0 = juce::Time::getMillisecondCounter();
+            known.scanAndAddFile(VCC_TEST_HANG_PLUGIN, false, found, vst3);
+            const auto waited = juce::Time::getMillisecondCounter() - t0;
+            failures = host.scan_failures();
+            const auto hang_reason = failures.count(VCC_TEST_HANG_PLUGIN) ? failures[VCC_TEST_HANG_PLUGIN] : juce::String();
+            check(found.isEmpty() && known.getBlacklistedFiles().contains(VCC_TEST_HANG_PLUGIN) &&
+                      hang_reason.contains("did not finish") && waited < 9000,
+                  "a plug-in that hangs while loading is stopped after the time limit (" + juce::String(waited) +
+                      " ms: " + hang_reason + ")");
+
+            // A whole folder with all three: the scan completes, the good one is found.
+            const auto folder = dir.getChildFile("plugin-folder");
+            folder.deleteRecursively();
+            folder.createDirectory();
+            for (const char* p : {VCC_TEST_PLUGIN, VCC_TEST_CRASH_PLUGIN, VCC_TEST_HANG_PLUGIN}) {
+                const juce::File src(p);
+                src.copyDirectoryTo(folder.getChildFile(src.getFileName()));
+            }
+            juce::KnownPluginList folder_list;
+            folder_list.setCustomScanner(nullptr);
+            struct Forward final : juce::KnownPluginList::CustomScanner {
+                explicit Forward(PluginHost& h) : host(h) {}
+                bool findPluginTypesFor(juce::AudioPluginFormat& f, juce::OwnedArray<juce::PluginDescription>& r,
+                                        const juce::String& id) override
+                {
+                    return host.scan_file(f, id, r);
+                }
+                PluginHost& host;
+            };
+            folder_list.setCustomScanner(std::make_unique<Forward>(host));
+            juce::PluginDirectoryScanner scanner(folder_list, vst3, juce::FileSearchPath(folder.getFullPathName()), true,
+                                                 juce::File(), false);
+            juce::String name;
+            int steps = 0;
+            while (scanner.scanNextFile(true, name) && ++steps < 20) {}
+            for (const auto& f : folder_list.getBlacklistedFiles()) host.clear_scan_failure(f);
+            check(folder_list.getNumTypes() == 1 && folder_list.getBlacklistedFiles().size() == 2,
+                  "a folder scan with a crasher and a hanger in it completes (" + juce::String(folder_list.getNumTypes()) +
+                      " found, " + juce::String(folder_list.getBlacklistedFiles().size()) + " blacklisted)");
+
+            // Without the tool, scanning still works (in process).
+            host.set_scanner_tool(dir.getChildFile("no-such-scanner"));
+            found.clear();
+            juce::KnownPluginList fallback;
+            fallback.setCustomScanner(std::make_unique<Forward>(host));
+            fallback.scanAndAddFile(VCC_TEST_PLUGIN, false, found, vst3);
+            check(!host.scans_out_of_process() && found.size() == 1,
+                  "without the scanner tool, scanning falls back to in process");
+            host.set_scanner_tool(juce::File(VCC_PLUGIN_SCANNER_TOOL));
+            // The Plug-ins window shows how it scans and why each failure failed.
+            ctx.commands.invokeDirectly(cmd::scanPlugins, false);
+            pump(500);
+            if (auto* w = find_dialog("Instrument and effect plug-ins")) {
+                if (auto* top = w->getTopLevelComponent()) top->setSize(760, 620);
+                pump(200);
+                shoot(*w, dir, "12-plugins");
+                w->exitModalState(0);
+                pump(200);
+            }
+            for (const char* p : {VCC_TEST_CRASH_PLUGIN, VCC_TEST_HANG_PLUGIN}) host.clear_scan_failure(p);
+            folder.deleteRecursively();
+        }
 
         // VST3 hosting (Main Spec 20): scan, load, play, change state.
         std::string plugin_track;

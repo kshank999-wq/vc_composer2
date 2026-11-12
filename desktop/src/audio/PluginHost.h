@@ -2,13 +2,21 @@
 // crash protection, creating instrument instances from a saved PluginRef, and
 // moving a plug-in's state in and out of the project.
 //
-// Scanning uses JUCE's dead-man's-pedal file: a plug-in that crashes the
-// scan is recorded and skipped next time, so one bad plug-in cannot keep the
-// application from starting (Main Spec §20 "failed scan cannot crash the
-// whole project" - the remaining step is out-of-process scanning).
+// Scanning is out of process (Main Spec §20 "a failed scan cannot crash the
+// whole project"): every plug-in file is loaded by a separate
+// vcc_plugin_scanner process with a time limit. A plug-in that crashes,
+// hangs or reports garbage only takes that process down; it is blacklisted
+// with the reason, and the scan carries on. If the scanner tool is missing
+// (a broken install), scanning falls back to in-process with JUCE's
+// dead-man's-pedal file, which at least skips a crasher on the next launch,
+// and says so.
 #pragma once
 
+#include <atomic>
+#include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -31,6 +39,26 @@ public:
     /// Saves the known-plug-in list (call after a scan).
     void save_list();
 
+    // --- Out-of-process scanning ---------------------------------------------------
+    /// The scanner tool beside the application, or the one set here (the
+    /// checks point at their build's). An empty/missing file means scanning
+    /// runs in process.
+    juce::File scanner_tool() const;
+    void set_scanner_tool(const juce::File& tool);
+    bool scans_out_of_process() const { return scanner_tool().existsAsFile(); }
+    /// How long one plug-in file may take to scan before it is stopped.
+    void set_scan_timeout_ms(int ms) noexcept { scan_timeout_ms_.store(ms); }
+    int scan_timeout_ms() const noexcept { return scan_timeout_ms_.load(); }
+    /// Scans one file or identifier through the scanner tool (any thread).
+    /// Returns false - and records why - when the plug-in crashed, hung or
+    /// could not be read; `found` gets what it contains otherwise.
+    bool scan_file(juce::AudioPluginFormat& format, const juce::String& file_or_id,
+                   juce::OwnedArray<juce::PluginDescription>& found, const std::function<bool()>& cancelled = {});
+    /// Why plug-ins failed to scan: file or identifier -> reason. Saved with
+    /// the plug-in list.
+    std::map<juce::String, juce::String> scan_failures() const;
+    void clear_scan_failure(const juce::String& file_or_id);
+
     /// Instruments in the known list, sorted by vendor and name.
     juce::Array<juce::PluginDescription> instruments() const;
 
@@ -47,9 +75,15 @@ public:
     static void restore_state(juce::AudioPluginInstance& instance, const std::string& state_base64);
 
 private:
+    void record_failure(const juce::String& file_or_id, const juce::String& reason);
+
     juce::AudioPluginFormatManager formats_;
     juce::KnownPluginList known_;
     std::unique_ptr<juce::PropertiesFile> properties_;
+    mutable std::mutex scan_lock_;
+    juce::File scanner_override_;
+    std::atomic<int> scan_timeout_ms_{60000};
+    std::map<juce::String, juce::String> failures_;
 };
 
 /// A hosted plug-in as a track instrument.

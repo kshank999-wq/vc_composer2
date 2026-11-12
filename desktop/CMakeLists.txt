@@ -98,6 +98,23 @@ juce_add_gui_app(VCComposer2
 target_sources(VCComposer2 PRIVATE app/Main.cpp)
 target_link_libraries(VCComposer2 PRIVATE vcc_desktop)
 
+# --- Out-of-process plug-in scanner ------------------------------------------------
+# Loads one plug-in file per run so a crashing plug-in cannot take the app down.
+# It ships beside the app executable (Contents/MacOS in the macOS bundle).
+juce_add_console_app(vcc_plugin_scanner PRODUCT_NAME "vcc_plugin_scanner")
+target_sources(vcc_plugin_scanner PRIVATE scanner/PluginScanner.cpp)
+target_compile_definitions(vcc_plugin_scanner PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1
+                                                      JUCE_PLUGINHOST_AU=1 JUCE_PLUGINHOST_LADSPA=0
+                                                      JUCE_DISPLAY_SPLASH_SCREEN=0)
+target_link_libraries(vcc_plugin_scanner PRIVATE juce::juce_audio_processors
+                                         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+set_target_properties(vcc_plugin_scanner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_dependencies(VCComposer2 vcc_plugin_scanner)
+add_custom_command(TARGET VCComposer2 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:vcc_plugin_scanner>"
+            "$<TARGET_FILE_DIR:VCComposer2>/$<TARGET_FILE_NAME:vcc_plugin_scanner>"
+    COMMENT "Placing the plug-in scanner beside the app")
+
 # --- Test instrument plug-in (used by the headless check only) ---------------------
 juce_add_plugin(VccTestInstrument
     FORMATS VST3
@@ -132,13 +149,43 @@ target_compile_definitions(VccTestEffect PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL
 target_link_libraries(VccTestEffect PRIVATE juce::juce_audio_utils
                                     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
+# Plug-ins that crash or hang as soon as they load, for the scanning check.
+foreach(trouble crash hang)
+    if(trouble STREQUAL "crash")
+        set(code Vcxc)
+        set(value 1)
+    else()
+        set(code Vcxh)
+        set(value 2)
+    endif()
+    juce_add_plugin(VccTest_${trouble}
+        FORMATS VST3
+        PRODUCT_NAME "VCC Test ${trouble}"
+        COMPANY_NAME "VC Composer"
+        PLUGIN_MANUFACTURER_CODE Vccm
+        PLUGIN_CODE ${code}
+        IS_SYNTH FALSE
+        NEEDS_MIDI_INPUT FALSE
+        COPY_PLUGIN_AFTER_BUILD FALSE
+        VST3_AUTO_MANIFEST FALSE)
+    target_sources(VccTest_${trouble} PRIVATE testplugin/TestEffect.cpp)
+    target_compile_definitions(VccTest_${trouble} PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0 VCC_SCAN_TROUBLE=${value})
+    target_link_libraries(VccTest_${trouble} PRIVATE juce::juce_audio_utils
+        PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+endforeach()
+
 # --- Headless check ----------------------------------------------------------------
 add_executable(vcc_desktop_check check/DesktopCheck.cpp)
 target_link_libraries(vcc_desktop_check PRIVATE vcc_desktop)
-add_dependencies(vcc_desktop_check VccTestInstrument_VST3 VccTestEffect_VST3)
+add_dependencies(vcc_desktop_check VccTestInstrument_VST3 VccTestEffect_VST3 VccTest_crash_VST3 VccTest_hang_VST3
+                 vcc_plugin_scanner)
 target_compile_definitions(vcc_desktop_check PRIVATE
     VCC_TEST_PLUGIN="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTestInstrument_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>"
-    VCC_TEST_EFFECT="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTestEffect_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>")
+    VCC_TEST_EFFECT="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTestEffect_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>"
+    VCC_TEST_CRASH_PLUGIN="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTest_crash_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>"
+    VCC_TEST_HANG_PLUGIN="$<GENEX_EVAL:$<TARGET_PROPERTY:VccTest_hang_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>"
+    VCC_PLUGIN_SCANNER_TOOL="$<TARGET_FILE:vcc_plugin_scanner>")
 if(VCC_BUILD_TESTS)
     add_test(NAME desktop_check COMMAND vcc_desktop_check "${CMAKE_BINARY_DIR}/screenshots")
 endif()

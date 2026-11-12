@@ -18,8 +18,9 @@ boundaries, build system, test infrastructure and targets.
 │                      recording, audio clips with waveforms and takes ·      │
 │                      automation lanes · MusicXML and PDF parts menus        │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ Services             Audition · VST3/AU instrument hosting with crash-safe  │  built
-│   desktop/src/audio  scanning · plug-in state in the project · autosave     │
+│ Services             Audition · VST3/AU instrument hosting with out-of-     │  built
+│   desktop/src/audio  process scanning · plug-in state in the project ·      │
+│                      autosave                                               │
 │                      FFmpeg picture decoding · render-by-cue bounces ·      │
 │                      stem export with a sum-to-mix check · audio clips      │
 │                      streamed from disk                                     │
@@ -198,7 +199,8 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 1. Build the Main Spec §8 performance-override layer and the MIDI → notation
    path (see above).
 2. Engine hardening:
-   - out-of-process plug-in scanning;
+   - out-of-process plug-in hosting (scanning is already out of process; a
+     plug-in that crashes while playing still takes the app down);
    - opening an effect insert's own window from the console;
    - saving the delay-compensation switch with the project.
 3. Picture follow-ups:

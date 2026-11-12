@@ -107,3 +107,8 @@ private:
 }  // namespace
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new TestEffect(); }
+
+#if defined(VCC_SCAN_TROUBLE)
+// Scanning-check builds of this plug-in misbehave on load (see ScanTrouble.cpp).
+#include "ScanTrouble.cpp"
+#endif
