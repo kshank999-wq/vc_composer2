@@ -19,6 +19,7 @@ std::vector<CueRenderResult> render_cues(AppContext& context, const CueRenderReq
     // restored from the project's saved states.
     PlaybackEngine engine(context.session, context.plugins);
     constexpr int block = 512;
+    engine.set_export_mode(true);  // temp/reference tracks are not part of a deliverable
     engine.prepare_offline(request.sample_rate, block);
 
     juce::WavAudioFormat wav;

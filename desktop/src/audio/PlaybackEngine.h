@@ -14,6 +14,22 @@
 //
 // The same processing runs without a device (render_offline) so tests and
 // the headless check can verify that a project actually makes sound.
+//
+// Console (Main Spec §12): every track and bus (master included) runs its
+// channel strip (ChannelDsp.h), inserts, fader and pan, sends and metering.
+// Processor objects persist across snapshot rebuilds in message-thread maps
+// keyed by strip id (and insert kind/occurrence), like the instruments, so a
+// document edit never cuts a reverb tail or resets a compressor; settings
+// reach them lock-free (Mailbox) and gains are ramped per block, so a knob
+// drag is immediate and click-free. Buses run in dependency order; a route
+// or send that would make a loop is ignored. Solo is solo-in-place: a
+// soloed strip keeps the buses it feeds (and the strips feeding a soloed bus)
+// audible, fx returns are solo-safe.
+//
+// Audio clips (Main Spec §11) play from memory (AudioFileCache.h) at the
+// device rate. Recording writes each armed track's input to a 24-bit WAV
+// through ThreadedWriter (lock-free from the audio thread); the pass is
+// placed as one "Record" undo step on the message thread when it ends.
 #pragma once
 
 #include <array>
@@ -37,6 +53,10 @@ namespace vcc::desktop {
 
 struct PlaybackSnapshot;
 struct PreviewClip;
+struct StripDsp;
+struct RecordPass;
+class InsertProcessor;
+class AudioFileCache;
 
 class PlaybackEngine final : public juce::AudioIODeviceCallback, private juce::Timer {
 public:
@@ -114,6 +134,16 @@ public:
     void render_offline_with_input(const juce::AudioBuffer<float>& input, juce::AudioBuffer<float>& out,
                                    int num_samples);
 
+    /// Why a track's audio clips are not all playing ("Missing audio file: x.wav"), or empty.
+    juce::String audio_status(const std::string& track_id) const;
+    /// Why an insert slot is not processing (missing plug-in), or empty.
+    juce::String insert_status(const std::string& strip_id, int slot) const;
+    /// The hosted effect in an insert slot (to open its editor or store its state).
+    juce::AudioPluginInstance* insert_plugin(const std::string& strip_id, int slot) const;
+    /// Deliverable rendering: only the tracks a deliverable includes play
+    /// (reference/temp tracks are left out unless opted in).
+    void set_export_mode(bool on);
+
     /// Re-render the snapshot now (normally debounced after document changes).
     void rebuild_now();
 
@@ -141,9 +171,22 @@ private:
     void prepare_all(double sample_rate, int block_size);
     std::shared_ptr<Instrument> instrument_for(const project::Track& track, InstrumentSlot& slot);
     std::unique_ptr<PlaybackSnapshot> build_snapshot();
-    void process(float* const* outputs, int num_outputs, int num_samples) noexcept;
-    void process_chunk(float* const* outputs, int num_outputs, int offset, int num_samples) noexcept;
+    void process(const float* const* inputs, int num_inputs, float* const* outputs, int num_outputs,
+                 int num_samples) noexcept;
+    void process_chunk(const float* const* inputs, int num_inputs, float* const* outputs, int num_outputs, int offset,
+                       int num_samples) noexcept;
     void retire_garbage();
+    /// Creates/updates the persistent strip and insert processors and pushes
+    /// every mix setting to them (lock-free). Cheap; runs on every edit.
+    void sync_processors();
+    // Recording
+    void begin_pass();
+    void end_passes();
+    void service_passes() noexcept;  // audio side: adopt / stop passes
+    void retire_active_pass() noexcept;
+    void collect_finished_passes();
+    void finalize_pass(std::unique_ptr<RecordPass> pass);
+    void report_recording(const juce::String& message, bool ok);
 
     session::Session& session_;
     PluginHost& plugins_;
@@ -154,9 +197,14 @@ private:
     int block_size_ = 512;
 
     std::map<std::string, InstrumentSlot> instruments_;  // message thread only
-    std::map<std::string, int> meter_index_;             // track id -> meter slot
-    std::array<std::atomic<float>, 512> meters_{};
-    std::atomic<float> master_meter_{0.0f};
+    std::map<std::string, std::shared_ptr<StripDsp>> strips_;                 // strip id -> processing, meters
+    std::map<std::string, std::shared_ptr<InsertProcessor>> inserts_;         // strip/kind/plugin#n -> processor
+    std::map<std::string, std::vector<std::string>> insert_keys_;             // strip id -> key per slot
+    std::unique_ptr<AudioFileCache> files_;
+    std::map<std::string, juce::String> audio_status_;
+    bool export_mode_ = false;
+    std::array<std::atomic<float>, 64> input_meters_{};
+    std::atomic<int> num_inputs_{0};
 
     // Handover
     std::atomic<PlaybackSnapshot*> pending_{nullptr};
@@ -177,6 +225,23 @@ private:
     std::atomic<bool> metronome_{false};
     std::atomic<bool> previewing_{false};
     bool rebuild_pending_ = false;
+
+    // Recording: a pass is created on the message thread, adopted by the
+    // audio thread, and handed back when it ends (stop, punch out, locate).
+    std::atomic<bool> record_enabled_{false};
+    std::atomic<bool> punch_{false};
+    Ticks punch_in_ = 0, punch_out_ = 0;
+    std::uint64_t next_pass_id_ = 1;
+    std::atomic<std::uint64_t> stop_passes_upto_{0};
+    std::atomic<RecordPass*> pending_pass_{nullptr};
+    RecordPass* active_pass_ = nullptr;  // audio thread
+    std::atomic<RecordPass*> finished_pass_{nullptr};
+    std::atomic<bool> pass_active_{false};
+    std::atomic<bool> recording_{false};
+    std::atomic<std::int64_t> recorded_samples_{0};
+    std::atomic<bool> device_running_{false};
+    std::atomic<int> latency_samples_{0};
+    std::unique_ptr<juce::TimeSliceThread> writer_thread_;
 
     juce::MidiMessageCollector live_input_;
     std::string live_track_;
