@@ -195,6 +195,35 @@ public:
     /// Resolves a clip's stored file name to a path on disk.
     std::string resolve_audio_path(const std::string& file) const;
 
+    // --- Automation (Main Spec §12) ----------------------------------------------------
+    // `owner_id` is a track id or a bus id (the master is "bus-master").
+    /// off / read / touch / latch / write (see project::automation_modes()).
+    bool set_automation_mode(const std::string& owner_id, const std::string& mode);
+    /// The lane for `param`, created if needed (seeded with one point at the
+    /// start holding the current static value, so creating a lane changes
+    /// nothing audible). Also makes it shown. Returns the lane id, or empty
+    /// for an unknown owner or parameter.
+    std::string ensure_lane(const std::string& owner_id, const std::string& param, const std::string& name = {});
+    /// Edits a lane's points or flags; the lane is normalised afterwards.
+    /// Same-label calls coalesce (a breakpoint drag is one undo step).
+    bool edit_lane(const std::string& owner_id, const std::string& lane_id, const std::string& label,
+                   const std::function<void(project::AutomationLane&)>& change);
+    bool remove_lane(const std::string& owner_id, const std::string& lane_id);
+    /// One written pass from the console (touch/latch/write while playing).
+    struct AutomationWrite {
+        std::string owner_id;
+        std::string param;
+        std::string name;  ///< Lane name if the lane is new.
+        Ticks from = 0;
+        Ticks to = 0;
+        std::vector<project::AutomationPoint> points;
+    };
+    /// Merges every lane written in a pass as one undo step ("Write
+    /// automation"), creating lanes as needed.
+    bool commit_automation_pass(const std::vector<AutomationWrite>& writes);
+    /// The owner's lanes, or null for an unknown owner.
+    const std::vector<project::AutomationLane>* lanes_of(const std::string& owner_id) const;
+
     // --- Selection ----------------------------------------------------------------
     const std::string& selected_track() const noexcept { return selected_track_; }
     void select_track(const std::string& track_id);

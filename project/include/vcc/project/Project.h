@@ -131,6 +131,48 @@ struct PluginRef {
     bool empty() const noexcept { return identifier.empty(); }
 };
 
+/// One breakpoint of an automation lane. Automation is placed in ticks, so a
+/// swell stays with the notes it shapes when the tempo is edited.
+struct AutomationPoint {
+    Ticks tick = 0;
+    double value = 0.0;  ///< In the parameter's own unit (dB, -1..+1 pan, 0/1 switch, Hz...).
+    /// How the value travels to the next point: "linear", "step" (hold, then
+    /// jump) or "smooth" (an S-curve, for swells).
+    std::string shape = "linear";
+};
+
+/// A lane of automation for one parameter of a track or bus (Main Spec §12).
+/// Parameter ids (see vcc/project/Automation.h for ranges and defaults):
+///   "volume" (dB), "pan", "mute" (0/1), "send:<bus id>" (dB),
+///   "strip.<field>" (any numeric ChannelStrip field, e.g. "strip.hmf.gain_db",
+///   "strip.comp_threshold_db", switches as 0/1 e.g. "strip.eq_on"),
+///   "insert:<slot>:<param>" (a built-in insert's param),
+///   "plugin:<index>" (the instrument plug-in's parameter, normalised 0..1),
+///   "insert_plugin:<slot>:<index>" (an effect plug-in's parameter, 0..1).
+struct AutomationLane {
+    std::string id;
+    std::string param;
+    std::string name;  ///< Display name, e.g. "HMF Gain" or the plug-in's parameter name.
+    std::vector<AutomationPoint> points;  ///< Sorted by tick; at most one point per tick.
+    bool enabled = true;  ///< Off: the lane is kept but not played.
+    bool shown = true;    ///< Shown under the track in the Sequencer.
+};
+
+/// Console automation modes, per track or bus.
+///   off   - lanes are ignored; controls are free.
+///   read  - lanes play; controls follow them.
+///   touch - lanes play; while a control is held it writes, and on release
+///           returns to the lane.
+///   latch - like touch, but after release it keeps writing the last value
+///           until the transport stops.
+///   write - writes every automatable control the strip has a lane for, for
+///           the whole pass.
+inline const std::vector<std::string>& automation_modes()
+{
+    static const std::vector<std::string> modes = {"off", "read", "touch", "latch", "write"};
+    return modes;
+}
+
 /// One equaliser band of a console channel.
 struct EqBand {
     bool on = true;
@@ -223,6 +265,8 @@ struct Track {
     bool input_stereo = false;  ///< Records input, input + 1.
     bool record_armed = false;
     std::string monitor = "auto";  ///< "auto" (input while armed and stopped/recording), "input", "off".
+    std::vector<AutomationLane> automation;
+    std::string automation_mode = "read";
     bool include_in_export = true;  ///< False for Reference tracks unless the user opts in.
     int midi_channel = 0;           ///< 0-15; 9 for drum policy.
     std::string template_origin;    ///< template_id/track id it came from, if any.
@@ -246,6 +290,8 @@ struct Bus {
     bool solo = false;
     ChannelStrip strip;
     std::string color;  ///< Empty: the console's colour for the bus kind.
+    std::vector<AutomationLane> automation;
+    std::string automation_mode = "read";
 };
 
 /// Spec §14 hierarchy: Production -> Reel/Episode -> Scene -> Cue.

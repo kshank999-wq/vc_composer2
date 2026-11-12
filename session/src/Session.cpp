@@ -6,6 +6,7 @@
 #include "vcc/core/Files.h"
 #include "vcc/cues/Cues.h"
 #include "vcc/picture/Picture.h"
+#include "vcc/project/Automation.h"
 #include "vcc/project/Render.h"
 
 namespace vcc::session {
@@ -986,6 +987,148 @@ std::string Session::resolve_audio_path(const std::string& file) const
     if (absolute || path_.empty()) return file;
     const auto slash = path_.find_last_of("/\\");
     return (slash == std::string::npos ? std::string(".") : path_.substr(0, slash)) + "/" + file;
+}
+
+// --- Automation --------------------------------------------------------------------------
+
+namespace {
+
+/// Runs `f` on the owner's lanes (and mode), a track or a bus. Returns false
+/// when the owner does not exist or `f` declines.
+template <typename F>
+std::function<bool(project::ProjectData&)> on_owner(const std::string& id, F f)
+{
+    return [id, f](project::ProjectData& d) {
+        if (project::Track* t = d.find_track(id)) return f(t->automation, t->automation_mode, t, static_cast<project::Bus*>(nullptr));
+        if (project::Bus* b = d.find_bus(id)) return f(b->automation, b->automation_mode, static_cast<project::Track*>(nullptr), b);
+        return false;
+    };
+}
+
+std::optional<double> static_of(const project::Track* t, const project::Bus* b, const std::string& param)
+{
+    if (t) return project::static_value(*t, param);
+    if (b) return project::static_value(*b, param);
+    return std::nullopt;
+}
+
+}  // namespace
+
+const std::vector<project::AutomationLane>* Session::lanes_of(const std::string& owner_id) const
+{
+    if (const auto* t = data().find_track(owner_id)) return &t->automation;
+    if (const auto* b = data().find_bus(owner_id)) return &b->automation;
+    return nullptr;
+}
+
+bool Session::set_automation_mode(const std::string& owner_id, const std::string& mode)
+{
+    const auto& modes = project::automation_modes();
+    if (std::find(modes.begin(), modes.end(), mode) == modes.end()) return false;
+    return edit("Automation " + mode, on_owner(owner_id, [&](auto&, std::string& m, auto*, auto*) {
+        if (m == mode) return false;
+        m = mode;
+        return true;
+    }));
+}
+
+std::string Session::ensure_lane(const std::string& owner_id, const std::string& param, const std::string& name)
+{
+    const auto info = project::param_info(param);
+    if (!info) return {};
+    if (const auto* lanes = lanes_of(owner_id)) {
+        if (const auto* l = project::find_lane(*lanes, param)) {
+            if (!l->shown) {
+                const std::string id = l->id;
+                edit_lane(owner_id, id, "Show lane", [](project::AutomationLane& x) { x.shown = true; });
+            }
+            return l->id;
+        }
+    } else {
+        return {};
+    }
+    const std::string id = project_.ids().next("lane");
+    const bool ok = edit("Add automation " + (name.empty() ? info->name : name),
+                         on_owner(owner_id, [&](std::vector<project::AutomationLane>& lanes, std::string&,
+                                                project::Track* t, project::Bus* b) {
+                             project::AutomationLane lane;
+                             lane.id = id;
+                             lane.param = param;
+                             lane.name = name.empty() ? info->name : name;
+                             const auto v = static_of(t, b, param);
+                             lane.points.push_back({0, v ? *v : info->default_value, "linear"});
+                             project::normalise(lane);
+                             lanes.push_back(std::move(lane));
+                             return true;
+                         }));
+    return ok ? id : std::string{};
+}
+
+bool Session::edit_lane(const std::string& owner_id, const std::string& lane_id, const std::string& label,
+                        const std::function<void(project::AutomationLane&)>& change)
+{
+    if (!project_.edit_coalescing(label, on_owner(owner_id, [&](std::vector<project::AutomationLane>& lanes,
+                                                                std::string&, auto*, auto*) {
+            for (auto& l : lanes)
+                if (l.id == lane_id) {
+                    const std::string param = l.param, id = l.id;
+                    change(l);
+                    l.param = param;
+                    l.id = id;
+                    project::normalise(l);
+                    return true;
+                }
+            return false;
+        })))
+        return false;
+    document_changed();
+    return true;
+}
+
+bool Session::remove_lane(const std::string& owner_id, const std::string& lane_id)
+{
+    return edit("Remove automation", on_owner(owner_id, [&](std::vector<project::AutomationLane>& lanes,
+                                                            std::string&, auto*, auto*) {
+        const auto before = lanes.size();
+        lanes.erase(std::remove_if(lanes.begin(), lanes.end(),
+                                   [&](const project::AutomationLane& l) { return l.id == lane_id; }),
+                    lanes.end());
+        return lanes.size() != before;
+    }));
+}
+
+bool Session::commit_automation_pass(const std::vector<AutomationWrite>& writes)
+{
+    if (writes.empty()) return false;
+    std::vector<std::string> new_ids;
+    for (std::size_t i = 0; i < writes.size(); ++i) new_ids.push_back(project_.ids().next("lane"));
+    return edit("Write automation", [&](project::ProjectData& d) {
+        for (std::size_t i = 0; i < writes.size(); ++i) {
+            const auto& w = writes[i];
+            const auto info = project::param_info(w.param);
+            if (!info) return false;
+            const bool ok = on_owner(w.owner_id, [&](std::vector<project::AutomationLane>& lanes, std::string&,
+                                                     project::Track* t, project::Bus* b) {
+                project::AutomationLane* lane = project::find_lane(lanes, w.param);
+                if (!lane) {
+                    project::AutomationLane l;
+                    l.id = new_ids[i];
+                    l.param = w.param;
+                    l.name = w.name.empty() ? info->name : w.name;
+                    // Outside the pass the lane holds what the control held.
+                    const auto v = static_of(t, b, w.param);
+                    l.points.push_back({0, v ? *v : info->default_value, "linear"});
+                    lanes.push_back(std::move(l));
+                    lane = &lanes.back();
+                }
+                project::write_pass(*lane, w.from, w.to, w.points);
+                lane->shown = true;
+                return true;
+            })(d);
+            if (!ok) return false;
+        }
+        return true;
+    });
 }
 
 }  // namespace vcc::session

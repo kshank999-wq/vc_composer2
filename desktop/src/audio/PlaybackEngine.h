@@ -35,6 +35,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <optional>
 #include <map>
 #include <memory>
 #include <string>
@@ -143,6 +144,33 @@ public:
     /// Deliverable rendering: only the tracks a deliverable includes play
     /// (reference/temp tracks are left out unless opted in).
     void set_export_mode(bool on);
+
+    // --- Automation (Main Spec §12) ------------------------------------------------
+    // `owner_id` is a track id or bus id ("bus-master"); `param` as in
+    // project::AutomationLane (vcc/project/Automation.h).
+    /// What the parameter is playing at now when a lane drives it (mode read,
+    /// touch, latch; or the value being written), so controls can follow it.
+    /// Empty when the parameter is not automated or the mode is "off".
+    std::optional<double> automated_value(const std::string& owner_id, const std::string& param) const;
+    /// Console gestures. While the transport plays and the owner's mode is
+    /// touch, latch or write, the engine records the values it is given; on
+    /// stop the pass is committed through Session::commit_automation_pass
+    /// (one undo step) and on_automation_written is called. The engine also
+    /// uses the touched value for sound while writing.
+    void begin_touch(const std::string& owner_id, const std::string& param);
+    void touch_value(const std::string& owner_id, const std::string& param, double value);
+    void end_touch(const std::string& owner_id, const std::string& param);
+    /// True when a gesture on this control would be written now.
+    bool writes_automation(const std::string& owner_id, const std::string& param) const;
+    std::function<void(const juce::String& message)> on_automation_written;
+
+    // --- Plug-in delay compensation ---------------------------------------------------
+    void set_delay_compensation(bool on);
+    bool delay_compensation() const noexcept;
+    /// Processing latency of a strip (its instrument and inserts), samples.
+    int latency_samples(const std::string& strip_id) const;
+    /// The delay the engine adds to line everything up (the longest path).
+    int compensation_samples() const;
 
     /// Re-render the snapshot now (normally debounced after document changes).
     void rebuild_now();

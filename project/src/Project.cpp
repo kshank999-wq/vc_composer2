@@ -1,5 +1,7 @@
 #include "vcc/project/Project.h"
 
+#include "vcc/project/Automation.h"
+
 #include <algorithm>
 #include <set>
 
@@ -649,6 +651,51 @@ std::vector<InsertSlot> inserts_from_json(const json::Value* v)
     return out;
 }
 
+json::Value automation_to_json(const std::vector<AutomationLane>& lanes)
+{
+    json::Array a;
+    for (const auto& l : lanes) {
+        json::Array pts;
+        for (const auto& p : l.points) {
+            json::Object o{{"tick", p.tick}, {"value", p.value}};
+            if (p.shape != "linear") o.set("shape", p.shape);
+            pts.emplace_back(o);
+        }
+        a.emplace_back(json::Object{{"id", l.id}, {"param", l.param}, {"name", l.name}, {"enabled", l.enabled},
+                                    {"shown", l.shown}, {"points", pts}});
+    }
+    return a;
+}
+
+/// Reads lanes; returns an error message, or empty.
+std::string automation_from_json(const json::Value* v, std::vector<AutomationLane>& out,
+                                 const std::function<bool(const std::string&)>& unique)
+{
+    if (!v) return {};
+    for (const auto& j : v->as_array()) {
+        AutomationLane l;
+        l.id = j.get_string("id");
+        if (!unique(l.id)) return "missing or duplicate automation lane id '" + l.id + "'";
+        l.param = j.get_string("param");
+        if (!param_info(l.param)) return "automation lane " + l.id + ": unknown parameter '" + l.param + "'";
+        if (find_lane(out, l.param)) return "two automation lanes for '" + l.param + "'";
+        l.name = j.get_string("name");
+        l.enabled = j.get_bool("enabled", true);
+        l.shown = j.get_bool("shown", true);
+        for (const auto& pj : j.get("points") ? j.get("points")->as_array() : json::Array{})
+            l.points.push_back({pj.get_int("tick"), pj.get_double("value"), pj.get_string("shape", "linear")});
+        normalise(l);
+        out.push_back(std::move(l));
+    }
+    return {};
+}
+
+bool valid_automation_mode(const std::string& m)
+{
+    const auto& modes = automation_modes();
+    return std::find(modes.begin(), modes.end(), m) != modes.end();
+}
+
 using Migration = bool (*)(json::Value& doc, std::string& error);
 
 /// One entry per older schema version, upgrading it by exactly one version.
@@ -717,6 +764,8 @@ json::Value Project::to_json() const
         o.set("input", t.input);
         o.set("input_stereo", t.input_stereo);
         o.set("monitor", t.monitor);
+        if (!t.automation.empty()) o.set("automation", automation_to_json(t.automation));
+        o.set("automation_mode", t.automation_mode);
         o.set("include_in_export", t.include_in_export);
         o.set("midi_channel", t.midi_channel);
         o.set("template_origin", t.template_origin);
@@ -770,7 +819,9 @@ json::Value Project::to_json() const
                                         {"mute", b.mute},
                                         {"solo", b.solo},
                                         {"strip", strip_to_json(b.strip)},
-                                        {"color", b.color}});
+                                        {"color", b.color},
+                                        {"automation", automation_to_json(b.automation)},
+                                        {"automation_mode", b.automation_mode}});
     }
     root.set("buses", buses);
 
@@ -919,6 +970,11 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.monitor = j.get_string("monitor", "auto");
         if (t.monitor != "auto" && t.monitor != "input" && t.monitor != "off")
             return fail("track " + t.id + ": unknown monitor mode '" + t.monitor + "'");
+        if (auto e = automation_from_json(j.get("automation"), t.automation, unique); !e.empty())
+            return fail("track " + t.id + ": " + e);
+        t.automation_mode = j.get_string("automation_mode", "read");
+        if (!valid_automation_mode(t.automation_mode))
+            return fail("track " + t.id + ": unknown automation mode '" + t.automation_mode + "'");
         t.include_in_export = j.get_bool("include_in_export", t.kind != TrackKind::Reference);
         t.midi_channel = static_cast<int>(j.get_int("midi_channel"));
         t.template_origin = j.get_string("template_origin");
@@ -995,6 +1051,11 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         b.strip = strip_from_json(j.get("strip"));
         b.color = j.get_string("color");
         b.inserts = inserts_from_json(j.get("inserts"));
+        if (auto e = automation_from_json(j.get("automation"), b.automation, unique); !e.empty())
+            return fail("bus " + b.id + ": " + e);
+        b.automation_mode = j.get_string("automation_mode", "read");
+        if (!valid_automation_mode(b.automation_mode))
+            return fail("bus " + b.id + ": unknown automation mode '" + b.automation_mode + "'");
         d.buses.push_back(std::move(b));
     }
     if (const auto* pj = doc.get("production")) {

@@ -1341,4 +1341,16 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
     if (playing) position_samples_.store(pos + n);
 }
 
+// --- Automation and delay compensation: STUBS (the engine work replaces these) -----------
+
+std::optional<double> PlaybackEngine::automated_value(const std::string&, const std::string&) const { return {}; }
+void PlaybackEngine::begin_touch(const std::string&, const std::string&) {}
+void PlaybackEngine::touch_value(const std::string&, const std::string&, double) {}
+void PlaybackEngine::end_touch(const std::string&, const std::string&) {}
+bool PlaybackEngine::writes_automation(const std::string&, const std::string&) const { return false; }
+void PlaybackEngine::set_delay_compensation(bool) {}
+bool PlaybackEngine::delay_compensation() const noexcept { return true; }
+int PlaybackEngine::latency_samples(const std::string&) const { return 0; }
+int PlaybackEngine::compensation_samples() const { return 0; }
+
 }  // namespace vcc::desktop

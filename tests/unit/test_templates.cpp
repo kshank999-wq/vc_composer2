@@ -273,7 +273,12 @@ TEST_CASE("acceptance 15 / merge: existing cues, buses and temp track survive")
         cue.title = "Opening";
         cue.end = kTicksPerWhole * 8;
         d.cues.push_back(cue);
-        d.buses.push_back({"bus-dialog", "Dialogue Ref", "group", "bus-master", {}, {}, 0.0, 0.0, false, false, {}, {}});
+        project::Bus dialog;
+        dialog.id = "bus-dialog";
+        dialog.name = "Dialogue Ref";
+        dialog.kind = "group";
+        dialog.output = "bus-master";
+        d.buses.push_back(dialog);
         return true;
     });
     REQUIRE(instantiate(p, tpl("cinematic.heroic.triumph"), content().instruments, {}).ok);
