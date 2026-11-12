@@ -150,7 +150,12 @@ TEST_CASE("save/load round trips through ten edit-save-reopen cycles")
         d.meter.set(5, TimeSignature{7, 8});
         d.tempo.set(kTicksPerWhole * 4, 92.5);
         d.frame_rate = FrameRate::Fps23_976;
-        d.cues.push_back({"cue-1", "1M1", "Opening", 0, kTicksPerWhole * 16, "writing", ""});
+        project::Cue cue;
+        cue.id = "cue-1";
+        cue.code = "1M1";
+        cue.title = "Opening";
+        cue.end = kTicksPerWhole * 16;
+        d.cues.push_back(cue);
         return true;
     });
     std::string t = p.add_track("Celli", TrackKind::Instrument, "strings.celli");

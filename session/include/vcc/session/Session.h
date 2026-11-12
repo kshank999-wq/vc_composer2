@@ -128,6 +128,39 @@ public:
     project::InsertResult send_ostinato(const std::string& track_id, const ostinato::Variant& variant,
                                         const std::string& preset_id, project::CollisionPolicy policy);
 
+    // --- Picture, markers and cues (Main Spec §13, §14) ------------------------------
+    bool set_frame_rate(FrameRate rate);
+    bool set_start_timecode(const std::string& timecode);
+    /// Adds a picture version and makes it the active cut; earlier cuts are kept.
+    std::string import_picture(project::PictureVersion picture);
+    bool set_active_picture(const std::string& picture_id);
+    bool set_picture_offset(const std::string& picture_id, double offset_seconds);
+    bool set_picture_start_timecode(const std::string& picture_id, const std::string& timecode);
+    bool set_changed_regions(const std::string& picture_id, std::vector<project::FlaggedRegion> regions);
+    bool remove_picture(const std::string& picture_id);
+
+    std::string add_marker(double project_seconds, const std::string& kind, const std::string& label = {});
+    bool update_marker(const std::string& marker_id, const std::function<void(project::Marker&)>& change);
+    bool remove_marker(const std::string& marker_id);
+    /// Hit-point tool: refits the tempo between `from_tick` and `target_tick`
+    /// so that `target_tick` sounds exactly on the marker (one undo step).
+    bool fit_tempo_to_marker(const std::string& marker_id, Ticks target_tick, Ticks from_tick,
+                             std::string* error = nullptr);
+
+    bool set_production(const project::Production& production);
+    std::string add_reel(const std::string& name);
+    std::string add_scene(const std::string& reel_id, const std::string& name);
+    /// A new cue over a music range, with the next free code in its reel.
+    std::string add_cue(Ticks start, Ticks end, const std::string& reel_id = {}, const std::string& title = {});
+    /// Edits a cue as one undo step. A locked cue is refused unless
+    /// `allow_locked` (the caller has asked the composer first, Main Spec §15).
+    bool update_cue(const std::string& cue_id, const std::function<void(project::Cue&)>& change,
+                    const std::string& label = "Edit cue", bool allow_locked = false);
+    bool remove_cue(const std::string& cue_id, bool allow_locked = false);
+    /// Records where a cue was spotted; with `move_music` the music range is
+    /// moved to the spotted timecodes through the tempo map.
+    bool spot_cue(const std::string& cue_id, const std::string& in_tc, const std::string& out_tc, bool move_music);
+
     // --- Selection ----------------------------------------------------------------
     const std::string& selected_track() const noexcept { return selected_track_; }
     void select_track(const std::string& track_id);

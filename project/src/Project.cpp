@@ -61,6 +61,38 @@ TrackVersion* Track::active_version() noexcept
     return versions.empty() ? nullptr : &versions.front();
 }
 
+const std::vector<std::string>& cue_statuses()
+{
+    static const std::vector<std::string> statuses = {"spotted", "writing", "sent", "awaiting_feedback",
+                                                      "revisions", "approved", "locked"};
+    return statuses;
+}
+
+const Cue* ProjectData::find_cue(const std::string& id) const noexcept
+{
+    for (const auto& c : cues)
+        if (c.id == id) return &c;
+    return nullptr;
+}
+Cue* ProjectData::find_cue(const std::string& id) noexcept
+{
+    for (auto& c : cues)
+        if (c.id == id) return &c;
+    return nullptr;
+}
+const PictureVersion* ProjectData::active_picture() const noexcept
+{
+    for (const auto& p : pictures)
+        if (p.id == active_picture_id) return &p;
+    return nullptr;
+}
+PictureVersion* ProjectData::active_picture() noexcept
+{
+    for (auto& p : pictures)
+        if (p.id == active_picture_id) return &p;
+    return nullptr;
+}
+
 const Track* ProjectData::find_track(const std::string& id) const noexcept
 {
     for (const auto& t : tracks)
@@ -580,11 +612,48 @@ json::Value Project::to_json() const
     }
     root.set("buses", buses);
 
+    root.set("production", json::Object{{"title", d.production.title}, {"client", d.production.client},
+                                        {"director", d.production.director}, {"composer", d.production.composer}});
+    json::Array reels, scenes;
+    for (const auto& r : d.reels) reels.emplace_back(json::Object{{"id", r.id}, {"name", r.name}});
+    for (const auto& sc : d.scenes)
+        scenes.emplace_back(json::Object{{"id", sc.id}, {"reel_id", sc.reel_id}, {"name", sc.name}});
+    root.set("reels", reels);
+    root.set("scenes", scenes);
+
     json::Array cues;
-    for (const auto& c : d.cues)
+    for (const auto& c : d.cues) {
+        json::Array deliverables;
+        for (const auto& dv : c.deliverables) deliverables.emplace_back(json::Object{{"name", dv.name}, {"done", dv.done}});
         cues.emplace_back(json::Object{{"id", c.id}, {"code", c.code}, {"title", c.title}, {"start", c.start},
-                                       {"end", c.end}, {"status", c.status}, {"notes", c.notes}});
+                                       {"end", c.end}, {"status", c.status}, {"notes", c.notes},
+                                       {"description", c.description}, {"reel_id", c.reel_id},
+                                       {"scene_id", c.scene_id}, {"spot_in", c.spot_in}, {"spot_out", c.spot_out},
+                                       {"revision", c.revision}, {"deadline", c.deadline}, {"composer", c.composer},
+                                       {"template_id", c.template_id}, {"usage", c.usage},
+                                       {"deliverables", deliverables}, {"transition_in", c.transition_in},
+                                       {"transition_out", c.transition_out}});
+    }
     root.set("cues", cues);
+
+    json::Array pictures;
+    for (const auto& p : d.pictures) {
+        json::Array regions;
+        for (const auto& r : p.changed_regions)
+            regions.emplace_back(json::Object{{"start", r.start_seconds}, {"end", r.end_seconds}, {"note", r.note}});
+        pictures.emplace_back(json::Object{{"id", p.id}, {"name", p.name}, {"path", p.path},
+                                           {"rate", to_string(p.rate)}, {"start_timecode", p.start_timecode},
+                                           {"offset_seconds", p.offset_seconds}, {"duration_frames", p.duration_frames},
+                                           {"width", p.width}, {"height", p.height}, {"changed_regions", regions},
+                                           {"notes", p.notes}});
+    }
+    root.set("pictures", pictures);
+    root.set("active_picture_id", d.active_picture_id);
+    json::Array markers;
+    for (const auto& m : d.markers)
+        markers.emplace_back(json::Object{{"id", m.id}, {"kind", m.kind}, {"seconds", m.seconds}, {"label", m.label},
+                                          {"cue_id", m.cue_id}, {"streamer_seconds", m.streamer_seconds}});
+    root.set("markers", markers);
 
     json::Array snaps;
     for (const auto& s : d.snapshots) {
@@ -742,11 +811,84 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
                                  i.get_bool("bypass")});
         d.buses.push_back(std::move(b));
     }
+    if (const auto* pj = doc.get("production")) {
+        d.production.title = pj->get_string("title");
+        d.production.client = pj->get_string("client");
+        d.production.director = pj->get_string("director");
+        d.production.composer = pj->get_string("composer");
+    }
+    for (const auto& j : doc.get("reels") ? doc.get("reels")->as_array() : json::Array{}) {
+        Reel r{j.get_string("id"), j.get_string("name")};
+        if (!unique(r.id)) return fail("missing or duplicate reel id '" + r.id + "'");
+        d.reels.push_back(r);
+    }
+    for (const auto& j : doc.get("scenes") ? doc.get("scenes")->as_array() : json::Array{}) {
+        Scene sc{j.get_string("id"), j.get_string("reel_id"), j.get_string("name")};
+        if (!unique(sc.id)) return fail("missing or duplicate scene id '" + sc.id + "'");
+        d.scenes.push_back(sc);
+    }
     for (const auto& j : doc.get("cues") ? doc.get("cues")->as_array() : json::Array{}) {
-        Cue c{j.get_string("id"), j.get_string("code"), j.get_string("title"), j.get_int("start"),
-              j.get_int("end"), j.get_string("status", "writing"), j.get_string("notes")};
+        Cue c;
+        c.id = j.get_string("id");
+        c.code = j.get_string("code");
+        c.title = j.get_string("title");
+        c.start = j.get_int("start");
+        c.end = j.get_int("end");
+        c.status = j.get_string("status", "writing");
+        c.notes = j.get_string("notes");
+        c.description = j.get_string("description");
+        c.reel_id = j.get_string("reel_id");
+        c.scene_id = j.get_string("scene_id");
+        c.spot_in = j.get_string("spot_in");
+        c.spot_out = j.get_string("spot_out");
+        c.revision = static_cast<int>(j.get_int("revision", 1));
+        c.deadline = j.get_string("deadline");
+        c.composer = j.get_string("composer");
+        c.template_id = j.get_string("template_id");
+        c.usage = j.get_string("usage", "BI");
+        c.transition_in = j.get_string("transition_in");
+        c.transition_out = j.get_string("transition_out");
+        for (const auto& dv : j.get("deliverables") ? j.get("deliverables")->as_array() : json::Array{})
+            c.deliverables.push_back({dv.get_string("name"), dv.get_bool("done")});
         if (!unique(c.id)) return fail("missing or duplicate cue id '" + c.id + "'");
+        if (std::find(cue_statuses().begin(), cue_statuses().end(), c.status) == cue_statuses().end())
+            return fail("cue " + c.id + ": unknown status '" + c.status + "'");
+        if (c.end < c.start) return fail("cue " + c.id + ": ends before it starts");
+        if (!c.reel_id.empty() && std::none_of(d.reels.begin(), d.reels.end(), [&](const Reel& r) { return r.id == c.reel_id; }))
+            return fail("cue " + c.id + " is in missing reel " + c.reel_id);
         d.cues.push_back(c);
+    }
+    for (const auto& j : doc.get("pictures") ? doc.get("pictures")->as_array() : json::Array{}) {
+        PictureVersion p;
+        p.id = j.get_string("id");
+        if (!unique(p.id)) return fail("missing or duplicate picture id '" + p.id + "'");
+        p.name = j.get_string("name");
+        p.path = j.get_string("path");
+        auto rate = frame_rate_from_string(j.get_string("rate", "24"));
+        if (!rate) return fail("picture " + p.id + ": invalid frame rate");
+        p.rate = *rate;
+        p.start_timecode = j.get_string("start_timecode", "01:00:00:00");
+        p.offset_seconds = j.get_double("offset_seconds");
+        p.duration_frames = j.get_int("duration_frames");
+        p.width = static_cast<int>(j.get_int("width"));
+        p.height = static_cast<int>(j.get_int("height"));
+        p.notes = j.get_string("notes");
+        for (const auto& r : j.get("changed_regions") ? j.get("changed_regions")->as_array() : json::Array{})
+            p.changed_regions.push_back({r.get_double("start"), r.get_double("end"), r.get_string("note")});
+        d.pictures.push_back(p);
+    }
+    d.active_picture_id = doc.get_string("active_picture_id");
+    if (!d.active_picture_id.empty() && !d.active_picture()) return fail("active picture not found");
+    for (const auto& j : doc.get("markers") ? doc.get("markers")->as_array() : json::Array{}) {
+        Marker m;
+        m.id = j.get_string("id");
+        if (!unique(m.id)) return fail("missing or duplicate marker id '" + m.id + "'");
+        m.kind = j.get_string("kind", "hit");
+        m.seconds = j.get_double("seconds");
+        m.label = j.get_string("label");
+        m.cue_id = j.get_string("cue_id");
+        m.streamer_seconds = j.get_double("streamer_seconds", 2.0);
+        d.markers.push_back(m);
     }
     for (const auto& j : doc.get("snapshots") ? doc.get("snapshots")->as_array() : json::Array{}) {
         Snapshot s{j.get_string("id"), j.get_string("name"), {}};

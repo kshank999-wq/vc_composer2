@@ -157,14 +157,97 @@ struct Bus {
     double gain_db = 0.0;
 };
 
+/// Spec §14 hierarchy: Production -> Reel/Episode -> Scene -> Cue.
+struct Production {
+    std::string title;     ///< The film or series.
+    std::string client;
+    std::string director;
+    std::string composer;  ///< Default composer for new cues.
+};
+
+struct Reel {
+    std::string id;
+    std::string name;  ///< "Reel 1", "Episode 104".
+};
+
+struct Scene {
+    std::string id;
+    std::string reel_id;
+    std::string name;  ///< "Sc. 42 - the warehouse".
+};
+
+struct Deliverable {
+    std::string name;  ///< "Stereo mix", "Stems", "Score PDF", "Parts".
+    bool done = false;
+};
+
+/// A cue (Main Spec §14). The music range is in ticks, so the cue follows the
+/// bars it was written in. The spotting range is the timecode the cue was
+/// spotted at, which belongs to the picture. The cue manager shows both and
+/// says when they disagree.
 struct Cue {
     std::string id;
     std::string code;   ///< "1M1".
     std::string title;
     Ticks start = 0;
     Ticks end = 0;
-    std::string status = "writing";  ///< writing, sent, awaiting_feedback, approved, locked.
+    /// spotted, writing, sent, awaiting_feedback, revisions, approved, locked.
+    std::string status = "writing";
+    std::string notes;  ///< Director's / spotting notes.
+    std::string description;
+    std::string reel_id;
+    std::string scene_id;
+    std::string spot_in;   ///< Timecode, e.g. "01:02:03:04"; empty when not spotted.
+    std::string spot_out;
+    int revision = 1;
+    std::string deadline;  ///< ISO date, "2026-12-01".
+    std::string composer;
+    std::string template_id;
+    /// Cue-sheet usage: BI (background instrumental), BV, VI (visual
+    /// instrumental), VV, MT (main title), ET (end title), SRC (source).
+    std::string usage = "BI";
+    std::vector<Deliverable> deliverables;
+    std::string transition_in;
+    std::string transition_out;
+
+    bool locked() const noexcept { return status == "locked"; }
+};
+
+/// Statuses in workflow order.
+const std::vector<std::string>& cue_statuses();
+
+/// A picture cut the score is written against (Main Spec §13). Earlier cuts
+/// are kept when a new one is imported, so the composer can compare.
+struct FlaggedRegion {
+    double start_seconds = 0.0;  ///< Project time.
+    double end_seconds = 0.0;
+    std::string note;
+};
+
+struct PictureVersion {
+    std::string id;
+    std::string name;  ///< "Cut 3 (locked)".
+    std::string path;  ///< As chosen; relative to the project file when it can be.
+    FrameRate rate = FrameRate::Fps24;
+    std::string start_timecode = "01:00:00:00";  ///< Timecode of the movie's first frame.
+    double offset_seconds = 0.0;                 ///< User-approved conform offset.
+    std::int64_t duration_frames = 0;
+    int width = 0;
+    int height = 0;
+    std::vector<FlaggedRegion> changed_regions;
     std::string notes;
+};
+
+/// A point in picture time (hit, sync point, streamer, punch, note). Kept in
+/// seconds, not ticks, so tempo edits never move a picture event (Main Spec
+/// §13: "anchor musical beats to picture events without accidental sync drift").
+struct Marker {
+    std::string id;
+    std::string kind = "hit";  ///< hit, sync, streamer, punch, note.
+    double seconds = 0.0;      ///< Project time (0 = the project's start timecode).
+    std::string label;
+    std::string cue_id;
+    double streamer_seconds = 2.0;  ///< Length of the streamer leading into it.
 };
 
 /// A named recall of which version each track plays (Main Spec §15 cue
@@ -185,12 +268,22 @@ struct ProjectData {
     int sample_rate = 48000;
     std::vector<Track> tracks;
     std::vector<Bus> buses;
+    Production production;
+    std::vector<Reel> reels;
+    std::vector<Scene> scenes;
     std::vector<Cue> cues;
+    std::vector<PictureVersion> pictures;
+    std::string active_picture_id;
+    std::vector<Marker> markers;
     std::vector<Snapshot> snapshots;
     std::vector<std::string> applied_templates;
 
     const Track* find_track(const std::string& id) const noexcept;
     Track* find_track(const std::string& id) noexcept;
+    const Cue* find_cue(const std::string& id) const noexcept;
+    Cue* find_cue(const std::string& id) noexcept;
+    const PictureVersion* active_picture() const noexcept;
+    PictureVersion* active_picture() noexcept;
     const Bus* find_bus(const std::string& id) const noexcept;
     Bus* find_bus(const std::string& id) noexcept;
     const Track* find_track_by_name(const std::string& wanted) const noexcept;

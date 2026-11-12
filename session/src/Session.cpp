@@ -4,6 +4,8 @@
 #include <filesystem>
 
 #include "vcc/core/Files.h"
+#include "vcc/cues/Cues.h"
+#include "vcc/picture/Picture.h"
 #include "vcc/project/Render.h"
 
 namespace vcc::session {
@@ -494,6 +496,255 @@ project::InsertResult Session::send_ostinato(const std::string& id, const ostina
                                              const std::string& preset_id, project::CollisionPolicy policy)
 {
     return insert_notes(id, v.start, v.end, v.notes, policy, "ostinato:" + preset_id + "/" + v.id);
+}
+
+// --- Picture, markers and cues ---------------------------------------------------------
+
+bool Session::set_frame_rate(FrameRate rate)
+{
+    return edit(std::string("Frame rate ") + to_string(rate), [&](project::ProjectData& d) {
+        if (d.frame_rate == rate) return false;
+        d.frame_rate = rate;
+        return true;
+    });
+}
+
+bool Session::set_start_timecode(const std::string& tc)
+{
+    auto parsed = Timecode::parse(tc);
+    if (!parsed || !timecode_to_frames(*parsed, data().frame_rate)) return false;
+    return edit("Start timecode " + tc, [&](project::ProjectData& d) {
+        if (d.start_timecode == tc) return false;
+        d.start_timecode = tc;
+        return true;
+    });
+}
+
+std::string Session::import_picture(project::PictureVersion picture)
+{
+    picture.id = project_.ids().next("pic");
+    if (picture.name.empty()) picture.name = "Cut " + std::to_string(data().pictures.size() + 1);
+    const std::string id = picture.id;
+    edit("Import picture " + picture.name, [&](project::ProjectData& d) {
+        d.pictures.push_back(picture);
+        d.active_picture_id = id;
+        return true;
+    });
+    return id;
+}
+
+bool Session::set_active_picture(const std::string& id)
+{
+    return edit("Switch picture", [&](project::ProjectData& d) {
+        if (d.active_picture_id == id) return false;
+        if (!id.empty() && std::none_of(d.pictures.begin(), d.pictures.end(),
+                                        [&](const project::PictureVersion& p) { return p.id == id; }))
+            return false;
+        d.active_picture_id = id;
+        return true;
+    });
+}
+
+namespace {
+template <typename F>
+std::function<bool(project::ProjectData&)> on_picture(const std::string& id, F f)
+{
+    return [id, f](project::ProjectData& d) {
+        for (auto& p : d.pictures)
+            if (p.id == id) return f(p);
+        return false;
+    };
+}
+}  // namespace
+
+bool Session::set_picture_offset(const std::string& id, double offset)
+{
+    if (!project_.edit_coalescing("Picture offset " + id, on_picture(id, [&](project::PictureVersion& p) {
+            p.offset_seconds = offset;
+            return true;
+        })))
+        return false;
+    document_changed();
+    return true;
+}
+
+bool Session::set_picture_start_timecode(const std::string& id, const std::string& tc)
+{
+    if (!Timecode::parse(tc)) return false;
+    return edit("Picture start timecode", on_picture(id, [&](project::PictureVersion& p) {
+        if (!timecode_to_frames(*Timecode::parse(tc), p.rate)) return false;
+        p.start_timecode = tc;
+        return true;
+    }));
+}
+
+bool Session::set_changed_regions(const std::string& id, std::vector<project::FlaggedRegion> regions)
+{
+    return edit("Flag changed regions", on_picture(id, [&](project::PictureVersion& p) {
+        p.changed_regions = regions;
+        return true;
+    }));
+}
+
+bool Session::remove_picture(const std::string& id)
+{
+    return edit("Remove picture", [&](project::ProjectData& d) {
+        auto it = std::find_if(d.pictures.begin(), d.pictures.end(), [&](const project::PictureVersion& p) { return p.id == id; });
+        if (it == d.pictures.end()) return false;
+        d.pictures.erase(it);
+        if (d.active_picture_id == id) d.active_picture_id = d.pictures.empty() ? std::string{} : d.pictures.back().id;
+        return true;
+    });
+}
+
+std::string Session::add_marker(double seconds, const std::string& kind, const std::string& label)
+{
+    const std::string id = project_.ids().next("mk");
+    edit("Add " + kind, [&](project::ProjectData& d) {
+        project::Marker m;
+        m.id = id;
+        m.kind = kind;
+        m.seconds = std::max(0.0, seconds);
+        m.label = label;
+        // A marker inside a cue belongs to it.
+        for (const auto& c : d.cues)
+            if (m.seconds >= d.tempo.seconds_at(c.start) && m.seconds <= d.tempo.seconds_at(c.end)) m.cue_id = c.id;
+        d.markers.push_back(m);
+        std::stable_sort(d.markers.begin(), d.markers.end(),
+                         [](const project::Marker& a, const project::Marker& b) { return a.seconds < b.seconds; });
+        return true;
+    });
+    return id;
+}
+
+bool Session::update_marker(const std::string& id, const std::function<void(project::Marker&)>& change)
+{
+    return edit("Edit marker", [&](project::ProjectData& d) {
+        for (auto& m : d.markers)
+            if (m.id == id) {
+                change(m);
+                std::stable_sort(d.markers.begin(), d.markers.end(),
+                                 [](const project::Marker& a, const project::Marker& b) { return a.seconds < b.seconds; });
+                return true;
+            }
+        return false;
+    });
+}
+
+bool Session::remove_marker(const std::string& id)
+{
+    return edit("Remove marker", [&](project::ProjectData& d) {
+        auto it = std::find_if(d.markers.begin(), d.markers.end(), [&](const project::Marker& m) { return m.id == id; });
+        if (it == d.markers.end()) return false;
+        d.markers.erase(it);
+        return true;
+    });
+}
+
+bool Session::fit_tempo_to_marker(const std::string& marker_id, Ticks target_tick, Ticks from_tick, std::string* error)
+{
+    const project::Marker* marker = nullptr;
+    for (const auto& m : data().markers)
+        if (m.id == marker_id) marker = &m;
+    if (!marker) {
+        if (error) *error = "no such marker";
+        return false;
+    }
+    auto fitted = picture::fit_tempo_to_hit(data().tempo, from_tick, target_tick, marker->seconds, error);
+    if (!fitted) return false;
+    return edit("Fit tempo to " + (marker->label.empty() ? marker->kind : marker->label), [&](project::ProjectData& d) {
+        d.tempo = *fitted;
+        return true;
+    });
+}
+
+bool Session::set_production(const project::Production& p)
+{
+    return edit("Production details", [&](project::ProjectData& d) {
+        d.production = p;
+        return true;
+    });
+}
+
+std::string Session::add_reel(const std::string& name)
+{
+    const std::string id = project_.ids().next("reel");
+    edit("Add " + name, [&](project::ProjectData& d) {
+        d.reels.push_back({id, name});
+        return true;
+    });
+    return id;
+}
+
+std::string Session::add_scene(const std::string& reel_id, const std::string& name)
+{
+    const std::string id = project_.ids().next("scene");
+    edit("Add scene " + name, [&](project::ProjectData& d) {
+        d.scenes.push_back({id, reel_id, name});
+        return true;
+    });
+    return id;
+}
+
+std::string Session::add_cue(Ticks start, Ticks end, const std::string& reel_id, const std::string& title)
+{
+    const std::string id = project_.ids().next("cue");
+    std::string code;
+    edit("Add cue", [&](project::ProjectData& d) {
+        project::Cue c;
+        c.id = id;
+        c.code = code = cues::next_code(d, reel_id);
+        c.title = title.empty() ? "Untitled cue" : title;
+        c.start = std::max<Ticks>(0, std::min(start, end));
+        c.end = std::max(start, end);
+        if (c.end == c.start) c.end = c.start + d.meter.at_tick(c.start).ticks_per_bar() * 8;
+        c.reel_id = reel_id;
+        c.composer = d.production.composer;
+        c.status = "spotted";
+        c.deliverables = {{"Stereo mix", false}, {"Stems", false}, {"Score and parts", false}};
+        d.cues.push_back(c);
+        return true;
+    });
+    return id;
+}
+
+bool Session::update_cue(const std::string& id, const std::function<void(project::Cue&)>& change,
+                         const std::string& label, bool allow_locked)
+{
+    return edit(label, [&](project::ProjectData& d) {
+        project::Cue* c = d.find_cue(id);
+        if (!c || (c->locked() && !allow_locked)) return false;
+        change(*c);
+        if (c->end < c->start) std::swap(c->start, c->end);
+        return true;
+    });
+}
+
+bool Session::remove_cue(const std::string& id, bool allow_locked)
+{
+    return edit("Remove cue", [&](project::ProjectData& d) {
+        auto it = std::find_if(d.cues.begin(), d.cues.end(), [&](const project::Cue& c) { return c.id == id; });
+        if (it == d.cues.end() || (it->locked() && !allow_locked)) return false;
+        d.cues.erase(it);
+        for (auto& m : d.markers)
+            if (m.cue_id == id) m.cue_id.clear();
+        return true;
+    });
+}
+
+bool Session::spot_cue(const std::string& id, const std::string& in_tc, const std::string& out_tc, bool move_music)
+{
+    auto in_s = picture::project_seconds_for_timecode(data(), in_tc);
+    auto out_s = picture::project_seconds_for_timecode(data(), out_tc);
+    if (!in_s || !out_s || *out_s <= *in_s) return false;
+    return update_cue(id, [&](project::Cue& c) {
+        c.spot_in = in_tc;
+        c.spot_out = out_tc;
+        if (move_music) {
+            c.start = data().tempo.tick_at_seconds(std::max(0.0, *in_s));
+            c.end = data().tempo.tick_at_seconds(std::max(0.0, *out_s));
+        }
+    }, "Spot cue " + id);
 }
 
 void Session::select_track(const std::string& id)

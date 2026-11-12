@@ -28,3 +28,12 @@ vcc_add_test(test_workflow DEPS vcc_templates)
 vcc_add_test(test_score_integration DEPS vcc_templates vcc_editing)
 add_subdirectory(ported)
 vcc_add_test(test_session DEPS vcc_session vcc_editing)
+vcc_add_test(test_picture DEPS vcc_picture)
+vcc_add_test(test_cues DEPS vcc_cues vcc_session)
+# Decodes a generated movie whose brightness encodes the frame number, so a
+# wrong frame cannot pass. Needs FFmpeg libraries and the ffmpeg tool.
+find_program(VCC_FFMPEG_TOOL ffmpeg)
+if(VCC_HAVE_FFMPEG AND VCC_FFMPEG_TOOL)
+    vcc_add_test(test_video_decoder DEPS vcc_media vcc_picture)
+    target_compile_definitions(test_video_decoder PRIVATE VCC_FFMPEG_TOOL="${VCC_FFMPEG_TOOL}")
+endif()

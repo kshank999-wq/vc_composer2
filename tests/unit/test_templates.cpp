@@ -267,7 +267,12 @@ TEST_CASE("acceptance 15 / merge: existing cues, buses and temp track survive")
     project::Project p;
     std::string temp = p.add_track("Temp Score", project::TrackKind::Reference);
     p.edit("cue", [](project::ProjectData& d) {
-        d.cues.push_back({"cue-1", "1M1", "Opening", 0, kTicksPerWhole * 8, "writing", ""});
+        project::Cue cue;
+        cue.id = "cue-1";
+        cue.code = "1M1";
+        cue.title = "Opening";
+        cue.end = kTicksPerWhole * 8;
+        d.cues.push_back(cue);
         d.buses.push_back({"bus-dialog", "Dialogue Ref", "group", "bus-master", {}, {}, 0.0});
         return true;
     });
