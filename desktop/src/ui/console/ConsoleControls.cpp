@@ -402,8 +402,8 @@ void ModeSelector::paintButton(juce::Graphics& g, bool over, bool down)
         g.drawRoundedRectangle(glass, 1.5f, 0.8f);
     }
     // Status lamp.
-    auto text = glass.reduced(3.0f, 0.0f);
-    const auto dot = text.removeFromLeft(7.0f).withSizeKeepingCentre(5.0f, 5.0f);
+    auto inner = glass.reduced(3.0f, 0.0f);
+    const auto dot = inner.removeFromLeft(7.0f).withSizeKeepingCentre(5.0f, 5.0f);
     if (!off) {
         g.setColour(lamp.withAlpha(0.3f));
         g.fillEllipse(dot.expanded(1.6f));
@@ -414,7 +414,7 @@ void ModeSelector::paintButton(juce::Graphics& g, bool over, bool down)
     g.fillEllipse(dot.getX() + 1.0f, dot.getY() + 0.8f, 2.0f, 1.4f);
     // Menu arrow.
     {
-        auto a = text.removeFromRight(6.0f);
+        auto a = inner.removeFromRight(6.0f);
         juce::Path p;
         const float cx = a.getCentreX(), cy = a.getCentreY();
         p.addTriangle(cx - 2.2f, cy - 1.0f, cx + 2.2f, cy - 1.0f, cx, cy + 1.8f);
@@ -424,7 +424,7 @@ void ModeSelector::paintButton(juce::Graphics& g, bool over, bool down)
     const auto ink = off ? paint::print_dim : (writing ? lamp.brighter(0.5f) : lamp.brighter(0.15f));
     g.setColour(ink);
     g.setFont(print_font(juce::jmin(9.0f, glass.getHeight() * 0.62f)));
-    g.drawFittedText(getButtonText(), text.toNearestInt(), juce::Justification::centred, 1, 0.7f);
+    g.drawFittedText(getButtonText(), inner.toNearestInt(), juce::Justification::centred, 1, 0.7f);
     g.setColour(juce::Colours::white.withAlpha(0.05f));
     g.fillRect(glass.withHeight(glass.getHeight() * 0.45f));
     if (down || over) {
