@@ -152,9 +152,9 @@ void TransportBar::update_position()
     juce::String pdc_text = "PDC";
     if (pdc) {
         const int samples = context_.engine.compensation_samples();
-        double rate = 48000.0;
-        if (auto* device = context_.engine.devices().getCurrentAudioDevice()) rate = device->getCurrentSampleRate();
-        if (samples > 0 && rate > 0.0) pdc_text << " " << juce::String(1000.0 * samples / rate, 1) << " ms";
+        double device_rate = 48000.0;
+        if (auto* device = context_.engine.devices().getCurrentAudioDevice()) device_rate = device->getCurrentSampleRate();
+        if (samples > 0 && device_rate > 0.0) pdc_text << " " << juce::String(1000.0 * samples / device_rate, 1) << " ms";
     } else {
         pdc_text << " off";
     }

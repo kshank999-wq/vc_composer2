@@ -158,7 +158,7 @@ std::vector<GridLine> grid_lines(const project::ParamInfo& p, int height_px)
     std::sort(values.begin(), values.end(), [&](double a, double b) { return to_norm(p, a) > to_norm(p, b); });
     std::vector<GridLine> out;
     double last = 1e9;
-    const double min_gap = 11.0 / std::max(1, height_px - 14);
+    const double min_gap = 13.0 / std::max(1, height_px - 14);
     for (double v : values) {
         const double n = to_norm(p, v);
         if (last - n < min_gap && !(p.toggle)) continue;
@@ -458,7 +458,7 @@ juce::Rectangle<int> AutomationLaneView::part_bounds(Part part) const
     const int row2 = std::min(25, getHeight() - 19);
     const int readout_w = 58;
     switch (part) {
-        case Part::Name: return {14, row1, w - 14 - readout_w - 4, 16};
+        case Part::Name: return {14, row1, data_.lane ? w - 14 - readout_w - 4 : w - 20, 16};
         case Part::Readout: return {w - readout_w - 6, row1, readout_w, 16};
         case Part::Mode: return {14, row2, 44, 15};
         case Part::Power: return {62, row2, 17, 15};
@@ -547,7 +547,7 @@ void AutomationLaneView::paint_header(juce::Graphics& g)
     const auto name_r = part_bounds(Part::Name);
     {
         const bool has = data_.lane.has_value();
-        juce::String name = has ? juce::String(data_.lane->name) : juce::String("Choose parameter");
+        juce::String name = has ? juce::String(data_.lane->name) : juce::String("Add automation lane");
         g.setColour(hovered(Part::Name) ? colours::text : (has ? colours::text.withAlpha(0.92f) : colours::accent));
         g.setFont(juce::FontOptions(11.5f, has ? juce::Font::bold : juce::Font::plain));
         const auto text_r = name_r.withTrimmedRight(10);
@@ -632,10 +632,13 @@ void AutomationLaneView::paint_body(juce::Graphics& g, juce::Rectangle<int> clip
         g.setColour(juce::Colours::white.withAlpha(zero ? 0.11f : 0.05f));
         g.drawHorizontalLine(juce::roundToInt(y), fx0, fx1);
         if (clip.getX() <= b.getX() + 40) {
-            g.setColour(colours::text_dim.withAlpha(0.65f));
-            const float ly = std::clamp(y - 10.0f, 0.0f, static_cast<float>(getHeight()) - 11.0f);
-            g.drawText(line.label, juce::Rectangle<float>(static_cast<float>(b.getX()) + 4.0f, ly, 40.0f, 10.0f),
-                       juce::Justification::centredLeft, false);
+            const float ly = std::clamp(y - 5.0f, 0.0f, static_cast<float>(getHeight()) - 11.0f);
+            const float lw = juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), line.label) + 6.0f;
+            const auto lr = juce::Rectangle<float>(static_cast<float>(b.getX()) + 2.0f, ly, lw, 10.0f);
+            g.setColour(kBodyColour.withAlpha(0.8f));
+            g.fillRoundedRectangle(lr, 2.0f);
+            g.setColour(colours::text_dim.withAlpha(0.75f));
+            g.drawText(line.label, lr, juce::Justification::centred, false);
         }
     }
 
@@ -715,8 +718,10 @@ void AutomationLaneView::paint_body(juce::Graphics& g, juce::Rectangle<int> clip
         g.fillRect(juce::Rectangle<float>(px - 0.5f, 0.0f, 1.5f, static_cast<float>(getHeight())));
         if (const auto v = curve_value(tl_.playhead_tick()); v && !pts.empty()) {
             const float y = y_of_value(*v);
+            g.setColour(colours::text);
+            g.fillEllipse(px - 3.0f, y - 3.0f, 6.0f, 6.0f);
             g.setColour(colours::playhead);
-            g.fillEllipse(px - 2.5f, y - 2.5f, 5.0f, 5.0f);
+            g.drawEllipse(px - 3.0f, y - 3.0f, 6.0f, 6.0f, 1.2f);
         }
     }
 
@@ -740,24 +745,24 @@ void AutomationLaneView::paint_body(juce::Graphics& g, juce::Rectangle<int> clip
 
 void AutomationLaneView::mouseMove(const juce::MouseEvent& e)
 {
-    auto cursor = juce::MouseCursor::NormalCursor;
+    auto shape = juce::MouseCursor::NormalCursor;
     std::optional<Part> part;
     int hover = -1;
     if (e.y >= getHeight() - kResizeZone) {
-        cursor = juce::MouseCursor::UpDownResizeCursor;
+        shape = juce::MouseCursor::UpDownResizeCursor;
     } else if (e.x < tl_.header_width()) {
         for (Part p : {Part::Name, Part::Mode, Part::Power, Part::Hide, Part::Remove, Part::Add})
             if (part_bounds(p).contains(e.getPosition()) && (data_.lane || p == Part::Name || p == Part::Mode || p == Part::Add))
                 part = p;
-        if (part) cursor = juce::MouseCursor::PointingHandCursor;
+        if (part) shape = juce::MouseCursor::PointingHandCursor;
     } else if (data_.lane) {
         hover = point_at(e.position);
-        if (hover >= 0) cursor = juce::MouseCursor::DraggingHandCursor;
-        else if (tl_.pencil_mode()) cursor = juce::MouseCursor::CrosshairCursor;
+        if (hover >= 0) shape = juce::MouseCursor::DraggingHandCursor;
+        else if (tl_.pencil_mode()) shape = juce::MouseCursor::CrosshairCursor;
         else if (const auto v = curve_value(tick_of(e.position.x)); v && std::abs(y_of_value(*v) - e.position.y) <= 5.0f)
-            cursor = juce::MouseCursor::PointingHandCursor;
+            shape = juce::MouseCursor::PointingHandCursor;
     }
-    setMouseCursor(cursor);
+    setMouseCursor(shape);
     if (part != hover_part_) {
         hover_part_ = part;
         repaint(0, 0, tl_.header_width(), getHeight());
@@ -1017,7 +1022,7 @@ void AutomationLaneView::commit_pencil()
         }
         drawn = std::move(steps);
     } else {
-        const double tol = info_->unit == "dB" ? 0.25 : (info_->max - info_->min) * 0.004;
+        const double tol = info_->unit == "dB" ? 0.5 : (info_->max - info_->min) * 0.012;
         project::thin(drawn, tol);
     }
     project::AutomationLane l = work_;

@@ -80,7 +80,7 @@ public:
 
 class AutomationLaneView final : public juce::Component {
 public:
-    static constexpr int kDefaultHeight = 64;
+    static constexpr int kDefaultHeight = 70;
     static constexpr int kMinHeight = 34;
     static constexpr int kMaxHeight = 260;
     static constexpr int kPlaceholderHeight = 40;
