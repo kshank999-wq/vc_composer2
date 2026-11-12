@@ -33,6 +33,15 @@ public:
     void show_mixer();
     void show_plugin_window(const std::string& track_id);
 
+    /// Places audio files at the playhead on the selected audio track (or a
+    /// new one) as one undo step, copying them into the project's "Audio
+    /// Files" folder when the project is saved. Returns the clip ids.
+    std::vector<std::string> import_audio_files(const juce::Array<juce::File>& files);
+    /// Punch in/out on the sequencer's ruler range (off when there is none).
+    void set_punch(bool on);
+    bool punch() const noexcept { return punch_; }
+    TransportBar& transport() noexcept { return transport_; }
+
     ComposerView& composer() noexcept { return composer_; }
     SequencerView& sequencer() noexcept { return sequencer_; }
     MixerWindow* mixer_window() noexcept { return mixer_.get(); }
@@ -60,6 +69,10 @@ private:
     void show_audio_settings();
     void show_plugin_scanner();
     void show_about();
+    void import_audio();
+    void new_audio_track();
+    void new_bus(bool fx);
+    void toggle_record();
 
     AppContext& context_;
     int listener_ = 0;
@@ -76,6 +89,7 @@ private:
     std::unique_ptr<juce::FileChooser> chooser_;
     int ticks_ = 0;
     int status_age_ = 0;
+    bool punch_ = false;
 };
 
 }  // namespace vcc::desktop

@@ -6,7 +6,10 @@
 #include <optional>
 #include <set>
 
+#include "ui/AudioTrackStyle.h"
 #include "ui/Theme.h"
+#include "ui/TrackPanel.h"
+#include "ui/WaveformCache.h"
 #include "vcc/project/Render.h"
 
 namespace vcc::desktop {
@@ -23,6 +26,9 @@ constexpr int kHScroll = 12;
 constexpr int kRollHeader = 30;
 constexpr int kVelocity = 64;
 constexpr int kKeyHeight = 11;
+constexpr int kTakeHeight = 40;   ///< One take lane under an audio track.
+constexpr int kEdge = 6;          ///< Grab width of a clip's trim edges and handles.
+constexpr double kMinClip = 0.01; ///< Shortest clip a trim leaves, seconds.
 
 const juce::String kScoreHint = "Written in the score - edit in the Composer view";
 
@@ -50,6 +56,13 @@ struct LaneView {
     std::vector<RegionView> regions;
     int lo = 48, hi = 72;  ///< Pitch span for the lane's mini roll.
     int range_lo = 21, range_hi = 108;
+    // Audio (Main Spec §11).
+    bool audio = false;       ///< An audio track: clips, no MIDI.
+    bool stereo = false;
+    bool armed = false;
+    std::vector<project::AudioClip> clips;  ///< Every lane, sorted by lane then start.
+    std::vector<std::string> clip_paths;    ///< Resolved file of each clip.
+    std::vector<int> takes;                 ///< Distinct take lanes (> 0) in use, ascending.
 };
 
 /// A region note named so it survives the document being copied by an edit.
@@ -174,6 +187,39 @@ struct Model {
 
     std::function<void()> view_changed;   ///< zoom / scroll moved
     std::function<void()> open_piano_roll;
+    std::function<void()> range_changed;  ///< the ruler selection changed
+
+    // Audio clips and recording.
+    WaveformCache waveforms;
+    std::set<std::string> show_takes;     ///< tracks whose take lanes are open
+    std::string clip_track, clip_id;      ///< the selected audio clip
+    Ticks range_start = 0, range_end = 0; ///< ruler selection (punch range); empty when equal
+    bool punch = false;
+    bool recording = false;
+    Ticks record_start = 0;
+
+    bool has_range() const { return range_end > range_start; }
+    double x_of_seconds(double s) const { return x_of(static_cast<double>(tempo.tick_at_seconds(std::max(0.0, s)))); }
+    double seconds_of_x(double x) const { return tempo.seconds_at(std::max<Ticks>(0, static_cast<Ticks>(tick_of(x)))); }
+    /// Grid for snapping clips: follows the zoom (sixteenths close up, bars far out).
+    Ticks clip_grid() const
+    {
+        if (px_of(kTicksPerQuarter / 4) >= 10.0) return kTicksPerQuarter / 4;
+        if (px_of(kTicksPerQuarter) >= 10.0) return kTicksPerQuarter;
+        return meter.at_bar(1).ticks_per_bar();
+    }
+    int row_height(const LaneView& l) const
+    {
+        const bool open = !l.takes.empty() && show_takes.count(l.id) > 0;
+        return kLaneHeight + (open ? static_cast<int>(l.takes.size()) * kTakeHeight : 0);
+    }
+    int lane_top(std::size_t index) const
+    {
+        int y = 0;
+        for (std::size_t i = 0; i < index && i < lanes.size(); ++i) y += row_height(lanes[i]);
+        return y;
+    }
+    int content_height() const { return lane_top(lanes.size()); }
 
     double x_of(double tick) const { return kHeader + (tick - view_start) * px_per_quarter / kTicksPerQuarter; }
     double tick_of(double x) const { return view_start + (x - kHeader) * kTicksPerQuarter / px_per_quarter; }
@@ -222,6 +268,7 @@ struct Model {
         markers = d.markers;
         changed_regions = d.active_picture() ? d.active_picture()->changed_regions : std::vector<project::FlaggedRegion>{};
         end = session.content_end();
+        double audio_end = 0.0;
         lanes.clear();
         for (const auto* t : session.music_tracks()) {
             LaneView l;
@@ -239,7 +286,24 @@ struct Model {
             }
             const auto* v = t->active_version();
             if (v) l.version = juce::String(v->name);
-            if (v && !l.reference) {
+            l.audio = t->kind == project::TrackKind::Audio;
+            l.stereo = t->input_stereo;
+            l.armed = t->record_armed;
+            if (l.audio) l.colour = audio_track_colour(*t);
+            if (v) {
+                l.clips = v->audio_clips;
+                std::stable_sort(l.clips.begin(), l.clips.end(), [](const project::AudioClip& a, const project::AudioClip& b) {
+                    return a.lane != b.lane ? a.lane < b.lane : a.start_seconds < b.start_seconds;
+                });
+                for (const auto& c : l.clips) {
+                    l.clip_paths.push_back(session.resolve_audio_path(c.file));
+                    if (c.lane > 0 && std::find(l.takes.begin(), l.takes.end(), c.lane) == l.takes.end())
+                        l.takes.push_back(c.lane);
+                    audio_end = std::max(audio_end, c.end_seconds());
+                }
+                std::sort(l.takes.begin(), l.takes.end());
+            }
+            if (v && !l.reference && !l.audio) {
                 project::Track score_only = *t;
                 score_only.active_version()->regions.clear();
                 try {
@@ -271,6 +335,33 @@ struct Model {
             l.hi = hi + 2;
             lanes.push_back(std::move(l));
         }
+        if (audio_end > 0.0) {
+            const Ticks t = tempo.tick_at_seconds(audio_end);
+            end = std::max(end, meter.bar_start(meter.bar_at(t) + 5));
+        }
+        // Forget a selected clip that went away (undo, delete).
+        bool found = false;
+        for (const auto& l : lanes)
+            if (l.id == clip_track)
+                for (const auto& c : l.clips) found = found || c.id == clip_id;
+        if (!found) {
+            clip_track.clear();
+            clip_id.clear();
+        }
+    }
+
+    const project::AudioClip* clip(const std::string& track, const std::string& id, const LaneView** lane_out = nullptr,
+                                   std::size_t* index_out = nullptr) const
+    {
+        for (const auto& l : lanes)
+            if (l.id == track)
+                for (std::size_t i = 0; i < l.clips.size(); ++i)
+                    if (l.clips[i].id == id) {
+                        if (lane_out) *lane_out = &l;
+                        if (index_out) *index_out = i;
+                        return &l.clips[i];
+                    }
+        return nullptr;
     }
 };
 
@@ -497,6 +588,23 @@ public:
             }
         }
 
+        // Selected range (punch in/out when punch is on).
+        if (m_.has_range()) {
+            const float x = static_cast<float>(m_.x_of(static_cast<double>(m_.range_start)));
+            const float x2 = static_cast<float>(m_.x_of(static_cast<double>(m_.range_end)));
+            const juce::Colour c = m_.punch ? colours::playhead : colours::accent;
+            g.setColour(c.withAlpha(0.22f));
+            g.fillRect(juce::Rectangle<float>(x, 14.0f, x2 - x, fh - 14.0f));
+            g.setColour(c);
+            g.fillRect(juce::Rectangle<float>(x, 14.0f, 2.0f, fh - 14.0f));
+            g.fillRect(juce::Rectangle<float>(x2 - 2.0f, 14.0f, 2.0f, fh - 14.0f));
+            if (m_.punch && x2 - x > 60.0f) {
+                g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+                g.drawText("PUNCH", juce::Rectangle<float>(x2 - 50.0f, 14.0f, 45.0f, 11.0f),
+                           juce::Justification::centredRight, false);
+            }
+        }
+
         g.setColour(colours::outline);
         g.drawHorizontalLine(h - 1, static_cast<float>(area.getX()), static_cast<float>(area.getRight()));
 
@@ -509,8 +617,39 @@ public:
         g.fillRect(juce::Rectangle<float>(px - 0.5f, fh - 4.0f, 1.5f, 4.0f));
     }
 
-    void mouseDown(const juce::MouseEvent& e) override { locate(e); }
-    void mouseDrag(const juce::MouseEvent& e) override { locate(e); }
+    // Click locates; click-drag selects a range (the punch range); right-click
+    // offers the range commands.
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        selecting_ = false;
+        if (e.mods.isPopupMenu()) {
+            show_menu();
+            return;
+        }
+        locate(e);
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu() || e.mouseDownPosition.x < kHeader) return;
+        if (!selecting_ && e.getDistanceFromDragStartX() * e.getDistanceFromDragStartX() < 16) return;
+        selecting_ = true;
+        const bool free = e.mods.isCommandDown();
+        auto at = [&](double x) {
+            const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(m_.tick_of(x)));
+            return free ? t : m_.snap(t, m_.clip_grid(), false);
+        };
+        const Ticks a = at(e.mouseDownPosition.x), b = at(std::max(e.x, kHeader));
+        m_.range_start = std::min(a, b);
+        m_.range_end = std::max(a, b);
+        if (auto* p = getParentComponent()) p->repaint();
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        if (selecting_ && m_.range_changed) m_.range_changed();
+        selecting_ = false;
+    }
 
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
@@ -523,6 +662,25 @@ public:
     }
 
 private:
+    void show_menu()
+    {
+        juce::PopupMenu menu;
+        menu.addItem("Punch in/out on this range", m_.has_range(), m_.punch,
+                     [this] { m_.ctx.commands.invokeDirectly(cmd::togglePunch, true); });
+        menu.addItem("Locate to range start", m_.has_range(), false, [this] {
+            m_.ctx.engine.locate(m_.range_start);
+            m_.playhead = m_.range_start;
+            if (auto* p = getParentComponent()) p->repaint();
+        });
+        menu.addSeparator();
+        menu.addItem("Clear range", m_.has_range(), false, [this] {
+            m_.range_start = m_.range_end = 0;
+            if (m_.range_changed) m_.range_changed();
+            if (auto* p = getParentComponent()) p->repaint();
+        });
+        menu.showMenuAsync({});
+    }
+
     void locate(const juce::MouseEvent& e)
     {
         if (e.x < kHeader) return;
@@ -533,6 +691,7 @@ private:
     }
 
     Model& m_;
+    bool selecting_ = false;
 };
 
 // --- Track lanes -------------------------------------------------------------------------------------
@@ -544,11 +703,15 @@ public:
         addAndMakeVisible(vscroll_);
         style_scrollbar(vscroll_);
         vscroll_.addListener(this);
+        setWantsKeyboardFocus(true);
+        m_.waveforms.on_changed = [this] { repaint(); };
     }
+
+    ~LaneArea() override { m_.waveforms.on_changed = nullptr; }
 
     void update_scroll()
     {
-        const int content = static_cast<int>(m_.lanes.size()) * kLaneHeight;
+        const int content = m_.content_height();
         const int visible = getHeight();
         scroll_y_ = juce::jlimit(0, std::max(0, content - visible), scroll_y_);
         vscroll_.setRangeLimits(0.0, std::max(content, visible));
@@ -559,7 +722,7 @@ public:
     {
         for (std::size_t i = 0; i < m_.lanes.size(); ++i) {
             if (m_.lanes[i].id != id) continue;
-            const int y = static_cast<int>(i) * kLaneHeight;
+            const int y = m_.lane_top(i);
             if (y < scroll_y_) scroll_y_ = y;
             else if (y + kLaneHeight > scroll_y_ + getHeight()) scroll_y_ = y + kLaneHeight - getHeight();
             update_scroll();
@@ -584,16 +747,30 @@ public:
         paint_grid(g, m_, timeline, 0, true);
 
         const std::string& selected = m_.ctx.session.selected_track();
-        for (std::size_t i = 0; i < m_.lanes.size(); ++i) {
-            const int y = static_cast<int>(i) * kLaneHeight - scroll_y_;
-            if (y + kLaneHeight < 0 || y > h) continue;
-            paint_lane(g, m_.lanes[i], juce::Rectangle<int>(0, y, w - kScroll, kLaneHeight), timeline,
-                       m_.lanes[i].id == selected);
+        int y = -scroll_y_;
+        for (const auto& l : m_.lanes) {
+            const int rh = m_.row_height(l);
+            if (y + rh >= 0 && y <= h)
+                paint_lane(g, l, juce::Rectangle<int>(0, y, w - kScroll, rh), timeline, l.id == selected);
+            y += rh;
         }
         if (m_.lanes.empty()) {
             g.setColour(colours::text_dim);
             g.setFont(juce::FontOptions(14.0f));
             g.drawText("No tracks yet - add a track or a template", timeline, juce::Justification::centred);
+        }
+        // The ruler selection carried down through the lanes.
+        if (m_.has_range()) {
+            const float x0 = static_cast<float>(m_.x_of(static_cast<double>(m_.range_start)));
+            const float x1 = static_cast<float>(m_.x_of(static_cast<double>(m_.range_end)));
+            const juce::Colour c = m_.punch ? colours::playhead : colours::accent;
+            juce::Graphics::ScopedSaveState state(g);
+            g.reduceClipRegion(timeline);
+            g.setColour(c.withAlpha(0.06f));
+            g.fillRect(juce::Rectangle<float>(x0, 0.0f, x1 - x0, static_cast<float>(h)));
+            g.setColour(c.withAlpha(0.45f));
+            g.drawVerticalLine(juce::roundToInt(x0), 0.0f, static_cast<float>(h));
+            g.drawVerticalLine(juce::roundToInt(x1), 0.0f, static_cast<float>(h));
         }
         g.setColour(colours::outline);
         g.drawVerticalLine(kHeader - 1, 0.0f, static_cast<float>(h));
@@ -602,15 +779,160 @@ public:
 
     void mouseDown(const juce::MouseEvent& e) override
     {
-        if (const auto* l = lane_at(e.y)) m_.ctx.session.select_track(l->id);
+        drag_ = Drag::None;
+        const Hit hit = hit_at(e.y);
+        if (!hit.lane) {
+            select_clip({}, {});
+            return;
+        }
+        const std::string track = hit.lane->id;
+        const LaneView lane = *hit.lane;  // the model is rebuilt by any edit below
+        m_.ctx.session.select_track(track);
+        if (e.x < kHeader) {
+            if (e.mods.isPopupMenu()) TrackPanel::show_track_menu(m_.ctx, track);
+            else if (!lane.takes.empty() && disclosure_rect(hit.row).contains(e.getPosition())) toggle_takes(track);
+            return;
+        }
+        const int index = clip_at(lane, hit, e.position);
+        if (index < 0) {
+            select_clip({}, {});
+            return;
+        }
+        const auto& c = lane.clips[static_cast<std::size_t>(index)];
+        select_clip(track, c.id);
+        grabKeyboardFocus();
+        if (e.mods.isPopupMenu()) {
+            show_clip_menu(lane, c);
+            return;
+        }
+        drag_ = zone_for(c, clip_rect(c, hit.row), e.position);
+        drag_track_ = track;
+        drag_clip_ = c;
+        drag_label_ = unique_label(drag_ == Drag::Move       ? "Move clip"
+                                   : drag_ == Drag::TrimLeft  ? "Trim clip start"
+                                   : drag_ == Drag::TrimRight ? "Trim clip end"
+                                   : drag_ == Drag::FadeIn    ? "Fade in"
+                                   : drag_ == Drag::FadeOut   ? "Fade out"
+                                                              : "Clip gain");
+        file_length_ = 0.0;
+        if (auto* thumb = m_.waveforms.get(lane.clip_paths[static_cast<std::size_t>(index)]))
+            file_length_ = thumb->getTotalLength();
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (drag_ == Drag::None) return;
+        const project::AudioClip o = drag_clip_;
+        const bool free = e.mods.isCommandDown();  // Cmd/Ctrl: no snapping
+        auto snapped = [&](double tick) {
+            const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(std::llround(tick)));
+            return free ? t : m_.snap(t, m_.clip_grid(), false);
+        };
+        const double dticks = m_.tick_of(e.x) - m_.tick_of(e.mouseDownPosition.x);
+        project::AudioClip c = o;
+        switch (drag_) {
+            case Drag::Move: {
+                const Ticks t0 = m_.tempo.tick_at_seconds(o.start_seconds);
+                c.start_seconds = std::max(0.0, m_.tempo.seconds_at(snapped(static_cast<double>(t0) + dticks)));
+                break;
+            }
+            case Drag::TrimLeft: {
+                const Ticks t0 = m_.tempo.tick_at_seconds(o.start_seconds);
+                double d = m_.tempo.seconds_at(snapped(static_cast<double>(t0) + dticks)) - o.start_seconds;
+                d = juce::jlimit(-o.source_offset, o.length - kMinClip, d);
+                c.start_seconds = o.start_seconds + d;
+                c.source_offset = o.source_offset + d;
+                c.length = o.length - d;
+                break;
+            }
+            case Drag::TrimRight: {
+                const Ticks t1 = m_.tempo.tick_at_seconds(o.end_seconds());
+                double len = m_.tempo.seconds_at(snapped(static_cast<double>(t1) + dticks)) - o.start_seconds;
+                if (file_length_ > 0.0) len = std::min(len, file_length_ - o.source_offset);
+                c.length = std::max(kMinClip, len);
+                break;
+            }
+            case Drag::FadeIn:
+                c.fade_in = juce::jlimit(0.0, o.length - o.fade_out, m_.seconds_of_x(e.x) - o.start_seconds);
+                break;
+            case Drag::FadeOut:
+                c.fade_out = juce::jlimit(0.0, o.length - o.fade_in, o.end_seconds() - m_.seconds_of_x(e.x));
+                break;
+            case Drag::Gain: {
+                const double per_px = e.mods.isShiftDown() ? 0.02 : 0.2;
+                c.gain_db = juce::jlimit(-48.0, 12.0, o.gain_db - e.getDistanceFromDragStartY() * per_px);
+                c.gain_db = std::round(c.gain_db * 10.0) / 10.0;
+                break;
+            }
+            case Drag::None: return;
+        }
+        const project::AudioClip* now = m_.clip(drag_track_, o.id);
+        if (!now) return;
+        const auto same = [](double a, double b) { return std::abs(a - b) < 1e-9; };
+        if (same(now->start_seconds, c.start_seconds) && same(now->source_offset, c.source_offset) &&
+            same(now->length, c.length) && same(now->fade_in, c.fade_in) && same(now->fade_out, c.fade_out) &&
+            same(now->gain_db, c.gain_db))
+            return;
+        m_.ctx.session.update_audio_clip(drag_track_, o.id, drag_label_, [c](project::AudioClip& x) {
+            x.start_seconds = c.start_seconds;
+            x.source_offset = c.source_offset;
+            x.length = c.length;
+            x.fade_in = c.fade_in;
+            x.fade_out = c.fade_out;
+            x.gain_db = c.gain_db;
+        });
+        if (drag_ == Drag::Gain) m_.ctx.status("Clip gain " + db_text(c.gain_db));
+    }
+
+    void mouseUp(const juce::MouseEvent&) override { drag_ = Drag::None; }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        auto shape = juce::MouseCursor::NormalCursor;
+        const Hit hit = hit_at(e.y);
+        if (hit.lane && e.x >= kHeader) {
+            const int index = clip_at(*hit.lane, hit, e.position);
+            if (index >= 0) {
+                const auto& c = hit.lane->clips[static_cast<std::size_t>(index)];
+                switch (zone_for(c, clip_rect(c, hit.row), e.position)) {
+                    case Drag::TrimLeft:
+                    case Drag::TrimRight: shape = juce::MouseCursor::LeftRightResizeCursor; break;
+                    case Drag::FadeIn:
+                    case Drag::FadeOut: shape = juce::MouseCursor::PointingHandCursor; break;
+                    case Drag::Gain: shape = juce::MouseCursor::UpDownResizeCursor; break;
+                    case Drag::Move:
+                    case Drag::None: shape = juce::MouseCursor::NormalCursor; break;
+                }
+            }
+        } else if (hit.lane && !hit.lane->takes.empty() && disclosure_rect(hit.row).contains(e.getPosition())) {
+            shape = juce::MouseCursor::PointingHandCursor;
+        }
+        setMouseCursor(shape);
     }
 
     void mouseDoubleClick(const juce::MouseEvent& e) override
     {
-        if (const auto* l = lane_at(e.y)) {
-            m_.ctx.session.select_track(l->id);
+        const Hit hit = hit_at(e.y);
+        if (hit.lane && !hit.lane->audio && hit.take == 0) {
+            m_.ctx.session.select_track(hit.lane->id);
             if (m_.open_piano_roll) m_.open_piano_roll();
         }
+    }
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        if (m_.clip_id.empty()) return false;
+        if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) {
+            const std::string track = m_.clip_track, id = m_.clip_id;
+            select_clip({}, {});
+            m_.ctx.session.remove_audio_clip(track, id);
+            return true;
+        }
+        if (key == juce::KeyPress::escapeKey) {
+            select_clip({}, {});
+            return true;
+        }
+        return false;
     }
 
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
@@ -619,7 +941,7 @@ public:
             m_.zoom_about(w.deltaY > 0 ? 1.2 : 1.0 / 1.2, std::max(e.x, kHeader));
             return;
         }
-        const int content = static_cast<int>(m_.lanes.size()) * kLaneHeight;
+        const int content = m_.content_height();
         const bool horizontal = e.mods.isShiftDown() || std::abs(w.deltaX) > std::abs(w.deltaY) || content <= getHeight();
         if (horizontal) {
             const float d = std::abs(w.deltaX) > std::abs(w.deltaY) ? w.deltaX : w.deltaY;
@@ -631,43 +953,359 @@ public:
         }
     }
 
+    // --- Clip actions (also reachable from tests through the session) ----------------------
+
+    /// Swaps a take onto the main lane as one undo step: whatever it overlaps
+    /// on lane 0 moves to the take's lane, so nothing is lost.
+    static bool promote_take(session::Session& session, const std::string& track_id, const std::string& clip_id)
+    {
+        return session.edit("Promote take", [&](project::ProjectData& d) {
+            project::Track* t = d.find_track(track_id);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
+            if (!v) return false;
+            project::AudioClip* take = nullptr;
+            for (auto& c : v->audio_clips)
+                if (c.id == clip_id) take = &c;
+            if (!take || take->lane == 0) return false;
+            const int lane = take->lane;
+            for (auto& c : v->audio_clips)
+                if (c.lane == 0 && c.start_seconds < take->end_seconds() && take->start_seconds < c.end_seconds())
+                    c.lane = lane;
+            take->lane = 0;
+            std::stable_sort(v->audio_clips.begin(), v->audio_clips.end(),
+                             [](const project::AudioClip& a, const project::AudioClip& b) {
+                                 return a.lane != b.lane ? a.lane < b.lane : a.start_seconds < b.start_seconds;
+                             });
+            return true;
+        });
+    }
+
 private:
+    enum class Drag { None, Move, TrimLeft, TrimRight, FadeIn, FadeOut, Gain };
+
+    struct Hit {
+        const LaneView* lane = nullptr;
+        int take = 0;  ///< 0: the track's main row; otherwise the take lane shown
+        juce::Rectangle<int> row;
+    };
+
+    static juce::String db_text(double db)
+    {
+        return (db > 0.0 ? "+" : "") + juce::String(db, 1) + " dB";
+    }
+
+    /// An edit label that does not merge with the previous undo step (two
+    /// drags in a row are two steps; every move within one drag is one).
+    std::string unique_label(const std::string& base) const
+    {
+        return m_.ctx.session.undo_label() == base ? base + " " : base;
+    }
+
+    void select_clip(const std::string& track, const std::string& id)
+    {
+        if (m_.clip_track == track && m_.clip_id == id) return;
+        m_.clip_track = track;
+        m_.clip_id = id;
+        repaint();
+    }
+
+    void toggle_takes(const std::string& track)
+    {
+        if (!m_.show_takes.erase(track)) m_.show_takes.insert(track);
+        update_scroll();
+        repaint();
+    }
+
     void scrollBarMoved(juce::ScrollBar*, double start) override
     {
         scroll_y_ = juce::roundToInt(start);
         repaint();
     }
 
-    const LaneView* lane_at(int y) const
+    Hit hit_at(int y) const
     {
-        const int i = (y + scroll_y_) / kLaneHeight;
-        if (y + scroll_y_ < 0 || i >= static_cast<int>(m_.lanes.size())) return nullptr;
-        return &m_.lanes[static_cast<std::size_t>(i)];
+        Hit hit;
+        int top = -scroll_y_;
+        for (const auto& l : m_.lanes) {
+            const int rh = m_.row_height(l);
+            if (y >= top && y < top + rh) {
+                hit.lane = &l;
+                if (y < top + kLaneHeight) {
+                    hit.row = {0, top, getWidth() - kScroll, kLaneHeight};
+                } else {
+                    const int k = (y - top - kLaneHeight) / kTakeHeight;
+                    hit.take = l.takes[static_cast<std::size_t>(std::min<int>(k, static_cast<int>(l.takes.size()) - 1))];
+                    hit.row = {0, top + kLaneHeight + k * kTakeHeight, getWidth() - kScroll, kTakeHeight};
+                }
+                return hit;
+            }
+            top += rh;
+        }
+        return hit;
     }
 
-    void paint_lane(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> row, juce::Rectangle<int> timeline,
-                    bool selected)
+    juce::Rectangle<float> clip_rect(const project::AudioClip& c, juce::Rectangle<int> row) const
     {
-        // Header.
-        auto header = row.withWidth(kHeader);
+        const float x0 = static_cast<float>(m_.x_of_seconds(c.start_seconds));
+        const float x1 = static_cast<float>(m_.x_of_seconds(c.end_seconds()));
+        return {x0, static_cast<float>(row.getY()) + 3.0f, std::max(3.0f, x1 - x0),
+                static_cast<float>(row.getHeight()) - 6.0f};
+    }
+
+    static juce::Rectangle<int> disclosure_rect(juce::Rectangle<int> row)
+    {
+        return {14, row.getY() + kLaneHeight - 17, kHeader - 20, 14};
+    }
+
+    static juce::Rectangle<float> gain_rect(juce::Rectangle<float> r)
+    {
+        if (r.getWidth() < 110.0f) return {};
+        return {r.getRight() - 54.0f, r.getY() + 1.0f, 46.0f, 12.0f};
+    }
+
+    /// The clip under the mouse on the hit row (topmost first), or -1.
+    int clip_at(const LaneView& l, const Hit& hit, juce::Point<float> p) const
+    {
+        if (hit.take == 0 && l.clips.empty()) return -1;
+        for (int i = static_cast<int>(l.clips.size()); --i >= 0;) {
+            const auto& c = l.clips[static_cast<std::size_t>(i)];
+            if (c.lane != hit.take) continue;
+            if (clip_rect(c, hit.row).expanded(2.0f, 0.0f).contains(p)) return i;
+        }
+        return -1;
+    }
+
+    Drag zone_for(const project::AudioClip& c, juce::Rectangle<float> r, juce::Point<float> p) const
+    {
+        const bool wide = r.getWidth() >= 4.0f * kEdge;
+        if (wide && p.y < r.getY() + 12.0f) {
+            const float fi = static_cast<float>(m_.x_of_seconds(c.start_seconds + c.fade_in));
+            const float fo = static_cast<float>(m_.x_of_seconds(c.end_seconds() - c.fade_out));
+            if (std::abs(p.x - std::max(fi, r.getX() + 4.0f)) <= kEdge) return Drag::FadeIn;
+            if (std::abs(p.x - std::min(fo, r.getRight() - 4.0f)) <= kEdge) return Drag::FadeOut;
+        }
+        if (gain_rect(r).expanded(2.0f).contains(p)) return Drag::Gain;
+        if (p.x - r.getX() <= kEdge) return Drag::TrimLeft;
+        if (r.getRight() - p.x <= kEdge) return Drag::TrimRight;
+        return Drag::Move;
+    }
+
+    void show_clip_menu(const LaneView& lane, const project::AudioClip& c)
+    {
+        auto& session = m_.ctx.session;
+        const std::string track = lane.id, id = c.id;
+        juce::PopupMenu menu;
+        menu.addSectionHeader(juce::String(c.name.empty() ? std::string("Clip") : c.name));
+        if (c.lane > 0)
+            menu.addItem("Promote take", [&session, track, id] { promote_take(session, track, id); });
+        menu.addItem(c.muted ? "Unmute clip" : "Mute clip", [this, track, id, muted = c.muted] {
+            m_.ctx.session.update_audio_clip(track, id, unique_label(muted ? "Unmute clip" : "Mute clip"),
+                                             [muted](project::AudioClip& x) { x.muted = !muted; });
+        });
+        juce::PopupMenu gain;
+        for (double db : {6.0, 3.0, 0.0, -3.0, -6.0, -12.0})
+            gain.addItem(db_text(db), true, std::abs(c.gain_db - db) < 0.05, [this, track, id, db] {
+                m_.ctx.session.update_audio_clip(track, id, unique_label("Clip gain"),
+                                                 [db](project::AudioClip& x) { x.gain_db = db; });
+            });
+        gain.addSeparator();
+        gain.addItem("Drag the dB box on the clip to fine-tune", false, false, [] {});
+        menu.addSubMenu("Clip gain (" + db_text(c.gain_db) + ")", gain);
+        menu.addItem("Remove fades", c.fade_in > 0.0 || c.fade_out > 0.0, false, [this, track, id] {
+            m_.ctx.session.update_audio_clip(track, id, unique_label("Remove fades"), [](project::AudioClip& x) {
+                x.fade_in = 0.0;
+                x.fade_out = 0.0;
+            });
+        });
+        if (!lane.takes.empty()) {
+            const bool open = m_.show_takes.count(track) > 0;
+            menu.addItem(open ? "Hide take lanes" : "Show take lanes", [this, track] { toggle_takes(track); });
+        }
+        menu.addSeparator();
+        menu.addItem("Delete clip", [this, track, id] {
+            select_clip({}, {});
+            m_.ctx.session.remove_audio_clip(track, id);
+        });
+        menu.showMenuAsync({});
+    }
+
+    void paint_header(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> row, bool selected)
+    {
+        auto header = row.withWidth(kHeader).withHeight(kLaneHeight);
         g.setColour(selected ? colours::panel_raised : colours::panel);
-        g.fillRect(header.withTrimmedRight(1));
+        g.fillRect(row.withWidth(kHeader).withTrimmedRight(1));
         g.setColour(l.colour);
         g.fillRect(header.withWidth(5));
         auto text = header.reduced(14, 7).withTrimmedLeft(-2);
         g.setColour(l.reference ? colours::accent_warm : (selected ? colours::text : colours::text.withAlpha(0.85f)));
         g.setFont(juce::FontOptions(13.0f, selected ? juce::Font::bold : juce::Font::plain));
-        g.drawText(l.name, text.removeFromTop(18), juce::Justification::centredLeft, true);
+        auto name_row = text.removeFromTop(18);
+        if (l.armed) {
+            g.setColour(colours::playhead);
+            g.fillEllipse(name_row.removeFromRight(10).withSizeKeepingCentre(9, 9).toFloat());
+            g.setColour(l.reference ? colours::accent_warm : (selected ? colours::text : colours::text.withAlpha(0.85f)));
+        }
+        g.drawText(l.name, name_row, juce::Justification::centredLeft, true);
         g.setColour(colours::text_dim);
         g.setFont(juce::FontOptions(11.0f));
-        g.drawText(l.reference ? juce::String("Temp / reference") : l.version, text.removeFromTop(15),
-                   juce::Justification::centredLeft, true);
-        if (!l.reference) {
+        juce::String sub = l.reference ? juce::String("Temp / reference")
+                           : l.audio   ? juce::String(l.stereo ? "Audio - stereo" : "Audio - mono")
+                                       : l.version;
+        if (l.armed) sub << "  - armed";
+        g.drawText(sub, text.removeFromTop(15), juce::Justification::centredLeft, true);
+        if (!l.takes.empty()) {
+            const bool open = m_.show_takes.count(l.id) > 0;
+            auto d = disclosure_rect(row);
+            juce::Path tri;
+            const float cx = static_cast<float>(d.getX()) + 4.0f, cy = static_cast<float>(d.getCentreY());
+            if (open) tri.addTriangle(cx - 4.0f, cy - 2.5f, cx + 4.0f, cy - 2.5f, cx, cy + 3.0f);
+            else tri.addTriangle(cx - 2.5f, cy - 4.0f, cx - 2.5f, cy + 4.0f, cx + 3.0f, cy);
+            g.setColour(colours::text_dim);
+            g.fillPath(tri);
+            g.setFont(juce::FontOptions(10.5f));
+            const int n = static_cast<int>(l.takes.size());
+            g.drawText(juce::String(n) + (n == 1 ? " take lane" : " take lanes"), d.withTrimmedLeft(12),
+                       juce::Justification::centredLeft, true);
+        } else if (!l.reference && !l.audio) {
             int count = static_cast<int>(l.score_notes.size());
             for (const auto& r : l.regions) count += static_cast<int>(r.notes.size());
             if (count > 0) {
                 g.setFont(juce::FontOptions(10.0f));
                 g.drawText(juce::String(count) + (count == 1 ? " note" : " notes"), text, juce::Justification::centredLeft);
+            }
+        } else if (l.audio) {
+            int n = 0;
+            for (const auto& c : l.clips) n += c.lane == 0 ? 1 : 0;
+            if (n > 0) {
+                g.setFont(juce::FontOptions(10.0f));
+                g.drawText(juce::String(n) + (n == 1 ? " clip" : " clips"), text, juce::Justification::centredLeft);
+            }
+        }
+    }
+
+    void paint_clip(juce::Graphics& g, const LaneView& l, std::size_t index, juce::Rectangle<int> row,
+                    juce::Rectangle<int> body, bool take_row)
+    {
+        const auto& c = l.clips[index];
+        const auto r = clip_rect(c, row);
+        if (r.getRight() < body.getX() || r.getX() > body.getRight()) return;
+        const bool selected = m_.clip_track == l.id && m_.clip_id == c.id;
+        const juce::String name(c.name.empty() ? juce::File(juce::String(c.file)).getFileNameWithoutExtension() : juce::String(c.name));
+        const std::string& path = l.clip_paths[index];
+
+        if (!m_.waveforms.exists(path)) {
+            // Missing file: hatched, named, still movable and deletable.
+            g.setColour(colours::missing.withAlpha(0.12f));
+            g.fillRoundedRectangle(r, 3.0f);
+            {
+                juce::Graphics::ScopedSaveState s(g);
+                g.reduceClipRegion(r.toNearestInt());
+                g.setColour(colours::missing.withAlpha(0.35f));
+                for (float x = r.getX() - r.getHeight(); x < r.getRight(); x += 9.0f)
+                    g.drawLine(x, r.getBottom(), x + r.getHeight(), r.getY(), 1.0f);
+                g.setColour(colours::text);
+                g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+                g.drawText("Missing: " + name, r.reduced(6.0f, 0.0f), juce::Justification::centredLeft, true);
+            }
+            g.setColour(selected ? colours::text : colours::missing);
+            g.drawRoundedRectangle(r, 3.0f, selected ? 2.0f : 1.0f);
+            return;
+        }
+
+        const float alpha = c.muted ? 0.45f : (take_row ? 0.75f : 1.0f);
+        const juce::Colour colour = l.colour;
+        g.setColour(colour.withAlpha(0.2f * alpha));
+        g.fillRoundedRectangle(r, 3.0f);
+        const auto band = r.withHeight(13.0f);
+        g.setColour(colour.withAlpha(0.45f * alpha));
+        g.fillRoundedRectangle(band, 3.0f);
+
+        // Waveform: only the visible part is drawn, so close zoom stays cheap.
+        auto wave = r.withTrimmedTop(14.0f).reduced(0.0f, 1.0f);
+        const auto visible = wave.getIntersection(body.toFloat());
+        if (auto* thumb = m_.waveforms.get(path); thumb && !visible.isEmpty() && wave.getWidth() > 0.0f) {
+            const double t0 = c.source_offset + c.length * (visible.getX() - wave.getX()) / wave.getWidth();
+            const double t1 = c.source_offset + c.length * (visible.getRight() - wave.getX()) / wave.getWidth();
+            const float gain = juce::Decibels::decibelsToGain(static_cast<float>(c.gain_db));
+            g.setColour((c.muted ? colours::text_dim : colour.brighter(0.75f)).withAlpha(0.9f * alpha));
+            thumb->drawChannels(g, visible.toNearestInt(), t0, t1, gain);
+        }
+
+        // Fades as curves; what they take away is shaded.
+        const float top = wave.getY(), bottom = wave.getBottom();
+        auto curve = [&](float xa, float xb, bool in) {
+            juce::Path shade, line;
+            constexpr int kSteps = 24;
+            shade.startNewSubPath(xa, top);
+            for (int i = 0; i <= kSteps; ++i) {
+                const float t = static_cast<float>(i) / kSteps;
+                const float level = in ? std::sin(t * juce::MathConstants<float>::halfPi)
+                                       : std::cos(t * juce::MathConstants<float>::halfPi);
+                const float x = xa + (xb - xa) * t, y = bottom - (bottom - top) * level;
+                shade.lineTo(x, y);
+                if (i == 0) line.startNewSubPath(x, y);
+                else line.lineTo(x, y);
+            }
+            shade.lineTo(xb, top);
+            shade.closeSubPath();
+            g.setColour(juce::Colours::black.withAlpha(0.35f));
+            g.fillPath(shade);
+            g.setColour(colours::text.withAlpha(0.8f));
+            g.strokePath(line, juce::PathStrokeType(1.2f));
+        };
+        const float fi = static_cast<float>(m_.x_of_seconds(c.start_seconds + c.fade_in));
+        const float fo = static_cast<float>(m_.x_of_seconds(c.end_seconds() - c.fade_out));
+        if (c.fade_in > 0.0) curve(r.getX(), fi, true);
+        if (c.fade_out > 0.0) curve(fo, r.getRight(), false);
+
+        g.setColour(colours::text.withAlpha(alpha));
+        g.setFont(juce::FontOptions(10.0f));
+        juce::String label = name;
+        if (c.muted) label << " (muted)";
+        g.drawText(label, band.reduced(5.0f, 0.0f).withTrimmedRight(gain_rect(r).isEmpty() ? 0.0f : 56.0f),
+                   juce::Justification::centredLeft, true);
+
+        // Clip gain box (drag up/down) and fade handles.
+        if (const auto gr = gain_rect(r); !gr.isEmpty() && (selected || std::abs(c.gain_db) > 0.05)) {
+            g.setColour(colours::background.withAlpha(0.7f));
+            g.fillRoundedRectangle(gr, 2.0f);
+            g.setColour(std::abs(c.gain_db) > 0.05 ? colours::accent_warm : colours::text_dim);
+            g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+            g.drawText(db_text(c.gain_db), gr, juce::Justification::centred, false);
+        }
+        if (selected && r.getWidth() >= 4.0f * kEdge) {
+            g.setColour(colours::text);
+            for (float x : {std::max(fi, r.getX() + 4.0f), std::min(fo, r.getRight() - 4.0f)})
+                g.fillRect(juce::Rectangle<float>(x - 3.5f, top - 3.5f, 7.0f, 7.0f));
+        }
+        g.setColour(selected ? colours::text : colour.withAlpha(0.8f * alpha));
+        g.drawRoundedRectangle(r, 3.0f, selected ? 2.0f : 1.0f);
+    }
+
+    void paint_lane(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> rows, juce::Rectangle<int> timeline,
+                    bool selected)
+    {
+        const auto row = rows.withHeight(kLaneHeight);
+        paint_header(g, l, rows, selected);
+
+        // Take lanes under the track.
+        if (m_.row_height(l) > kLaneHeight) {
+            for (std::size_t k = 0; k < l.takes.size(); ++k) {
+                const auto take_row = juce::Rectangle<int>(0, row.getBottom() + static_cast<int>(k) * kTakeHeight,
+                                                           rows.getWidth(), kTakeHeight);
+                g.setColour(colours::background.darker(0.25f));
+                g.fillRect(take_row.withLeft(kHeader).withRight(timeline.getRight()));
+                g.setColour(colours::text_dim);
+                g.setFont(juce::FontOptions(11.0f));
+                g.drawText("Take lane " + juce::String(l.takes[k]), take_row.withWidth(kHeader).reduced(22, 0),
+                           juce::Justification::centredLeft, true);
+                g.setColour(colours::outline.withAlpha(0.5f));
+                g.drawHorizontalLine(take_row.getBottom() - 1, static_cast<float>(kHeader), static_cast<float>(take_row.getRight()));
+                const auto body = take_row.withLeft(kHeader).withRight(timeline.getRight());
+                juce::Graphics::ScopedSaveState state(g);
+                g.reduceClipRegion(body);
+                for (std::size_t i = 0; i < l.clips.size(); ++i)
+                    if (l.clips[i].lane == l.takes[k]) paint_clip(g, l, i, take_row, body, true);
             }
         }
 
@@ -680,19 +1318,53 @@ private:
             g.fillRect(body);
         }
         g.setColour(colours::outline.withAlpha(0.8f));
-        g.drawHorizontalLine(row.getBottom() - 1, 0.0f, static_cast<float>(row.getRight()));
+        g.drawHorizontalLine(rows.getBottom() - 1, 0.0f, static_cast<float>(rows.getRight()));
+
+        bool has_main_clips = false;
+        for (const auto& c : l.clips) has_main_clips = has_main_clips || c.lane == 0;
 
         if (l.reference) {
             g.setColour(colours::accent_warm.withAlpha(0.06f));
             for (int x = body.getX() - body.getHeight(); x < body.getRight(); x += 14)
                 g.drawLine(static_cast<float>(x), static_cast<float>(body.getBottom()),
                            static_cast<float>(x + body.getHeight()), static_cast<float>(body.getY()), 1.0f);
-            g.setColour(colours::accent_warm.withAlpha(0.6f));
-            g.setFont(juce::FontOptions(11.0f, juce::Font::italic));
-            g.drawText("Temp / reference - no MIDI", body.reduced(10, 0), juce::Justification::centredLeft);
-            return;
+            if (!has_main_clips) {
+                g.setColour(colours::accent_warm.withAlpha(0.6f));
+                g.setFont(juce::FontOptions(11.0f, juce::Font::italic));
+                g.drawText("Temp / reference - no MIDI", body.reduced(10, 0), juce::Justification::centredLeft);
+            }
+        } else if (l.audio) {
+            if (!has_main_clips && !(l.armed && m_.recording)) {
+                g.setColour(colours::text_dim.withAlpha(0.5f));
+                g.setFont(juce::FontOptions(11.0f, juce::Font::italic));
+                g.drawText(l.armed ? "Armed - press Record and Play to record here"
+                                   : "Empty audio track - record, or File > Import Audio",
+                           body.reduced(10, 0), juce::Justification::centredLeft);
+            }
+        } else {
+            paint_notes(g, l, body);
         }
 
+        for (std::size_t i = 0; i < l.clips.size(); ++i)
+            if (l.clips[i].lane == 0) paint_clip(g, l, i, row, body, false);
+
+        // A pass being recorded grows from where it started to the playhead.
+        if (l.armed && m_.recording && m_.playhead > m_.record_start) {
+            const float x0 = static_cast<float>(m_.x_of(static_cast<double>(m_.record_start)));
+            const float x1 = static_cast<float>(m_.x_of(static_cast<double>(m_.playhead)));
+            auto rr = juce::Rectangle<float>(x0, static_cast<float>(row.getY()) + 3.0f, x1 - x0,
+                                             static_cast<float>(row.getHeight()) - 6.0f);
+            g.setColour(colours::playhead.withAlpha(0.28f));
+            g.fillRoundedRectangle(rr, 3.0f);
+            g.setColour(colours::playhead);
+            g.drawRoundedRectangle(rr, 3.0f, 1.2f);
+            g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+            g.drawText("Recording", rr.reduced(5.0f, 2.0f).removeFromBottom(12.0f), juce::Justification::centredRight, false);
+        }
+    }
+
+    void paint_notes(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> body)
+    {
         const auto notes_area = body.reduced(0, 5).toFloat();
         const int span = std::max(1, l.hi - l.lo + 1);
         const float row_h = notes_area.getHeight() / static_cast<float>(span);
@@ -746,6 +1418,10 @@ private:
     Model& m_;
     juce::ScrollBar vscroll_{true};
     int scroll_y_ = 0;
+    Drag drag_ = Drag::None;
+    std::string drag_track_, drag_label_;
+    project::AudioClip drag_clip_;
+    double file_length_ = 0.0;  ///< Of the dragged clip's file, when known.
 };
 
 // --- Divider between the lanes and the piano roll ----------------------------------------------
@@ -845,13 +1521,14 @@ public:
         const auto keys = juce::Rectangle<int>(0, grid.getY(), kHeader, grid.getHeight());
         const auto vel = velocity_area();
 
-        if (!l || l->reference) {
+        if (!l || l->reference || l->audio) {
             g.setColour(colours::panel);
             g.fillRect(getLocalBounds().withTrimmedTop(kRollHeader));
             g.setColour(colours::text_dim);
             g.setFont(juce::FontOptions(14.0f));
-            g.drawText(l ? "Temp / reference tracks hold no MIDI - select an instrument track"
-                         : "Select an instrument track to edit its MIDI",
+            g.drawText(!l           ? "Select an instrument track to edit its MIDI"
+                       : l->audio   ? "Audio tracks hold no MIDI - edit clips in the lanes above (drag, trim, fade; right-click for more)"
+                                    : "Temp / reference tracks hold no MIDI - select an instrument track",
                        getLocalBounds().withTrimmedTop(kRollHeader), juce::Justification::centred);
             return;
         }
@@ -874,7 +1551,7 @@ public:
         const auto* l = m_.selected_lane();
         juce::String hint;
         auto shape = juce::MouseCursor::NormalCursor;
-        if (l && !l->reference && grid_area().contains(e.getPosition())) {
+        if (l && !l->reference && !l->audio && grid_area().contains(e.getPosition())) {
             bool edge = false;
             if (hit_region_note(*l, e.position, edge)) {
                 shape = edge ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::DraggingHandCursor;
@@ -894,7 +1571,7 @@ public:
         grabKeyboardFocus();
         const auto* l = m_.selected_lane();
         drag_ = Drag::None;
-        if (!l || l->reference) return;
+        if (!l || l->reference || l->audio) return;
         const auto pos = e.position;
 
         if (keyboard_area().contains(e.getPosition())) {
@@ -1684,6 +2361,11 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
         toolbar.roll_button().onClick = [this] { set_roll_visible(toolbar.roll_button().getToggleState()); };
         model.view_changed = [this] { view_changed(); };
         model.open_piano_roll = [this] { set_roll_visible(true); };
+        model.range_changed = [this] {
+            if (owner.on_range_changed) owner.on_range_changed();
+        };
+        ruler.setComponentID("sequencer_ruler");
+        lanes.setComponentID("sequencer_lanes");
         divider.on_begin = [this] { drag_start_height = roll_height; };
         divider.on_drag = [this](int dy) {
             roll_height = juce::jlimit(kRollHeader + kVelocity + 4 * kKeyHeight, std::max(200, owner.getHeight() - 160),
@@ -1763,10 +2445,21 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
 
     void set_playhead(Ticks tick, bool playing)
     {
+        // Recording: the pass started record_seconds() before the playhead.
+        const bool recording = model.ctx.engine.recording();
+        if (recording) {
+            const double start = model.ctx.engine.position_seconds() - model.ctx.engine.record_seconds();
+            model.record_start = model.tempo.tick_at_seconds(std::max(0.0, start));
+        }
+        if (recording != model.recording) {
+            model.recording = recording;
+            lanes.repaint();
+        }
         if (tick == model.playhead && playing == model.playing) return;
         const Ticks old = model.playhead;
         model.playhead = tick;
         model.playing = playing;
+        if (recording) lanes.repaint();
         if (playing) {
             const double x = model.x_of(static_cast<double>(tick));
             const double right = kHeader + model.timeline_width;
@@ -1802,6 +2495,32 @@ SequencerView::SequencerView(AppContext& context) : impl_(std::make_unique<Impl>
 SequencerView::~SequencerView() = default;
 
 void SequencerView::set_playhead(Ticks tick, bool playing) { impl_->set_playhead(tick, playing); }
+
+std::pair<Ticks, Ticks> SequencerView::range() const { return {impl_->model.range_start, impl_->model.range_end}; }
+
+void SequencerView::set_range(Ticks start, Ticks end)
+{
+    impl_->model.range_start = std::max<Ticks>(0, std::min(start, end));
+    impl_->model.range_end = std::max<Ticks>(0, std::max(start, end));
+    repaint();
+    if (on_range_changed) on_range_changed();
+}
+
+void SequencerView::set_punch_display(bool on)
+{
+    impl_->model.punch = on;
+    repaint();
+}
+
+bool SequencerView::promote_take(session::Session& session, const std::string& track_id, const std::string& clip_id)
+{
+    return LaneArea::promote_take(session, track_id, clip_id);
+}
+
+std::pair<std::string, std::string> SequencerView::selected_clip() const
+{
+    return {impl_->model.clip_track, impl_->model.clip_id};
+}
 
 void SequencerView::paint(juce::Graphics& g) { g.fillAll(colours::background); }
 

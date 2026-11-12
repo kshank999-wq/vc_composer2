@@ -1,6 +1,7 @@
 #include "ui/TrackPanel.h"
 
 #include "audio/PlaceholderSynth.h"
+#include "ui/AudioTrackStyle.h"
 #include "ui/Theme.h"
 
 namespace vcc::desktop {
@@ -17,11 +18,62 @@ juce::Colour status_colour(const project::Track& t, const juce::String& engine_s
     }
 }
 
-/// One track row: colour, name, version, M/S, status.
-class TrackRow final : public juce::Component {
+bool recordable(const project::Track& t)
+{
+    return t.kind == project::TrackKind::Audio || t.kind == project::TrackKind::Reference;
+}
+
+/// Record-arm button: a red dot, lit when the track is armed.
+class ArmButton final : public juce::Button {
 public:
+    ArmButton() : juce::Button("Arm") {}
+    void paintButton(juce::Graphics& g, bool highlighted, bool down) override
+    {
+        auto r = getLocalBounds().toFloat().reduced(0.5f);
+        const juce::Colour red{0xffe23b2e};
+        const bool on = getToggleState();
+        g.setColour(on ? red.withAlpha(0.25f) : (down ? colours::panel_raised.brighter(0.1f) : colours::panel_raised));
+        g.fillRoundedRectangle(r, 3.0f);
+        g.setColour(on ? red : (highlighted ? colours::outline.brighter(0.3f) : colours::outline));
+        g.drawRoundedRectangle(r, 3.0f, 1.0f);
+        const float d = std::min(r.getWidth(), r.getHeight()) * 0.5f;
+        g.setColour(on ? red : red.withAlpha(highlighted ? 0.55f : 0.35f));
+        g.fillEllipse(r.withSizeKeepingCentre(d, d));
+    }
+};
+
+/// One track row: colour, name, version, M/S, status; recordable tracks add
+/// record arm, input, monitoring and an input meter (Main Spec §11).
+class TrackRow final : public juce::Component, private juce::Timer {
+public:
+    static constexpr int kHeight = 52;
+    static constexpr int kRecordableHeight = 78;
+
     TrackRow(AppContext& c, std::string id) : context_(c), id_(std::move(id))
     {
+        addChildComponent(arm_);
+        addChildComponent(input_);
+        addChildComponent(monitor_);
+        arm_.setClickingTogglesState(false);
+        arm_.setTooltip("Record arm: the next recording pass goes onto this track");
+        arm_.setComponentID("arm_" + juce::String(id_));
+        arm_.onClick = [this] {
+            const auto* t = context_.session.data().find_track(id_);
+            if (t) context_.session.set_record_armed(id_, !t->record_armed);
+        };
+        input_.setTooltip("Input: the device channel(s) this track records");
+        input_.setComponentID("input_" + juce::String(id_));
+        input_.onChange = [this] { input_chosen(input_.getSelectedId()); };
+        monitor_.setTooltip("Monitoring: Auto hears the input while armed (stopped or recording); Input always; Off never");
+        monitor_.setComponentID("monitor_" + juce::String(id_));
+        monitor_.addItem("Auto", 1);
+        monitor_.addItem("Input", 2);
+        monitor_.addItem("Off", 3);
+        monitor_.onChange = [this] {
+            const int sel = monitor_.getSelectedId();
+            const std::string mode = sel == 2 ? "input" : sel == 3 ? "off" : "auto";
+            context_.session.update_track_mix(id_, "Monitor", [mode](project::Track& t) { t.monitor = mode; });
+        };
         addAndMakeVisible(version_);
         addAndMakeVisible(mute_);
         addAndMakeVisible(solo_);
@@ -65,7 +117,31 @@ public:
         version_.setVisible(t->kind != project::TrackKind::Folder && !t->versions.empty());
         mute_.setVisible(t->kind != project::TrackKind::Folder);
         solo_.setVisible(t->kind != project::TrackKind::Folder);
+
+        const bool rec = recordable(*t);
+        for (juce::Component* comp : std::initializer_list<juce::Component*>{&arm_, &input_, &monitor_})
+            comp->setVisible(rec);
+        if (rec) {
+            arm_.setToggleState(t->record_armed, juce::dontSendNotification);
+            fill_inputs(*t);
+            monitor_.setSelectedId(t->monitor == "input" ? 2 : t->monitor == "off" ? 3 : 1, juce::dontSendNotification);
+        }
+        if (rec && t->record_armed) {
+            if (!isTimerRunning()) startTimerHz(24);
+        } else {
+            stopTimer();
+            level_[0] = level_[1] = 0.0f;
+        }
+        resized();
         repaint();
+    }
+
+    int preferred_height() const
+    {
+        const auto* t = context_.session.data().find_track(id_);
+        if (!t) return kHeight;
+        if (t->kind == project::TrackKind::Folder) return 24;
+        return recordable(*t) ? kRecordableHeight : kHeight;
     }
 
     void paint(juce::Graphics& g) override
@@ -77,7 +153,7 @@ public:
         auto r = getLocalBounds();
         g.setColour(selected ? colours::selection.withAlpha(0.35f) : (folder ? colours::background : colours::panel));
         g.fillRect(r);
-        g.setColour(colour_from_hex(t->color));
+        g.setColour(t->kind == project::TrackKind::Audio ? audio_track_colour(*t) : colour_from_hex(t->color));
         g.fillRect(r.removeFromLeft(folder ? 3 : 5));
         g.setColour(colours::outline);
         g.drawHorizontalLine(getHeight() - 1, 0.0f, static_cast<float>(getWidth()));
@@ -98,12 +174,49 @@ public:
         g.setFont(juce::FontOptions(11.0f));
         juce::String sub = t->kind == project::TrackKind::Reference ? juce::String("Temp - not exported")
                                                                     : status;
-        g.drawText(sub, text.withTrimmedRight(150).withTrimmedBottom(4), juce::Justification::centredLeft, true);
+        const bool rec = recordable(*t);
+        if (t->kind == project::TrackKind::Audio) sub = t->input_stereo ? "Stereo" : "Mono";
+        g.drawText(sub, text.withHeight(kHeight - 24).withTrimmedRight(rec ? 172 : 150).withTrimmedBottom(4),
+                   juce::Justification::centredLeft, true);
+
+        // Input meter of an armed track (what the next pass will record).
+        if (rec && !meter_area_.isEmpty()) {
+            auto m = meter_area_.toFloat();
+            g.setColour(colours::background);
+            g.fillRoundedRectangle(m, 2.0f);
+            const int channels = t->input_stereo ? 2 : 1;
+            const float bar_h = (m.getHeight() - 3.0f) / static_cast<float>(channels);
+            for (int ch = 0; ch < channels; ++ch) {
+                // -60..0 dBFS across the meter.
+                const float db = juce::Decibels::gainToDecibels(level_[ch], -60.0f);
+                const float frac = juce::jlimit(0.0f, 1.0f, (db + 60.0f) / 60.0f);
+                auto bar = juce::Rectangle<float>(m.getX() + 1.0f, m.getY() + 1.0f + static_cast<float>(ch) * (bar_h + 1.0f),
+                                                  (m.getWidth() - 2.0f) * frac, bar_h);
+                g.setColour(level_[ch] >= 1.0f ? colours::missing : db > -6.0f ? colours::fallback : colours::exact);
+                g.fillRect(bar);
+            }
+            g.setColour(colours::outline);
+            g.drawRoundedRectangle(m, 2.0f, 1.0f);
+        }
     }
 
     void resized() override
     {
-        auto r = getLocalBounds().withTrimmedTop(24).reduced(6, 3);
+        const auto* t = context_.session.data().find_track(id_);
+        const bool rec = t && recordable(*t);
+        auto r = getLocalBounds().withTrimmedTop(24).withHeight(kHeight - 24).reduced(6, 3);
+        if (rec) {
+            arm_.setBounds(r.removeFromRight(22));
+            r.removeFromRight(3);
+            auto line = getLocalBounds().withTrimmedTop(kHeight - 2).withTrimmedBottom(5).withTrimmedLeft(22).withTrimmedRight(6);
+            meter_area_ = line.removeFromRight(46).reduced(0, 5);
+            line.removeFromRight(6);
+            monitor_.setBounds(line.removeFromRight(66));
+            line.removeFromRight(4);
+            input_.setBounds(line);
+        } else {
+            meter_area_ = {};
+        }
         solo_.setBounds(r.removeFromRight(22));
         r.removeFromRight(3);
         mute_.setBounds(r.removeFromRight(22));
@@ -137,11 +250,65 @@ public:
     const std::string& id() const noexcept { return id_; }
 
 private:
+    static constexpr int kNoInput = 1;
+    static constexpr int kFirstInput = 100;
+    static constexpr int kMono = 50, kStereo = 51;
+
+    void fill_inputs(const project::Track& t)
+    {
+        input_.clear(juce::dontSendNotification);
+        const int n = context_.engine.num_inputs();
+        input_.addItem("No input", kNoInput);
+        const int step = t.input_stereo ? 2 : 1;
+        for (int ch = 0; ch + (step - 1) < n; ch += step) {
+            juce::String name = context_.engine.input_name(ch);
+            if (t.input_stereo) name << " + " << context_.engine.input_name(ch + 1);
+            input_.addItem(name, kFirstInput + ch);
+        }
+        input_.addSeparator();
+        input_.addItem("Mono", kMono);
+        input_.addItem("Stereo", kStereo);
+        const bool valid = t.input >= 0 && t.input + (step - 1) < n;
+        input_.setSelectedId(valid ? kFirstInput + t.input : kNoInput, juce::dontSendNotification);
+        input_.setItemEnabled(kMono, t.input_stereo);
+        input_.setItemEnabled(kStereo, !t.input_stereo);
+        if (n == 0) input_.setTooltip("No audio input device is open - choose one in Tools > Audio and MIDI Settings");
+    }
+
+    void input_chosen(int id)
+    {
+        if (id == kMono || id == kStereo) {
+            const bool stereo = id == kStereo;
+            context_.session.update_track_mix(id_, "Input format", [stereo](project::Track& t) { t.input_stereo = stereo; });
+            return;
+        }
+        const int channel = id >= kFirstInput ? id - kFirstInput : -1;
+        context_.session.update_track_mix(id_, "Input", [channel](project::Track& t) { t.input = channel; });
+    }
+
+    void timerCallback() override
+    {
+        const auto* t = context_.session.data().find_track(id_);
+        if (!t || !t->record_armed || t->input < 0) {
+            level_[0] = level_[1] = 0.0f;
+        } else {
+            for (int ch = 0; ch < (t->input_stereo ? 2 : 1); ++ch) {
+                const float peak = context_.engine.take_input_peak(t->input + ch);
+                level_[ch] = std::max(peak, level_[ch] * 0.85f);  // fall back smoothly
+            }
+        }
+        repaint(meter_area_);
+    }
+
     static constexpr int kDuplicate = 9999;
     AppContext& context_;
     std::string id_;
     juce::ComboBox version_;
     juce::TextButton mute_{"M"}, solo_{"S"};
+    ArmButton arm_;
+    juce::ComboBox input_, monitor_;
+    juce::Rectangle<int> meter_area_;
+    float level_[2] = {0.0f, 0.0f};
 };
 
 }  // namespace
@@ -211,8 +378,7 @@ private:
         int y = 0;
         const int w = viewport_.getMaximumVisibleWidth();
         for (auto& r : rows_) {
-            const auto* t = context_.session.data().find_track(r->id());
-            const int h = t && t->kind == project::TrackKind::Folder ? 24 : 52;
+            const int h = r->preferred_height();
             r->setBounds(0, y, w, h);
             y += h;
         }
@@ -386,6 +552,15 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
               [&c, id, inc = t->include_in_export] { c.session.set_include_in_export(id, !inc); });
     m.addItem(juce::String("Status: ") + t->assignment.message, false, false, [] {});
     m.addSeparator();
+    if (recordable(*t)) {
+        m.addItem("Record arm", true, t->record_armed,
+                  [&c, id, armed = t->record_armed] { c.session.set_record_armed(id, !armed); });
+        m.addItem("Import audio onto this track...", [&c, id] {
+            c.session.select_track(id);
+            c.commands.invokeDirectly(cmd::importAudio, true);
+        });
+    }
+    m.addSeparator();
     m.addItem("Remove track", [&c, id] { c.session.remove_track(id); });
     m.showMenuAsync({});
 }
@@ -393,6 +568,8 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
 void TrackPanel::show_add_track_menu(AppContext& c, juce::Component* target)
 {
     juce::PopupMenu m;
+    m.addItem("Audio track (mono)", [&c] { c.session.add_audio_track("Audio", false); });
+    m.addItem("Audio track (stereo)", [&c] { c.session.add_audio_track("Audio", true); });
     m.addItem("Temp / reference track", [&c] { c.session.add_reference_track("Temp Score"); });
     std::map<std::string, juce::PopupMenu> by_family;
     for (const auto& i : c.session.catalogs().instruments.all()) {

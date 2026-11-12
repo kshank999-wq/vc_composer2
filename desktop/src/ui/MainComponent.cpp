@@ -5,6 +5,7 @@
 #include "ui/CueManager.h"
 #include "ui/Dialogs.h"
 #include "ui/VideoWindow.h"
+#include "ui/WaveformCache.h"
 #include "vcc/picture/Picture.h"
 #include "ui/Theme.h"
 #include "vcc/core/Files.h"
@@ -88,6 +89,18 @@ MainComponent::MainComponent(AppContext& context)
     });
 
     context_.engine.on_transport_changed = [this] { transport_.update_position(); };
+    // A recording pass was placed (one undo step), or failed.
+    context_.engine.on_recording_finished = [this](const juce::String& message, bool ok) {
+        context_.status(message);
+        transport_.update_position();
+        if (!ok)
+            juce::AlertWindow::showAsync(juce::MessageBoxOptions::makeOptionsOk(juce::MessageBoxIconType::WarningIcon,
+                                                                                "Recording", message, {}, this),
+                                         [](int) {});
+    };
+    sequencer_.on_range_changed = [this] {
+        if (punch_) set_punch(true);  // follow the new range, or turn off when it was cleared
+    };
     startTimerHz(30);
 }
 
@@ -97,6 +110,7 @@ MainComponent::~MainComponent()
     close_video_window();
     context_.session.remove_listener(listener_);
     context_.engine.on_transport_changed = nullptr;
+    context_.engine.on_recording_finished = nullptr;
     plugin_windows_.clear();
 }
 
@@ -342,6 +356,172 @@ void MainComponent::show_plugin_scanner()
     o.launchAsync();
 }
 
+// --- Recording and audio ------------------------------------------------------------------------
+
+void MainComponent::toggle_record()
+{
+    auto& engine = context_.engine;
+    const bool on = !engine.record_enabled();
+    engine.set_record_enabled(on);
+    if (on) {
+        int armed = 0;
+        for (const auto& t : context_.session.data().tracks) armed += t.record_armed ? 1 : 0;
+        context_.status(armed == 0 ? juce::String("Record enabled - arm a track (the red button in the track list) to record onto it")
+                                   : "Record enabled - Play records onto " + juce::String(armed) +
+                                         (armed == 1 ? " armed track" : " armed tracks"));
+    } else {
+        context_.status("Record off");
+    }
+    transport_.update_position();
+    context_.commands.commandStatusChanged();
+}
+
+void MainComponent::set_punch(bool on)
+{
+    const auto range = sequencer_.range();
+    if (on && range.second <= range.first) {
+        if (!punch_) context_.status("Drag across the sequencer ruler to choose the punch range first");
+        on = false;
+    }
+    const bool changed = on != punch_;
+    punch_ = on;
+    context_.engine.set_punch(on, range.first, range.second);
+    sequencer_.set_punch_display(on);
+    transport_.set_punch_state(on);
+    if (changed) {
+        if (on) {
+            const auto& m = context_.session.data().meter;
+            auto where = [&](Ticks t) {
+                const int bar = m.bar_at(t);
+                const auto sig = m.at_bar(bar);
+                return juce::String(bar) + "." + juce::String((t - m.bar_start(bar)) / sig.beat_ticks() + 1);
+            };
+            context_.status("Punch in at " + where(range.first) + ", out at " + where(range.second));
+        } else if (range.second > range.first) {
+            context_.status("Punch off");
+        }
+    }
+    context_.commands.commandStatusChanged();
+}
+
+void MainComponent::import_audio()
+{
+    chooser_ = std::make_unique<juce::FileChooser>("Import audio", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3");
+    chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles |
+                              juce::FileBrowserComponent::canSelectMultipleItems,
+                          [this](const juce::FileChooser& fc) {
+                              const auto files = fc.getResults();
+                              if (!files.isEmpty()) import_audio_files(files);
+                          });
+}
+
+std::vector<std::string> MainComponent::import_audio_files(const juce::Array<juce::File>& files)
+{
+    auto& s = context_.session;
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+
+    struct Item {
+        juce::File file;
+        WaveformCache::FileInfo info;
+    };
+    std::vector<Item> items;
+    juce::StringArray unreadable;
+    for (const auto& f : files) {
+        Item item{f, {}};
+        if (WaveformCache::read_info(formats, f, item.info)) items.push_back(item);
+        else unreadable.add(f.getFileName());
+    }
+    if (items.empty()) {
+        juce::AlertWindow::showAsync(juce::MessageBoxOptions::makeOptionsOk(
+                                         juce::MessageBoxIconType::WarningIcon, "Could not import audio",
+                                         "None of these files could be read as audio:\n" + unreadable.joinIntoString("\n"), {}, this),
+                                     [](int) {});
+        return {};
+    }
+
+    // The selected audio (or reference) track, or a new audio track.
+    std::string track_id;
+    if (const auto* t = s.data().find_track(s.selected_track());
+        t && (t->kind == project::TrackKind::Audio || t->kind == project::TrackKind::Reference))
+        track_id = t->id;
+    if (track_id.empty())
+        track_id = s.add_audio_track(items.front().file.getFileNameWithoutExtension().toStdString(),
+                                     items.front().info.channels > 1);
+    if (track_id.empty()) return {};
+
+    // Inside a saved project the files are copied into "Audio Files" and
+    // stored relative to the project; otherwise they are referenced where they are.
+    const std::string folder = s.audio_folder();
+    const juce::File audio_dir = folder.empty() ? juce::File() : juce::File(juce::String::fromUTF8(folder.c_str()));
+    if (audio_dir != juce::File()) audio_dir.createDirectory();
+    int copied = 0;
+    std::vector<std::pair<std::string, project::AudioClip>> clips;
+    double at = context_.engine.position_seconds();
+    for (const auto& item : items) {
+        std::string stored = item.file.getFullPathName().toStdString();
+        if (audio_dir.isDirectory()) {
+            juce::File dest = item.file.isAChildOf(audio_dir) ? item.file : audio_dir.getChildFile(item.file.getFileName());
+            if (dest != item.file && dest.exists())
+                dest = audio_dir.getNonexistentChildFile(item.file.getFileNameWithoutExtension(), item.file.getFileExtension(), false);
+            if (dest == item.file || item.file.copyFileTo(dest)) {
+                stored = (audio_dir.getFileName() + "/" + dest.getRelativePathFrom(audio_dir)).toStdString();
+                copied += dest == item.file ? 0 : 1;
+            }
+        }
+        project::AudioClip c;
+        c.name = item.file.getFileNameWithoutExtension().toStdString();
+        c.file = stored;
+        c.start_seconds = at;
+        c.length = item.info.length_seconds;
+        c.channels = item.info.channels;
+        c.file_sample_rate = item.info.sample_rate;
+        clips.emplace_back(track_id, c);
+        at += c.length;  // several files play one after another
+    }
+    const auto ids = s.add_audio_clips(clips, clips.size() == 1 ? "Import " + clips.front().second.name : "Import audio", false);
+    s.select_track(track_id);
+    juce::String msg = "Imported " + juce::String(static_cast<int>(ids.size())) + (ids.size() == 1 ? " audio file" : " audio files");
+    if (copied > 0) msg << " (copied into " << audio_dir.getFileName() << ")";
+    else if (folder.empty()) msg << " - referenced in place; save the project to keep copies with it";
+    if (!unreadable.isEmpty()) msg << "; could not read " << unreadable.joinIntoString(", ");
+    context_.status(msg);
+    return ids;
+}
+
+void MainComponent::new_audio_track()
+{
+    auto* w = new juce::AlertWindow("New Audio Track", "A track for recorded or imported audio", juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor("name", "Audio");
+    w->addComboBox("format", {"Mono", "Stereo"}, "Input");
+    w->getComboBoxComponent("format")->setSelectedItemIndex(0, juce::dontSendNotification);
+    w->addButton("Add", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int r) {
+        if (r != 1) return;
+        const bool stereo = w->getComboBoxComponent("format")->getSelectedItemIndex() == 1;
+        const juce::String name = w->getTextEditorContents("name").trim();
+        context_.session.add_audio_track(name.isEmpty() ? "Audio" : name.toStdString(), stereo);
+    }), true);
+}
+
+void MainComponent::new_bus(bool fx)
+{
+    auto* w = new juce::AlertWindow(fx ? "New Aux (FX) Bus" : "New Group Bus",
+                                    fx ? "An effects return fed by track sends" : "A subgroup / stem that tracks can be routed to",
+                                    juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor("name", fx ? "Reverb" : "Group");
+    w->addButton("Add", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    w->enterModalState(true, juce::ModalCallbackFunction::create([this, w, fx](int r) {
+        if (r != 1) return;
+        const juce::String name = w->getTextEditorContents("name").trim();
+        const std::string id = context_.session.add_bus(name.toStdString(), fx ? "fx" : "group");
+        if (const auto* b = context_.session.data().find_bus(id))
+            context_.status("Added " + juce::String(fx ? "aux bus " : "group bus ") + juce::String(b->name) + " - see the Mixer");
+    }), true);
+}
+
 void MainComponent::show_about()
 {
     juce::AlertWindow::showMessageBoxAsync(
@@ -359,7 +539,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
 {
     c.addArray({cmd::newProject, cmd::newFromTemplate, cmd::open, cmd::save, cmd::saveAs, cmd::exportMidi,
                 cmd::exportScoreSvg, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
-                cmd::toggleMetronome, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
+                cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::addAudioTrack, cmd::importAudio,
+                cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::about});
@@ -395,6 +576,20 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.setInfo("Metronome", "", "Transport", context_.engine.metronome() ? juce::ApplicationCommandInfo::isTicked : 0);
             info.addDefaultKeypress('k', cmdKey);
             break;
+        case cmd::toggleRecord:
+            // R, as in most DAWs; in the Composer's note entry R is the rest key and wins there.
+            info.setInfo("Record", "Record enable", "Transport", context_.engine.record_enabled() ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.addDefaultKeypress('r', 0);
+            break;
+        case cmd::togglePunch:
+            info.setInfo("Punch In/Out", "Record only inside the sequencer ruler range", "Transport",
+                         punch_ ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.addDefaultKeypress('p', cmdKey | shift);
+            break;
+        case cmd::addAudioTrack: info.setInfo("New Audio Track...", "", "Track", 0); info.addDefaultKeypress('t', cmdKey | shift); break;
+        case cmd::importAudio: info.setInfo("Import Audio...", "", "File", 0); info.addDefaultKeypress('i', cmdKey | juce::ModifierKeys::altModifier); break;
+        case cmd::addAuxBus: info.setInfo("New Aux (FX) Bus...", "", "Track", 0); break;
+        case cmd::addGroupBus: info.setInfo("New Group Bus...", "", "Track", 0); break;
         case cmd::showComposer:
             info.setInfo("Composer (score)", "", "View", workspace_ == Workspace::Composer ? juce::ApplicationCommandInfo::isTicked : 0);
             info.addDefaultKeypress('1', cmdKey);
@@ -457,6 +652,12 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::play: context_.engine.toggle_play(); break;
         case cmd::rewind: context_.engine.locate(0); break;
         case cmd::toggleMetronome: context_.engine.set_metronome(!context_.engine.metronome()); break;
+        case cmd::toggleRecord: toggle_record(); break;
+        case cmd::togglePunch: set_punch(!punch_); break;
+        case cmd::addAudioTrack: new_audio_track(); break;
+        case cmd::importAudio: import_audio(); break;
+        case cmd::addAuxBus: new_bus(true); break;
+        case cmd::addGroupBus: new_bus(false); break;
         case cmd::showComposer: show_workspace(Workspace::Composer); break;
         case cmd::showSequencer: show_workspace(Workspace::Sequencer); break;
         case cmd::showMixer: show_mixer(); break;
@@ -505,7 +706,7 @@ bool MainComponent::perform(const InvocationInfo& info)
 
 // --- Menus -------------------------------------------------------------------------------------
 
-juce::StringArray MainComponent::getMenuBarNames() { return {"File", "Edit", "View", "Track", "Tools", "Help"}; }
+juce::StringArray MainComponent::getMenuBarNames() { return {"File", "Edit", "View", "Transport", "Track", "Tools", "Help"}; }
 
 juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
 {
@@ -516,6 +717,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             for (auto id : {cmd::newFromTemplate, cmd::newProject, cmd::open}) m.addCommandItem(c, id);
             m.addSeparator();
             m.addCommandItem(c, cmd::importPicture);
+            m.addCommandItem(c, cmd::importAudio);
             m.addSeparator();
             for (auto id : {cmd::save, cmd::saveAs, cmd::saveAsTemplate}) m.addCommandItem(c, id);
             m.addSeparator();
@@ -528,20 +730,27 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         case 2:
             for (auto id : {cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo, cmd::showCueManager})
                 m.addCommandItem(c, id);
-            m.addSeparator();
-            for (auto id : {cmd::play, cmd::rewind, cmd::toggleMetronome, cmd::addHit}) m.addCommandItem(c, id);
             break;
         case 3:
-            for (auto id : {cmd::addTrack, cmd::duplicateVersion, cmd::loadInstrument, cmd::openInstrumentWindow,
-                            cmd::removeTrack})
-                m.addCommandItem(c, id);
+            for (auto id : {cmd::play, cmd::rewind}) m.addCommandItem(c, id);
+            m.addSeparator();
+            for (auto id : {cmd::toggleRecord, cmd::togglePunch}) m.addCommandItem(c, id);
+            m.addSeparator();
+            for (auto id : {cmd::toggleMetronome, cmd::addHit}) m.addCommandItem(c, id);
             break;
         case 4:
+            for (auto id : {cmd::addTrack, cmd::addAudioTrack}) m.addCommandItem(c, id);
+            for (auto id : {cmd::addAuxBus, cmd::addGroupBus}) m.addCommandItem(c, id);
+            m.addSeparator();
+            for (auto id : {cmd::duplicateVersion, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::removeTrack})
+                m.addCommandItem(c, id);
+            break;
+        case 5:
             for (auto id : {cmd::chordExplorer, cmd::ostinatoCreator, cmd::addTemplate}) m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::audioSettings, cmd::scanPlugins}) m.addCommandItem(c, id);
             break;
-        case 5: m.addCommandItem(c, cmd::about); break;
+        case 6: m.addCommandItem(c, cmd::about); break;
         default: break;
     }
     return m;

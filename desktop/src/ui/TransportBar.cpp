@@ -14,6 +14,15 @@ TransportBar::TransportBar(AppContext& context) : context_(context)
 {
     for (auto* b : {&rewind_, &play_, &click_, &composer_, &sequencer_, &mixer_, &picture_, &cues_, &chords_, &ostinato_})
         addAndMakeVisible(*b);
+    addAndMakeVisible(record_);
+    addAndMakeVisible(punch_);
+    record_.setTooltip("Record enable (R): recording runs while playing, onto every armed track");
+    record_.setComponentID("transport_record");
+    record_.onClick = [this] { context_.commands.invokeDirectly(cmd::toggleRecord, true); };
+    punch_.setTooltip("Punch in/out: record only inside the range dragged on the sequencer ruler");
+    punch_.setComponentID("transport_punch");
+    punch_.setColour(juce::TextButton::buttonOnColourId, colours::playhead.withAlpha(0.7f));
+    punch_.onClick = [this] { context_.commands.invokeDirectly(cmd::togglePunch, true); };
     rewind_.setTooltip("Return to the start (Home)");
     play_.setTooltip("Play / Stop (Space)");
     click_.setClickingTogglesState(true);
@@ -40,7 +49,14 @@ TransportBar::TransportBar(AppContext& context) : context_(context)
     timecode_.setFont(juce::FontOptions(15.0f));
     timecode_.setColour(juce::Label::textColourId, colours::accent_warm);
 
-    for (auto* l : {&tempo_label_, &meter_label_, &key_label_}) {
+    addAndMakeVisible(rec_time_);
+    rec_time_.setComponentID("transport_rec_time");
+    rec_time_.setJustificationType(juce::Justification::centred);
+    rec_time_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+    rec_time_.setColour(juce::Label::backgroundColourId, colours::background);
+    rec_time_.setColour(juce::Label::outlineColourId, colours::outline);
+    rec_time_.setTooltip("Length of the pass being recorded");
+    for (auto* l : {&tempo_label_, &meter_label_, &key_label_, &rec_label_}) {
         addAndMakeVisible(*l);
         l->setFont(juce::FontOptions(11.0f));
         l->setColour(juce::Label::textColourId, colours::text_dim);
@@ -112,6 +128,58 @@ void TransportBar::update_position()
     const bool playing = context_.engine.playing();
     play_.setButtonText(playing ? "Stop" : "Play");
     play_.setColour(juce::TextButton::buttonColourId, playing ? colours::accent : colours::panel_raised);
+
+    const bool recording = context_.engine.recording();
+    record_.set_state(context_.engine.record_enabled(), recording);
+    const double secs = recording ? context_.engine.record_seconds() : 0.0;
+    const int whole = static_cast<int>(secs);
+    rec_time_.setText(juce::String(whole / 60) + ":" + juce::String(whole % 60).paddedLeft('0', 2) + "." +
+                          juce::String(static_cast<int>((secs - whole) * 10.0)),
+                      juce::dontSendNotification);
+    rec_time_.setColour(juce::Label::textColourId, recording ? colours::playhead : colours::text_dim);
+}
+
+void TransportBar::set_punch_state(bool on) { punch_.setToggleState(on, juce::dontSendNotification); }
+
+void TransportBar::RecordButton::set_state(bool enabled, bool recording)
+{
+    // Repaint every frame while recording, so the pulse moves.
+    if (enabled == enabled_ && recording == recording_ && !recording) return;
+    enabled_ = enabled;
+    recording_ = recording;
+    repaint();
+}
+
+void TransportBar::RecordButton::paintButton(juce::Graphics& g, bool highlighted, bool down)
+{
+    auto r = getLocalBounds().toFloat().reduced(1.0f);
+    g.setColour(down ? colours::panel_raised.brighter(0.1f) : colours::panel_raised);
+    g.fillRoundedRectangle(r, 4.0f);
+    g.setColour(highlighted ? colours::outline.brighter(0.3f) : colours::outline);
+    g.drawRoundedRectangle(r, 4.0f, 1.0f);
+
+    const float d = std::min(r.getWidth(), r.getHeight()) * 0.5f;
+    const auto dot = r.withSizeKeepingCentre(d, d);
+    const juce::Colour red{0xffe23b2e};
+    if (enabled_ || recording_) {
+        // Glow: steady when armed, pulsing (about once a second) while recording.
+        float glow = 0.55f;
+        if (recording_) {
+            const double phase = std::fmod(juce::Time::getMillisecondCounterHiRes() / 1000.0, 1.0);
+            glow = 0.35f + 0.65f * static_cast<float>(0.5 + 0.5 * std::cos(phase * juce::MathConstants<double>::twoPi));
+        }
+        for (int i = 3; i >= 1; --i) {
+            g.setColour(red.withAlpha(0.12f * glow * static_cast<float>(4 - i)));
+            g.fillEllipse(dot.expanded(static_cast<float>(i) * 2.5f));
+        }
+        g.setColour(recording_ ? red.interpolatedWith(juce::Colours::white, 0.25f * glow) : red);
+        g.fillEllipse(dot);
+    } else {
+        g.setColour(red.withAlpha(highlighted ? 0.6f : 0.4f));
+        g.fillEllipse(dot);
+        g.setColour(red.withAlpha(0.9f));
+        g.drawEllipse(dot, 1.2f);
+    }
 }
 
 void TransportBar::paint(juce::Graphics& g)
@@ -131,25 +199,33 @@ void TransportBar::resized()
     };
     rewind_.setBounds(take(40));
     play_.setBounds(take(64));
-    click_.setBounds(take(52));
+    record_.setBounds(take(40));
+    punch_.setBounds(take(54));
+    click_.setBounds(take(50));
     r.removeFromLeft(6);
-    bars_.setBounds(take(120));
-    timecode_.setBounds(take(170));
-    r.removeFromLeft(6);
+    bars_.setBounds(take(112));
+    timecode_.setBounds(take(160));
     auto field = [&](juce::Label& label, juce::Component& c, int w) {
         auto a = take(w);
         label.setBounds(a.removeFromTop(12));
-        c.setBounds(a);
+        c.setBounds(a.withTrimmedTop(&c == &rec_time_ ? 1 : 0));
     };
+    field(rec_label_, rec_time_, 64);
+    r.removeFromLeft(6);
     field(tempo_label_, tempo_, 84);
     field(meter_label_, meter_, 70);
-    field(key_label_, key_, 140);
+    field(key_label_, key_, 124);
 
+    // The view and tool buttons on the right; those that would run into the
+    // transport on a narrow window are hidden.
+    const int left_edge = key_.getRight() + 12;
     auto right = getLocalBounds().reduced(8, 6);
     for (auto* b : {&ostinato_, &chords_, &cues_, &picture_, &mixer_, &sequencer_, &composer_}) {
-        b->setBounds(right.removeFromRight(b == &sequencer_ ? 86 : 64));
+        b->setBounds(right.removeFromRight(b == &sequencer_ ? 80 : 60));
         right.removeFromRight(6);
     }
+    for (auto* b : {&ostinato_, &chords_, &cues_, &picture_, &mixer_, &sequencer_, &composer_})
+        b->setVisible(b->getX() >= left_edge);
 }
 
 }  // namespace vcc::desktop
