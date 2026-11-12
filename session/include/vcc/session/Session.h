@@ -120,6 +120,8 @@ public:
     /// Stores a plug-in's state without an undo step (it changes whenever the
     /// composer touches the plug-in's own window).
     void store_plugin_state(const std::string& track_id, const std::string& state_base64);
+    /// The same for an effect plug-in in an insert slot of a track or bus.
+    void store_insert_plugin_state(const std::string& owner_id, int slot, const std::string& state_base64);
     bool set_tempo(double bpm);
     bool set_meter(const TimeSignature& signature);
     bool set_key(const std::string& key);

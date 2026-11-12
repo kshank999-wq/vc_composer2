@@ -424,6 +424,26 @@ bool Session::set_instrument_plugin(const std::string& id, const project::Plugin
     }));
 }
 
+void Session::store_insert_plugin_state(const std::string& owner_id, int slot, const std::string& state)
+{
+    bool changed = false;
+    project_.modify_unrecorded([&](project::ProjectData& d) {
+        std::vector<project::InsertSlot>* inserts = nullptr;
+        if (project::Track* t = d.find_track(owner_id)) inserts = &t->inserts;
+        else if (project::Bus* b = d.find_bus(owner_id)) inserts = &b->inserts;
+        if (!inserts || slot < 0 || slot >= static_cast<int>(inserts->size())) return;
+        auto& ins = (*inserts)[static_cast<std::size_t>(slot)];
+        if (ins.kind == "plugin" && ins.plugin.state_base64 != state) {
+            ins.plugin.state_base64 = state;
+            changed = true;
+        }
+    });
+    if (changed && !dirty_) {
+        dirty_ = true;
+        notify(Change::File);
+    }
+}
+
 void Session::store_plugin_state(const std::string& id, const std::string& state)
 {
     bool changed = false;

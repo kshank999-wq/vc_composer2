@@ -21,13 +21,13 @@
 namespace vcc::ipc {
 
 constexpr std::uint32_t kMagic = 0x56434332;  // "VCC2"
-constexpr std::uint32_t kVersion = 1;
+constexpr std::uint32_t kVersion = 2;
 constexpr int kMaxChannels = 16;
 constexpr int kMaxBlock = 8192;
 constexpr int kMaxMidi = 4096;
 constexpr int kRingSize = 2048;
 /// The command-line token both sides agree on (JUCE child-process handshake).
-inline const char* const kProcessId = "vcc-plugin-host-1";
+inline const char* const kProcessId = "vcc-plugin-host-2";
 
 struct MidiEvent {
     std::int32_t offset;
@@ -103,9 +103,11 @@ private:
     Shared* shared_ = nullptr;
 };
 
-/// A message: request id, command, then the command's fields.
+/// A message: request id, the instance it is for, command, then the
+/// command's fields. One host process can carry many instances.
 struct Message {
     std::int32_t id = 0;
+    std::int32_t instance = 0;
     juce::String command;
     juce::MemoryBlock payload;  ///< The fields, written with MemoryOutputStream.
 

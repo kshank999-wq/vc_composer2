@@ -2,6 +2,8 @@
 
 #include "audio/RemotePlugin.h"
 
+#include <algorithm>
+
 namespace vcc::desktop {
 
 namespace {
@@ -80,13 +82,88 @@ void PluginHost::set_host_tool(const juce::File& tool)
     host_override_ = tool;
 }
 
-void PluginHost::set_out_of_process(bool on)
+juce::StringArray PluginHost::hosting_mode_names()
 {
-    properties_->setValue("outOfProcessHosting", on);
+    return {"Inside VC Composer", "Each instance in its own process (safest)", "One process per plug-in",
+            "One process per manufacturer", "All plug-ins in one process (lightest)"};
+}
+
+namespace {
+const char* const kModeKeys[] = {"in_app", "each_instance", "per_plugin", "per_manufacturer", "shared"};
+}  // namespace
+
+PluginHost::HostingMode PluginHost::hosting_mode() const
+{
+    const auto key = properties_->getValue("hostingMode", {});
+    for (int i = 0; i < 5; ++i)
+        if (key == kModeKeys[i]) return static_cast<HostingMode>(i);
+    // Older settings had an on/off switch.
+    return properties_->getBoolValue("outOfProcessHosting", true) ? HostingMode::each_instance : HostingMode::in_app;
+}
+
+void PluginHost::set_hosting_mode(HostingMode mode)
+{
+    properties_->setValue("hostingMode", kModeKeys[static_cast<int>(mode)]);
     properties_->saveIfNeeded();
 }
 
-bool PluginHost::out_of_process() const { return properties_->getBoolValue("outOfProcessHosting", true); }
+void PluginHost::note_crash(const juce::String& identifier)
+{
+    std::lock_guard<std::mutex> lock(hosting_lock_);
+    isolated_.insert(identifier);
+}
+
+bool PluginHost::isolated(const juce::String& identifier) const
+{
+    std::lock_guard<std::mutex> lock(hosting_lock_);
+    return isolated_.count(identifier) > 0;
+}
+
+void PluginHost::clear_crash_isolation()
+{
+    std::lock_guard<std::mutex> lock(hosting_lock_);
+    isolated_.clear();
+}
+
+std::vector<std::pair<juce::String, int>> PluginHost::host_processes() const
+{
+    std::lock_guard<std::mutex> lock(hosting_lock_);
+    std::vector<std::pair<juce::String, int>> out;
+    for (const auto& w : all_processes_)
+        if (auto p = w.lock(); p && !p->crashed()) out.emplace_back(p->label(), p->instance_count());
+    return out;
+}
+
+std::shared_ptr<HostProcess> PluginHost::process_for(const juce::PluginDescription& d)
+{
+    const auto mode = hosting_mode();
+    juce::String key, label;
+    const bool alone = mode == HostingMode::each_instance || isolated(d.createIdentifierString());
+    if (!alone) {
+        if (mode == HostingMode::per_plugin) {
+            key = "plugin:" + d.createIdentifierString();
+            label = d.name;
+        } else if (mode == HostingMode::per_manufacturer) {
+            key = "maker:" + (d.manufacturerName.isEmpty() ? juce::String("Unknown") : d.manufacturerName);
+            label = d.manufacturerName.isEmpty() ? juce::String("Unknown manufacturer") : d.manufacturerName;
+        } else {
+            key = "shared";
+            label = "All plug-ins";
+        }
+    }
+    std::lock_guard<std::mutex> lock(hosting_lock_);
+    if (!alone)
+        if (auto it = processes_.find(key); it != processes_.end())
+            if (auto p = it->second.lock(); p && !p->crashed()) return p;
+    auto p = HostProcess::start(host_tool(), alone ? d.name : label);
+    if (!p) return nullptr;
+    if (!alone) processes_[key] = p;
+    all_processes_.erase(std::remove_if(all_processes_.begin(), all_processes_.end(),
+                                        [](const std::weak_ptr<HostProcess>& w) { return w.expired(); }),
+                         all_processes_.end());
+    all_processes_.push_back(p);
+    return p;
+}
 
 juce::File PluginHost::scanner_tool() const
 {
@@ -231,8 +308,13 @@ std::unique_ptr<juce::AudioPluginInstance> PluginHost::create(const project::Plu
     }
     if (hosts_out_of_process()) {
         // In its own process: a crash there leaves the session playing.
-        auto remote = RemotePluginInstance::create(host_tool(), *description, ref.state_base64, sample_rate, block_size,
-                                                   error);
+        auto process = process_for(*description);
+        if (!process) {
+            error = "the plug-in host process could not be started";
+            return nullptr;
+        }
+        auto remote = RemotePluginInstance::create(std::move(process), *description, ref.state_base64, sample_rate,
+                                                   block_size, error);
         if (remote) return remote;
         return nullptr;
     }

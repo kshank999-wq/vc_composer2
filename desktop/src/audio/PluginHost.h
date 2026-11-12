@@ -17,6 +17,8 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
+#include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -64,14 +66,31 @@ public:
 
     project::PluginRef ref_for(const juce::PluginDescription& description) const;
 
-    // --- Out-of-process hosting -----------------------------------------------------
-    /// Plug-ins run in their own processes (vcc_plugin_host, one per
-    /// instance) when the tool is installed and this is on (the default).
+    // --- Hosting modes --------------------------------------------------------------
+    /// Where plug-ins run. Out of the app, a crashing plug-in takes down only
+    /// its host process (and whatever else that process carries):
+    ///   in_app           inside VC Composer (lightest; a crash takes the app down)
+    ///   each_instance    every instance in its own process (safest; the default)
+    ///   per_plugin       all instances of one plug-in share a process
+    ///   per_manufacturer all of one manufacturer's plug-ins share a process
+    ///   shared           every plug-in in one process (lightest out of the app)
+    enum class HostingMode { in_app, each_instance, per_plugin, per_manufacturer, shared };
+    static juce::StringArray hosting_mode_names();
+    HostingMode hosting_mode() const;
+    void set_hosting_mode(HostingMode mode);
     juce::File host_tool() const;
     void set_host_tool(const juce::File& tool);
-    void set_out_of_process(bool on);
-    bool out_of_process() const;
-    bool hosts_out_of_process() const { return out_of_process() && host_tool().existsAsFile(); }
+    bool hosts_out_of_process() const { return hosting_mode() != HostingMode::in_app && host_tool().existsAsFile(); }
+    /// A plug-in whose process crashed this session; it runs in its own
+    /// process from its next load, whatever the mode (in a shared process
+    /// there is no telling which plug-in crashed it, so all of them are).
+    void note_crash(const juce::String& plugin_identifier);
+    bool isolated(const juce::String& plugin_identifier) const;
+    /// Lets plug-ins that crashed share processes again (the mode applies).
+    void clear_crash_isolation();
+    /// Host processes running now, and the instances each carries (for the
+    /// Plug-ins window and the checks).
+    std::vector<std::pair<juce::String, int>> host_processes() const;
 
     /// Creates and prepares a plug-in instance for a saved reference,
     /// restoring its state. Returns nullptr with a reason when the plug-in is
@@ -92,6 +111,11 @@ private:
     mutable std::mutex scan_lock_;
     juce::File scanner_override_;
     juce::File host_override_;
+    std::shared_ptr<class HostProcess> process_for(const juce::PluginDescription& description);
+    mutable std::mutex hosting_lock_;
+    std::map<juce::String, std::weak_ptr<class HostProcess>> processes_;
+    std::vector<std::weak_ptr<class HostProcess>> all_processes_;
+    std::set<juce::String> isolated_;
     std::atomic<int> scan_timeout_ms_{60000};
     std::map<juce::String, juce::String> failures_;
 };

@@ -1101,6 +1101,105 @@ void hosting_checks(AppContext& ctx, const juce::File& dir)
                                                     juce::String(rt_energy.load(), 3) + ")");
     auto* shown = dynamic_cast<RemotePluginInstance*>(e.insert_plugin(track, 0));
     check(shown && shown->show_editor(true) && shown->show_editor(false), "the plug-in's window opens in its own process");
+    e.stop();
+
+    // Hosting modes: how many processes carry an instrument and two effects.
+    const auto instrument = scan(ctx, VCC_TEST_PLUGIN);
+    if (!instrument) return;
+    using Mode = PluginHost::HostingMode;
+    const auto original = host.hosting_mode();
+    host.clear_crash_isolation();
+    // Counted against what other engines in this check already hold.
+    auto census = [&] {
+        int processes = 0, instances = 0;
+        for (const auto& [label, n] : host.host_processes()) {
+            ++processes;
+            instances += n;
+        }
+        return std::pair<int, int>{processes, instances};
+    };
+    auto processes_for = [&](Mode mode) {
+        host.set_hosting_mode(mode);
+        const auto base = census();
+        juce::String why;
+        std::vector<std::unique_ptr<juce::AudioPluginInstance>> held;
+        for (const auto* ref : {&*instrument, &*effect, &*effect}) held.push_back(host.create(*ref, 48000.0, 512, why));
+        const auto now = census();
+        int is_remote = 0;
+        for (const auto& h : held) is_remote += dynamic_cast<RemotePluginInstance*>(h.get()) != nullptr;
+        return std::tuple<int, int, int>{now.first - base.first, now.second - base.second, is_remote};
+    };
+    const auto [each_p, each_i, each_r] = processes_for(Mode::each_instance);
+    const auto [plug_p, plug_i, plug_r] = processes_for(Mode::per_plugin);
+    const auto [maker_p, maker_i, maker_r] = processes_for(Mode::per_manufacturer);
+    const auto [shared_p, shared_i, shared_r] = processes_for(Mode::shared);
+    const auto [app_p, app_i, app_r] = processes_for(Mode::in_app);
+    check(each_p == 3 && plug_p == 2 && maker_p == 1 && shared_p == 1 && app_p == 0 && each_r == 3 && shared_i == 3 &&
+              app_r == 0,
+          "hosting modes put an instrument and two effects in the right processes (each " + juce::String(each_p) +
+              ", per plug-in " + juce::String(plug_p) + ", per manufacturer " + juce::String(maker_p) + ", shared " +
+              juce::String(shared_p) + ", in app " + juce::String(app_p) + ")");
+    juce::ignoreUnused(each_i, plug_i, plug_r, maker_i, maker_r, shared_r, app_i);
+
+    // Shared: two tracks, each through an effect at half gain, one process.
+    host.set_hosting_mode(Mode::shared);
+    const auto other = s.add_audio_track("Tone 2", false);
+    s.add_audio_clips({{other, clip}}, "Import");
+    for (const auto& id : {track, other})
+        s.update_track_mix(id, "inserts", [&](project::Track& t) {
+            project::InsertSlot slot;
+            slot.kind = "plugin";
+            slot.suggestion = false;
+            slot.plugin = *effect;
+            t.inserts = {slot};
+        });
+    check(e.restart_plugins() >= 2, "changing the hosting mode restarts the open project's plug-ins");
+    for (const auto& id : {track, other})
+        if (auto* p = e.insert_plugin(id, 0)) p->getParameters()[1]->setValue(0.5f);
+    e.play();
+    const double half = render(40);
+    e.stop();
+    int shared_instances = 0;
+    for (const auto& [label, n] : host.host_processes())
+        if (label == "All plug-ins") shared_instances = n;
+    check(shared_instances == 2 && std::abs(half - before) < 0.02,
+          "two effects sharing one process both process their tracks (level " + juce::String(half, 3) + " for two tracks at half gain)");
+
+    // The settings survive a mode change, and insert state is saved.
+    host.set_hosting_mode(Mode::per_plugin);
+    e.restart_plugins();
+    auto* moved = e.insert_plugin(track, 0);
+    const auto* saved = s.data().find_track(track);
+    check(moved && std::abs(moved->getParameters()[1]->getValue() - 0.5f) < 0.01f && saved &&
+              !saved->inserts.empty() && !saved->inserts[0].plugin.state_base64.empty(),
+          "a mode change keeps each plug-in's settings, and effect state is saved in the project");
+
+    // A crash in a shared process silences what it carries; a reload isolates them.
+    host.set_hosting_mode(Mode::shared);
+    s.update_track_mix(other, "inserts", [&](project::Track& t) {
+        project::InsertSlot slot;
+        slot.kind = "plugin";
+        slot.suggestion = false;
+        slot.plugin = *crasher;
+        t.inserts = {slot};
+    });
+    e.restart_plugins();
+    e.take_newly_crashed_plugins();
+    e.play();
+    render(10);
+    if (auto* p = e.insert_plugin(other, 0)) p->getParameters()[1]->setValue(0.0f);  // crash it
+    render(20);
+    const auto both = e.take_newly_crashed_plugins();
+    check(both.size() == 2, "a crash in a shared process takes down what that process carried (" + both.joinIntoString(", ") + ")");
+    check(e.reload_crashed_plugins() == 2, "both are reloaded");
+    const double recovered = render(20);
+    e.stop();
+    auto* tone_fx = dynamic_cast<RemotePluginInstance*>(e.insert_plugin(track, 0));
+    auto* crash_fx = dynamic_cast<RemotePluginInstance*>(e.insert_plugin(other, 0));
+    check(tone_fx && crash_fx && &tone_fx->process() != &crash_fx->process() && tone_fx->process().instance_count() == 1 &&
+              crash_fx->process().instance_count() == 1 && recovered > 0.05,
+          "after a crash, the plug-ins that crashed run in processes of their own (level " + juce::String(recovered, 3) + ")");
+    host.set_hosting_mode(original);
 }
 
 }  // namespace

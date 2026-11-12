@@ -211,9 +211,8 @@ void MainComponent::open_file(const juce::File& file)
 
 void MainComponent::capture_plugin_states()
 {
-    for (const auto* t : context_.session.music_tracks())
-        if (auto* p = context_.engine.plugin_for(t->id))
-            context_.session.store_plugin_state(t->id, PluginHost::state_of(*p));
+    // Instruments and effect inserts alike, on tracks and buses.
+    context_.engine.capture_plugin_states();
 }
 
 bool MainComponent::save(bool save_as)
@@ -492,22 +491,33 @@ void MainComponent::show_plugin_scanner()
             failures_.setColour(juce::TextEditor::backgroundColourId, colours::panel);
             failures_.setColour(juce::TextEditor::textColourId, colours::accent_warm);
             addAndMakeVisible(failures_);
-            hosting_.setButtonText("Run each plug-in in its own process (a crash cannot take VC Composer down)");
-            hosting_.setToggleState(c.plugins.out_of_process(), juce::dontSendNotification);
+            hosting_label_.setText("Run plug-ins", juce::dontSendNotification);
+            hosting_label_.setColour(juce::Label::textColourId, colours::text_dim);
+            addAndMakeVisible(hosting_label_);
+            hosting_.addItemList(PluginHost::hosting_mode_names(), 1);
+            hosting_.setSelectedItemIndex(static_cast<int>(c.plugins.hosting_mode()), juce::dontSendNotification);
             hosting_.setEnabled(c.plugins.host_tool().existsAsFile());
-            hosting_.onClick = [this] {
-                context_.plugins.set_out_of_process(hosting_.getToggleState());
-                context_.status(hosting_.getToggleState()
-                                    ? juce::String("Plug-ins loaded from now on run in their own processes")
-                                    : juce::String("Plug-ins loaded from now on run inside VC Composer"));
+            hosting_.setTooltip("Outside VC Composer, a plug-in that crashes takes down only its own process. "
+                                "Sharing a process uses less memory; a crash there silences everything it carries.");
+            hosting_.onChange = [this] {
+                context_.plugins.set_hosting_mode(
+                    static_cast<PluginHost::HostingMode>(hosting_.getSelectedItemIndex()));
+                // Move the open project's plug-ins over now, keeping their state.
+                const int n = context_.engine.restart_plugins();
+                context_.status("Plug-ins now run: " + hosting_.getText().toLowerCase() +
+                                (n > 0 ? " (" + juce::String(n) + " restarted with their settings)" : juce::String()));
+                refresh();
             };
             addAndMakeVisible(hosting_);
+            addAndMakeVisible(processes_);
             retry_.setButtonText("Retry failed plug-ins");
-            retry_.setTooltip("Forget the failures, so the next scan tries them again");
+            retry_.setTooltip("Forget the failures, so the next scan tries them again, and let plug-ins that crashed "
+                              "share processes again");
             retry_.onClick = [this] {
                 for (const auto& [target, reason] : context_.plugins.scan_failures())
                     context_.plugins.clear_scan_failure(target);
                 context_.plugins.known().clearBlacklistedFiles();
+                context_.plugins.clear_crash_isolation();
                 refresh();
             };
             addAndMakeVisible(retry_);
@@ -527,7 +537,10 @@ void MainComponent::show_plugin_scanner()
         {
             auto r = getLocalBounds();
             auto foot = r.removeFromBottom(failures_.isVisible() ? 180 : 64).reduced(8, 4);
-            hosting_.setBounds(foot.removeFromTop(26));
+            auto mode_row = foot.removeFromTop(26);
+            hosting_label_.setBounds(mode_row.removeFromLeft(90));
+            hosting_.setBounds(mode_row.removeFromLeft(330));
+            processes_.setBounds(mode_row.withTrimmedLeft(10));
             auto top = foot.removeFromTop(24);
             retry_.setBounds(top.removeFromRight(170));
             mode_.setBounds(top);
@@ -547,6 +560,15 @@ void MainComponent::show_plugin_scanner()
                                 "is skipped on the next launch). Reinstall to restore safe scanning.",
                           juce::dontSendNotification);
             mode_.setColour(juce::Label::textColourId, out ? colours::text_dim : colours::missing);
+            const auto running = context_.plugins.host_processes();
+            int instances = 0;
+            for (const auto& [label, n] : running) instances += n;
+            processes_.setText(running.empty() ? juce::String()
+                                               : juce::String(instances) + " plug-in" + (instances == 1 ? "" : "s") +
+                                                     " in " + juce::String(static_cast<int>(running.size())) +
+                                                     " process" + (running.size() == 1 ? "" : "es"),
+                               juce::dontSendNotification);
+            processes_.setColour(juce::Label::textColourId, colours::text_dim);
             juce::String text;
             for (const auto& [target, reason] : context_.plugins.scan_failures())
                 text << juce::File::createFileWithoutCheckingPath(target).getFileName() << ": " << reason << "\n";
@@ -564,7 +586,8 @@ void MainComponent::show_plugin_scanner()
         juce::Label mode_;
         juce::TextEditor failures_;
         juce::TextButton retry_;
-        juce::ToggleButton hosting_;
+        juce::ComboBox hosting_;
+        juce::Label hosting_label_, processes_;
     };
     juce::DialogWindow::LaunchOptions o;
     o.content.setOwned(new Scanner(context_));

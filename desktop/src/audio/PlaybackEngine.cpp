@@ -1288,8 +1288,13 @@ juce::StringArray PlaybackEngine::take_newly_crashed_plugins()
 {
     juce::StringArray names;
     auto note = [&](RemotePluginInstance* r) {
-        if (r && r->crashed() && crash_reported_.insert(r).second)
+        if (r && r->crashed() && crash_reported_.insert(r).second) {
             names.add(r->getName().upToLastOccurrenceOf(" (crashed)", false, false));
+            // From its next load it runs in a process of its own.
+            juce::PluginDescription d;
+            r->fillInPluginDescription(d);
+            plugins_.note_crash(d.createIdentifierString());
+        }
     };
     for (auto& [id, slot] : instruments_)
         if (auto* pi = dynamic_cast<PluginInstrument*>(slot.instrument.get())) note(remote_of(&pi->instance()));
@@ -1308,6 +1313,43 @@ int PlaybackEngine::take_late_plugin_blocks()
         if (proc)
             if (auto* r = remote_of(proc->plugin())) late += r->take_late_blocks();
     return late;
+}
+
+void PlaybackEngine::capture_plugin_states()
+{
+    for (auto& [id, slot] : instruments_)
+        if (auto* pi = dynamic_cast<PluginInstrument*>(slot.instrument.get()))
+            session_.store_plugin_state(id, PluginHost::state_of(pi->instance()));
+    for (const auto& [owner, keys] : insert_keys_)
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            if (keys[i].empty()) continue;
+            auto it = inserts_.find(keys[i]);
+            if (it == inserts_.end() || !it->second) continue;
+            if (auto* instance = it->second->plugin())
+                session_.store_insert_plugin_state(owner, static_cast<int>(i), PluginHost::state_of(*instance));
+        }
+}
+
+int PlaybackEngine::restart_plugins()
+{
+    capture_plugin_states();
+    int count = 0;
+    for (auto& [id, slot] : instruments_)
+        if (dynamic_cast<PluginInstrument*>(slot.instrument.get())) {
+            slot.key.clear();
+            ++count;
+        }
+    for (auto it = inserts_.begin(); it != inserts_.end();) {
+        if (it->second && it->second->plugin()) {
+            it = inserts_.erase(it);
+            ++count;
+        } else {
+            ++it;
+        }
+    }
+    crash_reported_.clear();
+    if (count > 0) rebuild_now();
+    return count;
 }
 
 int PlaybackEngine::reload_crashed_plugins()

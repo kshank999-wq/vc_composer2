@@ -87,6 +87,7 @@ juce::MemoryBlock Message::encode() const
 {
     juce::MemoryOutputStream out;
     out.writeInt(id);
+    out.writeInt(instance);
     out.writeString(command);
     out.writeInt64(static_cast<juce::int64>(payload.getSize()));
     out.write(payload.getData(), payload.getSize());
@@ -97,6 +98,7 @@ bool Message::decode(const juce::MemoryBlock& block, Message& out)
 {
     juce::MemoryInputStream in(block, false);
     out.id = in.readInt();
+    out.instance = in.readInt();
     out.command = in.readString();
     const auto size = in.readInt64();
     if (size < 0 || size > in.getNumBytesRemaining()) return false;

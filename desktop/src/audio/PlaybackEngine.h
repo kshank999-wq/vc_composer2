@@ -184,6 +184,12 @@ public:
     int take_late_plugin_blocks();
     /// Starts every crashed plug-in again from its last state. Returns how many.
     int reload_crashed_plugins();
+    /// Stores every hosted plug-in's state in the project (instruments and
+    /// effect inserts, on tracks and buses), without an undo step.
+    void capture_plugin_states();
+    /// Stops and reloads every plug-in from its stored state - after the
+    /// hosting mode changes. Returns how many were restarted.
+    int restart_plugins();
 
     /// Offline rendering streams synchronously (prepare_offline turns it
     /// on); the checks turn it off to exercise the real-time disk thread.
