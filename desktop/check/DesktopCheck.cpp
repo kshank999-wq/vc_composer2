@@ -1035,6 +1035,94 @@ void ipc_wait_checks(const juce::File& dir)
     file.deleteFile();
 }
 
+/// Insert windows from the console (Main Spec 12): an effect plug-in's own
+/// window, and the controls of a built-in processor.
+void insert_window_checks(AppContext& ctx, const juce::File& dir)
+{
+    auto& session = ctx.session;
+    const auto effect = scan(ctx, VCC_TEST_EFFECT);
+    if (!effect || !ctx.show_insert_window) {
+        check(false, "insert windows can be opened (no test effect or no window handler)");
+        return;
+    }
+    ctx.engine.stop();
+    session.new_empty();
+    const auto track = session.add_audio_track("Dialogue", false);
+    session.update_track_mix(track, "inserts", [&](project::Track& t) {
+        project::InsertSlot fx;
+        fx.kind = "plugin";
+        fx.suggestion = false;
+        fx.plugin = *effect;
+        project::InsertSlot comp;
+        comp.kind = "compressor";
+        comp.suggestion = false;
+        t.inserts = {fx, comp};
+    });
+    ctx.engine.rebuild_now();
+
+    // The effect's own window; a change made there is saved with the project.
+    ctx.show_insert_window(track, 0);
+    pump(400);
+    auto* fx_window = find_dialog("VCC Test Effect - Dialogue");
+    check(fx_window != nullptr, "an effect insert's window opens from its slot (" +
+                                    juce::String(fx_window ? fx_window->getName() : juce::String("not found")) + ")");
+    if (fx_window) {
+        fx_window->setSize(520, 220);
+        pump(200);
+        shoot(*fx_window, dir, "13-insert-plugin");
+    }
+    if (auto* p = ctx.engine.insert_plugin(track, 0)) p->getParameters()[1]->setValueNotifyingHost(0.25f);
+    const auto before = session.data().find_track(track)->inserts[0].plugin.state_base64;
+    if (auto* dw = dynamic_cast<juce::DocumentWindow*>(fx_window)) dw->closeButtonPressed();
+    pump(100);
+    const auto after = session.data().find_track(track)->inserts[0].plugin.state_base64;
+    check(!after.empty() && after != before, "closing the effect's window stores its settings in the project");
+
+    // A built-in compressor: a window of controls, each drag one undo step.
+    ctx.show_insert_window(track, 1);
+    pump(300);
+    auto* comp_window = find_dialog("Compressor - Dialogue (insert 2)");
+    std::vector<juce::Slider*> sliders;
+    std::function<void(juce::Component&)> collect = [&](juce::Component& c) {
+        if (auto* sl = dynamic_cast<juce::Slider*>(&c)) sliders.push_back(sl);
+        for (auto* child : c.getChildren()) collect(*child);
+    };
+    if (comp_window) collect(*comp_window);
+    check(comp_window != nullptr && sliders.size() == 5,
+          "a built-in compressor's window shows its controls (" + juce::String(static_cast<int>(sliders.size())) + ")");
+    if (comp_window && sliders.size() >= 2) {
+        shoot(*comp_window, dir, "14-insert-builtin");
+        auto drag = [&](juce::Slider* sl, std::initializer_list<double> values) {
+            if (sl->onDragStart) sl->onDragStart();
+            for (double v : values) sl->setValue(v, juce::sendNotificationSync);
+            if (sl->onDragEnd) sl->onDragEnd();
+        };
+        drag(sliders[0], {-30.0, -32.0, -34.0});  // threshold
+        drag(sliders[1], {6.0, 8.0});             // ratio
+        const auto* t = session.data().find_track(track);
+        const auto& params = t->inserts[1].params;
+        auto near = [](double a, double b) { return std::abs(a - b) < 1e-9; };
+        const bool set = params.count("threshold_db") && near(params.at("threshold_db"), -34.0) && params.count("ratio") &&
+                         near(params.at("ratio"), 8.0);
+        check(set, "the compressor's controls change its settings in the project");
+        session.undo();
+        const auto* u = session.data().find_track(track);
+        const bool one_step = near(u->inserts[1].params.at("threshold_db"), -34.0) &&
+                              (!u->inserts[1].params.count("ratio") || !near(u->inserts[1].params.at("ratio"), 8.0));
+        session.undo();
+        const auto* u2 = session.data().find_track(track);
+        check(one_step && !u2->inserts[1].params.count("threshold_db"),
+              "each drag of a control is one undo step");
+        pump(100);
+        check(std::abs(sliders[0]->getValue() - (-18.0)) < 0.01, "the window follows an undo (threshold back to " +
+                                                                      juce::String(sliders[0]->getValue(), 1) + " dB)");
+    }
+    // Replacing the insert closes its window.
+    session.update_track_mix(track, "replace", [&](project::Track& t) { t.inserts[1].kind = "reverb"; });
+    pump(100);
+    check(find_dialog("Compressor - Dialogue (insert 2)") == nullptr, "a window closes when its insert is replaced");
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -1846,6 +1934,7 @@ int main(int argc, char** argv)
         delay_compensation_checks(ctx, dir, plugin_track.empty() ? std::nullopt : std::optional<project::PluginRef>(plugin_ref));
         ipc_wait_checks(dir);
         hosting_checks(ctx, dir);
+        insert_window_checks(ctx, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

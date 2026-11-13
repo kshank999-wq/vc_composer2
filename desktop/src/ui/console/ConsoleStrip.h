@@ -121,6 +121,7 @@ private:
     void show_output_menu();
     void show_monitor_menu();
     void show_insert_menu(int index, bool lamp);
+    int insert_count() const;
     void show_send_menu(const std::string& bus_id);
     void show_name_menu();
     void edit_gain_text();

@@ -13,6 +13,7 @@
 #include "vcc/core/Files.h"
 #include "vcc/engraving/PrintLayout.h"
 #include "vcc/engraving/SvgRenderer.h"
+#include "vcc/project/Automation.h"
 #include "vcc/project/Render.h"
 
 namespace vcc::desktop {
@@ -21,9 +22,10 @@ namespace vcc::desktop {
 
 class MainComponent::PluginWindow final : public juce::DocumentWindow {
 public:
-    PluginWindow(AppContext& c, std::string track_id, juce::AudioPluginInstance& instance)
+    /// An instrument's window (`slot` < 0) or an effect insert's.
+    PluginWindow(AppContext& c, std::string owner_id, int slot, juce::AudioPluginInstance& instance)
         : juce::DocumentWindow(instance.getName(), colours::background, juce::DocumentWindow::closeButton),
-          context_(c), track_id_(std::move(track_id)), instance_(instance)
+          context_(c), owner_id_(std::move(owner_id)), slot_(slot), instance_(instance)
     {
         setUsingNativeTitleBar(true);
         juce::AudioProcessorEditor* editor = instance.hasEditor() ? instance.createEditorIfNeeded() : nullptr;
@@ -36,7 +38,13 @@ public:
 
     ~PluginWindow() override { store(); }
 
-    void store() { context_.session.store_plugin_state(track_id_, PluginHost::state_of(instance_)); }
+    /// The plug-in's settings go into the project (no undo step).
+    void store()
+    {
+        const auto state = PluginHost::state_of(instance_);
+        if (slot_ < 0) context_.session.store_plugin_state(owner_id_, state);
+        else context_.session.store_insert_plugin_state(owner_id_, slot_, state);
+    }
 
     void closeButtonPressed() override
     {
@@ -45,11 +53,145 @@ public:
     }
 
     juce::AudioPluginInstance* instance() noexcept { return &instance_; }
+    const std::string& owner() const noexcept { return owner_id_; }
+    int slot() const noexcept { return slot_; }
 
 private:
     AppContext& context_;
-    std::string track_id_;
+    std::string owner_id_;
+    int slot_;
     juce::AudioPluginInstance& instance_;
+};
+
+/// The window for a built-in processor in an insert slot: a control for
+/// each of its settings, the same parameters automation lanes use. Each
+/// drag is one undo step.
+class MainComponent::BuiltinInsertWindow final : public juce::DocumentWindow {
+public:
+    BuiltinInsertWindow(AppContext& c, std::string owner_id, int slot, const juce::String& title)
+        : juce::DocumentWindow(title, colours::background, juce::DocumentWindow::closeButton),
+          context_(c), owner_id_(std::move(owner_id)), slot_(slot)
+    {
+        setUsingNativeTitleBar(true);
+        auto* content = new Content(*this);
+        setContentOwned(content, true);
+        centreWithSize(content->getWidth(), content->getHeight());
+        setVisible(true);
+    }
+    void closeButtonPressed() override { setVisible(false); }
+    const std::string& owner() const noexcept { return owner_id_; }
+    int slot() const noexcept { return slot_; }
+    std::string kind() const noexcept { return kind_; }
+    /// The document changed (an undo, automation, another view): follow it.
+    void refresh()
+    {
+        if (auto* content = dynamic_cast<Content*>(getContentComponent())) content->refresh();
+    }
+
+private:
+    struct Row {
+        project::ParamInfo info;
+        std::unique_ptr<juce::Label> label;
+        std::unique_ptr<juce::Slider> slider;
+    };
+
+    class Content final : public juce::Component {
+    public:
+        explicit Content(BuiltinInsertWindow& w) : window_(w)
+        {
+            const auto& d = w.context_.session.data();
+            std::vector<project::ParamInfo> params;
+            if (const auto* t = d.find_track(w.owner_id_)) {
+                params = project::automatable_params(*t, d);
+                if (w.slot_ < static_cast<int>(t->inserts.size())) w.kind_ = t->inserts[static_cast<size_t>(w.slot_)].kind;
+            } else if (const auto* b = d.find_bus(w.owner_id_)) {
+                params = project::automatable_params(*b, d);
+                if (w.slot_ < static_cast<int>(b->inserts.size())) w.kind_ = b->inserts[static_cast<size_t>(w.slot_)].kind;
+            }
+            const std::string prefix = "insert:" + std::to_string(w.slot_) + ":";
+            for (const auto& p : params) {
+                if (p.id.rfind(prefix, 0) != 0) continue;
+                Row row;
+                row.info = p;
+                // "compressor 1 Threshold" -> "Threshold"
+                row.label = std::make_unique<juce::Label>(juce::String(), juce::String(p.name).fromFirstOccurrenceOf(
+                                                                              juce::String(w.slot_ + 1) + " ", false, false));
+                row.label->setColour(juce::Label::textColourId, colours::text_dim);
+                addAndMakeVisible(*row.label);
+                row.slider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight);
+                row.slider->setRange(p.min, p.max, p.toggle ? 1.0 : 0.0);
+                if (p.log_scale && p.min > 0.0) row.slider->setSkewFactorFromMidPoint(std::sqrt(p.min * p.max));
+                row.slider->setTextValueSuffix(p.unit.empty() ? juce::String() : " " + juce::String(p.unit));
+                row.slider->setNumDecimalPlacesToDisplay(p.unit == "Hz" || p.unit == "ms" ? 0 : 2);
+                row.slider->setDoubleClickReturnValue(true, p.default_value);
+                const std::string id = p.id;
+                const juce::String label_text = row.label->getText();
+                row.slider->onDragStart = [this] { ++gesture_; };
+                row.slider->onValueChange = [this, id, label_text, s = row.slider.get()] {
+                    if (refreshing_) return;
+                    apply(id, label_text, s->getValue());
+                };
+                addAndMakeVisible(*row.slider);
+                rows_.push_back(std::move(row));
+            }
+            if (rows_.empty()) {
+                empty_.setText("This processor has no settings to show.", juce::dontSendNotification);
+                addAndMakeVisible(empty_);
+            }
+            refresh();
+            setSize(460, juce::jmax(80, 20 + static_cast<int>(rows_.size()) * 34));
+        }
+
+        void refresh()
+        {
+            const auto& d = window_.context_.session.data();
+            refreshing_ = true;
+            for (auto& r : rows_) {
+                if (r.slider->isMouseButtonDown()) continue;
+                std::optional<double> v;
+                if (const auto* t = d.find_track(window_.owner_id_)) v = project::static_value(*t, r.info.id);
+                else if (const auto* b = d.find_bus(window_.owner_id_)) v = project::static_value(*b, r.info.id);
+                r.slider->setValue(v ? *v : r.info.default_value, juce::dontSendNotification);
+            }
+            refreshing_ = false;
+        }
+
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced(10);
+            empty_.setBounds(area);
+            for (auto& r : rows_) {
+                auto line = area.removeFromTop(34).reduced(0, 4);
+                r.label->setBounds(line.removeFromLeft(130));
+                r.slider->setBounds(line);
+            }
+        }
+        void paint(juce::Graphics& g) override { g.fillAll(colours::background); }
+
+    private:
+        void apply(const std::string& id, const juce::String& what, double value)
+        {
+            auto& session = window_.context_.session;
+            // One undo step per drag: the label alternates between gestures.
+            const std::string label = (what + (gesture_ % 2 ? " " : "")).toStdString();
+            if (session.data().find_track(window_.owner_id_))
+                session.update_track_mix(window_.owner_id_, label,
+                                         [&](project::Track& t) { project::set_static_value(t, id, value); });
+            else
+                session.update_bus(window_.owner_id_, label, [&](project::Bus& b) { project::set_static_value(b, id, value); });
+        }
+
+        BuiltinInsertWindow& window_;
+        std::vector<Row> rows_;
+        juce::Label empty_;
+        int gesture_ = 0;
+        bool refreshing_ = false;
+    };
+
+    AppContext& context_;
+    std::string owner_id_;
+    int slot_;
+    std::string kind_;
 };
 
 // --- Main component -----------------------------------------------------------------------------
@@ -77,15 +219,29 @@ MainComponent::MainComponent(AppContext& context)
         status_age_ = 0;
     };
     context_.show_plugin_window = [this](const std::string& id) { show_plugin_window(id); };
+    context_.show_insert_window = [this](const std::string& owner, int slot) { show_insert_window(owner, slot); };
 
     listener_ = context_.session.add_listener([this](session::Change c) {
         // A MIDI keyboard plays whichever track is selected.
         if (c == session::Change::Selection) context_.engine.set_live_track(context_.session.selected_track());
         if (c == session::Change::Document) {
-            // Close plug-in windows whose instrument changed or went away.
+            // Close plug-in windows whose plug-in changed or went away.
             for (auto it = plugin_windows_.begin(); it != plugin_windows_.end();) {
-                if (context_.engine.plugin_for(it->first) != it->second->instance()) it = plugin_windows_.erase(it);
+                const auto& w = *it->second;
+                auto* now = w.slot() < 0 ? context_.engine.plugin_for(w.owner())
+                                         : context_.engine.insert_plugin(w.owner(), w.slot());
+                if (now != it->second->instance()) it = plugin_windows_.erase(it);
                 else ++it;
+            }
+            // Built-in processor windows follow the document, and close when
+            // their slot holds something else.
+            for (auto it = builtin_windows_.begin(); it != builtin_windows_.end();) {
+                if (insert_kind(it->second->owner(), it->second->slot()) != it->second->kind()) {
+                    it = builtin_windows_.erase(it);
+                } else {
+                    it->second->refresh();
+                    ++it;
+                }
             }
         }
     });
@@ -114,6 +270,8 @@ MainComponent::~MainComponent()
     context_.engine.on_transport_changed = nullptr;
     context_.engine.on_recording_finished = nullptr;
     plugin_windows_.clear();
+    builtin_windows_.clear();
+    context_.show_insert_window = nullptr;
 }
 
 void MainComponent::paint(juce::Graphics& g) { g.fillAll(colours::background); }
@@ -451,8 +609,51 @@ void MainComponent::show_plugin_window(const std::string& id)
         context_.status("This track is played by the built-in placeholder; load an instrument plug-in first");
         return;
     }
-    auto& w = plugin_windows_[id];
-    if (!w || w->instance() != instance) w = std::make_unique<PluginWindow>(context_, id, *instance);
+    auto& w = plugin_windows_["instrument:" + id];
+    if (!w || w->instance() != instance) w = std::make_unique<PluginWindow>(context_, id, -1, *instance);
+    w->setVisible(true);
+    w->toFront(true);
+}
+
+std::string MainComponent::insert_kind(const std::string& owner, int slot) const
+{
+    const std::vector<project::InsertSlot>* inserts = nullptr;
+    if (const auto* t = context_.session.data().find_track(owner)) inserts = &t->inserts;
+    else if (const auto* b = context_.session.data().find_bus(owner)) inserts = &b->inserts;
+    if (!inserts || slot < 0 || slot >= static_cast<int>(inserts->size())) return {};
+    return (*inserts)[static_cast<size_t>(slot)].kind;
+}
+
+void MainComponent::show_insert_window(const std::string& owner, int slot)
+{
+    const auto kind = insert_kind(owner, slot);
+    if (kind.empty()) return;
+    const std::string key = owner + "#" + std::to_string(slot);
+    juce::String owner_name;
+    if (const auto* t = context_.session.data().find_track(owner)) owner_name = t->name;
+    else if (const auto* b = context_.session.data().find_bus(owner)) owner_name = b->name;
+
+    if (kind == "plugin") {
+        context_.engine.rebuild_now();  // a slot filled a moment ago has its plug-in now
+        auto* instance = context_.engine.insert_plugin(owner, slot);
+        if (!instance) {
+            const auto why = context_.engine.insert_status(owner, slot);
+            context_.status(why.isNotEmpty() ? why : juce::String("That plug-in is not loaded"));
+            return;
+        }
+        auto& w = plugin_windows_["insert:" + key];
+        if (!w || w->instance() != instance) w = std::make_unique<PluginWindow>(context_, owner, slot, *instance);
+        w->setName(instance->getName() + " - " + owner_name);
+        w->setVisible(true);
+        w->toFront(true);
+        return;
+    }
+    auto& w = builtin_windows_[key];
+    if (!w || w->kind() != kind) {
+        juce::String title = juce::String(kind).substring(0, 1).toUpperCase() + juce::String(kind).substring(1);
+        w = std::make_unique<BuiltinInsertWindow>(context_, owner, slot, title + " - " + owner_name + " (insert " +
+                                                                              juce::String(slot + 1) + ")");
+    }
     w->setVisible(true);
     w->toFront(true);
 }

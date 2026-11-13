@@ -13,7 +13,7 @@ MainWindow::MainWindow(const juce::String& file, bool show_welcome)
     plugins_ = std::make_unique<PluginHost>();
     engine_ = std::make_unique<PlaybackEngine>(*session_, *plugins_);
     context_ = std::make_unique<AppContext>(AppContext{*catalogs_, *session_, *engine_, *plugins_, commands_,
-                                                       composer::make_vc_composer_profile(), {}, {}});
+                                                       composer::make_vc_composer_profile(), {}, {}, {}});
     main_ = std::make_unique<MainComponent>(*context_);
 
     commands_.registerAllCommandsForTarget(main_.get());

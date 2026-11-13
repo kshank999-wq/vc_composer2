@@ -262,8 +262,9 @@ public:
         }
     };
     static constexpr int kSlots = 5;
-    /// Clicked slot: index, whether on the bypass lamp.
-    std::function<void(int, bool)> on_click;
+    /// Clicked slot: index, whether on the bypass lamp, whether a menu was
+    /// asked for (right-click / ctrl-click).
+    std::function<void(int, bool, bool)> on_click;
     void set(std::vector<Slot> slots);
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;

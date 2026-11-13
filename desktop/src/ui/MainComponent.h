@@ -36,6 +36,8 @@ public:
     void export_parts_pdf_dialog();
     void export_full_score_dialog();
     void show_plugin_window(const std::string& track_id);
+    /// An insert's window: a hosted effect's editor, or a built-in processor's controls.
+    void show_insert_window(const std::string& owner_id, int slot);
 
     /// Places audio files at the playhead on the selected audio track (or a
     /// new one) as one undo step, copying them into the project's "Audio
@@ -66,6 +68,8 @@ public:
 
 private:
     class PluginWindow;
+    class BuiltinInsertWindow;
+    std::string insert_kind(const std::string& owner_id, int slot) const;
     void timerCallback() override;
     void capture_plugin_states();
     void export_midi();
@@ -90,6 +94,7 @@ private:
     Workspace workspace_ = Workspace::Composer;
     std::unique_ptr<MixerWindow> mixer_;
     std::map<std::string, std::unique_ptr<PluginWindow>> plugin_windows_;
+    std::map<std::string, std::unique_ptr<BuiltinInsertWindow>> builtin_windows_;
     std::unique_ptr<juce::FileChooser> chooser_;
     int ticks_ = 0;
     int status_age_ = 0;

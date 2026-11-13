@@ -199,7 +199,6 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 1. Build the Main Spec §8 performance-override layer and the MIDI → notation
    path (see above).
 2. Engine hardening:
-   - opening an effect insert's own window from the console;
    - saving the delay-compensation switch with the project.
 3. Picture follow-ups:
    - picture + score draft export (needs an encoder);

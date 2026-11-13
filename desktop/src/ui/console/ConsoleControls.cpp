@@ -968,7 +968,7 @@ void InsertRack::mouseDown(const juce::MouseEvent& e)
 {
     const int i = juce::jlimit(0, kSlots - 1, static_cast<int>(e.position.y / slot_bounds(0).getHeight()));
     const bool lamp = e.position.x < slot_bounds(i).getHeight() + 1.0f;
-    if (on_click) on_click(i, lamp && !e.mods.isPopupMenu());
+    if (on_click) on_click(i, lamp && !e.mods.isPopupMenu(), e.mods.isPopupMenu());
 }
 
 // --- Scribble --------------------------------------------------------------------------------

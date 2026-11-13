@@ -1,6 +1,7 @@
 #include "ui/console/ConsoleStrip.h"
 
 #include <algorithm>
+#include <map>
 #include <cmath>
 #include <type_traits>
 
@@ -462,8 +463,17 @@ void Strip::setup_controls()
     output_.on_click = [this] { show_output_menu(); };
     output_.setTooltip("Output routing");
     if (kind_ == Kind::Master) output_.on_click = nullptr;
-    inserts_.on_click = [this](int i, bool lamp) { show_insert_menu(i, lamp); };
-    inserts_.setTooltip("Inserts - click a slot to add or change a processor; click a lamp to bypass");
+    inserts_.on_click = [this](int i, bool lamp, bool popup) {
+        // A filled slot opens its window; an empty one (or a right-click)
+        // offers what can go there; the lamp bypasses.
+        if (!lamp && !popup && i < insert_count() && context_.show_insert_window) {
+            context_.show_insert_window(id_, i);
+            return;
+        }
+        show_insert_menu(i, lamp);
+    };
+    inserts_.setTooltip("Inserts - click a processor to open its window; click an empty slot to add one; "
+                        "right-click for options; click a lamp to bypass");
 
     for (auto& row : sends_) {
         auto* r = row.get();
@@ -1341,6 +1351,16 @@ void Strip::show_monitor_menu()
     }));
 }
 
+int Strip::insert_count() const
+{
+    if (is_track()) {
+        if (const auto* t = context_.session.data().find_track(id_)) return static_cast<int>(t->inserts.size());
+    } else if (const auto* b = context_.session.data().find_bus(id_)) {
+        return static_cast<int>(b->inserts.size());
+    }
+    return 0;
+}
+
 void Strip::show_insert_menu(int index, bool lamp)
 {
     const std::vector<project::InsertSlot>* list = nullptr;
@@ -1360,11 +1380,32 @@ void Strip::show_insert_menu(int index, bool lamp)
         });
         return;
     }
+    // Built-in processors (100+) and the scanned effect plug-ins (1000+),
+    // grouped by manufacturer.
+    juce::Array<juce::PluginDescription> effects;
+    for (const auto& d : context_.plugins.known().getTypes())
+        if (!d.isInstrument) effects.add(d);
+    std::sort(effects.begin(), effects.end(), [](const juce::PluginDescription& a, const juce::PluginDescription& b) {
+        return a.manufacturerName == b.manufacturerName ? a.name < b.name : a.manufacturerName < b.manufacturerName;
+    });
+    auto fill = [&](juce::PopupMenu& menu) {
+        for (std::size_t i = 0; i < builtin_inserts().size(); ++i)
+            menu.addItem(100 + static_cast<int>(i), builtin_inserts()[i].second);
+        juce::PopupMenu plugins;
+        std::map<juce::String, juce::PopupMenu> by_maker;
+        for (int i = 0; i < effects.size(); ++i)
+            by_maker[effects[i].manufacturerName.isEmpty() ? juce::String("Other") : effects[i].manufacturerName].addItem(
+                1000 + i, effects[i].name);
+        for (auto& [maker, sub] : by_maker) plugins.addSubMenu(maker, sub);
+        if (effects.isEmpty()) plugins.addItem(-1, "No effect plug-ins scanned yet (Tools > Plug-ins)", false);
+        menu.addSubMenu("Effect plug-ins", plugins);
+    };
     juce::PopupMenu m, add;
-    for (std::size_t i = 0; i < builtin_inserts().size(); ++i) add.addItem(100 + static_cast<int>(i), builtin_inserts()[i].second);
+    fill(add);
     if (used) {
         const auto& s = (*list)[at];
         m.addSectionHeader(insert_name(s) + (s.suggestion ? " (suggested)" : ""));
+        m.addItem(5, "Open window...");
         if (s.suggestion && s.kind != "plugin") m.addItem(3, "Use the built-in " + insert_name(s));
         m.addItem(1, "Bypass", true, s.bypass);
         m.addSubMenu("Replace with", add);
@@ -1373,12 +1414,29 @@ void Strip::show_insert_menu(int index, bool lamp)
         m.addItem(2, "Remove");
     } else {
         m.addSectionHeader("Add insert");
-        for (std::size_t i = 0; i < builtin_inserts().size(); ++i) m.addItem(100 + static_cast<int>(i), builtin_inserts()[i].second);
+        fill(m);
     }
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&inserts_), guarded(top_.get(), [this, at, used](int r) {
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&inserts_), guarded(top_.get(), [this, at, used, effects](int r) {
         if (r <= 0) return;
+        if (r == 5) {
+            if (context_.show_insert_window) context_.show_insert_window(id_, static_cast<int>(at));
+            return;
+        }
         begin_gesture();
-        if (r >= 100) {
+        if (r >= 1000 && r - 1000 < effects.size()) {
+            const auto ref = context_.plugins.ref_for(effects[r - 1000]);
+            edit(used ? "Replace insert" : "Add insert", [&](auto& x) {
+                project::InsertSlot slot;
+                slot.kind = "plugin";
+                slot.plugin_ref = ref.identifier;
+                slot.plugin = ref;
+                slot.suggestion = false;
+                if (used && at < x.inserts.size()) x.inserts[at] = slot;
+                else x.inserts.push_back(slot);
+            });
+            return;
+        }
+        if (r >= 100 && r < 1000) {
             const auto& kind = builtin_inserts()[static_cast<std::size_t>(r - 100)];
             edit(used ? "Replace insert" : "Add insert", [&](auto& x) {
                 project::InsertSlot slot;

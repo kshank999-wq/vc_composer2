@@ -26,6 +26,9 @@ struct AppContext {
     std::function<void(const juce::String&)> status;
     /// Opens a hosted plug-in's own window for a track.
     std::function<void(const std::string& track_id)> show_plugin_window;
+    /// Opens an insert's window: a hosted effect's own editor, or the editor
+    /// for a built-in processor. `owner_id` is a track or bus id.
+    std::function<void(const std::string& owner_id, int slot)> show_insert_window;
 };
 
 /// Application commands (menus, toolbar buttons and key bindings).
