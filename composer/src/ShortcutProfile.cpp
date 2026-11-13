@@ -858,6 +858,91 @@ ShortcutProfile make_sibelius_style_profile(ShortcutPlatform platform)
     return profile;
 }
 
+ShortcutProfile make_composer2_profile(ShortcutPlatform platform)
+{
+    // The Edit window's own table (docs/spec/ui/SPEC.md, "Keyboard
+    // shortcuts"), which follows the convention composers know from Finale
+    // and Sibelius: durations rising with the number, 5 the quarter.
+    ShortcutProfile profile("Composer 2");
+    const ModifierMask primary = to_mask(primary_modifier(platform));
+    const auto bind = [](ShortcutProfile& target, Command command, const KeyStroke& stroke) {
+        target.bind_unchecked(command, stroke);
+    };
+
+    bind(profile, Command::SelectDurationSixtyFourth, KeyStroke{Key::Digit1, 0});
+    bind(profile, Command::SelectDurationThirtySecond, KeyStroke{Key::Digit2, 0});
+    bind(profile, Command::SelectDurationSixteenth, KeyStroke{Key::Digit3, 0});
+    bind(profile, Command::SelectDurationEighth, KeyStroke{Key::Digit4, 0});
+    bind(profile, Command::SelectDurationQuarter, KeyStroke{Key::Digit5, 0});
+    bind(profile, Command::SelectDurationHalf, KeyStroke{Key::Digit6, 0});
+    bind(profile, Command::SelectDurationWhole, KeyStroke{Key::Digit7, 0});
+    bind(profile, Command::SelectDurationBreve, KeyStroke{Key::Digit8, 0});
+
+    bind(profile, Command::ToggleDot, KeyStroke{Key::Period, 0});
+    bind(profile, Command::ToggleDoubleDot, KeyStroke{Key::Period, to_mask(Modifier::Shift)});
+    bind(profile, Command::ToggleTuplet, KeyStroke{Key::Slash, 0});
+    bind(profile, Command::ToggleNestedTuplet, KeyStroke{Key::Slash, to_mask(Modifier::Shift)});
+    bind(profile, Command::ToggleRest, KeyStroke{Key::Digit0, 0});
+    // The keypad's Enter ties, as in both; the main Enter returns to zero.
+    bind(profile, Command::ToggleTie, KeyStroke{Key::KeypadEnter, 0});
+    bind(profile, Command::ToggleGraceEntry, KeyStroke{Key::G, to_mask(Modifier::Alt)});
+    bind(profile, Command::ToggleGraceSlash,
+         KeyStroke{Key::G, combine(to_mask(Modifier::Alt), to_mask(Modifier::Shift))});
+
+    bind(profile, Command::AccidentalSharp, KeyStroke{Key::Equals, 0});
+    bind(profile, Command::AccidentalFlat, KeyStroke{Key::Minus, 0});
+    bind(profile, Command::AccidentalNatural, KeyStroke{Key::Digit9, 0});
+    bind(profile, Command::AccidentalDoubleSharp, KeyStroke{Key::Equals, to_mask(Modifier::Shift)});
+    bind(profile, Command::AccidentalDoubleFlat, KeyStroke{Key::Minus, to_mask(Modifier::Shift)});
+    bind(profile, Command::CycleEnharmonicSpelling, KeyStroke{Key::E, 0});
+
+    bind(profile, Command::ArticulationAccent, KeyStroke{Key::A, to_mask(Modifier::Alt)});
+    bind(profile, Command::ArticulationStaccato, KeyStroke{Key::S, to_mask(Modifier::Alt)});
+    bind(profile, Command::ArticulationTenuto, KeyStroke{Key::T, to_mask(Modifier::Alt)});
+    bind(profile, Command::ArticulationMarcato, KeyStroke{Key::M, to_mask(Modifier::Alt)});
+    bind(profile, Command::ArticulationStaccatissimo,
+         KeyStroke{Key::S, combine(to_mask(Modifier::Alt), to_mask(Modifier::Shift))});
+
+    bind(profile, Command::DynamicPianississimo, KeyStroke{Key::Digit1, to_mask(Modifier::Shift)});
+    bind(profile, Command::DynamicPianissimo, KeyStroke{Key::Digit2, to_mask(Modifier::Shift)});
+    bind(profile, Command::DynamicPiano, KeyStroke{Key::Digit3, to_mask(Modifier::Shift)});
+    bind(profile, Command::DynamicMezzoPiano, KeyStroke{Key::Digit4, to_mask(Modifier::Shift)});
+    bind(profile, Command::DynamicMezzoForte, KeyStroke{Key::Digit5, to_mask(Modifier::Shift)});
+    bind(profile, Command::DynamicForte, KeyStroke{Key::Digit6, to_mask(Modifier::Shift)});
+    bind(profile, Command::DynamicFortissimo, KeyStroke{Key::Digit7, to_mask(Modifier::Shift)});
+    bind(profile, Command::DynamicFortississimo, KeyStroke{Key::Digit8, to_mask(Modifier::Shift)});
+
+    bind(profile, Command::StartCrescendo, KeyStroke{Key::H, 0});
+    bind(profile, Command::StartDiminuendo, KeyStroke{Key::H, to_mask(Modifier::Shift)});
+    bind(profile, Command::StartSlur, KeyStroke{Key::S, 0});
+    bind(profile, Command::ExtendSpanRight, KeyStroke{Key::RightBracket, 0});
+    bind(profile, Command::ShrinkSpanLeft, KeyStroke{Key::LeftBracket, 0});
+
+    bind(profile, Command::EditKeySignature, KeyStroke{Key::K, 0});
+    bind(profile, Command::EditTimeSignature, KeyStroke{Key::T, 0});
+    bind(profile, Command::EditClef, KeyStroke{Key::Q, 0});
+    bind(profile, Command::EditTempo, KeyStroke{Key::T, combine(to_mask(Modifier::Alt), to_mask(Modifier::Shift))});
+    bind(profile, Command::AddText, KeyStroke{Key::X, 0});
+
+    bind(profile, Command::ToggleKeyboardEntryMode, KeyStroke{Key::N, 0});
+    bind(profile, Command::ResyncWithHost, KeyStroke{Key::F5, 0});
+    bind(profile, Command::ShowComposerWindow, KeyStroke{Key::F6, 0});
+
+    add_common_bindings(profile, bind, platform);
+
+    // The spec's departures from the common set: an octave on Shift, the
+    // voices on the primary modifier.
+    bind(profile, Command::PitchUpOctave, KeyStroke{Key::ArrowUp, to_mask(Modifier::Shift)});
+    bind(profile, Command::PitchDownOctave, KeyStroke{Key::ArrowDown, to_mask(Modifier::Shift)});
+    bind(profile, Command::SelectVoice1, KeyStroke{Key::Digit1, primary});
+    bind(profile, Command::SelectVoice2, KeyStroke{Key::Digit2, primary});
+    bind(profile, Command::SelectVoice3, KeyStroke{Key::Digit3, primary});
+    bind(profile, Command::SelectVoice4, KeyStroke{Key::Digit4, primary});
+
+    profile.built_in_ = true;
+    return profile;
+}
+
 std::vector<ShortcutProfile> built_in_profiles(ShortcutPlatform platform)
 {
     return {make_vc_composer_profile(platform), make_finale_style_profile(platform),

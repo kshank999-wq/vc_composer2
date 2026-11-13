@@ -119,11 +119,24 @@ void Session::document_changed()
 {
     const bool was_dirty = dirty_;
     dirty_ = true;
-    if (!selected_track_.empty() && !data().find_track(selected_track_)) {
-        selected_track_.clear();
+    if (!selection_.track.empty() && !data().find_track(selection_.track)) {
+        selection_.track.clear();
+        selection_.notes.clear();
         auto tracks = music_tracks();
-        if (!tracks.empty()) selected_track_ = tracks.front()->id;
+        if (!tracks.empty()) selection_.track = tracks.front()->id;
         notify(Change::Selection);
+    } else if (!selection_.notes.empty()) {
+        // Notes that an edit removed leave the selection.
+        Selection kept = selection_;
+        const auto* t = data().find_track(kept.track);
+        const auto* v = t ? t->active_version() : nullptr;
+        kept.notes.erase(std::remove_if(kept.notes.begin(), kept.notes.end(),
+                                        [&](notation::EventId id) { return !v || !v->score.find_note(id); }),
+                         kept.notes.end());
+        if (kept.notes != selection_.notes) {
+            selection_ = kept;
+            notify(Change::Selection);
+        }
     }
     notify(Change::Document);
     if (!was_dirty) notify(Change::File);
@@ -134,9 +147,9 @@ void Session::reset(project::Project p, const std::string& path)
     project_ = std::move(p);
     path_ = path;
     dirty_ = false;
-    selected_track_.clear();
+    selection_ = {};
     auto tracks = music_tracks();
-    if (!tracks.empty()) selected_track_ = tracks.front()->id;
+    if (!tracks.empty()) selection_.track = tracks.front()->id;
     notify(Change::Document);
     notify(Change::Selection);
     notify(Change::File);
@@ -786,9 +799,56 @@ bool Session::spot_cue(const std::string& id, const std::string& in_tc, const st
 
 void Session::select_track(const std::string& id)
 {
-    if (id == selected_track_ || (!id.empty() && !data().find_track(id))) return;
-    selected_track_ = id;
+    if (id == selection_.track || (!id.empty() && !data().find_track(id))) return;
+    selection_.track = id;
+    selection_.notes.clear();
     notify(Change::Selection);
+}
+
+void Session::set_selection(Selection s)
+{
+    if (!s.track.empty() && !data().find_track(s.track)) return;
+    const auto* t = data().find_track(s.track);
+    const auto* v = t ? t->active_version() : nullptr;
+    s.notes.erase(std::remove_if(s.notes.begin(), s.notes.end(),
+                                 [&](notation::EventId id) { return !v || !v->score.find_note(id); }),
+                  s.notes.end());
+    std::sort(s.notes.begin(), s.notes.end());
+    s.notes.erase(std::unique(s.notes.begin(), s.notes.end()), s.notes.end());
+    if (s.to <= s.from) s.from = s.to = 0;
+    if (s == selection_) return;
+    selection_ = std::move(s);
+    notify(Change::Selection);
+}
+
+void Session::set_selection_range(Ticks from, Ticks to)
+{
+    Selection s = selection_;
+    s.from = from;
+    s.to = to;
+    set_selection(std::move(s));
+}
+
+void Session::select_notes(const std::string& track_id, std::vector<notation::EventId> notes)
+{
+    Selection s = selection_;
+    s.track = track_id;
+    s.notes = std::move(notes);
+    if (const auto* t = data().find_track(track_id); t && t->active_version() && !s.notes.empty()) {
+        Ticks lo = 0, hi = 0;
+        bool any = false;
+        for (auto id : s.notes)
+            if (const auto* n = t->active_version()->score.find_note(id)) {
+                lo = any ? std::min(lo, n->start_tick) : n->start_tick;
+                hi = any ? std::max(hi, n->end_tick()) : n->end_tick();
+                any = true;
+            }
+        if (any) {
+            s.from = lo;
+            s.to = hi;
+        }
+    }
+    set_selection(std::move(s));
 }
 
 std::vector<const project::Track*> Session::music_tracks() const

@@ -10,6 +10,7 @@
 
 #include "ui/AppContext.h"
 #include "ui/hw/HwControls.h"
+#include "vcc/project/RenderCache.h"
 
 namespace vcc::desktop::shell {
 
@@ -134,6 +135,7 @@ private:
     AppContext& context_;
     int listener_ = 0;
     hw::Lcd lcd_{{}, 12.0f};
+    project::RenderCache render_;
 };
 
 /// Producer view: the selected track's channel: fader, meter, pan, mute,

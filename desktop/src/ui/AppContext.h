@@ -70,6 +70,8 @@ enum : juce::CommandID {
     reloadCrashedPlugins,
     showControlGallery = 0x1320,
     toggleView,
+    zoomIn,
+    zoomOut,
     showVideo = 0x1310,
     showCueManager,
     importPicture,

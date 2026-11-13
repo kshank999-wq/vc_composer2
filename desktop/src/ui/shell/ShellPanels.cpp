@@ -449,30 +449,79 @@ void SelectionPanel::resized() { lcd_.setBounds(content()); }
 
 void SelectionPanel::refresh()
 {
-    const auto* t = context_.session.data().find_track(context_.session.selected_track());
+    // The shared selection (docs/spec/ui, "Panel behavior"): track, range,
+    // note count and pitch span, value, velocity range.
+    const auto& session = context_.session;
+    const auto& sel = session.selection();
+    const auto& d = session.data();
+    const auto* t = d.find_track(sel.track);
     if (!t) {
         lcd_.set_text("No track selected");
         return;
     }
+    const auto* v = t->active_version();
+    auto bar_beat = [&](Ticks tick) {
+        const auto bbt = bars_beats_ticks(d.meter, tick);
+        return bbt.upToLastOccurrenceOf("|", false, false);
+    };
     juce::String text;
-    text << "TRACK    " << juce::String(t->name).toUpperCase() << "\n";
-    if (const auto* v = t->active_version()) {
-        text << "VERSION  " << juce::String(v->name).toUpperCase() << "\n";
-        const auto sound = !t->instrument_plugin.empty() ? t->instrument_plugin.name : t->assignment.patch_display;
-        text << "SOUND    " << juce::String(sound).toUpperCase() << "\n";
-        int notes = 0;
-        const notation::ScoreNote *lo = nullptr, *hi = nullptr;
-        for (std::size_t s = 0; s < v->score.staff_count(); ++s)
-            for (const auto& n : v->score.notes(s)) {
-                if (n.is_rest) continue;
-                ++notes;
-                if (!lo || notation::midi_note_number(n.pitch) < notation::midi_note_number(lo->pitch)) lo = &n;
-                if (!hi || notation::midi_note_number(n.pitch) > notation::midi_note_number(hi->pitch)) hi = &n;
-            }
-        text << "NOTES    " << notes;
-        if (lo && hi) text << "  " << pitch_name(lo->pitch) << juce::String::fromUTF8(" \xe2\x86\x92 ") << pitch_name(hi->pitch);
-        text << "\nOVERRIDES " << static_cast<int>(v->performance.size());
+    text << "TRACK     " << juce::String(t->name).toUpperCase() << "\n";
+    text << "RANGE     "
+         << (sel.has_range() ? "BAR " + bar_beat(sel.from) + juce::String::fromUTF8(" \xe2\x86\x92 ") + bar_beat(sel.to - 1)
+                             : juce::String("-"))
+         << "\n";
+    if (!v) {
+        lcd_.set_text(text);
+        return;
     }
+    // The notes: the selected ones, or the whole track when none are.
+    std::vector<const notation::ScoreNote*> notes;
+    if (!sel.notes.empty()) {
+        for (auto id : sel.notes)
+            if (const auto* n = v->score.find_note(id); n && !n->is_rest) notes.push_back(n);
+    } else {
+        for (std::size_t s = 0; s < v->score.staff_count(); ++s)
+            for (const auto& n : v->score.notes(s))
+                if (!n.is_rest) notes.push_back(&n);
+    }
+    const notation::ScoreNote *lo = nullptr, *hi = nullptr;
+    for (const auto* n : notes) {
+        if (!lo || notation::midi_note_number(n->pitch) < notation::midi_note_number(lo->pitch)) lo = n;
+        if (!hi || notation::midi_note_number(n->pitch) > notation::midi_note_number(hi->pitch)) hi = n;
+    }
+    text << "NOTES     " << static_cast<int>(notes.size());
+    if (lo && hi) text << "  " << pitch_name(lo->pitch) << juce::String::fromUTF8(" \xe2\x86\x92 ") << pitch_name(hi->pitch);
+    text << (sel.notes.empty() ? "  (TRACK)" : "") << "\n";
+    // Value: the selected notes' written value when they share one.
+    juce::String value = "-";
+    if (!sel.notes.empty() && !notes.empty()) {
+        const auto& d0 = notes.front()->duration;
+        const bool same = std::all_of(notes.begin(), notes.end(), [&](const notation::ScoreNote* n) { return n->duration == d0; });
+        if (same) {
+            const char* names[] = {"2/1", "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64"};
+            value = names[static_cast<int>(d0.value)];
+            for (int i = 0; i < d0.dots; ++i) value << ".";
+            if (d0.tuplet.is_tuplet()) value << " " << juce::String(d0.tuplet.actual) << ":" << juce::String(d0.tuplet.normal);
+        } else {
+            value = "MIXED";
+        }
+    }
+    text << "VALUE     " << value << "\n";
+    // Velocity: as performed (overrides included), selected notes only.
+    juce::String velocity = "-";
+    if (!sel.notes.empty()) {
+        const auto& r = render_.render(*t);
+        int vmin = 128, vmax = -1;
+        for (std::size_t i = 0; i < r.notes.size(); ++i)
+            if (std::binary_search(sel.notes.begin(), sel.notes.end(), r.note_ids[i])) {
+                vmin = std::min(vmin, r.notes[i].velocity);
+                vmax = std::max(vmax, r.notes[i].velocity);
+            }
+        if (vmax >= 0)
+            velocity = vmin == vmax ? juce::String(vmin)
+                                    : juce::String(vmin) + juce::String::fromUTF8(" \xe2\x86\x92 ") + juce::String(vmax);
+    }
+    text << "VELOCITY  " << velocity;
     lcd_.set_text(text);
 }
 

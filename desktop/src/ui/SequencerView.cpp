@@ -12,6 +12,7 @@
 #include "ui/Theme.h"
 #include "ui/TrackPanel.h"
 #include "ui/WaveformCache.h"
+#include "ui/hw/HwTheme.h"
 #include "vcc/project/Automation.h"
 #include "vcc/project/Performance.h"
 #include "vcc/project/Render.h"
@@ -2031,8 +2032,42 @@ public:
             for (auto sid : perf_sel_)
                 if (score_index(*l, sid) >= 0) kept_ids.push_back(sid);
             perf_sel_ = std::move(kept_ids);
+            // The shared selection (docs/spec/ui): notes selected in the
+            // Composer view or the inspector are selected here.
+            const auto& shared = m_.ctx.session.selection();
+            if (shared.track == l->id) {
+                std::vector<notation::EventId> want;
+                for (auto sid : shared.notes)
+                    if (score_index(*l, sid) >= 0) want.push_back(sid);
+                auto mine = perf_sel_;
+                std::sort(mine.begin(), mine.end());
+                if (mine != want) {
+                    perf_sel_ = want;
+                    if (!want.empty()) selection_.clear();
+                }
+            }
         }
         repaint();
+    }
+
+    /// Hands the score notes selected here to the session's shared selection.
+    void publish_selection()
+    {
+        const auto* l = m_.selected_lane();
+        if (!l || l->reference || l->audio) return;
+        auto mine = perf_sel_;
+        std::sort(mine.begin(), mine.end());
+        auto& session = m_.ctx.session;
+        const auto& shared = session.selection();
+        if (shared.track == l->id && shared.notes == mine) return;
+        if (mine.empty()) {
+            auto next = shared;
+            next.track = l->id;
+            next.notes.clear();
+            session.set_selection(std::move(next));
+        } else {
+            session.select_notes(l->id, mine);
+        }
     }
 
     void resized() override
@@ -2265,7 +2300,7 @@ public:
         repaint();
     }
 
-    void mouseUp(const juce::MouseEvent&) override
+    void mouseUp(const juce::MouseEvent& e) override
     {
         const Drag d = drag_;
         drag_ = Drag::None;
@@ -2280,6 +2315,7 @@ public:
             case Drag::Velocity: commit_velocity(); break;
             case Drag::PerfMove:
                 if (dt_ != 0 || dp_ != 0) commit_score_edit(Drag::PerfMove);
+                else if (!e.mods.isShiftDown()) perf_sel_ = {perf_anchor_};  // a click, not a drag
                 break;
             case Drag::PerfLength:
                 if (dt_ != 0) commit_score_edit(Drag::PerfLength);
@@ -2287,6 +2323,7 @@ public:
             case Drag::PerfVelocity: commit_performance(Drag::PerfVelocity); break;
             case Drag::None: break;
         }
+        publish_selection();
         repaint();
     }
 
@@ -2320,6 +2357,7 @@ public:
         if (key == juce::KeyPress::escapeKey) {
             selection_.clear();
             perf_sel_.clear();
+            publish_selection();
             repaint();
             return true;
         }
@@ -2949,6 +2987,7 @@ private:
                     perf_sel_.clear();
                     for (auto sid : l->score_ids)
                         if (sid != notation::kInvalidEventId) perf_sel_.push_back(sid);
+                    publish_selection();
                     repaint();
                 }
                 break;
@@ -3195,6 +3234,14 @@ private:
         g.fillRect(keys);
         const int piano_x = kHeader - 62;
         const auto* l = m_.selected_lane();
+        // Lit keys: the pitches of the selected notes, in the LED colour.
+        std::array<bool, 128> lit{};
+        if (l) {
+            for (auto sid : perf_sel_)
+                if (const int i = score_index(*l, sid); i >= 0)
+                    lit[static_cast<std::size_t>(juce::jlimit(0, 127, l->score_notes[static_cast<std::size_t>(i)].pitch))] = true;
+            for (const auto& k : selection_) lit[static_cast<std::size_t>(juce::jlimit(0, 127, k.pitch))] = true;
+        }
         for (int p = 0; p < 128; ++p) {
             const float y = y_of(p);
             if (y + kKeyHeight < keys.getY() || y > keys.getBottom()) continue;
@@ -3213,6 +3260,13 @@ private:
             if (l && (p < l->range_lo || p > l->range_hi)) {
                 g.setColour(juce::Colours::black.withAlpha(0.35f));
                 g.fillRect(juce::Rectangle<float>(static_cast<float>(piano_x), y, 61.0f, kh));
+            }
+            if (lit[static_cast<std::size_t>(p)]) {
+                const auto led = hw::Theme::get().led();
+                g.setColour(led);
+                g.fillRect(juce::Rectangle<float>(static_cast<float>(piano_x), y, 61.0f, kh));
+                g.setColour(led.darker(0.6f));
+                g.drawHorizontalLine(juce::roundToInt(y + kh) - 1, static_cast<float>(piano_x), static_cast<float>(kHeader - 1));
             }
             if (p % 12 == 0) {
                 g.setColour(colours::text);

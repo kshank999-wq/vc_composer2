@@ -193,7 +193,39 @@ and the document model. The work is mostly presentation.
    - Both tabs show the existing views inside the new shell first, so the
      app works at every step.
    - Switching keeps the playhead, selection, zoom and scroll.
-3. **Shared selection and shortcuts.** One selection drives the counters,
+3. **Shared selection and shortcuts.** *Done (November 2026).*
+   - **Shared selection.** `Session::selection()` holds the track, a time
+     range and score notes, the single selection everything reads and
+     writes.
+     - The Composer view's note selection, the piano roll's, and a range
+       dragged on the ruler all set it. Each view takes it on when it
+       changes elsewhere.
+     - The top deck's start/end/length counter shows its range.
+     - The inspector shows track, range, note count and pitch span, value
+       and velocity range.
+     - The piano roll's keyboard lights the selected pitches in the LED
+       colour.
+     - Edits drop deleted notes from it.
+     - A plain click on a note selects just that note.
+   - **Keyboard profile "Composer 2"** is the default and follows the
+     spec's table, numbered as in Finale and Sibelius:
+     - 1 is a 64th, 2 a 32nd, 3 a 16th, 4 an eighth, 5 a quarter, 6 a
+       half, 7 a whole and 8 a breve;
+     - `.` dot, `/` triplet, 0 rest, - flat, = sharp, 9 natural;
+     - Shift+Up/Down for an octave, Cmd/Ctrl+1–4 for the voices, keypad
+       Enter to tie.
+     - Right after typing a note, a value key sets the next note's value;
+       with notes the user selected, it re-times them.
+     - Enter returns to zero and Cmd/Ctrl −/= zooms.
+     - Picture and Cue Manager moved to Cmd/Ctrl+Alt+P/U, freeing
+       Cmd/Ctrl+1–4.
+     - Edit › Keyboard Shortcuts switches between Composer 2, VC Composer,
+       Finale style and Sibelius style, and remembers the choice.
+   - **Still to come:** L for loop waits for loop playback; the note-value
+     keycaps with their number legends come with the Composer view's
+     toolbar in step 4.
+
+   The original step 3 description: One selection drives the counters,
    the inspector, the lit keys and both views. Add the shortcut table,
    with the Finale/Sibelius note values as the default profile.
 4. **Composer view lanes to the spec:**

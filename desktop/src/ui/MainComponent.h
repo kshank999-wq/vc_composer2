@@ -38,6 +38,10 @@ public:
     /// Every hardware control of the UI spec, in the current theme.
     void show_control_gallery();
     juce::PopupMenu theme_menu();
+    /// The shortcut profiles: Composer 2 (the default), then the built-in ones.
+    juce::PopupMenu shortcuts_menu();
+    /// Switches the keyboard profile by name, remembering it. False when unknown.
+    bool use_shortcut_profile(const std::string& name);
     juce::DocumentWindow* control_gallery() noexcept { return gallery_window_.get(); }
     void import_musicxml();
     void export_musicxml();
@@ -121,6 +125,7 @@ private:
     std::unique_ptr<juce::FileChooser> chooser_;
     std::unique_ptr<juce::DocumentWindow> gallery_window_;
     int ticks_ = 0;
+    bool syncing_range_ = false;
     int status_age_ = 0;
     bool punch_ = false;
 };

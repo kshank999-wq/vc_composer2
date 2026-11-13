@@ -1603,6 +1603,100 @@ void shell_checks(MainWindow& window, const juce::File& dir)
     pump(100);
 }
 
+/// UI spec step 3: one selection shared by both views, the counters and the
+/// inspector; the shortcut table with Finale/Sibelius note values.
+void selection_and_shortcut_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.horror.psychological");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(200);
+    const std::string track = session.selected_track();
+    auto& composer = main.composer();
+    composer.grabKeyboardFocus();
+
+    // The default profile: Finale/Sibelius numbering (5 quarter, 4 eighth).
+    check(ctx.shortcuts.name() == "Composer 2", "the default keyboard profile is Composer 2");
+    for (const char c : {'5', 'c', 'd', '4', 'e', 'f', '6', 'g'}) composer.keyPressed(juce::KeyPress(c));
+    pump(50);
+    const auto* t = session.data().find_track(track);
+    std::vector<notation::ScoreNote> line;
+    if (t)
+        for (const auto& n : t->active_version()->score.notes(0))
+            if (!n.is_rest) line.push_back(n);
+    std::sort(line.begin(), line.end(), [](const auto& a, const auto& b) { return a.start_tick < b.start_tick; });
+    const bool values = line.size() == 5 && line[0].duration.value == notation::NoteValue::Quarter &&
+                        line[2].duration.value == notation::NoteValue::Eighth &&
+                        line[4].duration.value == notation::NoteValue::Half;
+    check(values, "5, 4 and 6 choose a quarter, an eighth and a half, as in Finale and Sibelius");
+
+    // Select everything in the Composer view: the shared selection, the
+    // counters and the inspector follow.
+    composer.perform(composer::Command::SelectAll);
+    pump(50);
+    const auto& sel = session.selection();
+    check(sel.track == track && sel.notes.size() == 5 && sel.from == 0 && !line.empty() &&
+              sel.to == line.back().end_tick(),
+          "selecting notes in the Composer view is the shared selection, with their range (" +
+              juce::String(static_cast<int>(sel.notes.size())) + " notes)");
+    pump(120);  // the window's timer hands the range to the deck
+    main.deck().update_position();
+    const auto range = main.deck().range_lcd().text();
+    check(range.contains("START   1|1|000") && range.contains("END     2|2|000"),
+          "the start/end/length counter shows the selection (" + range.replace("\n", " / ") + ")");
+    const auto inspector = main.selection_panel().readout().text();
+    check(inspector.contains("NOTES     5") && inspector.contains("VALUE     MIXED") &&
+              inspector.contains("VELOCITY") && !inspector.contains("VELOCITY  -"),
+          "the inspector shows the selection's notes, value and velocity range");
+    check(main.sequencer().range() == std::make_pair(sel.from, sel.to), "the ruler shows the selection's range");
+
+    // The Producer view's piano roll has the same notes selected.
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(200);
+    shoot(main, dir, "26-selection-producer");
+    // Selecting one note there selects it in the Composer view.
+    if (auto* roll = find_named(main, "vcc-piano-roll")) {
+        const auto notes = find_roll_notes(*roll);
+        if (!notes.empty()) {
+            const juce::Point<float> p(notes.front().left + 3.0f, notes.front().y);
+            roll->mouseDown(mouse_event(*roll, p, p, false));
+            roll->mouseUp(mouse_event(*roll, p, p, false));
+            pump(50);
+        }
+        check(session.selection().notes.size() == 1, "clicking a note in the piano roll selects just that note");
+        main.show_workspace(MainComponent::Workspace::Composer);
+        pump(100);
+        check(composer.selected_notes() == session.selection().notes,
+              "the Composer view shows the note selected in the piano roll");
+        shoot(main, dir, "27-selection-composer");
+    }
+
+    // A ruler range is the selection's range.
+    main.sequencer().set_range(4 * kTicksPerQuarter, 8 * kTicksPerQuarter);
+    check(session.selection().from == 4 * kTicksPerQuarter && session.selection().to == 8 * kTicksPerQuarter,
+          "a range dragged on the ruler is the shared selection's range");
+
+    // App shortcuts from the spec's table.
+    auto* keys = ctx.commands.getKeyMappings();
+    check(keys->containsMapping(cmd::rewind, juce::KeyPress(juce::KeyPress::returnKey)) &&
+              keys->containsMapping(cmd::zoomIn, juce::KeyPress('=', juce::ModifierKeys::commandModifier, 0)) &&
+              keys->containsMapping(cmd::zoomOut, juce::KeyPress('-', juce::ModifierKeys::commandModifier, 0)) &&
+              keys->containsMapping(cmd::toggleView, juce::KeyPress(juce::KeyPress::tabKey, juce::ModifierKeys::ctrlModifier, 0)) &&
+              !keys->containsMapping(cmd::showVideo, juce::KeyPress('3', juce::ModifierKeys::commandModifier, 0)),
+          "Enter returns to zero, Cmd/Ctrl -/= zoom, Ctrl+Tab switches views, Cmd/Ctrl+1-4 are free for voices");
+    ctx.commands.invokeDirectly(cmd::zoomIn, false);
+    ctx.commands.invokeDirectly(cmd::zoomOut, false);
+
+    // Switching profiles, remembered.
+    check(main.use_shortcut_profile("Sibelius style") && ctx.shortcuts.name() == "Sibelius style" &&
+              hw::ui_settings().getValue("shortcut_profile") == "Sibelius style",
+          "the keyboard profile can be switched and is remembered");
+    main.use_shortcut_profile("Composer 2");
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -2418,6 +2512,7 @@ int main(int argc, char** argv)
         insert_window_checks(ctx, dir);
         hardware_control_checks(window.main(), dir);
         shell_checks(window, dir);
+        selection_and_shortcut_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

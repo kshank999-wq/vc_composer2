@@ -299,8 +299,32 @@ public:
     bool set_stems(std::vector<project::StemDef> stems);
 
     // --- Selection ----------------------------------------------------------------
-    const std::string& selected_track() const noexcept { return selected_track_; }
+    /// The one selection every view and panel shares (docs/spec/ui,
+    /// "Interaction and state"): a track, a time range and score notes.
+    /// Selecting notes in the Composer view selects them in the piano roll
+    /// and the inspector, and the reverse.
+    struct Selection {
+        std::string track;
+        Ticks from = 0, to = 0;                ///< Empty when to <= from.
+        std::vector<notation::EventId> notes;  ///< Score notes on `track`.
+        bool has_range() const noexcept { return to > from; }
+        bool operator==(const Selection& o) const
+        {
+            return track == o.track && from == o.from && to == o.to && notes == o.notes;
+        }
+        bool operator!=(const Selection& o) const { return !(*this == o); }
+    };
+    const Selection& selection() const noexcept { return selection_; }
+    const std::string& selected_track() const noexcept { return selection_.track; }
+    /// A new track clears the notes (they belong to the old one) and keeps the range.
     void select_track(const std::string& track_id);
+    /// Replaces the whole selection. Notes that are not on the track's score
+    /// are dropped; one notification, none when nothing changed.
+    void set_selection(Selection selection);
+    /// The range alone (the ruler, a drag across bars).
+    void set_selection_range(Ticks from, Ticks to);
+    /// Selects score notes on a track; the range becomes the notes' span.
+    void select_notes(const std::string& track_id, std::vector<notation::EventId> notes);
 
     // --- Queries for views ----------------------------------------------------------
     /// Instrument tracks in display order (folders and video excluded).
@@ -323,7 +347,7 @@ private:
     project::Project project_;
     std::string path_;
     bool dirty_ = false;
-    std::string selected_track_;
+    Selection selection_;
     std::map<int, Listener> listeners_;
     int next_listener_ = 1;
 };

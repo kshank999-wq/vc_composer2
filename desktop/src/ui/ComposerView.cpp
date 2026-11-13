@@ -193,7 +193,7 @@ ComposerView::ComposerView(AppContext& context) : context_(context)
     hint_.setColour(juce::Label::textColourId, colours::text_dim);
     hint_.setFont(juce::FontOptions(12.0f));
     listener_ = context_.session.add_listener([this](session::Change c) {
-        if (committing_) return;
+        if (committing_ || syncing_) return;
         if (c == session::Change::Document || c == session::Change::Selection) rebuild();
     });
     rebuild();
@@ -220,9 +220,46 @@ void ComposerView::rebuild()
     const auto* version = selected ? selected->active_version() : nullptr;
     const bool new_track = !selected || selected->id != editing_track_ || !version || version->id != editing_version_;
     reload_working_copy(new_track);
+    // Notes selected elsewhere (the piano roll, the inspector) are selected here.
+    const auto& shared = context_.session.selection();
+    if (editor_ && shared.track == editing_track_) {
+        auto mine = editor_->selection();
+        std::sort(mine.begin(), mine.end());
+        if (mine != shared.notes) {
+            editor_->set_selection(shared.notes);
+            just_entered_ = false;  // a selection made elsewhere
+        }
+    }
     apply_view_settings();
     resized();
     repaint();
+}
+
+std::vector<notation::EventId> ComposerView::selected_notes() const
+{
+    if (!editor_) return {};
+    auto ids = editor_->selection();
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+void ComposerView::publish_selection()
+{
+    if (!editor_ || editing_track_.empty() || syncing_) return;
+    auto mine = editor_->selection();
+    std::sort(mine.begin(), mine.end());
+    const auto& shared = context_.session.selection();
+    if (shared.track == editing_track_ && shared.notes == mine) return;
+    syncing_ = true;
+    if (mine.empty()) {
+        auto s = shared;
+        s.track = editing_track_;
+        s.notes.clear();
+        context_.session.set_selection(std::move(s));
+    } else {
+        context_.session.select_notes(editing_track_, mine);
+    }
+    syncing_ = false;
 }
 
 void ComposerView::reload_working_copy(bool new_editor)
@@ -245,7 +282,7 @@ void ComposerView::reload_working_copy(bool new_editor)
     editing_track_ = t->id;
     editing_version_ = v->id;
     hint_.setText("Writing on " + juce::String(t->name) + " (" + juce::String(v->name) + ")" +
-                      (note_entry_ ? "  -  type A-G to enter notes, 1-7 for durations, Space to play" : ""),
+                      (note_entry_ ? "  -  type A-G to enter notes, 5 quarter / 4 eighth / 6 half for durations, Space to play" : ""),
                   juce::dontSendNotification);
 }
 
@@ -269,6 +306,7 @@ void ComposerView::apply_view_settings()
         view.set_origin_tick(origin_);
         view.score_changed();
     }
+    publish_selection();
 }
 
 Ticks ComposerView::visible_ticks() const
@@ -293,6 +331,7 @@ void ComposerView::zoom(bool larger)
 void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* point, notation::EventId id)
 {
     grabKeyboardFocus();
+    just_entered_ = false;
     context_.session.select_track(strip.track_id());
     if (!editor_ || strip.track_id() != editing_track_) return;
     if (id != notation::kInvalidEventId) {
@@ -368,6 +407,21 @@ void ComposerView::perform(Command command)
         context_.status("Select an instrument track first");
         return;
     }
+    // Right after typing a note, a value, dot, triplet or rest is for the
+    // next note, as in Finale and Sibelius; with notes the user selected, it
+    // changes them.
+    const bool for_next = command == Command::SelectDurationBreve || command == Command::SelectDurationWhole ||
+                          command == Command::SelectDurationHalf || command == Command::SelectDurationQuarter ||
+                          command == Command::SelectDurationEighth || command == Command::SelectDurationSixteenth ||
+                          command == Command::SelectDurationThirtySecond || command == Command::SelectDurationSixtyFourth ||
+                          command == Command::ToggleDot || command == Command::ToggleDoubleDot ||
+                          command == Command::ToggleTuplet || command == Command::ToggleRest;
+    if (for_next && just_entered_ && note_entry_) {
+        editor_->clear_selection();
+        handle(editor_->apply(command));
+        return;  // still "just entered": 4 then . chooses a dotted eighth
+    }
+    just_entered_ = false;
     handle(editor_->apply(command));
 }
 
@@ -428,11 +482,13 @@ bool ComposerView::keyPressed(const juce::KeyPress& key)
     notation::Step step = notation::Step::C;
     if (editor_ && note_entry_ && stroke.modifiers == 0 && ui::step_from_key(stroke, step)) {
         handle(editor_->insert_step(step));
+        just_entered_ = true;
         return true;
     }
     if (editor_ && note_entry_ && stroke.modifiers == composer::to_mask(composer::Modifier::Shift) &&
         ui::step_from_key(stroke, step)) {
         handle(editor_->add_step_to_chord(step));
+        just_entered_ = true;
         return true;
     }
     const Command command = context_.shortcuts.command_for(stroke);

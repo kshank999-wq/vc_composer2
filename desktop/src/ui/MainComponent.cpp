@@ -248,7 +248,18 @@ MainComponent::MainComponent(AppContext& context)
 
     listener_ = context_.session.add_listener([this](session::Change c) {
         // A MIDI keyboard plays whichever track is selected.
-        if (c == session::Change::Selection) context_.engine.set_live_track(context_.session.selected_track());
+        if (c == session::Change::Selection) {
+            context_.engine.set_live_track(context_.session.selected_track());
+            // The selection's range shows on the ruler (and punch follows it).
+            const auto& sel = context_.session.selection();
+            const auto r = sequencer_.range();
+            if (r.first != sel.from || r.second != sel.to) {
+                syncing_range_ = true;
+                sequencer_.set_range(sel.from, sel.to);
+                syncing_range_ = false;
+                if (punch_) set_punch(true);
+            }
+        }
         if (c == session::Change::Document) {
             // Close plug-in windows whose plug-in changed or went away.
             for (auto it = plugin_windows_.begin(); it != plugin_windows_.end();) {
@@ -281,9 +292,17 @@ MainComponent::MainComponent(AppContext& context)
                                                                                 "Recording", message, {}, this),
                                          [](int) {});
     };
+    // The ruler's range is the shared selection's range (docs/spec/ui): a
+    // drag on the ruler, or notes selected in either view, set it.
     sequencer_.on_range_changed = [this] {
+        if (syncing_range_) return;
+        const auto r = sequencer_.range();
+        context_.session.set_selection_range(r.first, r.second);
         if (punch_) set_punch(true);  // follow the new range, or turn off when it was cleared
     };
+    // The keyboard profile chosen last time.
+    if (const auto saved = hw::ui_settings().getValue("shortcut_profile"); saved.isNotEmpty())
+        use_shortcut_profile(saved.toStdString());
     startTimerHz(30);
 }
 
@@ -405,8 +424,8 @@ void MainComponent::timerCallback()
     const Ticks tick = context_.engine.position();
     const bool playing = context_.engine.playing();
     deck_.update_position();
-    const auto range = sequencer_.range();
-    deck_.set_range(range.first, range.second);
+    const auto& sel = context_.session.selection();
+    deck_.set_range(sel.from, sel.to);
     toolbar_.update(punch_, sequencer_.pencil_mode());
     if (composer_.isVisible()) composer_.set_playhead(tick, playing);
     if (sequencer_.isVisible()) sequencer_.set_playhead(tick, playing);
@@ -714,6 +733,36 @@ juce::PopupMenu MainComponent::theme_menu()
     m.addItem("Dark staves", true, !theme.paper(), [] { hw::Theme::get().set_paper(false); });
     m.addItem("Paper staves", true, theme.paper(), [] { hw::Theme::get().set_paper(true); });
     return m;
+}
+
+juce::PopupMenu MainComponent::shortcuts_menu()
+{
+    juce::PopupMenu m;
+    std::vector<composer::ShortcutProfile> profiles{composer::make_composer2_profile()};
+    for (auto& p : composer::built_in_profiles()) profiles.push_back(std::move(p));
+    for (const auto& p : profiles) {
+        const std::string name = p.name();
+        juce::String label(name);
+        if (name == "Composer 2") label << "  (5 quarter, 4 eighth, 6 half)";
+        m.addItem(label, true, context_.shortcuts.name() == name, [this, name] {
+            if (use_shortcut_profile(name)) context_.status("Keyboard shortcuts: " + juce::String(name));
+        });
+    }
+    return m;
+}
+
+bool MainComponent::use_shortcut_profile(const std::string& name)
+{
+    std::vector<composer::ShortcutProfile> profiles{composer::make_composer2_profile()};
+    for (auto& p : composer::built_in_profiles()) profiles.push_back(std::move(p));
+    for (auto& p : profiles)
+        if (p.name() == name) {
+            context_.shortcuts = std::move(p);
+            hw::ui_settings().setValue("shortcut_profile", juce::String(name));
+            hw::ui_settings().saveIfNeeded();
+            return true;
+        }
+    return false;
 }
 
 void MainComponent::show_control_gallery()
@@ -1128,7 +1177,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportFullScorePdf, cmd::exportStems, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
                 cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::addAudioTrack, cmd::importAudio,
                 cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
-                cmd::showControlGallery, cmd::toggleView,
+                cmd::showControlGallery, cmd::toggleView, cmd::zoomIn, cmd::zoomOut,
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
@@ -1177,7 +1226,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.addDefaultKeypress('z', cmdKey | shift);
             break;
         case cmd::play: info.setInfo(context_.engine.playing() ? "Stop" : "Play", "", "Transport", 0); info.addDefaultKeypress(KP::spaceKey, 0); break;
-        case cmd::rewind: info.setInfo("Return to Start", "", "Transport", 0); info.addDefaultKeypress(KP::homeKey, 0); break;
+        case cmd::rewind:
+            info.setInfo("Return to Start", "", "Transport", 0);
+            info.addDefaultKeypress(KP::homeKey, 0);
+            info.addDefaultKeypress(KP::returnKey, 0);  // Enter (docs/spec/ui shortcut table)
+            break;
         case cmd::toggleMetronome:
             info.setInfo("Metronome", "", "Transport", context_.engine.metronome() ? juce::ApplicationCommandInfo::isTicked : 0);
             info.addDefaultKeypress('k', cmdKey);
@@ -1198,21 +1251,21 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::addGroupBus: info.setInfo("New Group Bus...", "", "Track", 0); break;
         case cmd::showComposer:
             info.setInfo("Composer View", "", "View", workspace_ == Workspace::Composer ? juce::ApplicationCommandInfo::isTicked : 0);
-            info.addDefaultKeypress('1', cmdKey);
             break;
         case cmd::showSequencer:
             info.setInfo("Producer View", "", "View", workspace_ == Workspace::Sequencer ? juce::ApplicationCommandInfo::isTicked : 0);
-            info.addDefaultKeypress('2', cmdKey);
             break;
         case cmd::showMixer: info.setInfo("Mixer", "", "View", 0); info.addDefaultKeypress('m', cmdKey); break;
         case cmd::showControlGallery: info.setInfo("Control Gallery", "", "View", 0); break;
+        case cmd::zoomIn: info.setInfo("Zoom In", "", "View", 0); info.addDefaultKeypress('=', cmdKey); break;
+        case cmd::zoomOut: info.setInfo("Zoom Out", "", "View", 0); info.addDefaultKeypress('-', cmdKey); break;
         case cmd::toggleView:
             info.setInfo("Switch Composer / Producer", "", "View", 0);
             info.addDefaultKeypress(juce::KeyPress::tabKey, juce::ModifierKeys::ctrlModifier);
             info.addDefaultKeypress('`', juce::ModifierKeys::commandModifier);
             break;
-        case cmd::showVideo: info.setInfo("Picture", "", "View", 0); info.addDefaultKeypress('3', cmdKey); break;
-        case cmd::showCueManager: info.setInfo("Cue Manager", "", "View", 0); info.addDefaultKeypress('4', cmdKey); break;
+        case cmd::showVideo: info.setInfo("Picture", "", "View", 0); info.addDefaultKeypress('p', cmdKey | juce::ModifierKeys::altModifier); break;
+        case cmd::showCueManager: info.setInfo("Cue Manager", "", "View", 0); info.addDefaultKeypress('u', cmdKey | juce::ModifierKeys::altModifier); break;
         case cmd::importPicture: info.setInfo("Import Picture...", "", "File", 0); info.addDefaultKeypress('i', cmdKey | shift); break;
         case cmd::addHit: info.setInfo("Mark Hit at Playhead", "", "Transport", 0); info.addDefaultKeypress('h', cmdKey | shift); break;
         case cmd::chordExplorer: info.setInfo("Chord Explorer...", "", "Tools", 0); info.addDefaultKeypress('h', cmdKey | shift); break;
@@ -1284,6 +1337,11 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showControlGallery: show_control_gallery(); break;
         case cmd::toggleView:
             show_workspace(workspace_ == Workspace::Composer ? Workspace::Producer : Workspace::Composer);
+            break;
+        case cmd::zoomIn:
+        case cmd::zoomOut:
+            if (workspace_ == Workspace::Composer) composer_.zoom(info.commandID == cmd::zoomIn);
+            else sequencer_.zoom(info.commandID == cmd::zoomIn);
             break;
         case cmd::showVideo: show_video_window(context_); break;
         case cmd::showCueManager: show_cue_manager(context_); break;
@@ -1359,11 +1417,16 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         case 1:
             m.addCommandItem(c, cmd::undo);
             m.addCommandItem(c, cmd::redo);
+            m.addSeparator();
+            m.addSubMenu("Keyboard Shortcuts", shortcuts_menu());
             break;
         case 2:
             for (auto id : {cmd::showComposer, cmd::showSequencer, cmd::toggleView, cmd::showMixer, cmd::showVideo,
                             cmd::showCueManager})
                 m.addCommandItem(c, id);
+            m.addSeparator();
+            m.addCommandItem(c, cmd::zoomIn);
+            m.addCommandItem(c, cmd::zoomOut);
             m.addSeparator();
             m.addSubMenu("Theme", theme_menu());
             m.addCommandItem(c, cmd::showControlGallery);

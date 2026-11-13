@@ -506,6 +506,7 @@ public:
     void clear();
 
 private:
+    friend ShortcutProfile make_composer2_profile(ShortcutPlatform);
     friend ShortcutProfile make_vc_composer_profile(ShortcutPlatform);
     friend ShortcutProfile make_finale_style_profile(ShortcutPlatform);
     friend ShortcutProfile make_sibelius_style_profile(ShortcutPlatform);
@@ -520,6 +521,11 @@ private:
 /// The application's own profile. Chosen to avoid the keys a DAW usually
 /// claims, and to be reachable without a numeric keypad - laptops do not
 /// have one.
+/// The Edit window's table (docs/spec/ui): Finale/Sibelius numbering on the
+/// number row, `/` for a triplet, Shift+arrows for an octave, the primary
+/// modifier with 1-4 for the voices. The app's default.
+ShortcutProfile make_composer2_profile(ShortcutPlatform platform = host_shortcut_platform());
+
 ShortcutProfile make_vc_composer_profile(
     ShortcutPlatform platform = host_shortcut_platform());
 

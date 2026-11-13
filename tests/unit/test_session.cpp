@@ -332,3 +332,50 @@ TEST_CASE("the delay-compensation switch is saved with the project and undoable"
     REQUIRE(old.open(path, &err));
     CHECK(old.data().delay_compensation);
 }
+
+TEST_CASE("one selection: notes give a range, edits prune it, a new track clears the notes")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const std::string t = s.add_track("Flute", "woodwinds.flute");
+    notation::Score score = s.data().find_track(t)->active_version()->score;
+    editing::ScoreEditor editor(score);
+    editor.set_cursor(editing::EditCursor{});
+    editor.set_duration(notation::NoteValue::Quarter);
+    std::vector<notation::EventId> ids;
+    for (auto step : {notation::Step::C, notation::Step::D, notation::Step::E}) {
+        notation::Pitch p;
+        p.step = step;
+        ids.push_back(editor.insert_pitch(p).new_event);
+    }
+    REQUIRE(s.commit_score(t, score, "Notes"));
+
+    int notices = 0;
+    const int id = s.add_listener([&](session::Change c) {
+        if (c == session::Change::Selection) ++notices;
+    });
+    s.select_notes(t, {ids[1], ids[2], 999999});
+    CHECK_EQ(s.selection().notes.size(), 2u);  // the unknown id is dropped
+    CHECK_EQ(s.selection().from, kTicksPerQuarter);
+    CHECK_EQ(s.selection().to, 3 * kTicksPerQuarter);
+    CHECK_EQ(notices, 1);
+    s.select_notes(t, {ids[2], ids[1]});  // the same selection: no notice
+    CHECK_EQ(notices, 1);
+
+    // Deleting a selected note takes it out of the selection.
+    score = s.data().find_track(t)->active_version()->score;
+    REQUIRE(score.remove_note(ids[2]));
+    REQUIRE(s.commit_score(t, score, "Delete"));
+    CHECK(s.selection().notes == std::vector<notation::EventId>{ids[1]});
+
+    // The ruler range alone.
+    s.set_selection_range(0, 4 * kTicksPerQuarter);
+    CHECK(s.selection().has_range() && s.selection().notes.size() == 1);
+
+    // Another track: its notes, not these.
+    const std::string u = s.add_track("Oboe", "woodwinds.oboe");
+    s.select_track(u);
+    CHECK(s.selection().notes.empty());
+    CHECK(s.selection().has_range());
+    s.remove_listener(id);
+}

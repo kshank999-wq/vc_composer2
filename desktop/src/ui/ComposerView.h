@@ -22,6 +22,8 @@ public:
 
     void set_playhead(Ticks tick, bool playing);
     bool note_entry() const noexcept { return note_entry_; }
+    /// The notes selected in the score being edited (the shared selection's notes).
+    std::vector<notation::EventId> selected_notes() const;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -68,6 +70,13 @@ private:
     double spaces_per_quarter_ = ui::NotationView::kDefaultSpacesPerQuarter;
     double pixels_per_space_ = 8.0;
     bool committing_ = false;
+    bool syncing_ = false;  ///< Exchanging the selection with the session.
+    /// The selection is only the note just typed: a duration key then sets
+    /// the next note's value (as in Finale and Sibelius) rather than
+    /// re-timing that note.
+    bool just_entered_ = false;
+    /// Publishes the editor's selection to the session's shared selection.
+    void publish_selection();
 };
 
 }  // namespace vcc::desktop
