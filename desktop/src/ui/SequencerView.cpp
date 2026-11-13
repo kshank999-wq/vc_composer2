@@ -3517,6 +3517,12 @@ bool SequencerView::pencil_mode() const { return impl_->model.pencil; }
 
 void SequencerView::set_pencil_mode(bool on) { impl_->model.set_pencil_mode(on); }
 
+void SequencerView::zoom(bool in)
+{
+    auto& m = impl_->model;
+    m.zoom_about(in ? 1.25 : 0.8, kHeader + m.timeline_width / 2.0);
+}
+
 void SequencerView::notate_region(const std::string& region_id) { impl_->roll.open_region_notation(region_id); }
 
 void SequencerView::set_playhead(Ticks tick, bool playing) { impl_->set_playhead(tick, playing); }

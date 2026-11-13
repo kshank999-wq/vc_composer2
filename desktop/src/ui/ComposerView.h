@@ -41,7 +41,12 @@ private:
     void ask_for_input(composer::Command command);
     void set_origin(Ticks tick);
     void scrollBarMoved(juce::ScrollBar*, double start) override { set_origin(static_cast<Ticks>(start)); }
+
+public:
+    /// Larger or smaller staves (the toolbar's Zoom keys).
     void zoom(bool larger);
+
+private:
     void strip_clicked(Strip& strip, const engraving::InsertionPoint* point, notation::EventId id);
     Ticks visible_ticks() const;
 

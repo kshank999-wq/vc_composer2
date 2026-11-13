@@ -10,7 +10,8 @@
 #include "ui/MixerComponent.h"
 #include "ui/SequencerView.h"
 #include "ui/TrackPanel.h"
-#include "ui/TransportBar.h"
+#include "ui/shell/ShellPanels.h"
+#include "ui/shell/TopDeck.h"
 
 namespace vcc::desktop {
 
@@ -22,7 +23,10 @@ public:
     explicit MainComponent(AppContext& context);
     ~MainComponent() override;
 
-    enum class Workspace { Composer, Sequencer };
+    /// The two views of the one project (docs/spec/ui): Composer (the score)
+    /// and Producer (MIDI, audio, mixing). `Sequencer` is the Producer view's
+    /// old name.
+    enum class Workspace { Composer, Producer, Sequencer = Producer };
     void show_workspace(Workspace w);
     Workspace workspace() const noexcept { return workspace_; }
 
@@ -50,7 +54,16 @@ public:
     /// Punch in/out on the sequencer's ruler range (off when there is none).
     void set_punch(bool on);
     bool punch() const noexcept { return punch_; }
-    TransportBar& transport() noexcept { return transport_; }
+    shell::TopDeck& deck() noexcept { return deck_; }
+    shell::Toolbar& toolbar() noexcept { return toolbar_; }
+    shell::EditFrame& edit_frame() noexcept { return edit_; }
+    shell::MarkersPanel& markers() noexcept { return markers_; }
+    shell::NewTrackPanel& new_track_panel() noexcept { return new_track_; }
+    shell::SelectionPanel& selection_panel() noexcept { return selection_; }
+    shell::ChannelPanel& channel_panel() noexcept { return channel_; }
+    shell::StatusStrip& status_strip() noexcept { return status_strip_; }
+    /// The stage bar: 0 Compose, 1 Score, 2 Mix, 3 Master.
+    void go_to_stage(int stage);
 
     ComposerView& composer() noexcept { return composer_; }
     SequencerView& sequencer() noexcept { return sequencer_; }
@@ -88,13 +101,19 @@ private:
 
     AppContext& context_;
     int listener_ = 0;
-    TransportBar transport_;
+    shell::TopDeck deck_;
+    shell::Toolbar toolbar_;
+    shell::EditFrame edit_;
+    shell::MarkersPanel markers_;
+    shell::NewTrackPanel new_track_;
+    shell::SelectionPanel selection_;
+    shell::ChannelPanel channel_;
+    shell::StatusStrip status_strip_;
     TrackPanel tracks_;
     juce::StretchableLayoutManager layout_;
     std::unique_ptr<juce::StretchableLayoutResizerBar> divider_;
     ComposerView composer_;
     SequencerView sequencer_;
-    juce::Label status_;
     Workspace workspace_ = Workspace::Composer;
     std::unique_ptr<MixerWindow> mixer_;
     std::map<std::string, std::unique_ptr<PluginWindow>> plugin_windows_;

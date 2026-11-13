@@ -70,6 +70,8 @@ class Keycap : public juce::Button {
 public:
     explicit Keycap(const juce::String& legend, bool toggles = false);
     void set_led_dot(bool show) { led_dot_ = show; repaint(); }
+    /// The LED dot lit or not regardless of the toggle (a finished stage).
+    void set_led_lit(bool lit) { led_forced_ = lit ? 1 : 0; repaint(); }
     /// The LED dot's colour; default follows the theme's LED colour.
     void set_led_colour(juce::Colour c) { led_colour_ = c; repaint(); }
     /// Lit as a solid fill (record red, solo amber, mute blue) with dark text.
@@ -92,6 +94,7 @@ protected:
 
 private:
     bool led_dot_ = false;
+    int led_forced_ = -1;  ///< -1: follows the toggle.
     juce::Colour led_colour_;
     juce::Colour solid_;
     juce::Colour glyph_lit_;
@@ -122,7 +125,7 @@ private:
 
 /// A backlit readout. `caption` is a small label in the top-left corner at
 /// 65%; the text can run to several lines.
-class Lcd : public juce::Component {
+class Lcd : public juce::Component, public juce::SettableTooltipClient {
 public:
     explicit Lcd(juce::String text = {}, float size = 13.0f);
     void set_text(const juce::String& t);
@@ -130,9 +133,13 @@ public:
     void set_caption(const juce::String& c) { caption_ = c; repaint(); }
     void set_size(float s) { size_ = s; repaint(); }
     void set_justification(juce::Justification j) { just_ = j; repaint(); }
+    /// Makes the readout clickable (tempo, meter and key open an editor).
+    void set_on_click(std::function<void()> f);
     void paint(juce::Graphics& g) override;
+    void mouseUp(const juce::MouseEvent& e) override;
 
 private:
+    std::function<void()> on_click_;
     juce::String text_, caption_;
     float size_ = 13.0f;
     juce::Justification just_ = juce::Justification::centredLeft;

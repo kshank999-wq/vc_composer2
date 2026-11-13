@@ -288,7 +288,8 @@ void Keycap::paintButton(juce::Graphics& g, bool highlighted, bool down)
     }
     if (led_dot_) {
         auto dot = face.removeFromLeft(12.0f);
-        paint::led(g, dot.getCentre().translated(2.0f, 0.0f), getToggleState(), led_or_theme(led_colour_));
+        paint::led(g, dot.getCentre().translated(2.0f, 0.0f), led_forced_ < 0 ? getToggleState() : led_forced_ == 1,
+                   led_or_theme(led_colour_));
     }
     if (glyph_ != Glyph::None) {
         const juce::Colour gc = on ? (glyph_lit_.isTransparent() ? Theme::get().led() : glyph_lit_) : tok::text;
@@ -337,6 +338,17 @@ void Lcd::set_text(const juce::String& t)
     if (t == text_) return;
     text_ = t;
     repaint();
+}
+
+void Lcd::set_on_click(std::function<void()> f)
+{
+    on_click_ = std::move(f);
+    setMouseCursor(on_click_ ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void Lcd::mouseUp(const juce::MouseEvent& e)
+{
+    if (on_click_ && getLocalBounds().contains(e.getPosition())) on_click_();
 }
 
 void Lcd::paint(juce::Graphics& g)

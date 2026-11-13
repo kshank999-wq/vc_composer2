@@ -159,7 +159,32 @@ and the document model. The work is mostly presentation.
    The original step 1 description: Tokens with runtime LED, LCD and Dark or
    Paper staff colours; the embedded fonts; and the controls: panel,
    keycap, LED, LCD, small knob, ring knob, meters, fader, wheel.
-2. **The window shell with the two tabs.** Composer | Producer on the
+2. **The window shell with the two tabs.** *Done (November 2026).*
+   `desktop/src/ui/shell/` replaces the old transport bar.
+   - Top deck:
+     - nameplate with the Composer | Producer switch;
+     - transport keys;
+     - main counter in bars|beats|ticks at 960 per quarter, a min:sec or
+       timecode sub-counter, and a start/end/length readout of the ruler
+       range;
+     - Tempo, Meter and Key LCDs (click to change) and the Click key;
+     - master meters on their own peak reader.
+   - Toolbar per view.
+   - Edit window frame with the session name and the stage bar (Compose,
+     Score › export menu, Mix › mixer, Master › stems).
+   - Left rack: the track list plus Markers (cues, click to locate) in
+     Composer; New track plus the track list in Producer.
+   - Right panel: a live Selection readout in Composer; a channel for the
+     selected track in Producer (fader, pan, meters, M/S, automation mode,
+     inserts, output).
+   - Status strip.
+   - Ctrl+Tab (and Cmd+` on macOS) switches views.
+   - The deck shrinks, then wraps to two rows; under 1280 px the right
+     panel drops below the edit window.
+   - Not wired yet: Loop, Count-in, Wait note, pre-roll, MIDI tracks to
+     hardware and the Page view; they are shown disabled with a tooltip.
+
+   The original step 2 description: Composer | Producer on the
    nameplate.
    - Top deck: transport, counters in 960-tick bars|beats|ticks,
      Tempo/Meter/Key LCDs, master meters.

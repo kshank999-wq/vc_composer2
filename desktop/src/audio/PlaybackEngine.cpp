@@ -109,6 +109,9 @@ struct StripDsp {
     float mute_cur = 1.0f, mute_target = 1.0f;
     // Meters (audio thread writes, message thread takes).
     std::atomic<float> peak_l{0.0f}, peak_r{0.0f}, gr_db{0.0f};
+    /// The same peaks for a second display (the Edit window's master meters),
+    /// so two meters on one strip never take each other's readings.
+    std::atomic<float> deck_l{0.0f}, deck_r{0.0f};
     std::atomic<bool> gate_closed{false}, clipped{false};
 };
 
@@ -639,6 +642,8 @@ void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::Au
     const float pl = buf.getMagnitude(0, 0, n), pr = buf.getMagnitude(1, 0, n);
     store_max(d.peak_l, pl);
     store_max(d.peak_r, pr);
+    store_max(d.deck_l, pl);
+    store_max(d.deck_r, pr);
     if (pl > 1.0f || pr > 1.0f) d.clipped.store(true, std::memory_order_relaxed);
     if (p.strip.comp_on) store_min(d.gr_db, d.channel.gain_reduction_db());
     if (p.strip.gate_on && d.channel.gate_closed()) d.gate_closed.store(true, std::memory_order_relaxed);
@@ -1432,6 +1437,16 @@ float PlaybackEngine::take_peak(const std::string& id)
 }
 
 float PlaybackEngine::take_master_peak() { return take_peak("bus-master"); }
+
+PlaybackEngine::StripMeter PlaybackEngine::take_deck_meter(const std::string& strip_id)
+{
+    StripMeter m;
+    auto it = strips_.find(strip_id);
+    if (it == strips_.end()) return m;
+    m.left = it->second->deck_l.exchange(0.0f);
+    m.right = it->second->deck_r.exchange(0.0f);
+    return m;
+}
 
 PlaybackEngine::StripMeter PlaybackEngine::take_meter(const std::string& strip_id)
 {

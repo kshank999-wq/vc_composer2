@@ -1483,6 +1483,126 @@ void hardware_control_checks(MainComponent& main, const juce::File& dir)
     window->setVisible(false);
 }
 
+/// UI spec step 2 (docs/spec/ui/SPEC.md, "Layout"): the Edit window shell
+/// around both views, the Composer | Producer switch, the counters in 960
+/// ticks, the stage bar, markers, new track, the channel and the status
+/// strip, and the narrow-window layout.
+void shell_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.horror.psychological");
+    pump(200);
+
+    // Counters at 960 ticks to the quarter (the engine keeps 2880).
+    {
+        MeterMap m;
+        const Ticks q = kTicksPerQuarter;
+        const auto at = shell::bars_beats_ticks(m, 4 * q + 2 * q + 941 * 3);
+        MeterMap six;
+        six.set(1, TimeSignature{6, 8});
+        const auto eighths = shell::bars_beats_ticks(six, 3 * q + q / 2 + 240 * 3);
+        const auto len = shell::length_bbt(m, q, q + 4 * q + q + 480 * 3);
+        check(at == "2|3|941" && eighths == "2|2|240" && len == "1|1|480",
+              "the counters read bars|beats|ticks at 960 to the quarter (" + at + ", 6/8 " + eighths + ", length " + len +
+                  ")");
+        ctx.engine.locate(4 * q + q);
+        main.deck().update_position();
+        check(main.deck().main_counter().text() == "2|2|000",
+              "the main counter follows the playhead (" + main.deck().main_counter().text() + ")");
+    }
+
+    // The switch: one project, two views; the playhead and selection stay.
+    const Ticks here = ctx.engine.position();
+    const auto selected = session.selected_track();
+    main.deck().producer_key().triggerClick();
+    pump(100);
+    const bool producer = main.workspace() == MainComponent::Workspace::Producer && main.sequencer().isVisible() &&
+                          !main.composer().isVisible() && main.channel_panel().isVisible() &&
+                          main.new_track_panel().isVisible() && main.toolbar().key("Punch") != nullptr;
+    check(producer && main.deck().producer_key().getToggleState() && !main.deck().composer_key().getToggleState(),
+          "the Producer key shows the Producer view, its toolbar, new-track panel and channel");
+    check(ctx.engine.position() == here && session.selected_track() == selected,
+          "switching views keeps the playhead and the selection");
+    check(main.edit_frame().stage_key(2).getToggleState(), "the stage bar shows Mix in the Producer view");
+    main.setSize(1680, 1240);
+    window.setSize(1680, 1240);
+    pump(200);
+    shoot(main, dir, "24-shell-producer-1680");
+    ctx.commands.invokeDirectly(cmd::toggleView, false);
+    pump(100);
+    check(main.workspace() == MainComponent::Workspace::Composer && main.composer().isVisible() &&
+              main.markers().isVisible() && main.selection_panel().isVisible(),
+          "Ctrl+Tab (Switch Composer / Producer) flips back to the Composer view");
+    check(main.edit_frame().stage_key(0).getToggleState() && !main.edit_frame().stage_key(2).getToggleState(),
+          "the stage bar shows Compose in the Composer view");
+    shoot(main, dir, "23-shell-composer-1680");
+
+    // Markers: cues in time order, click to locate.
+    session.edit("Cue", [](project::ProjectData& d) {
+        project::Cue c;
+        c.id = "cue-shell";
+        c.code = "1M2";
+        c.title = "Arrival";
+        c.start = 8 * 4 * kTicksPerQuarter;
+        c.end = c.start + 8 * 4 * kTicksPerQuarter;
+        d.cues.push_back(c);
+        return true;
+    });
+    pump(50);
+    check(main.markers().rows() == 1, "the markers list shows the project's cues");
+    main.markers().locate(0);
+    check(ctx.engine.position() == 8 * 4 * kTicksPerQuarter, "clicking a marker locates the playhead to it");
+
+    // The selection readout follows the selected track.
+    const auto* t = session.data().find_track(session.selected_track());
+    check(t && main.selection_panel().readout().text().contains(juce::String(t->name).toUpperCase()),
+          "the selection panel shows the selected track");
+
+    // New track (Producer view): two stereo audio tracks in one go.
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(50);
+    const auto before = session.data().tracks.size();
+    main.new_track_panel().type_key(2).triggerClick();
+    pump(20);
+    main.new_track_panel().set_count(2);
+    const int made = main.new_track_panel().create();
+    check(made == 2 && session.data().tracks.size() == before + 2, "New track makes as many audio tracks as asked");
+    session.undo();
+    session.undo();
+
+    // The channel: the fader and the automation keys write the selected track.
+    session.select_track(selected);
+    pump(50);
+    main.channel_panel().fader().set_db(-6.0);
+    main.channel_panel().mode_key(1).triggerClick();
+    pump(50);
+    const auto* sel = session.data().find_track(selected);
+    check(sel && std::abs(sel->gain_db + 6.0) < 0.01 && sel->automation_mode == "touch",
+          "the channel's fader and automation keys write the selected track");
+    session.undo();
+    session.undo();
+
+    // The status strip carries messages.
+    ctx.status("Shell check message");
+    check(main.status_strip().message() == "Shell check message", "messages show in the status strip");
+
+    // Narrow: the deck wraps and the right panel drops below the edit window.
+    main.show_workspace(MainComponent::Workspace::Composer);
+    window.setSize(1200, 800);
+    main.setSize(1200, 800);
+    pump(150);
+    check(main.deck().getHeight() > 150 && main.selection_panel().getY() > main.edit_frame().getY() &&
+              main.selection_panel().getRight() <= main.edit_frame().getRight() + 1,
+          "under 1280 px the top deck wraps and the right panel drops below the edit window");
+    shoot(main, dir, "25-shell-1200");
+    window.setSize(1440, 900);
+    main.setSize(1440, 900);
+    pump(100);
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -2297,6 +2417,7 @@ int main(int argc, char** argv)
         hosting_checks(ctx, dir);
         insert_window_checks(ctx, dir);
         hardware_control_checks(window.main(), dir);
+        shell_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

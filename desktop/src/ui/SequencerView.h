@@ -33,6 +33,8 @@ public:
     /// Pencil: dragging in an automation lane draws freehand (key P).
     bool pencil_mode() const;
     void set_pencil_mode(bool on);
+    /// Zooms the timeline in or out about its middle (the toolbar's Zoom keys).
+    void zoom(bool in);
     /// Opens Notate Region for a MIDI region of the selected track.
     void notate_region(const std::string& region_id);
     /// The sequencer showing this context's document (for menus elsewhere), or null.

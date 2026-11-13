@@ -200,18 +200,38 @@ private:
 // --- Main component -----------------------------------------------------------------------------
 
 MainComponent::MainComponent(AppContext& context)
-    : context_(context), transport_(context), tracks_(context), composer_(context), sequencer_(context)
+    : context_(context),
+      deck_(context),
+      toolbar_(context),
+      edit_(context),
+      markers_(context),
+      new_track_(context),
+      selection_(context),
+      channel_(context),
+      status_strip_(context),
+      tracks_(context),
+      composer_(context),
+      sequencer_(context)
 {
     // The UI theme (LED, LCD, staves) the user chose last time.
     hw::Theme::get().attach(&hw::ui_settings());
-    addAndMakeVisible(transport_);
+    // The Edit window (docs/spec/ui): top deck, toolbar, left rack, the
+    // edit window around the current view, right panel, status strip.
+    for (auto* c : std::initializer_list<juce::Component*>{&deck_, &toolbar_, &edit_, &markers_, &selection_,
+                                                           &status_strip_})
+        addAndMakeVisible(c);
+    addChildComponent(new_track_);
+    addChildComponent(channel_);
     addAndMakeVisible(tracks_);
     addAndMakeVisible(composer_);
     addChildComponent(sequencer_);
-    addAndMakeVisible(status_);
-    status_.setFont(juce::FontOptions(12.0f));
-    status_.setColour(juce::Label::textColourId, colours::text_dim);
-    status_.setColour(juce::Label::backgroundColourId, colours::panel);
+    deck_.on_view = [this](bool producer) { show_workspace(producer ? Workspace::Producer : Workspace::Composer); };
+    edit_.on_stage = [this](int stage) { go_to_stage(stage); };
+    toolbar_.on_zoom = [this](bool larger) {
+        if (workspace_ == Workspace::Composer) composer_.zoom(larger);
+        else sequencer_.zoom(larger);
+    };
+    toolbar_.on_pencil = [this](bool on) { sequencer_.set_pencil_mode(on); };
 
     layout_.setItemLayout(0, 220, 520, 300);
     layout_.setItemLayout(1, 5, 5, 5);
@@ -220,7 +240,7 @@ MainComponent::MainComponent(AppContext& context)
     addAndMakeVisible(*divider_);
 
     context_.status = [this](const juce::String& message) {
-        status_.setText(message, juce::dontSendNotification);
+        status_strip_.set_message(message);
         status_age_ = 0;
     };
     context_.show_plugin_window = [this](const std::string& id) { show_plugin_window(id); };
@@ -251,11 +271,11 @@ MainComponent::MainComponent(AppContext& context)
         }
     });
 
-    context_.engine.on_transport_changed = [this] { transport_.update_position(); };
+    context_.engine.on_transport_changed = [this] { deck_.update_position(); };
     // A recording pass was placed (one undo step), or failed.
     context_.engine.on_recording_finished = [this](const juce::String& message, bool ok) {
         context_.status(message);
-        transport_.update_position();
+        deck_.update_position();
         if (!ok)
             juce::AlertWindow::showAsync(juce::MessageBoxOptions::makeOptionsOk(juce::MessageBoxIconType::WarningIcon,
                                                                                 "Recording", message, {}, this),
@@ -279,26 +299,102 @@ MainComponent::~MainComponent()
     context_.show_insert_window = nullptr;
 }
 
-void MainComponent::paint(juce::Graphics& g) { g.fillAll(colours::background); }
+void MainComponent::paint(juce::Graphics& g) { g.fillAll(hw::tok::chassis); }
 
 void MainComponent::resized()
 {
+    constexpr int kPad = 10, kGap = hw::tok::gap_panel, kRight = 268;
     auto r = getLocalBounds();
-    transport_.setBounds(r.removeFromTop(52));
-    status_.setBounds(r.removeFromBottom(22));
-    juce::Component* items[] = {&tracks_, divider_.get(), workspace_ == Workspace::Composer
-                                                              ? static_cast<juce::Component*>(&composer_)
-                                                              : static_cast<juce::Component*>(&sequencer_)};
+    status_strip_.setBounds(r.removeFromBottom(18));
+    r.reduce(kPad, kPad);
+    deck_.setBounds(r.removeFromTop(shell::TopDeck::height_for(getWidth())));
+    r.removeFromTop(kGap);
+    toolbar_.setBounds(r.removeFromTop(60));
+    r.removeFromTop(kGap);
+
+    const bool producer = workspace_ == Workspace::Producer;
+    juce::Component& right = producer ? static_cast<juce::Component&>(channel_) : selection_;
+    // Under ~1280 px the right panel drops below the edit window.
+    const bool narrow = getWidth() < 1280;
+    juce::Rectangle<int> right_area;
+    if (!narrow) {
+        right_area = r.removeFromRight(kRight);
+        r.removeFromRight(kGap);
+        right_area = right_area.withHeight(producer ? std::min(right_area.getHeight(), 420) : 190);
+    }
+
+    // Left rack | edit window, with the divider between them.
+    juce::Component* items[] = {&markers_, divider_.get(), &edit_};
     layout_.layOutComponents(items, 3, r.getX(), r.getY(), r.getWidth(), r.getHeight(), false, true);
-    (workspace_ == Workspace::Composer ? static_cast<juce::Component&>(sequencer_) : composer_)
-        .setBounds(items[2]->getBounds());
+    auto rack = markers_.getBounds();
+    divider_->setBounds(divider_->getBounds().reduced(1, 0));
+    // The rack: Composer = tracks, then markers; Producer = new track, then tracks.
+    if (producer) {
+        new_track_.setBounds(rack.removeFromTop(200));
+        rack.removeFromTop(kGap);
+        tracks_.setBounds(rack);
+    } else {
+        const int markers_h = juce::jlimit(120, 260, rack.getHeight() / 3);
+        markers_.setBounds(rack.removeFromBottom(markers_h));
+        rack.removeFromBottom(kGap);
+        tracks_.setBounds(rack);
+    }
+    auto edit = edit_.getBounds();
+    if (narrow) {
+        right_area = edit.removeFromBottom(producer ? 330 : 170);
+        edit.removeFromBottom(kGap);
+        edit_.setBounds(edit);
+    }
+    right.setBounds(right_area);
+    const auto content = edit_.getBounds().getIntersection(edit_.content_area() + edit_.getPosition());
+    composer_.setBounds(content);
+    sequencer_.setBounds(content);
+}
+
+void MainComponent::go_to_stage(int stage)
+{
+    switch (stage) {
+        case 0: show_workspace(Workspace::Composer); break;
+        case 1: {
+            // Score: parts and the full score.
+            show_workspace(Workspace::Composer);
+            edit_.set_stage(1);
+            juce::PopupMenu m;
+            m.addItem("Export parts (PDF)...", [this] { export_parts_pdf_dialog(); });
+            m.addItem("Export full score (PDF)...", [this] { export_full_score_dialog(); });
+            m.addItem("Export MusicXML...", [this] { export_musicxml(); });
+            m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&edit_.stage_key(1)));
+            break;
+        }
+        case 2:
+            show_workspace(Workspace::Producer);
+            show_mixer();
+            break;
+        case 3:
+            show_workspace(Workspace::Producer);
+            edit_.set_stage(3);
+            context_.commands.invokeDirectly(cmd::exportStems, true);
+            break;
+        default: break;
+    }
 }
 
 void MainComponent::show_workspace(Workspace w)
 {
+    // One project, two views: the playhead, the selection and each view's
+    // own zoom and scroll stay as they are.
     workspace_ = w;
-    composer_.setVisible(w == Workspace::Composer);
-    sequencer_.setVisible(w == Workspace::Sequencer);
+    const bool producer = w == Workspace::Producer;
+    composer_.setVisible(!producer);
+    sequencer_.setVisible(producer);
+    markers_.setVisible(!producer);
+    selection_.setVisible(!producer);
+    new_track_.setVisible(producer);
+    channel_.setVisible(producer);
+    deck_.set_producer(producer);
+    toolbar_.set_producer(producer);
+    edit_.set_stage(producer ? 2 : 0);
+    if (producer) channel_.refresh();
     resized();
     if (w == Workspace::Composer) composer_.grabKeyboardFocus();
     else sequencer_.grabKeyboardFocus();
@@ -308,7 +404,10 @@ void MainComponent::timerCallback()
 {
     const Ticks tick = context_.engine.position();
     const bool playing = context_.engine.playing();
-    transport_.update_position();
+    deck_.update_position();
+    const auto range = sequencer_.range();
+    deck_.set_range(range.first, range.second);
+    toolbar_.update(punch_, sequencer_.pencil_mode());
     if (composer_.isVisible()) composer_.set_playhead(tick, playing);
     if (sequencer_.isVisible()) sequencer_.set_playhead(tick, playing);
     // A plug-in that crashed in its own process: the session plays on without it.
@@ -330,9 +429,10 @@ void MainComponent::timerCallback()
         if (context_.session.dirty()) {
             capture_plugin_states();
             context_.session.write_autosave(user_data_directory().getFullPathName().toStdString());
+            status_strip_.set_autosaved(juce::Time::getCurrentTime());
         }
     }
-    if (++status_age_ == 30 * 8) status_.setText({}, juce::dontSendNotification);
+    if (++status_age_ == 30 * 8) status_strip_.set_message({});
 }
 
 // --- File ------------------------------------------------------------------------------------------
@@ -859,7 +959,7 @@ void MainComponent::toggle_record()
     } else {
         context_.status("Record off");
     }
-    transport_.update_position();
+    deck_.update_position();
     context_.commands.commandStatusChanged();
 }
 
@@ -874,7 +974,7 @@ void MainComponent::set_punch(bool on)
     punch_ = on;
     context_.engine.set_punch(on, range.first, range.second);
     sequencer_.set_punch_display(on);
-    transport_.set_punch_state(on);
+    toolbar_.update(on, sequencer_.pencil_mode());
     if (changed) {
         if (on) {
             const auto& m = context_.session.data().meter;
@@ -1028,7 +1128,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportFullScorePdf, cmd::exportStems, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
                 cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::addAudioTrack, cmd::importAudio,
                 cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
-                cmd::showControlGallery,
+                cmd::showControlGallery, cmd::toggleView,
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
@@ -1097,15 +1197,20 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::addAuxBus: info.setInfo("New Aux (FX) Bus...", "", "Track", 0); break;
         case cmd::addGroupBus: info.setInfo("New Group Bus...", "", "Track", 0); break;
         case cmd::showComposer:
-            info.setInfo("Composer (score)", "", "View", workspace_ == Workspace::Composer ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.setInfo("Composer View", "", "View", workspace_ == Workspace::Composer ? juce::ApplicationCommandInfo::isTicked : 0);
             info.addDefaultKeypress('1', cmdKey);
             break;
         case cmd::showSequencer:
-            info.setInfo("Sequencer", "", "View", workspace_ == Workspace::Sequencer ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.setInfo("Producer View", "", "View", workspace_ == Workspace::Sequencer ? juce::ApplicationCommandInfo::isTicked : 0);
             info.addDefaultKeypress('2', cmdKey);
             break;
         case cmd::showMixer: info.setInfo("Mixer", "", "View", 0); info.addDefaultKeypress('m', cmdKey); break;
         case cmd::showControlGallery: info.setInfo("Control Gallery", "", "View", 0); break;
+        case cmd::toggleView:
+            info.setInfo("Switch Composer / Producer", "", "View", 0);
+            info.addDefaultKeypress(juce::KeyPress::tabKey, juce::ModifierKeys::ctrlModifier);
+            info.addDefaultKeypress('`', juce::ModifierKeys::commandModifier);
+            break;
         case cmd::showVideo: info.setInfo("Picture", "", "View", 0); info.addDefaultKeypress('3', cmdKey); break;
         case cmd::showCueManager: info.setInfo("Cue Manager", "", "View", 0); info.addDefaultKeypress('4', cmdKey); break;
         case cmd::importPicture: info.setInfo("Import Picture...", "", "File", 0); info.addDefaultKeypress('i', cmdKey | shift); break;
@@ -1177,6 +1282,9 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showSequencer: show_workspace(Workspace::Sequencer); break;
         case cmd::showMixer: show_mixer(); break;
         case cmd::showControlGallery: show_control_gallery(); break;
+        case cmd::toggleView:
+            show_workspace(workspace_ == Workspace::Composer ? Workspace::Producer : Workspace::Composer);
+            break;
         case cmd::showVideo: show_video_window(context_); break;
         case cmd::showCueManager: show_cue_manager(context_); break;
         case cmd::importPicture:
@@ -1253,7 +1361,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addCommandItem(c, cmd::redo);
             break;
         case 2:
-            for (auto id : {cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo, cmd::showCueManager})
+            for (auto id : {cmd::showComposer, cmd::showSequencer, cmd::toggleView, cmd::showMixer, cmd::showVideo,
+                            cmd::showCueManager})
                 m.addCommandItem(c, id);
             m.addSeparator();
             m.addSubMenu("Theme", theme_menu());
