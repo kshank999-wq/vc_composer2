@@ -1,5 +1,7 @@
 #include "ui/ScoreExchange.h"
 
+#include <algorithm>
+
 #include "AppResources.h"
 #include "vcc/core/Files.h"
 #include "vcc/engraving/PdfRenderer.h"

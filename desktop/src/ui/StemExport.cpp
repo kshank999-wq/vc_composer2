@@ -1,5 +1,6 @@
 #include "ui/StemExport.h"
 
+#include <algorithm>
 #include <set>
 
 #include "audio/StemRenderer.h"

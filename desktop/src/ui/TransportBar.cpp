@@ -1,5 +1,7 @@
 #include "ui/TransportBar.h"
 
+#include <algorithm>
+
 #include "ui/Theme.h"
 #include "vcc/theory/Pitch.h"
 

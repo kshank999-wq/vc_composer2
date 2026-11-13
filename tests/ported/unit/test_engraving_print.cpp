@@ -6,6 +6,7 @@
 // ink - and that the SVG a page becomes carries the font.
 #include "vcc/engraving/PrintLayout.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 

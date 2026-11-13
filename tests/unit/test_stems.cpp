@@ -1,4 +1,5 @@
 // Stems: which tracks each prints, defaults, coverage, and persistence.
+#include <algorithm>
 #include <filesystem>
 
 #include "vcc/project/Stems.h"

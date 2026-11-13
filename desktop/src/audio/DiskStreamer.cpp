@@ -1,5 +1,6 @@
 #include "audio/DiskStreamer.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace vcc::desktop {

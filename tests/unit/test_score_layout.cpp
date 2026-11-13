@@ -1,5 +1,6 @@
 // The full score: parts aligned on one timeline, names, brackets, hidden
 // empty staves, transposed and concert views, and a printed PDF.
+#include <algorithm>
 #include <cmath>
 #include <map>
 

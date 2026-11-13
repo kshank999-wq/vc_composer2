@@ -5,6 +5,7 @@
 // that a block boundary is not a reason to cut a click in half.
 #include "vcc/audio/Metronome.h"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 
 namespace vcc::music {
@@ -737,7 +738,7 @@ SmfReadResult read_smf_file(const std::string& path, SmfFile& out)
     if (path.empty())
         return refuse_read("no MIDI file path was given");
 
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(std::filesystem::u8path(path), std::ios::binary);
     if (!file)
         return refuse_read("could not open that MIDI file");
 

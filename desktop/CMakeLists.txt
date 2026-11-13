@@ -109,6 +109,11 @@ target_compile_definitions(vcc_plugin_scanner PRIVATE JUCE_WEB_BROWSER=0 JUCE_US
 target_link_libraries(vcc_plugin_scanner PRIVATE juce::juce_audio_processors
                                          PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 set_target_properties(vcc_plugin_scanner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+if(APPLE)
+    # Hosting Audio Units shows their generic view (AUGenericView), which JUCE
+    # links for GUI apps but not for console tools.
+    target_link_libraries(vcc_plugin_scanner PRIVATE "-framework CoreAudioKit")
+endif()
 add_dependencies(VCComposer2 vcc_plugin_scanner)
 add_custom_command(TARGET VCComposer2 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:vcc_plugin_scanner>"
@@ -127,6 +132,11 @@ target_compile_definitions(vcc_plugin_host PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_C
 target_link_libraries(vcc_plugin_host PRIVATE juce::juce_audio_utils
                                       PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 set_target_properties(vcc_plugin_host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+if(APPLE)
+    # Hosting Audio Units shows their generic view (AUGenericView), which JUCE
+    # links for GUI apps but not for console tools.
+    target_link_libraries(vcc_plugin_host PRIVATE "-framework CoreAudioKit")
+endif()
 add_dependencies(VCComposer2 vcc_plugin_host)
 add_custom_command(TARGET VCComposer2 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:vcc_plugin_host>"

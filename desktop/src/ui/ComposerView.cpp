@@ -1,5 +1,7 @@
 #include "ui/ComposerView.h"
 
+#include <algorithm>
+
 #include "ui/Theme.h"
 #include "ui/TrackPanel.h"
 #include "vcc/ui/KeyMapping.h"

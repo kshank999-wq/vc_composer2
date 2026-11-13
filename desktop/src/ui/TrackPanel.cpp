@@ -1,5 +1,7 @@
 #include "ui/TrackPanel.h"
 
+#include <algorithm>
+
 #include "audio/PlaceholderSynth.h"
 #include "ui/AudioTrackStyle.h"
 #include "ui/SequencerView.h"

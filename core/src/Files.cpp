@@ -62,6 +62,23 @@ bool replace_file(const std::string& from, const std::string& to)
 #endif
 }
 
+// UTF-8 paths on every platform: Windows' narrow C calls use the ANSI code
+// page, so a name with an em dash or an accent would be mangled there.
+std::FILE* open_for_writing(const std::string& path)
+{
+#if defined(_WIN32)
+    return _wfopen(fs::u8path(path).wstring().c_str(), L"wb");
+#else
+    return std::fopen(path.c_str(), "wb");
+#endif
+}
+
+void remove_file(const std::string& path)
+{
+    std::error_code ignored;
+    fs::remove(fs::u8path(path), ignored);
+}
+
 void sync_directory_of(const std::string& path)
 {
 #if !defined(_WIN32)
@@ -90,7 +107,7 @@ FileWriteResult write_file_atomically(const std::string& path, const std::string
     }
     const std::string temporary = temporary_path_for(path) + "." + std::to_string(g_counter.fetch_add(1));
 
-    std::FILE* f = std::fopen(temporary.c_str(), "wb");
+    std::FILE* f = open_for_writing(temporary);
     if (!f) {
         result.error = "could not open that folder for writing";
         return result;
@@ -99,12 +116,12 @@ FileWriteResult write_file_atomically(const std::string& path, const std::string
     ok = flush_to_disk(f) && ok;
     ok = (std::fclose(f) == 0) && ok;
     if (!ok) {
-        std::remove(temporary.c_str());
+        remove_file(temporary);
         result.error = "writing the file failed";
         return result;
     }
     if (!replace_file(temporary, path)) {
-        std::remove(temporary.c_str());
+        remove_file(temporary);
         result.error = "could not put the finished file in place";
         return result;
     }
