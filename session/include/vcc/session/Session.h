@@ -17,6 +17,7 @@
 #include "vcc/interchange/MusicXml.h"
 #include "vcc/ostinato/Ostinato.h"
 #include "vcc/project/Performance.h"
+#include "vcc/session/Notate.h"
 #include "vcc/project/Project.h"
 #include "vcc/project/Stems.h"
 #include "vcc/templates/Templates.h"
@@ -273,6 +274,19 @@ public:
     /// undo step.
     bool humanize(const std::string& track_id, const std::vector<notation::EventId>& notes,
                   const project::HumanizeSettings& settings);
+
+    // --- MIDI -> notation (Main Spec §8) ---------------------------------------------------
+    /// Plans a piano-roll edit of a score note (see Notate.h). Changes nothing.
+    NotatePlan plan_note_edit(const std::string& track_id, notation::EventId note, const NoteTarget& target) const;
+    /// Plans notating a MIDI region into the track's score. Changes nothing.
+    NotatePlan plan_notate_region(const std::string& track_id, const std::string& region_id,
+                                  const RegionNotateSettings& settings = {}) const;
+    /// Applies one option of a plan as one undo step. Refuses (false) a plan
+    /// made before the track's score last changed.
+    /// With `coalesce`, same-label applies merge into one undo step (several
+    /// notes edited by one gesture).
+    bool apply_notate(const std::string& track_id, const NotatePlan& plan, std::size_t option, const std::string& label,
+                      bool coalesce = false);
 
     // --- Stems (Main Spec §16) ---------------------------------------------------------
     /// The project's stems, or sensible defaults when it has none (group

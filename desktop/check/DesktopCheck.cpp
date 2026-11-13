@@ -1133,18 +1133,77 @@ juce::Component* find_named(juce::Component& root, const juce::String& name)
     return nullptr;
 }
 
-juce::MouseEvent mouse_event(juce::Component& c, juce::Point<float> p, juce::Point<float> down, bool dragged)
+juce::MouseEvent mouse_event(juce::Component& c, juce::Point<float> p, juce::Point<float> down, bool dragged,
+                             bool alt = false)
 {
     const auto now = juce::Time::getCurrentTime();
-    return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), p,
-                            juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier),
+    const int mods = juce::ModifierKeys::leftButtonModifier | (alt ? juce::ModifierKeys::altModifier : 0);
+    return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys(mods),
                             juce::MouseInputSource::defaultPressure, 0.0f, 0.0f, 0.0f, 0.0f, &c, &c, now, down, now, 1,
                             dragged);
 }
 
-/// Performance overrides (Main Spec 8): dragging a score note in the piano
-/// roll changes how it is played, never what is written, as one undo step.
-void performance_checks(AppContext& ctx, juce::Component& main, const std::string& track, const juce::File& dir)
+void drag(juce::Component& c, juce::Point<float> from, juce::Point<float> to, bool alt = false)
+{
+    c.mouseDown(mouse_event(c, from, from, false, alt));
+    c.mouseDrag(mouse_event(c, (from + to) / 2.0f, from, true, alt));
+    c.mouseDrag(mouse_event(c, to, from, true, alt));
+    c.mouseUp(mouse_event(c, to, from, true, alt));
+    pump(100);
+}
+
+juce::TextButton* find_button(juce::Component& root, const juce::String& prefix)
+{
+    if (auto* b = dynamic_cast<juce::TextButton*>(&root); b && b->getButtonText().startsWith(prefix)) return b;
+    for (auto* c : root.getChildren())
+        if (auto* f = find_button(*c, prefix)) return f;
+    return nullptr;
+}
+
+/// Score notes in the piano roll, found by hovering as the pointer would:
+/// one entry per pitch row, {left edge, right edge, centre y}.
+struct RollNote {
+    float left, right, y;
+};
+std::vector<RollNote> find_roll_notes(juce::Component& roll)
+{
+    // The notes follow one another in time, a pixel apart: each run of
+    // columns with a note under the pointer is one note.
+    std::map<int, std::vector<float>> columns;
+    const juce::MouseCursor normal(juce::MouseCursor::NormalCursor);
+    for (int y = 40; y < roll.getHeight() - 60; y += 2)
+        for (int x = 0; x < roll.getWidth() - 20; x += 1) {
+            const juce::Point<float> p(static_cast<float>(x), static_cast<float>(y));
+            roll.mouseMove(mouse_event(roll, p, p, false));
+            if (roll.getMouseCursor() != normal) columns[x].push_back(p.y);
+        }
+    std::vector<RollNote> out;
+    int prev = -10;
+    std::vector<float> ys;
+    auto flush = [&] {
+        if (out.empty() || ys.empty()) return;
+        std::sort(ys.begin(), ys.end());
+        out.back().y = ys[ys.size() / 2];
+        ys.clear();
+    };
+    for (const auto& [x, hits] : columns) {
+        if (x != prev + 1) {
+            flush();
+            out.push_back({static_cast<float>(x), static_cast<float>(x), 0.0f});
+        }
+        out.back().right = static_cast<float>(x);
+        ys.insert(ys.end(), hits.begin(), hits.end());
+        prev = x;
+    }
+    flush();
+    return out;
+}
+
+/// Performance overrides and MIDI -> notation (Main Spec 8) in the piano
+/// roll: an Alt-drag of a score note changes only how it is played; a plain
+/// drag rewrites it in the score; an edit that can be read two ways asks;
+/// a MIDI region is notated through its dialog.
+void performance_checks(AppContext& ctx, MainComponent& main, const std::string& track, const juce::File& dir)
 {
     auto& session = ctx.session;
     session.select_track(track);
@@ -1155,33 +1214,24 @@ void performance_checks(AppContext& ctx, juce::Component& main, const std::strin
     const auto* t = session.data().find_track(track);
     const auto written = project::render_track(*t, false);
     const std::string score_before = json::write(notation::score_to_json(t->active_version()->score));
+    const auto notes = find_roll_notes(*roll);
+    check(notes.size() >= 4, "the score notes are found under the pointer in the piano roll (" +
+                                 juce::String(static_cast<int>(notes.size())) + ")");
+    if (notes.size() < 2) return;
+    const auto& first = notes.front();
+    const auto& last = notes.back();
+    auto score_json = [&] {
+        return json::write(notation::score_to_json(session.data().find_track(track)->active_version()->score));
+    };
 
-    // Find a score note by hovering, as the pointer would.
-    std::optional<juce::Point<float>> at;
-    const juce::MouseCursor resize(juce::MouseCursor::LeftRightResizeCursor);
-    for (int y = 40; y < roll->getHeight() - 60 && !at; y += 3)
-        for (int x = 170; x < roll->getWidth() - 20 && !at; x += 3) {
-            const juce::Point<float> p(static_cast<float>(x), static_cast<float>(y));
-            roll->mouseMove(mouse_event(*roll, p, p, false));
-            if (roll->getMouseCursor() == resize) at = p + juce::Point<float>(2.0f, 0.0f);
-        }
-    check(at.has_value(), "a score note can be found under the pointer in the piano roll");
-    if (!at) return;
-    const auto to = *at + juce::Point<float>(14.0f, -30.0f);  // later, and (ignored) higher
-    roll->mouseDown(mouse_event(*roll, *at, *at, false));
-    roll->mouseDrag(mouse_event(*roll, (*at + to) / 2.0f, *at, true));
-    roll->mouseDrag(mouse_event(*roll, to, *at, true));
-    roll->mouseUp(mouse_event(*roll, to, *at, true));
-    pump(100);
-
+    // Alt-drag: a performance only.
+    drag(*roll, {first.left + 2.0f, first.y}, {first.left + 16.0f, first.y}, true);
     const auto* perf = session.performance_of(track);
     check(perf && perf->size() == 1 && perf->begin()->second.onset > 0,
-          "dragging a score note plays it later (" + juce::String(perf && !perf->empty() ? perf->begin()->second.onset : 0) +
+          "Alt-dragging a score note plays it later (" + juce::String(perf && !perf->empty() ? perf->begin()->second.onset : 0) +
               " ticks)");
-    t = session.data().find_track(track);
-    check(json::write(notation::score_to_json(t->active_version()->score)) == score_before,
-          "the drag leaves the written score untouched");
-    const auto played = project::render_track(*t);
+    check(score_json() == score_before, "the Alt-drag leaves the written score untouched");
+    const auto played = project::render_track(*session.data().find_track(track));
     bool moved = false, same_pitches = played.notes.size() == written.notes.size();
     for (std::size_t i = 0; same_pitches && i < played.notes.size(); ++i) {
         same_pitches = played.notes[i].pitch == written.notes[i].pitch;
@@ -1189,15 +1239,92 @@ void performance_checks(AppContext& ctx, juce::Component& main, const std::strin
     }
     check(moved && same_pitches, "playback and export hear the note later, at the written pitch");
     shoot(main, dir, "15-performance-drag");
-
     session.undo();
     check(session.performance_of(track)->empty(), "one undo returns the note to how it is written");
+
+    // A plain drag of a note up a tone: a new pitch, written into the score.
+    const auto rows_per_tone = (notes[0].y - notes[1].y);  // C to D is a tone
+    const auto& sc0 = session.data().find_track(track)->active_version()->score;
+    std::vector<notation::ScoreNote> line;
+    for (const auto& n : sc0.notes(0))
+        if (!n.is_rest) line.push_back(n);
+    std::sort(line.begin(), line.end(), [](const auto& a, const auto& b) { return a.start_tick < b.start_tick; });
+    const auto target = line.size() >= 4 ? line[3] : notation::ScoreNote{};
+    drag(*roll, {last.left + 4.0f, last.y}, {last.left + 4.0f, last.y - rows_per_tone});
+    if (auto* stray = find_dialog("Notate the edit"))
+        if (auto* cancel = find_button(*stray, "Cancel")) cancel->triggerClick(), pump(100);
+    const auto* rewritten = session.data().find_track(track)->active_version()->score.find_note(target.id);
+    const int before_midi = notation::midi_note_number(target.pitch);
+    const int after_midi = rewritten ? notation::midi_note_number(rewritten->pitch) : -1;
+    check(rewritten && after_midi == before_midi + 2 && rewritten->start_tick == target.start_tick &&
+              session.performance_of(track)->empty(),
+          "dragging a score note up a tone rewrites its pitch in the score (" + juce::String(before_midi) + " -> " +
+              juce::String(after_midi) + ")");
+    session.undo();
+    check(score_json() == score_before, "one undo puts the written note back");
+
+    // Stretching the first note into the second: the reconciliation prompt.
+    drag(*roll, {first.right - 1.0f, first.y}, {first.right + 20.0f, first.y});
+    pump(200);
+    auto* prompt = find_dialog("Notate the edit");
+    check(prompt != nullptr, "an edit that overlaps the next note asks how to read it");
+    if (prompt) {
+        shoot(*prompt, dir, "17-notate-prompt");
+        auto* voice = find_button(*prompt, "Write it in the score in voice");
+        check(voice != nullptr, "the prompt offers a second voice");
+        if (voice) voice->triggerClick();
+        pump(300);
+        bool in_voice_2 = false;
+        for (const auto& n : session.data().find_track(track)->active_version()->score.notes(0))
+            in_voice_2 = in_voice_2 || (n.voice == 1 && !n.is_rest);
+        check(in_voice_2, "choosing the second voice writes the note there");
+        session.undo();
+    }
+
     project::HumanizeSettings h = project::humanize_preset("natural");
     h.seed = 7;
     check(session.humanize(track, {}, h) && session.performance_of(track)->size() == written.notes.size(),
           "humanize gives every score note a performance");
     pump(150);
     shoot(main, dir, "16-performance-humanized");
+    session.undo();
+
+    // A played MIDI region, notated through its dialog.
+    constexpr Ticks Q = kTicksPerQuarter;
+    const Ticks bar = 2 * 4 * Q;  // bar 3, after the typed phrase
+    session.edit("Record MIDI", [&](project::ProjectData& d) {
+        project::MidiRegion r;
+        r.id = "rgn-check-played";
+        r.start = bar;
+        r.end = bar + 4 * Q;
+        r.source = "recorded";
+        r.notes = {{bar + 17, Q - 40, 62, 72, 0, {}}, {bar + Q - 25, Q / 2 + 10, 65, 90, 0, {}},
+                   {bar + Q + Q / 2 + 9, Q * 2 - 30, 69, 84, 0, {}}};
+        d.find_track(track)->active_version()->regions.push_back(r);
+        return true;
+    });
+    const auto before_notation = project::render_track(*session.data().find_track(track)).notes;
+    const auto count_before = session.data().find_track(track)->active_version()->score.total_note_count();
+    main.sequencer().notate_region("rgn-check-played");
+    pump(300);
+    auto* dialog = find_dialog("Notate Region");
+    check(dialog != nullptr, "Notate Region opens for a MIDI region");
+    if (dialog) {
+        shoot(*dialog, dir, "18-notate-region");
+        if (auto* go = find_button(*dialog, "Notate the region")) go->triggerClick();
+        pump(300);
+        const auto* v = session.data().find_track(track)->active_version();
+        check(v->regions.empty() && v->score.total_note_count() >= count_before + 3,
+              "notating the region writes its notes into the score and removes the region");
+        check(project::render_track(*session.data().find_track(track)).notes == before_notation,
+              "the notated passage still plays exactly as recorded");
+        check(find_dialog("Notate Region") == nullptr, "the dialog closes");
+        main.show_workspace(MainComponent::Workspace::Composer);
+        pump(200);
+        shoot(main, dir, "19-notated-in-composer");
+        main.show_workspace(MainComponent::Workspace::Sequencer);
+        session.undo();
+    }
     session.undo();
 }
 

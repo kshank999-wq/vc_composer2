@@ -267,6 +267,10 @@ std::string Session::add_track(const std::string& name, const std::string& instr
             t->assignment.patch_display = "GM placeholder";
             t->assignment.message = "Built-in placeholder sound until a library patch or plug-in is assigned.";
             if (def->unpitched) t->midi_channel = 9;
+            // The staves the instrument reads (clef, transposition, grand
+            // staff), as a template would give it.
+            if (auto* v = t->active_version(); v && v->score.total_note_count() == 0)
+                v->score.reset_staves(templates::instrument_score(*def, t->name).staves());
             return true;
         });
     }
@@ -1266,6 +1270,52 @@ bool Session::humanize(const std::string& track_id, const std::vector<notation::
             return true;
         })))
         return false;
+    document_changed();
+    return true;
+}
+
+// --- MIDI -> notation ----------------------------------------------------------------------
+
+NotatePlan Session::plan_note_edit(const std::string& track_id, notation::EventId note, const NoteTarget& target) const
+{
+    const project::Track* t = project_.data().find_track(track_id);
+    if (!t) {
+        NotatePlan p;
+        p.error = "No such track";
+        return p;
+    }
+    return session::plan_note_edit(*t, note, target);
+}
+
+NotatePlan Session::plan_notate_region(const std::string& track_id, const std::string& region_id,
+                                       const RegionNotateSettings& settings) const
+{
+    const project::Track* t = project_.data().find_track(track_id);
+    if (!t) {
+        NotatePlan p;
+        p.error = "No such track";
+        return p;
+    }
+    return session::plan_notate_region(*t, region_id, settings);
+}
+
+bool Session::apply_notate(const std::string& track_id, const NotatePlan& plan, std::size_t option,
+                           const std::string& label, bool coalesce)
+{
+    if (!plan.ok() || option >= plan.options.size()) return false;
+    const auto& o = plan.options[option];
+    auto change = on_track(track_id, [&](project::Track& t) {
+            auto* v = t.active_version();
+            if (!v || v->score.revision() != plan.base_revision) return false;
+            v->score = o.score;
+            v->performance = o.performance;
+            for (const auto& id : o.removed_regions)
+                v->regions.erase(std::remove_if(v->regions.begin(), v->regions.end(),
+                                                [&](const project::MidiRegion& r) { return r.id == id; }),
+                                 v->regions.end());
+            return true;
+        });
+    if (!(coalesce ? project_.edit_coalescing(label, change) : project_.edit(label, change))) return false;
     document_changed();
     return true;
 }

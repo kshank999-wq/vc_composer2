@@ -15,6 +15,7 @@
 #include "vcc/project/Automation.h"
 #include "vcc/project/Performance.h"
 #include "vcc/project/Render.h"
+#include "vcc/session/Notate.h"
 
 namespace vcc::desktop {
 
@@ -36,7 +37,7 @@ constexpr double kMinClip = 0.01; ///< Shortest clip a trim leaves, seconds.
 constexpr int kBusHeight = 34;    ///< A bus row (automation only) at the bottom.
 
 const juce::String kScoreHint =
-    "Written in the score - drag to play it early or late, drag its end to hold it; pitch and rhythm are edited in the Composer view";
+    "Written in the score - drag to rewrite it (the score follows); Alt-drag to change only how it is played";
 
 // --- Cached view of the document ----------------------------------------------------------------
 
@@ -63,6 +64,8 @@ struct LaneView {
     std::vector<NoteEvent> score_notes;
     std::vector<notation::EventId> score_ids;
     std::map<notation::EventId, NoteEvent> score_written;
+    /// Written start and end of each score note's tie chain, in the score.
+    std::map<notation::EventId, std::pair<Ticks, Ticks>> score_span;
     std::map<notation::EventId, project::NoteOverride> performance;
     std::vector<RegionView> regions;
     int lo = 48, hi = 72;  ///< Pitch span for the lane's mini roll.
@@ -404,6 +407,8 @@ struct Model final : AutomationTimeline {
                     for (std::size_t i = 0; i < written.notes.size(); ++i)
                         l.score_written[written.note_ids[i]] = written.notes[i];
                     l.performance = v->performance;
+                    for (auto sid : l.score_ids)
+                        if (sid != notation::kInvalidEventId) l.score_span[sid] = session::written_span(v->score, sid);
                 } catch (...) {
                     l.score_notes.clear();
                     l.score_ids.clear();
@@ -1848,6 +1853,123 @@ private:
     bool flip_ = false;
 };
 
+/// Notate Region (Main Spec §8, MIDI -> notation): a MIDI region written
+/// into the track's score. The settings re-plan as they change, and the
+/// buttons are the plan's readings - where the region lands on written
+/// notes, or where the quantizer heard triplets, more than one.
+class RegionNotatePanel final : public juce::Component {
+public:
+    RegionNotatePanel(AppContext& ctx, std::string track, std::string region)
+        : ctx_(ctx), track_(std::move(track)), region_(std::move(region))
+    {
+        grid_.addItem("Eighth notes", 1);
+        grid_.addItem("Sixteenth notes", 2);
+        grid_.addItem("32nd notes", 3);
+        grid_.setSelectedId(2, juce::dontSendNotification);
+        grid_.onChange = [this] { replan(); };
+        triplets_.setButtonText("Allow triplets");
+        triplets_.setToggleState(true, juce::dontSendNotification);
+        triplets_.onClick = [this] { replan(); };
+        feel_.setButtonText("Keep the played feel (timing and velocity as a performance)");
+        feel_.setToggleState(true, juce::dontSendNotification);
+        feel_.onClick = [this] { replan(); };
+        for (auto* l : {&grid_label_, &summary_}) {
+            l->setColour(juce::Label::textColourId, colours::text);
+            addAndMakeVisible(*l);
+        }
+        grid_label_.setText("Quantize to", juce::dontSendNotification);
+        summary_.setJustificationType(juce::Justification::topLeft);
+        summary_.setFont(juce::FontOptions(12.5f));
+        for (auto* t : {&triplets_, &feel_}) t->setColour(juce::ToggleButton::textColourId, colours::text);
+        addAndMakeVisible(grid_);
+        addAndMakeVisible(triplets_);
+        addAndMakeVisible(feel_);
+        cancel_.setButtonText("Cancel");
+        cancel_.onClick = [this] { close(); };
+        addAndMakeVisible(cancel_);
+        setSize(520, 300);
+        replan();
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(16, 12);
+        auto row = r.removeFromTop(26);
+        grid_label_.setBounds(row.removeFromLeft(90));
+        grid_.setBounds(row.removeFromLeft(170));
+        row.removeFromLeft(16);
+        triplets_.setBounds(row);
+        r.removeFromTop(6);
+        feel_.setBounds(r.removeFromTop(24));
+        r.removeFromTop(8);
+        auto buttons = r.removeFromBottom(30);
+        cancel_.setBounds(buttons.removeFromRight(90));
+        for (auto it = choices_.rbegin(); it != choices_.rend(); ++it) {
+            buttons.removeFromRight(8);
+            (*it)->setBounds(buttons.removeFromRight(juce::jmin(200, (*it)->getBestWidthForHeight(30) + 24)));
+        }
+        summary_.setBounds(r);
+    }
+
+    void paint(juce::Graphics& g) override { g.fillAll(colours::panel); }
+
+private:
+    void replan()
+    {
+        session::RegionNotateSettings s;
+        s.grid = grid_.getSelectedId() == 1   ? notation::NoteValue::Eighth
+                 : grid_.getSelectedId() == 3 ? notation::NoteValue::ThirtySecond
+                                              : notation::NoteValue::Sixteenth;
+        s.allow_triplets = triplets_.getToggleState();
+        s.keep_feel = feel_.getToggleState();
+        plan_ = ctx_.session.plan_notate_region(track_, region_, s);
+        for (auto& b : choices_) removeChildComponent(b.get());
+        choices_.clear();
+        juce::String text;
+        if (!plan_.ok()) {
+            text = juce::String(plan_.error);
+        } else {
+            if (!plan_.question.empty()) text << juce::String(plan_.question) << "\n\n";
+            for (std::size_t k = 0; k < plan_.options.size(); ++k) {
+                const auto& o = plan_.options[k];
+                text << juce::String(o.label) << ": " << juce::String(o.detail) << "\n";
+                auto b = std::make_unique<juce::TextButton>(juce::String(o.label));
+                b->onClick = [this, k] { apply(k); };
+                if (k == 0) b->setColour(juce::TextButton::buttonColourId, colours::accent.withAlpha(0.6f));
+                addAndMakeVisible(*b);
+                choices_.push_back(std::move(b));
+            }
+        }
+        summary_.setText(text.trimEnd(), juce::dontSendNotification);
+        resized();
+    }
+
+    void apply(std::size_t k)
+    {
+        if (ctx_.session.apply_notate(track_, plan_, k, "Notate region")) {
+            if (ctx_.status) ctx_.status(juce::String(session::describe(plan_.options[k])));
+        } else if (ctx_.status) {
+            ctx_.status("The track changed meanwhile - nothing was notated");
+        }
+        close();
+    }
+
+    void close()
+    {
+        // A launched dialog is deleted when its modal state ends.
+        if (auto* dw = findParentComponentOfClass<juce::DialogWindow>()) dw->exitModalState(0);
+    }
+
+    AppContext& ctx_;
+    std::string track_, region_;
+    session::NotatePlan plan_;
+    juce::Label grid_label_, summary_;
+    juce::ComboBox grid_;
+    juce::ToggleButton triplets_, feel_;
+    std::vector<std::unique_ptr<juce::TextButton>> choices_;
+    juce::TextButton cancel_;
+};
+
 class PianoRoll final : public juce::Component, private juce::ScrollBar::Listener {
 public:
     explicit PianoRoll(Model& m) : m_(m)
@@ -1956,7 +2078,7 @@ public:
             if (hit_region_note(*l, e.position, edge)) {
                 shape = edge ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::DraggingHandCursor;
             } else if (auto sid = hit_score_note(*l, e.position, edge)) {
-                shape = edge ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::LeftRightResizeCursor;
+                shape = edge ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::DraggingHandCursor;
                 hint = performance_hint(*l, *sid);
             }
         }
@@ -2005,7 +2127,13 @@ public:
         if (!grid_area().contains(e.getPosition())) return;
         bool edge = false;
         if (e.mods.isPopupMenu()) {
-            if (auto sid = hit_score_note(*l, pos, edge)) {
+            if (auto hit = hit_region_note(*l, pos, edge)) {
+                const NoteKey key{hit->first, hit->second.start, hit->second.pitch};
+                perf_sel_.clear();
+                if (!is_selected(key)) selection_ = {key};
+                repaint();
+                show_region_menu(hit->first);
+            } else if (auto sid = hit_score_note(*l, pos, edge)) {
                 if (!is_perf_selected(*sid)) perf_sel_ = {*sid};
                 selection_.clear();
                 repaint();
@@ -2050,7 +2178,10 @@ public:
             }
             perf_anchor_ = *sid;
             down_tick_ = m_.tick_of(pos.x);
+            down_pitch_ = pitch_at(pos.y);
             dt_ = 0;
+            dp_ = 0;
+            free_ = false;
             drag_ = edge ? Drag::PerfLength : Drag::PerfMove;
             hint_ = performance_hint(*l, *sid);
             status(hint_);
@@ -2097,12 +2228,26 @@ public:
             case Drag::PerfVelocity: vel_value_ = velocity_at(pos.y); break;
             case Drag::PerfMove:
             case Drag::PerfLength: {
-                // Performance nudges are free (no grid): they are the small
-                // departures a grid cannot express. Alt snaps to the grid.
-                Ticks d = static_cast<Ticks>(std::llround(m_.tick_of(pos.x) - down_tick_));
-                if (e.mods.isAltDown()) d = d / grid() * grid();
+                // Snapped, the written note moves on the grid and the score
+                // follows. Alt: free, the small departures a grid cannot
+                // express, kept as a performance.
+                const auto* l = m_.selected_lane();
+                const Ticks raw = static_cast<Ticks>(std::llround(m_.tick_of(pos.x) - down_tick_));
+                free_ = e.mods.isAltDown();
+                Ticks d = raw;
+                if (!free_ && l) {
+                    const auto span = l->score_span.count(perf_anchor_) ? l->score_span.at(perf_anchor_)
+                                                                         : std::pair<Ticks, Ticks>{0, 0};
+                    if (drag_ == Drag::PerfMove) {
+                        d = m_.snap(std::max<Ticks>(0, span.first + raw), grid(), false) - span.first;
+                    } else {
+                        const Ticks end = m_.snap(std::max<Ticks>(0, span.second + raw), grid(), false);
+                        d = std::max(span.first + grid(), end) - span.second;
+                    }
+                }
                 dt_ = d;
-                if (const auto* l = m_.selected_lane()) hint_ = drag_hint(*l);
+                dp_ = drag_ == Drag::PerfMove ? juce::jlimit(-24, 24, pitch_at(pos.y) - down_pitch_) : 0;
+                if (l) hint_ = drag_hint(*l);
                 break;
             }
             case Drag::None: return;
@@ -2124,10 +2269,10 @@ public:
                 break;
             case Drag::Velocity: commit_velocity(); break;
             case Drag::PerfMove:
-                if (dt_ != 0) commit_performance(Drag::PerfMove);
+                if (dt_ != 0 || dp_ != 0) commit_score_edit(Drag::PerfMove);
                 break;
             case Drag::PerfLength:
-                if (dt_ != 0) commit_performance(Drag::PerfLength);
+                if (dt_ != 0) commit_score_edit(Drag::PerfLength);
                 break;
             case Drag::PerfVelocity: commit_performance(Drag::PerfVelocity); break;
             case Drag::None: break;
@@ -2346,9 +2491,14 @@ private:
     {
         project::NoteOverride o;
         if (auto it = l.performance.find(perf_anchor_); it != l.performance.end()) o = it->second;
+        if (!free_) {
+            juce::String what = drag_ == Drag::PerfLength ? "Rewrites its length" : "Rewrites the note";
+            if (dp_ != 0) what << " (" << (dp_ > 0 ? "+" : "") << dp_ << " semitones)";
+            return what + " in the score  -  Alt-drag to change only how it is played";
+        }
         if (drag_ == Drag::PerfMove) o.onset += dt_;
         if (drag_ == Drag::PerfLength) o.length += dt_;
-        return "Played " + describe_override(project::clamp_override(o)) + "  (Alt snaps to the grid)";
+        return "Played " + describe_override(project::clamp_override(o)) + "  (performance only)";
     }
 
     std::optional<NoteKey> velocity_hit(const LaneView& l, float x) const
@@ -2633,6 +2783,119 @@ private:
             if (const auto* now = m_.selected_lane()) status(performance_hint(*now, perf_anchor_));
     }
 
+    /// A drag of score notes, carried into the score where it can be written
+    /// (Main Spec §8, MIDI -> notation) and kept as a performance where it
+    /// cannot. One undo step for the gesture. A single note whose edit can
+    /// be read more than one way asks which reading was meant.
+    void commit_score_edit(Drag kind)
+    {
+        const auto* l = m_.selected_lane();
+        if (!l || perf_sel_.empty()) return;
+        const std::string track = l->id;
+        const bool move = kind == Drag::PerfMove;
+        const Ticks dt = dt_;
+        const int dp = dp_;
+        const bool free = free_;
+        // Targets from what the roll showed when the drag began.
+        std::vector<std::pair<notation::EventId, session::NoteTarget>> targets;
+        for (auto sid : perf_sel_) {
+            const int i = score_index(*l, sid);
+            if (i < 0) continue;
+            const auto& n = l->score_notes[static_cast<std::size_t>(i)];
+            session::NoteTarget t{n.start, n.duration, juce::jlimit(0, 127, n.pitch + dp)};
+            if (move)
+                t.start = std::max<Ticks>(0, t.start + dt);
+            else
+                t.duration = std::max<Ticks>(1, t.duration + dt);
+            targets.emplace_back(sid, t);
+        }
+        // Moving later, the last note first, so a note never lands on one
+        // that is about to move out of its way.
+        std::sort(targets.begin(), targets.end(), [&](const auto& a, const auto& b) {
+            return (move && dt > 0) ? a.second.start > b.second.start : a.second.start < b.second.start;
+        });
+        const std::string label = gesture_label(move ? "Edit score note" : "Lengthen score note");
+        auto& session = m_.ctx.session;
+        int written = 0, performed = 0;
+        juce::String last;
+        for (const auto& [sid, target] : targets) {
+            const auto plan = session.plan_note_edit(track, sid, target);
+            if (!plan.ok()) continue;
+            if (targets.size() == 1 && !free && !plan.ambiguity.empty()) {
+                ask_reading(track, plan, label);
+                return;
+            }
+            std::size_t choice = 0;
+            if (free)
+                for (std::size_t k = 0; k < plan.options.size(); ++k)
+                    if (plan.options[k].id == "override") choice = k;
+            if (session.apply_notate(track, plan, choice, label, true)) {
+                const auto& o = plan.options[choice];
+                (o.id == "override" ? performed : written)++;
+                last = juce::String(session::describe(o));
+            }
+        }
+        hint_.clear();
+        if (written + performed == 1)
+            status(last);
+        else if (written + performed > 1)
+            status(juce::String(written) + " written into the score, " + juce::String(performed) + " kept as a performance");
+    }
+
+    /// The reconciliation prompt: an edit that can be read more than one way
+    /// (a triplet, an overlap, a spelling) offers its readings.
+    void ask_reading(const std::string& track, const session::NotatePlan& plan, const std::string& label)
+    {
+        auto* w = new juce::AlertWindow("Notate the edit", juce::String(plan.question), juce::MessageBoxIconType::QuestionIcon);
+        juce::String details;
+        for (std::size_t k = 0; k < plan.options.size(); ++k) {
+            const auto& o = plan.options[k];
+            details << juce::String(o.label) << (o.detail.empty() ? juce::String() : ": " + juce::String(o.detail)) << "\n";
+            w->addButton(juce::String(o.label), static_cast<int>(k) + 1);
+        }
+        w->addTextBlock(details.trimEnd());
+        w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+        juce::Component::SafePointer<PianoRoll> self(this);
+        w->enterModalState(true, juce::ModalCallbackFunction::create([self, track, plan, label](int r) {
+                               if (!self || r <= 0) return;
+                               const auto k = static_cast<std::size_t>(r - 1);
+                               if (self->m_.ctx.session.apply_notate(track, plan, k, label))
+                                   self->status(juce::String(session::describe(plan.options[k])));
+                               else
+                                   self->status("The score changed meanwhile - nothing was written");
+                           }),
+                           true);
+    }
+
+    void show_region_menu(const std::string& region)
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader("MIDI region");
+        juce::Component::SafePointer<PianoRoll> self(this);
+        menu.addItem("Notate this region...", [self, region] {
+            if (self) self->open_region_notation(region);
+        });
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition());
+    }
+
+public:
+    /// Opens the Notate Region dialog for a region of the selected track.
+    void open_region_notation(const std::string& region)
+    {
+        const auto* l = m_.selected_lane();
+        if (!l) return;
+        juce::DialogWindow::LaunchOptions o;
+        o.dialogTitle = "Notate Region";
+        o.content.setOwned(new RegionNotatePanel(m_.ctx, l->id, region));
+        o.componentToCentreAround = this;
+        o.dialogBackgroundColour = colours::panel;
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = false;
+        o.resizable = false;
+        o.launchAsync();
+    }
+
+private:
     void show_performance_menu()
     {
         const auto* l = m_.selected_lane();
@@ -2834,7 +3097,10 @@ private:
             const notation::EventId sid = i < l.score_ids.size() ? l.score_ids[i] : notation::kInvalidEventId;
             const bool sel = sid != notation::kInvalidEventId && is_perf_selected(sid);
             NoteEvent shown = l.score_notes[i];
-            if (sel && drag_ == Drag::PerfMove) shown.start = std::max<Ticks>(0, shown.start + dt_);
+            if (sel && drag_ == Drag::PerfMove) {
+                shown.start = std::max<Ticks>(0, shown.start + dt_);
+                shown.pitch = juce::jlimit(0, 127, shown.pitch + dp_);
+            }
             if (sel && drag_ == Drag::PerfLength) shown.duration = std::max<Ticks>(1, shown.duration + dt_);
             const auto r = note_rect(shown);
             const auto w = l.score_written.find(sid);
@@ -3039,6 +3305,7 @@ private:
     std::vector<notation::EventId> perf_sel_;
     notation::EventId perf_anchor_ = notation::kInvalidEventId;
     bool flip_ = false;
+    bool free_ = false;  ///< The current score-note drag is Alt (performance only).
     std::uint64_t humanize_seed_ = 0;
 };
 
@@ -3239,6 +3506,8 @@ void SequencerView::hide_all_automation()
 bool SequencerView::pencil_mode() const { return impl_->model.pencil; }
 
 void SequencerView::set_pencil_mode(bool on) { impl_->model.set_pencil_mode(on); }
+
+void SequencerView::notate_region(const std::string& region_id) { impl_->roll.open_region_notation(region_id); }
 
 void SequencerView::set_playhead(Ticks tick, bool playing) { impl_->set_playhead(tick, playing); }
 

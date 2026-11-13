@@ -146,6 +146,11 @@ int family_rank(const std::string& f)
 
 }  // namespace
 
+notation::Score instrument_score(const InstrumentDef& def, const std::string& track_name)
+{
+    return score_for_instrument(def, track_name);
+}
+
 InstantiateResult instantiate(project::Project& proj, const Template& tpl, const InstrumentRegistry& instruments,
                               const InstantiateOptions& opt)
 {

@@ -47,6 +47,10 @@ struct InstrumentDef {
 const std::vector<std::string>& family_order();
 /// Default family colour for tracks and folders.
 std::string family_color(const std::string& family);
+
+/// The empty score an instrument's track starts with: its clef, its
+/// transposition, and a grand staff for keyboards and harp.
+notation::Score instrument_score(const InstrumentDef& def, const std::string& track_name);
 /// Display name for a family folder: "strings" -> "Strings".
 std::string family_display(const std::string& family);
 

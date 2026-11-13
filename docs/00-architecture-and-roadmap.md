@@ -123,13 +123,34 @@ points.
   deleted notes stay until undo can no longer bring the note back, and are
   not saved.
 
+- **MIDI → notation** (`vcc/session/Notate.h`). A piano-roll drag of a score
+  note is planned against the score:
+  - On the grid, the note is rewritten there. It keeps its id, so its
+    performance stays. A tie chain is rewritten whole and split at barlines,
+    and a transposing part is edited at sounding pitch and written
+    transposed.
+  - Off the grid (Alt-drag), the change is kept as a performance override.
+  - When the edit can be read more than one way, a reconciliation prompt
+    offers the readings:
+    - a triplet: write the triplet, round to straight time, or keep it as a
+      performance;
+    - an overlap with the next note of its line: keep it as a performance
+      (legato) or write it in a free voice;
+    - a chromatic pitch: both spellings.
+  - A MIDI region (played, drawn or generated) is notated through the
+    notation engine's MIDI reader: quantized to a chosen grid, with triplets
+    optional, voices inferred, spelled in the written key, tied across
+    barlines. Where it lands on written notes, the prompt offers another
+    voice or replacing what is written. "Keep the played feel" stores each
+    note's played timing and velocity as overrides, so the notated passage
+    still sounds exactly as recorded.
+  - Every option is a complete outcome, applied as one undo step, and is
+    refused if the score changed after it was planned.
+
 **Next:**
 
 1. **Rendered cache.** MIDI by dirty time range, using the ported event diff,
    so an edit costs its own size.
-2. **MIDI → notation.** A piano-roll edit to a linked note updates notation
-   when the result is representable, and is otherwise kept as an override. A
-   reconciliation prompt covers ambiguous tuplets, overlaps and spelling.
 
 ## Build and test
 
@@ -173,6 +194,7 @@ Spec test coverage at this stage:
 | Notation engine, engraving, editing, MIDI files, scheduler | `tests/ported/*` (25 suites) |
 | Main §20: temp tracks excluded from deliverables | `test_project`, `test_workflow` |
 | Main §8: performance overrides (offsets, clamping, undo, humanize seed, CC, save) | `test_performance` |
+| Main §8: MIDI → notation (grid edits, overrides, tuplet/overlap/spelling prompts, region notation) | `test_notate` |
 
 ## Repository layout
 
@@ -210,8 +232,7 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 
 ### Immediate next steps
 
-1. Build the Main Spec §8 rendered cache and the MIDI → notation path (see
-   above).
+1. Build the Main Spec §8 rendered cache (see above).
 2. Engine hardening:
    - saving the delay-compensation switch with the project.
 3. Picture follow-ups:

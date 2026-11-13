@@ -262,8 +262,8 @@ const std::vector<Duration>& notatable_durations()
 /// it could not reach - which is at most a few ticks, and is reported rather
 /// than being allowed to lengthen the note to something it never was. Zero
 /// parts means the length was shorter than the shortest value notation has.
-std::size_t notate_length(Ticks length, Duration* out, std::size_t capacity,
-                          Ticks& unwritten)
+std::size_t notate_length_impl(Ticks length, Duration* out, std::size_t capacity,
+                               Ticks& unwritten)
 {
     unwritten = length > 0 ? length : 0;
     if (out == nullptr || capacity == 0 || length <= 0)
@@ -558,6 +558,11 @@ std::size_t assign_voices(std::vector<Sound>& sounds)
 
 }  // namespace
 
+std::size_t notate_length(Ticks length, Duration* out, std::size_t capacity, Ticks& unwritten)
+{
+    return notate_length_impl(length, out, capacity, unwritten);
+}
+
 Ticks quantize_tick(Ticks tick, Ticks grid, bool allow_triplets) noexcept
 {
     if (grid <= 0)
@@ -773,7 +778,7 @@ MidiImportResult import_midi(const music::SmfFile& file, Score& out,
             Duration chain[8];
             Ticks unwritten = 0;
             const std::size_t parts =
-                notate_length(length, chain, sizeof(chain) / sizeof(chain[0]), unwritten);
+                notate_length_impl(length, chain, sizeof(chain) / sizeof(chain[0]), unwritten);
             if (parts == 0) {
                 // Shorter than the shortest written value there is, which
                 // after the floor check above means a handful of ticks.

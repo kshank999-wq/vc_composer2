@@ -229,6 +229,11 @@ MidiImportResult import_midi(const music::SmfFile& file, Score& out,
 /// the straight and triplet candidates wins.
 Ticks quantize_tick(Ticks tick, Ticks grid, bool allow_triplets) noexcept;
 
+/// Writes `length` as a tie chain of written values (plain, dotted, and
+/// undotted triplets), longest first. Returns how many were written and
+/// leaves in `unwritten` whatever no value could reach.
+std::size_t notate_length(Ticks length, Duration* out, std::size_t capacity, Ticks& unwritten);
+
 /// The grid's length in ticks, or zero for anything that is not a written
 /// note value - including an integer cast into `NoteValue` from outside its
 /// range, which is how a bad setting would arrive.
