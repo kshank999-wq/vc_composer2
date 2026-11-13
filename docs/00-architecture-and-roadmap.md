@@ -107,14 +107,27 @@ points.
 - `render_track` turns score plus regions into the MIDI the Sequencer and
   export see. Notation → sequence is therefore always current.
 - The project's meter map and key are written into every score on every edit.
+- **Performance overrides** (`vcc/project/Performance.h`). Each version keeps
+  per-note onset, length, velocity and CC offsets, keyed by stable score note
+  ID (a tie chain by its first note) and apart from the score. They are
+  offsets, so a later score edit still reaches the performed note, and
+  clearing one gives back exactly the written note. `render_track` applies
+  them, so playback and MIDI export hear them; printed parts and MusicXML
+  never see them. A CC offset moves the note's own controllers and, on maps
+  that shape dynamics with a controller, lifts that controller while the note
+  sounds. Humanize is seeded per note. In the piano roll, dragging a score
+  note changes when it plays, dragging its end changes how long it is held,
+  and the velocity lane changes how hard it is played. Each drag is one undo
+  step and pitch is never changed. A right-click opens humanize presets,
+  reset, and a panel with exact offsets for the four values. Overrides of
+  deleted notes stay until undo can no longer bring the note back, and are
+  not saved.
 
 **Next:**
 
-1. **Performance overrides.** Per-note onset, length, velocity and CC offsets,
-   keyed by stable note ID and kept apart from score intent.
-2. **Rendered cache.** MIDI by dirty time range, using the ported event diff,
+1. **Rendered cache.** MIDI by dirty time range, using the ported event diff,
    so an edit costs its own size.
-3. **MIDI → notation.** A piano-roll edit to a linked note updates notation
+2. **MIDI → notation.** A piano-roll edit to a linked note updates notation
    when the result is representable, and is otherwise kept as an override. A
    reconciliation prompt covers ambiguous tuplets, overlaps and spelling.
 
@@ -159,6 +172,7 @@ Spec test coverage at this stage:
 | Main §22 vertical slice: one stave, three notes, staccato/dynamics → MIDI | `test_score_integration` |
 | Notation engine, engraving, editing, MIDI files, scheduler | `tests/ported/*` (25 suites) |
 | Main §20: temp tracks excluded from deliverables | `test_project`, `test_workflow` |
+| Main §8: performance overrides (offsets, clamping, undo, humanize seed, CC, save) | `test_performance` |
 
 ## Repository layout
 
@@ -196,8 +210,8 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 
 ### Immediate next steps
 
-1. Build the Main Spec §8 performance-override layer and the MIDI → notation
-   path (see above).
+1. Build the Main Spec §8 rendered cache and the MIDI → notation path (see
+   above).
 2. Engine hardening:
    - saving the delay-compensation switch with the project.
 3. Picture follow-ups:

@@ -8,6 +8,7 @@
 #include "vcc/cues/Cues.h"
 #include "vcc/picture/Picture.h"
 #include "vcc/project/Automation.h"
+#include "vcc/project/Performance.h"
 #include "vcc/project/Render.h"
 #include "vcc/project/Stems.h"
 
@@ -1178,6 +1179,95 @@ bool Session::set_stems(std::vector<project::StemDef> stems)
         d.stems = stems;
         return true;
     });
+}
+
+// --- Performance overrides --------------------------------------------------------------
+
+const std::map<notation::EventId, project::NoteOverride>* Session::performance_of(const std::string& track_id) const
+{
+    const project::Track* t = project_.data().find_track(track_id);
+    const project::TrackVersion* v = t ? t->active_version() : nullptr;
+    return v ? &v->performance : nullptr;
+}
+
+bool Session::edit_performance(const std::string& track_id, const std::vector<notation::EventId>& notes,
+                               const std::string& label,
+                               const std::function<void(notation::EventId, project::NoteOverride&)>& change)
+{
+    const project::Track* t = project_.data().find_track(track_id);
+    if (!t || !t->active_version() || notes.empty()) return false;
+    const auto performable = project::performable_notes(*t);
+    std::vector<notation::EventId> targets;
+    for (auto id : notes)
+        if (std::binary_search(performable.begin(), performable.end(), id) &&
+            std::find(targets.begin(), targets.end(), id) == targets.end())
+            targets.push_back(id);
+    if (targets.empty()) return false;
+    if (!project_.edit_coalescing(label, on_track(track_id, [&](project::Track& tr) {
+            auto& perf = tr.active_version()->performance;
+            for (auto id : targets) {
+                project::NoteOverride o;
+                if (auto it = perf.find(id); it != perf.end()) o = it->second;
+                change(id, o);
+                o = project::clamp_override(o);
+                if (o.empty())
+                    perf.erase(id);
+                else
+                    perf[id] = o;
+            }
+            return true;
+        })))
+        return false;
+    document_changed();
+    return true;
+}
+
+bool Session::clear_performance(const std::string& track_id, const std::vector<notation::EventId>& notes)
+{
+    const auto* perf = performance_of(track_id);
+    if (!perf || perf->empty()) return false;
+    bool any = notes.empty();
+    for (auto id : notes) any = any || perf->count(id) > 0;
+    if (!any) return false;
+    if (!project_.edit(notes.empty() ? "Clear performance" : "Reset performance", on_track(track_id, [&](project::Track& t) {
+            auto& p = t.active_version()->performance;
+            if (notes.empty())
+                p.clear();
+            else
+                for (auto id : notes) p.erase(id);
+            return true;
+        })))
+        return false;
+    document_changed();
+    return true;
+}
+
+bool Session::humanize(const std::string& track_id, const std::vector<notation::EventId>& notes,
+                       const project::HumanizeSettings& settings)
+{
+    const project::Track* t = project_.data().find_track(track_id);
+    if (!t || !t->active_version()) return false;
+    const auto performable = project::performable_notes(*t);
+    std::vector<notation::EventId> targets;
+    for (auto id : notes.empty() ? performable : notes)
+        if (std::binary_search(performable.begin(), performable.end(), id)) targets.push_back(id);
+    if (targets.empty()) return false;
+    if (!project_.edit("Humanize", on_track(track_id, [&](project::Track& tr) {
+            auto& perf = tr.active_version()->performance;
+            for (auto id : targets) {
+                project::NoteOverride o;
+                if (auto it = perf.find(id); it != perf.end()) o = it->second;
+                o = project::humanized(o, id, settings);
+                if (o.empty())
+                    perf.erase(id);
+                else
+                    perf[id] = o;
+            }
+            return true;
+        })))
+        return false;
+    document_changed();
+    return true;
 }
 
 }  // namespace vcc::session

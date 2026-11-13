@@ -24,6 +24,8 @@
 #include "ui/VideoWindow.h"
 #include "vcc/media/VideoDecoder.h"
 #include "vcc/project/Automation.h"
+#include "vcc/notation/ScoreFile.h"
+#include "vcc/project/Performance.h"
 #include "vcc/project/Render.h"
 
 using namespace vcc;
@@ -1123,6 +1125,82 @@ void insert_window_checks(AppContext& ctx, const juce::File& dir)
     check(find_dialog("Compressor - Dialogue (insert 2)") == nullptr, "a window closes when its insert is replaced");
 }
 
+juce::Component* find_named(juce::Component& root, const juce::String& name)
+{
+    if (root.getName() == name) return &root;
+    for (auto* c : root.getChildren())
+        if (auto* f = find_named(*c, name)) return f;
+    return nullptr;
+}
+
+juce::MouseEvent mouse_event(juce::Component& c, juce::Point<float> p, juce::Point<float> down, bool dragged)
+{
+    const auto now = juce::Time::getCurrentTime();
+    return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), p,
+                            juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier),
+                            juce::MouseInputSource::defaultPressure, 0.0f, 0.0f, 0.0f, 0.0f, &c, &c, now, down, now, 1,
+                            dragged);
+}
+
+/// Performance overrides (Main Spec 8): dragging a score note in the piano
+/// roll changes how it is played, never what is written, as one undo step.
+void performance_checks(AppContext& ctx, juce::Component& main, const std::string& track, const juce::File& dir)
+{
+    auto& session = ctx.session;
+    session.select_track(track);
+    pump(200);
+    auto* roll = find_named(main, "vcc-piano-roll");
+    check(roll != nullptr && roll->isVisible() && roll->getHeight() > 100, "the piano roll is showing");
+    if (!roll) return;
+    const auto* t = session.data().find_track(track);
+    const auto written = project::render_track(*t, false);
+    const std::string score_before = json::write(notation::score_to_json(t->active_version()->score));
+
+    // Find a score note by hovering, as the pointer would.
+    std::optional<juce::Point<float>> at;
+    const juce::MouseCursor resize(juce::MouseCursor::LeftRightResizeCursor);
+    for (int y = 40; y < roll->getHeight() - 60 && !at; y += 3)
+        for (int x = 170; x < roll->getWidth() - 20 && !at; x += 3) {
+            const juce::Point<float> p(static_cast<float>(x), static_cast<float>(y));
+            roll->mouseMove(mouse_event(*roll, p, p, false));
+            if (roll->getMouseCursor() == resize) at = p + juce::Point<float>(2.0f, 0.0f);
+        }
+    check(at.has_value(), "a score note can be found under the pointer in the piano roll");
+    if (!at) return;
+    const auto to = *at + juce::Point<float>(14.0f, -30.0f);  // later, and (ignored) higher
+    roll->mouseDown(mouse_event(*roll, *at, *at, false));
+    roll->mouseDrag(mouse_event(*roll, (*at + to) / 2.0f, *at, true));
+    roll->mouseDrag(mouse_event(*roll, to, *at, true));
+    roll->mouseUp(mouse_event(*roll, to, *at, true));
+    pump(100);
+
+    const auto* perf = session.performance_of(track);
+    check(perf && perf->size() == 1 && perf->begin()->second.onset > 0,
+          "dragging a score note plays it later (" + juce::String(perf && !perf->empty() ? perf->begin()->second.onset : 0) +
+              " ticks)");
+    t = session.data().find_track(track);
+    check(json::write(notation::score_to_json(t->active_version()->score)) == score_before,
+          "the drag leaves the written score untouched");
+    const auto played = project::render_track(*t);
+    bool moved = false, same_pitches = played.notes.size() == written.notes.size();
+    for (std::size_t i = 0; same_pitches && i < played.notes.size(); ++i) {
+        same_pitches = played.notes[i].pitch == written.notes[i].pitch;
+        moved = moved || played.notes[i].start > written.notes[i].start;
+    }
+    check(moved && same_pitches, "playback and export hear the note later, at the written pitch");
+    shoot(main, dir, "15-performance-drag");
+
+    session.undo();
+    check(session.performance_of(track)->empty(), "one undo returns the note to how it is written");
+    project::HumanizeSettings h = project::humanize_preset("natural");
+    h.seed = 7;
+    check(session.humanize(track, {}, h) && session.performance_of(track)->size() == written.notes.size(),
+          "humanize gives every score note a performance");
+    pump(150);
+    shoot(main, dir, "16-performance-humanized");
+    session.undo();
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -1403,6 +1481,7 @@ int main(int argc, char** argv)
 
         window.main().show_workspace(MainComponent::Workspace::Sequencer);
         shoot(window.main(), dir, "02-sequencer");
+        performance_checks(ctx, window.main(), track, dir);
         window.main().show_workspace(MainComponent::Workspace::Composer);
 
         window.main().show_mixer();

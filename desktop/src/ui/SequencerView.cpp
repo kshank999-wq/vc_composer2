@@ -1,6 +1,7 @@
 #include "ui/SequencerView.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <optional>
@@ -12,6 +13,7 @@
 #include "ui/TrackPanel.h"
 #include "ui/WaveformCache.h"
 #include "vcc/project/Automation.h"
+#include "vcc/project/Performance.h"
 #include "vcc/project/Render.h"
 
 namespace vcc::desktop {
@@ -33,7 +35,8 @@ constexpr int kEdge = 6;          ///< Grab width of a clip's trim edges and han
 constexpr double kMinClip = 0.01; ///< Shortest clip a trim leaves, seconds.
 constexpr int kBusHeight = 34;    ///< A bus row (automation only) at the bottom.
 
-const juce::String kScoreHint = "Written in the score - edit in the Composer view";
+const juce::String kScoreHint =
+    "Written in the score - drag to play it early or late, drag its end to hold it; pitch and rhythm are edited in the Composer view";
 
 // --- Cached view of the document ----------------------------------------------------------------
 
@@ -55,7 +58,12 @@ struct LaneView {
     juce::Colour colour;
     bool reference = false;
     int channel = 0;
+    /// Score notes as performed (overrides applied), with the id of the
+    /// score note each came from, as written, and their overrides.
     std::vector<NoteEvent> score_notes;
+    std::vector<notation::EventId> score_ids;
+    std::map<notation::EventId, NoteEvent> score_written;
+    std::map<notation::EventId, project::NoteOverride> performance;
     std::vector<RegionView> regions;
     int lo = 48, hi = 72;  ///< Pitch span for the lane's mini roll.
     int range_lo = 21, range_hi = 108;
@@ -389,9 +397,17 @@ struct Model final : AutomationTimeline {
                 project::Track score_only = *t;
                 score_only.active_version()->regions.clear();
                 try {
-                    l.score_notes = project::render_track(score_only).notes;
+                    auto played = project::render_track(score_only);
+                    l.score_notes = std::move(played.notes);
+                    l.score_ids = std::move(played.note_ids);
+                    const auto written = project::render_track(score_only, false);
+                    for (std::size_t i = 0; i < written.notes.size(); ++i)
+                        l.score_written[written.note_ids[i]] = written.notes[i];
+                    l.performance = v->performance;
                 } catch (...) {
                     l.score_notes.clear();
+                    l.score_ids.clear();
+                    l.score_written.clear();
                 }
                 for (const auto& r : v->regions)
                     l.regions.push_back(RegionView{r.id, r.source, r.start, r.end, r.lane, r.notes});
@@ -1723,10 +1739,120 @@ public:
 
 // --- Piano roll ------------------------------------------------------------------------------------
 
+/// The Performance... panel: exact offsets for the selected score notes
+/// (how they are played, not what is written). Each slider sets that offset
+/// on every selected note; a slider drag is one undo step.
+class PerformancePanel final : public juce::Component {
+public:
+    PerformancePanel(AppContext& ctx, std::string track, std::vector<notation::EventId> ids, double bpm)
+        : ctx_(ctx), track_(std::move(track)), ids_(std::move(ids)), bpm_(bpm)
+    {
+        project::NoteOverride start;
+        if (const auto* perf = ctx_.session.performance_of(track_))
+            if (auto it = perf->find(ids_.front()); it != perf->end()) start = it->second;
+        title_.setText(ids_.size() == 1 ? juce::String("How this note is played")
+                                        : "How these " + juce::String(static_cast<int>(ids_.size())) + " notes are played",
+                       juce::dontSendNotification);
+        title_.setFont(juce::FontOptions(13.0f, juce::Font::bold));
+        title_.setColour(juce::Label::textColourId, colours::text);
+        addAndMakeVisible(title_);
+        const double q = static_cast<double>(kTicksPerQuarter);
+        add_row(0, "Timing", -q / 2, q / 2, static_cast<double>(start.onset), " ticks");
+        add_row(1, "Length", -q, 2 * q, static_cast<double>(start.length), " ticks");
+        add_row(2, "Velocity", -64, 64, start.velocity, "");
+        add_row(3, "CC", -64, 64, start.cc, "");
+        reset_.setButtonText("As written");
+        reset_.onClick = [this] {
+            ctx_.session.clear_performance(track_, ids_);
+            for (auto& r : rows_) r.slider.setValue(0.0, juce::dontSendNotification);
+            refresh_labels();
+        };
+        addAndMakeVisible(reset_);
+        refresh_labels();
+        setSize(360, 34 + 4 * 30 + 40);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(12, 8);
+        title_.setBounds(r.removeFromTop(24));
+        for (auto& row : rows_) {
+            auto line = r.removeFromTop(30);
+            row.name.setBounds(line.removeFromLeft(62));
+            row.value.setBounds(line.removeFromRight(86));
+            row.slider.setBounds(line.reduced(4, 4));
+        }
+        reset_.setBounds(r.removeFromBottom(28).removeFromRight(110));
+    }
+
+    void paint(juce::Graphics& g) override { g.fillAll(colours::panel); }
+
+private:
+    struct Row {
+        juce::Label name, value;
+        juce::Slider slider{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
+    };
+
+    void add_row(int index, const juce::String& name, double lo, double hi, double value, const juce::String&)
+    {
+        auto& row = rows_[static_cast<std::size_t>(index)];
+        row.name.setText(name, juce::dontSendNotification);
+        row.name.setColour(juce::Label::textColourId, colours::text_dim);
+        row.value.setColour(juce::Label::textColourId, colours::text);
+        row.value.setJustificationType(juce::Justification::centredRight);
+        row.slider.setRange(lo, hi, 1.0);
+        row.slider.setValue(value, juce::dontSendNotification);
+        row.slider.setDoubleClickReturnValue(true, 0.0);
+        row.slider.onDragStart = [this] { flip_ = !flip_; };
+        row.slider.onValueChange = [this, index] { apply(index); };
+        addAndMakeVisible(row.name);
+        addAndMakeVisible(row.slider);
+        addAndMakeVisible(row.value);
+    }
+
+    void apply(int index)
+    {
+        static const char* labels[] = {"Performance timing", "Performance length", "Performance velocity", "Performance CC"};
+        const auto v = static_cast<int>(rows_[static_cast<std::size_t>(index)].slider.getValue());
+        ctx_.session.edit_performance(track_, ids_, std::string(labels[index]) + (flip_ ? " " : ""),
+                                      [index, v](notation::EventId, project::NoteOverride& o) {
+                                          switch (index) {
+                                              case 0: o.onset = v; break;
+                                              case 1: o.length = v; break;
+                                              case 2: o.velocity = v; break;
+                                              default: o.cc = v; break;
+                                          }
+                                      });
+        refresh_labels();
+    }
+
+    void refresh_labels()
+    {
+        auto ms = [&](double ticks) {
+            return juce::roundToInt(1000.0 * 60.0 / std::max(1.0, bpm_) * ticks / static_cast<double>(kTicksPerQuarter));
+        };
+        auto sign = [](int v) { return (v > 0 ? "+" : "") + juce::String(v); };
+        rows_[0].value.setText(sign(ms(rows_[0].slider.getValue())) + " ms", juce::dontSendNotification);
+        rows_[1].value.setText(sign(ms(rows_[1].slider.getValue())) + " ms", juce::dontSendNotification);
+        rows_[2].value.setText(sign(static_cast<int>(rows_[2].slider.getValue())), juce::dontSendNotification);
+        rows_[3].value.setText(sign(static_cast<int>(rows_[3].slider.getValue())), juce::dontSendNotification);
+    }
+
+    AppContext& ctx_;
+    std::string track_;
+    std::vector<notation::EventId> ids_;
+    double bpm_ = 120.0;
+    juce::Label title_;
+    std::array<Row, 4> rows_;
+    juce::TextButton reset_;
+    bool flip_ = false;
+};
+
 class PianoRoll final : public juce::Component, private juce::ScrollBar::Listener {
 public:
     explicit PianoRoll(Model& m) : m_(m)
     {
+        setName("vcc-piano-roll");
         setWantsKeyboardFocus(true);
         addAndMakeVisible(vscroll_);
         style_scrollbar(vscroll_);
@@ -1759,6 +1885,7 @@ public:
         if (id != track_) {
             track_ = id;
             selection_.clear();
+            perf_sel_.clear();
             drag_ = Drag::None;
             centre_on_notes();
         }
@@ -1768,6 +1895,10 @@ public:
             for (const auto& k : selection_)
                 if (region_note(*l, k)) kept.push_back(k);
             selection_ = std::move(kept);
+            std::vector<notation::EventId> kept_ids;
+            for (auto sid : perf_sel_)
+                if (score_index(*l, sid) >= 0) kept_ids.push_back(sid);
+            perf_sel_ = std::move(kept_ids);
         }
         repaint();
     }
@@ -1824,8 +1955,9 @@ public:
             bool edge = false;
             if (hit_region_note(*l, e.position, edge)) {
                 shape = edge ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::DraggingHandCursor;
-            } else if (hit_score_note(*l, e.position)) {
-                hint = kScoreHint;
+            } else if (auto sid = hit_score_note(*l, e.position, edge)) {
+                shape = edge ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::LeftRightResizeCursor;
+                hint = performance_hint(*l, *sid);
             }
         }
         setMouseCursor(shape);
@@ -1849,7 +1981,17 @@ public:
         }
 
         if (velocity_area().contains(e.getPosition())) {
+            if (auto sid = score_velocity_hit(*l, pos.x); sid && !velocity_hit(*l, pos.x)) {
+                if (!is_perf_selected(*sid)) perf_sel_ = {*sid};
+                selection_.clear();
+                perf_anchor_ = *sid;
+                vel_value_ = velocity_at(pos.y);
+                drag_ = Drag::PerfVelocity;
+                repaint();
+                return;
+            }
             if (auto key = velocity_hit(*l, pos.x)) {
+                perf_sel_.clear();
                 const bool sel = is_selected(*key);
                 vel_targets_ = sel ? selection_ : std::vector<NoteKey>{*key};
                 if (!sel) selection_ = {*key};
@@ -1862,7 +2004,17 @@ public:
 
         if (!grid_area().contains(e.getPosition())) return;
         bool edge = false;
+        if (e.mods.isPopupMenu()) {
+            if (auto sid = hit_score_note(*l, pos, edge)) {
+                if (!is_perf_selected(*sid)) perf_sel_ = {*sid};
+                selection_.clear();
+                repaint();
+                show_performance_menu();
+            }
+            return;
+        }
         if (auto hit = hit_region_note(*l, pos, edge)) {
+            perf_sel_.clear();
             const NoteKey key{hit->first, hit->second.start, hit->second.pitch};
             if (e.mods.isShiftDown()) {
                 if (is_selected(key)) {
@@ -1884,13 +2036,32 @@ public:
             repaint();
             return;
         }
-        if (hit_score_note(*l, pos)) {
-            if (m_.ctx.status) m_.ctx.status(kScoreHint);
-            hint_ = kScoreHint;
+        if (auto sid = hit_score_note(*l, pos, edge)) {
+            selection_.clear();
+            if (e.mods.isShiftDown()) {
+                if (is_perf_selected(*sid)) {
+                    perf_sel_.erase(std::find(perf_sel_.begin(), perf_sel_.end(), *sid));
+                    repaint();
+                    return;
+                }
+                perf_sel_.push_back(*sid);
+            } else if (!is_perf_selected(*sid)) {
+                perf_sel_ = {*sid};
+            }
+            perf_anchor_ = *sid;
+            down_tick_ = m_.tick_of(pos.x);
+            dt_ = 0;
+            drag_ = edge ? Drag::PerfLength : Drag::PerfMove;
+            hint_ = performance_hint(*l, *sid);
+            status(hint_);
+            audition(*l, l->score_notes[static_cast<std::size_t>(score_index(*l, *sid))].pitch);
             repaint();
             return;
         }
-        if (!e.mods.isShiftDown()) selection_.clear();
+        if (!e.mods.isShiftDown()) {
+            selection_.clear();
+            perf_sel_.clear();
+        }
         create_pitch_ = pitch_at(pos.y);
         create_start_ = m_.snap(static_cast<Ticks>(m_.tick_of(pos.x)), grid(), true);
         create_end_ = create_start_ + grid();
@@ -1922,7 +2093,18 @@ public:
                 dt_ = std::max<Ticks>(anchor_.start + grid(), end) - anchor_.end();
                 break;
             }
-            case Drag::Velocity: vel_value_ = velocity_at(pos.y); break;
+            case Drag::Velocity:
+            case Drag::PerfVelocity: vel_value_ = velocity_at(pos.y); break;
+            case Drag::PerfMove:
+            case Drag::PerfLength: {
+                // Performance nudges are free (no grid): they are the small
+                // departures a grid cannot express. Alt snaps to the grid.
+                Ticks d = static_cast<Ticks>(std::llround(m_.tick_of(pos.x) - down_tick_));
+                if (e.mods.isAltDown()) d = d / grid() * grid();
+                dt_ = d;
+                if (const auto* l = m_.selected_lane()) hint_ = drag_hint(*l);
+                break;
+            }
             case Drag::None: return;
         }
         repaint();
@@ -1941,6 +2123,13 @@ public:
                 if (dt_ != 0) commit_resize();
                 break;
             case Drag::Velocity: commit_velocity(); break;
+            case Drag::PerfMove:
+                if (dt_ != 0) commit_performance(Drag::PerfMove);
+                break;
+            case Drag::PerfLength:
+                if (dt_ != 0) commit_performance(Drag::PerfLength);
+                break;
+            case Drag::PerfVelocity: commit_performance(Drag::PerfVelocity); break;
             case Drag::None: break;
         }
         repaint();
@@ -1965,12 +2154,17 @@ public:
     bool keyPressed(const juce::KeyPress& key) override
     {
         if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) {
+            if (selection_.empty() && !perf_sel_.empty()) {
+                status("Score notes are deleted in the Composer view - right-click to reset how they are played");
+                return true;
+            }
             if (selection_.empty()) return false;
             commit_delete();
             return true;
         }
         if (key == juce::KeyPress::escapeKey) {
             selection_.clear();
+            perf_sel_.clear();
             repaint();
             return true;
         }
@@ -1986,7 +2180,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Create, Move, Resize, Velocity };
+    enum class Drag { None, Create, Move, Resize, Velocity, PerfMove, PerfLength, PerfVelocity };
 
     juce::Rectangle<int> grid_area() const
     {
@@ -2085,11 +2279,76 @@ private:
         return std::nullopt;
     }
 
-    bool hit_score_note(const LaneView& l, juce::Point<float> p) const
+    /// The score note under `p` (as performed), and whether `p` is on its end.
+    std::optional<notation::EventId> hit_score_note(const LaneView& l, juce::Point<float> p, bool& edge) const
     {
-        for (const auto& n : l.score_notes)
-            if (note_rect(n).contains(p)) return true;
-        return false;
+        for (std::size_t i = l.score_notes.size(); i-- > 0;) {
+            if (i >= l.score_ids.size() || l.score_ids[i] == notation::kInvalidEventId) continue;
+            const auto rect = note_rect(l.score_notes[i]);
+            if (!rect.expanded(0.0f, 0.5f).contains(p)) continue;
+            edge = p.x > rect.getRight() - std::min(7.0f, rect.getWidth() / 3.0f);
+            return l.score_ids[i];
+        }
+        return std::nullopt;
+    }
+
+    static int score_index(const LaneView& l, notation::EventId id)
+    {
+        for (std::size_t i = 0; i < l.score_ids.size(); ++i)
+            if (l.score_ids[i] == id) return static_cast<int>(i);
+        return -1;
+    }
+
+    bool is_perf_selected(notation::EventId id) const
+    {
+        return std::find(perf_sel_.begin(), perf_sel_.end(), id) != perf_sel_.end();
+    }
+
+    std::optional<notation::EventId> score_velocity_hit(const LaneView& l, float x) const
+    {
+        std::optional<notation::EventId> best;
+        float best_d = 6.0f;
+        for (std::size_t i = 0; i < l.score_notes.size() && i < l.score_ids.size(); ++i) {
+            if (l.score_ids[i] == notation::kInvalidEventId) continue;
+            float d = std::abs(static_cast<float>(m_.x_of(static_cast<double>(l.score_notes[i].start))) - x);
+            if (is_perf_selected(l.score_ids[i])) d -= 0.5f;
+            if (d < best_d) {
+                best_d = d;
+                best = l.score_ids[i];
+            }
+        }
+        return best;
+    }
+
+    /// "+12 ms late, held 40 ms longer, velocity +6" for one score note.
+    juce::String describe_override(const project::NoteOverride& o) const
+    {
+        auto ms = [&](Ticks t) {
+            return juce::roundToInt(1000.0 * 60.0 / std::max(1.0, m_.bpm) * static_cast<double>(std::llabs(t)) /
+                                    static_cast<double>(kTicksPerQuarter));
+        };
+        juce::StringArray parts;
+        if (o.onset != 0) parts.add(juce::String(ms(o.onset)) + " ms " + (o.onset < 0 ? "early" : "late"));
+        if (o.length != 0) parts.add(juce::String(ms(o.length)) + " ms " + (o.length < 0 ? "shorter" : "longer"));
+        if (o.velocity != 0) parts.add("velocity " + juce::String(o.velocity > 0 ? "+" : "") + juce::String(o.velocity));
+        if (o.cc != 0) parts.add("CC " + juce::String(o.cc > 0 ? "+" : "") + juce::String(o.cc));
+        return parts.isEmpty() ? juce::String("as written") : parts.joinIntoString(", ");
+    }
+
+    juce::String performance_hint(const LaneView& l, notation::EventId id) const
+    {
+        const auto it = l.performance.find(id);
+        if (it == l.performance.end() || it->second.empty()) return kScoreHint;
+        return "Played " + describe_override(it->second) + "  -  right-click to reset or humanize";
+    }
+
+    juce::String drag_hint(const LaneView& l) const
+    {
+        project::NoteOverride o;
+        if (auto it = l.performance.find(perf_anchor_); it != l.performance.end()) o = it->second;
+        if (drag_ == Drag::PerfMove) o.onset += dt_;
+        if (drag_ == Drag::PerfLength) o.length += dt_;
+        return "Played " + describe_override(project::clamp_override(o)) + "  (Alt snaps to the grid)";
     }
 
     std::optional<NoteKey> velocity_hit(const LaneView& l, float x) const
@@ -2336,6 +2595,121 @@ private:
         }
     }
 
+    // --- Performance overrides (Main Spec §8): how score notes are played ---------------------------
+
+    /// Each gesture is its own undo step: same-label edits coalesce, so the
+    /// label alternates between two spellings from one gesture to the next.
+    std::string gesture_label(const char* base)
+    {
+        flip_ = !flip_;
+        return std::string(base) + (flip_ ? "" : " ");
+    }
+
+    void commit_performance(Drag kind)
+    {
+        const auto* l = m_.selected_lane();
+        if (!l || perf_sel_.empty()) return;
+        const auto ids = perf_sel_;
+        const Ticks dt = dt_;
+        bool ok = false;
+        if (kind == Drag::PerfVelocity) {
+            const int i = score_index(*l, perf_anchor_);
+            if (i < 0) return;
+            // The whole selection moves by the anchor's change, so the
+            // written dynamic shape is kept.
+            const int delta = vel_value_ - l->score_notes[static_cast<std::size_t>(i)].velocity;
+            if (delta == 0) return;
+            ok = m_.ctx.session.edit_performance(l->id, ids, gesture_label("Performance velocity"),
+                                                 [delta](notation::EventId, project::NoteOverride& o) { o.velocity += delta; });
+        } else {
+            const bool onset = kind == Drag::PerfMove;
+            ok = m_.ctx.session.edit_performance(l->id, ids, gesture_label(onset ? "Performance timing" : "Performance length"),
+                                                 [dt, onset](notation::EventId, project::NoteOverride& o) {
+                                                     (onset ? o.onset : o.length) += dt;
+                                                 });
+        }
+        hint_.clear();
+        if (ok)
+            if (const auto* now = m_.selected_lane()) status(performance_hint(*now, perf_anchor_));
+    }
+
+    void show_performance_menu()
+    {
+        const auto* l = m_.selected_lane();
+        if (!l || perf_sel_.empty()) return;
+        bool any = false;
+        for (auto id : perf_sel_) any = any || l->performance.count(id) > 0;
+        juce::PopupMenu humanize;
+        humanize.addItem(11, "Subtle");
+        humanize.addItem(12, "Natural");
+        humanize.addItem(13, "Loose");
+        juce::PopupMenu menu;
+        const auto n = static_cast<int>(perf_sel_.size());
+        menu.addSectionHeader(n == 1 ? juce::String("Score note: how it is played")
+                                     : juce::String(n) + " score notes: how they are played");
+        menu.addItem(1, "Performance...");
+        menu.addSubMenu("Humanize", humanize);
+        menu.addItem(2, n == 1 ? "Reset to as written" : "Reset these to as written", any);
+        menu.addSeparator();
+        menu.addItem(3, "Select all score notes");
+        menu.addItem(4, "Reset the whole track to as written", !l->performance.empty());
+        const std::string track = l->id;
+        const auto ids = perf_sel_;
+        juce::Component::SafePointer<PianoRoll> self(this);
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition(),
+                           [self, track, ids](int r) {
+                               if (self) self->performance_action(r, track, ids);
+                           });
+    }
+
+    void performance_action(int r, const std::string& track, const std::vector<notation::EventId>& ids)
+    {
+        auto& session = m_.ctx.session;
+        switch (r) {
+            case 1: open_performance_panel(); break;
+            case 2:
+                if (session.clear_performance(track, ids)) status("Reset to as written");
+                break;
+            case 3:
+                if (const auto* l = m_.selected_lane()) {
+                    selection_.clear();
+                    perf_sel_.clear();
+                    for (auto sid : l->score_ids)
+                        if (sid != notation::kInvalidEventId) perf_sel_.push_back(sid);
+                    repaint();
+                }
+                break;
+            case 4:
+                if (session.clear_performance(track)) status("The whole track plays as written");
+                break;
+            case 11:
+            case 12:
+            case 13: {
+                auto settings = project::humanize_preset(r == 11 ? "subtle" : r == 12 ? "natural" : "loose");
+                settings.seed = ++humanize_seed_;
+                if (session.humanize(track, ids, settings))
+                    status("Humanized " + juce::String(static_cast<int>(ids.size())) + " note(s) - Undo to try again");
+                break;
+            }
+            default: break;
+        }
+    }
+
+    void open_performance_panel()
+    {
+        const auto* l = m_.selected_lane();
+        if (!l || perf_sel_.empty()) return;
+        juce::Rectangle<int> area;
+        for (auto sid : perf_sel_)
+            if (const int i = score_index(*l, sid); i >= 0) {
+                const auto r = note_rect(l->score_notes[static_cast<std::size_t>(i)]).toNearestInt();
+                area = area.isEmpty() ? r : area.getUnion(r);
+            }
+        if (area.isEmpty()) area = grid_area().withSizeKeepingCentre(10, 10);
+        juce::CallOutBox::launchAsynchronously(std::make_unique<PerformancePanel>(m_.ctx, l->id, perf_sel_, m_.bpm),
+                                               area.getIntersection(grid_area()), this);
+    }
+
     // --- Painting ---------------------------------------------------------------------------------------
 
     void paint_header(juce::Graphics& g, const LaneView* l)
@@ -2364,7 +2738,10 @@ private:
             g.setColour(colours::text_dim);
             const auto n = selection_.size();
             juce::String text = n > 0 ? juce::String(static_cast<int>(n)) + " selected  -  drag to move, edge to resize, Delete to remove"
-                                      : juce::String("Click and drag to draw notes  -  Shift-click to add to the selection");
+                                : !perf_sel_.empty()
+                                    ? juce::String(static_cast<int>(perf_sel_.size())) +
+                                          " score note(s)  -  drag to play early or late, end to hold, right-click to humanize or reset"
+                                    : juce::String("Click and drag to draw notes  -  drag a score note to shape how it is played");
             g.drawText(text, info, juce::Justification::centredLeft, true);
         }
         // Legend.
@@ -2386,8 +2763,8 @@ private:
                 g.setColour(colours::text_dim);
                 g.drawText(label, legend.removeFromLeft(100), juce::Justification::centredLeft);
             };
-            item("MIDI (editable)", false);
-            item("Score (read-only)", true);
+            item("MIDI", false);
+            item("Score (performance)", true);
         }
     }
 
@@ -2449,14 +2826,43 @@ private:
         g.reduceClipRegion(grid);
         const auto gf = grid.toFloat();
 
-        // Score-linked notes: ghosted, read-only.
-        for (const auto& n : l.score_notes) {
-            const auto r = note_rect(n);
+        // Score notes, as performed. Their pitch and rhythm belong to the
+        // score; dragging them changes how they are played. A note played
+        // away from how it is written keeps a dashed outline at the written
+        // place and a line joining the two.
+        for (std::size_t i = 0; i < l.score_notes.size(); ++i) {
+            const notation::EventId sid = i < l.score_ids.size() ? l.score_ids[i] : notation::kInvalidEventId;
+            const bool sel = sid != notation::kInvalidEventId && is_perf_selected(sid);
+            NoteEvent shown = l.score_notes[i];
+            if (sel && drag_ == Drag::PerfMove) shown.start = std::max<Ticks>(0, shown.start + dt_);
+            if (sel && drag_ == Drag::PerfLength) shown.duration = std::max<Ticks>(1, shown.duration + dt_);
+            const auto r = note_rect(shown);
+            const auto w = l.score_written.find(sid);
+            const bool moved = w != l.score_written.end() && (w->second.start != shown.start || w->second.duration != shown.duration);
+            if (moved) {
+                const auto wr = note_rect(w->second);
+                if (wr.intersects(gf) || r.intersects(gf)) {
+                    juce::Path outline;
+                    outline.addRoundedRectangle(wr.reduced(0.5f), 2.0f);
+                    juce::Path dashed;
+                    const float dashes[] = {3.0f, 2.5f};
+                    juce::PathStrokeType(1.0f).createDashedStroke(dashed, outline, dashes, 2);
+                    g.setColour(colours::text_dim.withAlpha(0.7f));
+                    g.fillPath(dashed);
+                    g.drawLine(wr.getX(), wr.getCentreY(), r.getX(), r.getCentreY(), 1.0f);
+                }
+            }
             if (!r.intersects(gf)) continue;
-            g.setColour(l.colour.withAlpha(0.22f));
+            const bool performed = sid != notation::kInvalidEventId && l.performance.count(sid) > 0;
+            g.setColour(sel ? colours::accent_warm.withAlpha(0.55f) : l.colour.withAlpha(performed ? 0.38f : 0.22f));
             g.fillRoundedRectangle(r, 2.0f);
-            g.setColour(l.colour.withAlpha(0.6f));
-            g.drawRoundedRectangle(r.reduced(0.5f), 2.0f, 1.0f);
+            g.setColour(sel ? juce::Colours::white : l.colour.withAlpha(0.75f));
+            g.drawRoundedRectangle(r.reduced(0.5f), 2.0f, sel ? 1.4f : 1.0f);
+            if (performed && r.getWidth() > 8.0f) {
+                // A small mark: this note has a performance of its own.
+                g.setColour(colours::accent_warm);
+                g.fillEllipse(r.getRight() - 6.0f, r.getY() + 2.0f, 4.0f, 4.0f);
+            }
         }
 
         // MIDI-region notes.
@@ -2582,7 +2988,24 @@ private:
             g.fillRect(juce::Rectangle<float>(x, top, 2.0f, bottom - top));
             g.fillEllipse(x - 2.5f, top - 3.0f, 7.0f, 7.0f);
         };
-        for (const auto& n : l.score_notes) bar(n.start, n.velocity, l.colour.withAlpha(0.3f));
+        for (std::size_t i = 0; i < l.score_notes.size(); ++i) {
+            const auto& n = l.score_notes[i];
+            const notation::EventId sid = i < l.score_ids.size() ? l.score_ids[i] : notation::kInvalidEventId;
+            const bool sel = sid != notation::kInvalidEventId && is_perf_selected(sid);
+            int v = n.velocity;
+            if (sel && drag_ == Drag::PerfVelocity) {
+                const int a = score_index(l, perf_anchor_);
+                if (a >= 0) v = juce::jlimit(1, 127, v + vel_value_ - l.score_notes[static_cast<std::size_t>(a)].velocity);
+            }
+            if (const auto w = l.score_written.find(sid); w != l.score_written.end() && w->second.velocity != v) {
+                // The written velocity, as a short tick.
+                const float x = static_cast<float>(m_.x_of(static_cast<double>(n.start)));
+                const float wy = bottom - span * static_cast<float>(w->second.velocity) / 127.0f;
+                g.setColour(colours::text_dim.withAlpha(0.8f));
+                g.fillRect(juce::Rectangle<float>(x - 4.0f, wy, 10.0f, 1.5f));
+            }
+            bar(n.start, v, sel ? colours::accent_warm : l.colour.withAlpha(l.performance.count(sid) ? 0.6f : 0.3f));
+        }
         for (const auto& r : l.regions)
             for (const auto& n : r.notes) {
                 const NoteKey k{r.id, n.start, n.pitch};
@@ -2612,6 +3035,11 @@ private:
     std::vector<NoteKey> vel_targets_;
     int vel_value_ = 80;
     int last_velocity_ = 90;
+    // Score notes selected for performance editing, by score note id.
+    std::vector<notation::EventId> perf_sel_;
+    notation::EventId perf_anchor_ = notation::kInvalidEventId;
+    bool flip_ = false;
+    std::uint64_t humanize_seed_ = 0;
 };
 
 }  // namespace

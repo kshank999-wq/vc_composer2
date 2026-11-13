@@ -11,6 +11,12 @@
 
 namespace vcc::project {
 
+bool operator==(const NoteOverride& a, const NoteOverride& b) noexcept
+{
+    return a.onset == b.onset && a.length == b.length && a.velocity == b.velocity && a.cc == b.cc;
+}
+bool operator!=(const NoteOverride& a, const NoteOverride& b) noexcept { return !(a == b); }
+
 // --- Enums --------------------------------------------------------------------
 
 namespace {
@@ -302,7 +308,7 @@ std::string Project::add_track(const std::string& name, TrackKind kind, const st
         t.include_in_export = kind != TrackKind::Reference;
         t.output_bus_id = "bus-master";
         if (kind != TrackKind::Folder) {
-            t.versions.push_back({version, "Version 1", {}, score_for_track(t.name), {}, {}, std::nullopt, {}});
+            t.versions.push_back({version, "Version 1", {}, score_for_track(t.name), {}, {}, {}, std::nullopt, {}});
             t.active_version_id = version;
         }
         d.tracks.push_back(t);
@@ -780,6 +786,19 @@ json::Value Project::to_json() const
                             {"score", notation::score_to_json(v.score)}, {"regions", regions},
                             {"articulation_overrides", string_array(v.articulation_overrides)}};
             if (v.gain_db) vo.set("gain_db", *v.gain_db);
+            {
+                json::Array perf;
+                for (const auto& [id, ov] : v.performance) {
+                    if (ov.empty() || !v.score.find_note(id)) continue;
+                    json::Object po{{"note", static_cast<std::int64_t>(id)}};
+                    if (ov.onset != 0) po.set("onset", ov.onset);
+                    if (ov.length != 0) po.set("length", ov.length);
+                    if (ov.velocity != 0) po.set("velocity", ov.velocity);
+                    if (ov.cc != 0) po.set("cc", ov.cc);
+                    perf.emplace_back(std::move(po));
+                }
+                if (!perf.empty()) vo.set("performance", perf);
+            }
             if (!v.audio_clips.empty()) {
                 json::Array clips;
                 for (const auto& c : v.audio_clips)
@@ -998,6 +1017,16 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
             if (const auto* sj = vj.get("score")) {
                 notation::ScoreLoadResult loaded = notation::score_from_json(*sj, v.score);
                 if (!loaded.ok) return fail("version " + v.id + " score: " + loaded.error);
+            }
+            for (const auto& pj : vj.get("performance") ? vj.get("performance")->as_array() : json::Array{}) {
+                const auto id = static_cast<notation::EventId>(pj.get_int("note"));
+                if (id == notation::kInvalidEventId) return fail("version " + v.id + ": performance entry without a note");
+                NoteOverride o;
+                o.onset = pj.get_int("onset");
+                o.length = pj.get_int("length");
+                o.velocity = static_cast<int>(std::clamp<std::int64_t>(pj.get_int("velocity"), -127, 127));
+                o.cc = static_cast<int>(std::clamp<std::int64_t>(pj.get_int("cc"), -127, 127));
+                if (!o.empty() && v.score.find_note(id)) v.performance[id] = o;
             }
             for (const auto& rj : vj.get("regions") ? vj.get("regions")->as_array() : json::Array{}) {
                 MidiRegion r;

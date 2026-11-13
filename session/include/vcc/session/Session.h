@@ -16,6 +16,7 @@
 
 #include "vcc/interchange/MusicXml.h"
 #include "vcc/ostinato/Ostinato.h"
+#include "vcc/project/Performance.h"
 #include "vcc/project/Project.h"
 #include "vcc/project/Stems.h"
 #include "vcc/templates/Templates.h"
@@ -252,6 +253,26 @@ public:
     bool commit_automation_pass(const std::vector<AutomationWrite>& writes);
     /// The owner's lanes, or null for an unknown owner.
     const std::vector<project::AutomationLane>* lanes_of(const std::string& owner_id) const;
+
+    // --- Performance overrides (Main Spec §8) ------------------------------------------
+    // How written notes are played, per score note id, on the track's active
+    // version. The score itself is never changed by these.
+    /// The active version's overrides, or null for an unknown track.
+    const std::map<notation::EventId, project::NoteOverride>* performance_of(const std::string& track_id) const;
+    /// Changes the overrides of `notes` (each is passed its current override,
+    /// empty when it has none). Ids that are not performable notes of the
+    /// score are skipped. Same-label calls coalesce, so a drag is one undo
+    /// step. False if nothing could be changed.
+    bool edit_performance(const std::string& track_id, const std::vector<notation::EventId>& notes,
+                          const std::string& label,
+                          const std::function<void(notation::EventId, project::NoteOverride&)>& change);
+    /// Returns notes to exactly how they are written (all notes when `notes`
+    /// is empty). One undo step.
+    bool clear_performance(const std::string& track_id, const std::vector<notation::EventId>& notes = {});
+    /// Seeded humanize of `notes` (all performable notes when empty). One
+    /// undo step.
+    bool humanize(const std::string& track_id, const std::vector<notation::EventId>& notes,
+                  const project::HumanizeSettings& settings);
 
     // --- Stems (Main Spec §16) ---------------------------------------------------------
     /// The project's stems, or sensible defaults when it has none (group

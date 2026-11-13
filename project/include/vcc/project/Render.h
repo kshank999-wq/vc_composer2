@@ -21,6 +21,9 @@ namespace vcc::project {
 
 struct RenderedTrack {
     std::vector<NoteEvent> notes;        ///< Sounding notes: score + regions.
+    /// Parallel to `notes`: the score note each came from (the first note of
+    /// a tie chain), or 0 for a note of a MIDI region.
+    std::vector<notation::EventId> note_ids;
     std::vector<NoteEvent> keyswitches;  ///< Player instructions, not music.
     std::vector<ControllerEvent> controllers;
     std::vector<std::string> warnings;   ///< Out-of-range notes, unmapped articulations.
@@ -29,9 +32,15 @@ struct RenderedTrack {
 /// The built-in maps by name ("default", "orchestral_cc"); default otherwise.
 notation::ExpressionMap expression_map_named(const std::string& name);
 
-/// Renders a track's active version.
-RenderedTrack render_track(const Track& track, const notation::ExpressionMap& map);
-RenderedTrack render_track(const Track& track);
+/// Renders a track's active version. With `performance`, the version's
+/// note overrides are applied (what playback and export use); without, the
+/// notes are as written (what the piano roll shows as the written position).
+RenderedTrack render_track(const Track& track, const notation::ExpressionMap& map, bool performance = true);
+RenderedTrack render_track(const Track& track, bool performance = true);
+
+/// Applies one override to a rendered note (clamped: never before zero,
+/// never shorter than a tick, velocity 1-127).
+NoteEvent apply_override(NoteEvent note, const NoteOverride& o) noexcept;
 
 /// Deliverable MIDI for a project: one track per exported instrument track,
 /// keyswitches included only when `include_keyswitches` (they are for the

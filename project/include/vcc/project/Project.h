@@ -104,6 +104,23 @@ struct AudioClip {
     double end_seconds() const noexcept { return start_seconds + length; }
 };
 
+/// How one written note is played (Main Spec §8 performance overrides).
+/// Offsets, not values: the score keeps the musical intent, and this layer
+/// only says how far the performance departs from it, so a later score edit
+/// (a new dynamic, a longer note) still reaches the performed note.
+struct NoteOverride {
+    Ticks onset = 0;   ///< Added to the rendered start (early < 0 < late).
+    Ticks length = 0;  ///< Added to the rendered duration.
+    int velocity = 0;  ///< Added to the rendered velocity.
+    /// Added to the controllers the note sends (its articulation CCs), and,
+    /// when the expression map shapes dynamics with a controller, to that
+    /// controller while the note sounds.
+    int cc = 0;
+    bool empty() const noexcept { return onset == 0 && length == 0 && velocity == 0 && cc == 0; }
+};
+bool operator==(const NoteOverride& a, const NoteOverride& b) noexcept;
+bool operator!=(const NoteOverride& a, const NoteOverride& b) noexcept;
+
 /// A non-destructive alternative of a track's content (Main Spec §15).
 struct TrackVersion {
     std::string id;
@@ -112,6 +129,10 @@ struct TrackVersion {
     /// Written notation: staves, notes, articulations, dynamics, slurs.
     notation::Score score;
     std::vector<MidiRegion> regions;
+    /// Performance overrides by score note id, kept apart from the score: a
+    /// tie chain is keyed by its first note. Overrides of notes that no
+    /// longer exist are ignored and are not saved.
+    std::map<notation::EventId, NoteOverride> performance;
     std::vector<std::string> articulation_overrides;
     std::optional<double> gain_db;  ///< Optional per-version mix setting.
     /// Audio on this version's playlist (audio and reference tracks; any
