@@ -15,6 +15,7 @@
 #include "vcc/project/Automation.h"
 #include "vcc/project/Performance.h"
 #include "vcc/project/Render.h"
+#include "vcc/project/RenderCache.h"
 #include "vcc/session/Notate.h"
 
 namespace vcc::desktop {
@@ -196,6 +197,7 @@ struct Model final : AutomationTimeline {
     explicit Model(AppContext& c) : ctx(c) {}
 
     AppContext& ctx;
+    project::RenderCache render_cache;
     double px_per_quarter = 24.0;
     double view_start = 0.0;  ///< Tick at the left edge of the timeline.
     int timeline_width = 800;
@@ -397,18 +399,21 @@ struct Model final : AutomationTimeline {
                 std::sort(l.takes.begin(), l.takes.end());
             }
             if (v && !l.reference && !l.audio) {
-                project::Track score_only = *t;
-                score_only.active_version()->regions.clear();
                 try {
-                    auto played = project::render_track(score_only);
-                    l.score_notes = std::move(played.notes);
-                    l.score_ids = std::move(played.note_ids);
-                    const auto written = project::render_track(score_only, false);
+                    // Score notes only (region notes have no score id), from
+                    // the render cache: only what an edit reaches is rendered.
+                    const auto& played = render_cache.render(*t);
+                    for (std::size_t i = 0; i < played.notes.size(); ++i)
+                        if (played.note_ids[i] != notation::kInvalidEventId) {
+                            l.score_notes.push_back(played.notes[i]);
+                            l.score_ids.push_back(played.note_ids[i]);
+                        }
+                    const auto& written = render_cache.render(*t, false);
                     for (std::size_t i = 0; i < written.notes.size(); ++i)
-                        l.score_written[written.note_ids[i]] = written.notes[i];
+                        if (written.note_ids[i] != notation::kInvalidEventId)
+                            l.score_written[written.note_ids[i]] = written.notes[i];
                     l.performance = v->performance;
-                    for (auto sid : l.score_ids)
-                        if (sid != notation::kInvalidEventId) l.score_span[sid] = session::written_span(v->score, sid);
+                    l.score_span = session::written_spans(v->score);
                 } catch (...) {
                     l.score_notes.clear();
                     l.score_ids.clear();
@@ -437,6 +442,11 @@ struct Model final : AutomationTimeline {
             l.lo = lo - 2;
             l.hi = hi + 2;
             lanes.push_back(std::move(l));
+        }
+        {
+            std::vector<std::string> live;
+            for (const auto& lane : lanes) live.push_back(lane.id);
+            render_cache.retain(live);
         }
         // Buses at the bottom (automation only), the master last.
         std::vector<const project::Bus*> buses;

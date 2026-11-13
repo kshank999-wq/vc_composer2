@@ -952,7 +952,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
                 watch_plugin(pi->instance(), pi, pi->has_watch(),
                              [pi](std::unique_ptr<ParameterWatch> w) { pi->set_watch(std::move(w)); },
                              instrument_watch_targets_, t->id, "plugin:");
-            project::RenderedTrack r = project::render_track(*t);
+            project::RenderedTrack r = render_cache_.render(*t);
             if (st.instrument->wants_keyswitches()) r.notes.insert(r.notes.end(), r.keyswitches.begin(), r.keyswitches.end());
             st.events = to_events(r.notes, r.controllers, d.tempo, sample_rate_);
             st.midi.ensureSize(4096);
@@ -1193,6 +1193,10 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
     snap->seek(position_samples_.load());
     // Streams no clip uses any more go when the snapshots holding them retire.
     streams_ = std::move(live_streams);
+    // Forget tracks that are gone.
+    std::vector<std::string> live;
+    for (const auto& t : d.tracks) live.push_back(t.id);
+    render_cache_.retain(live);
     return snap;
 }
 

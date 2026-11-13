@@ -27,18 +27,65 @@ NoteEvent apply_override(NoteEvent note, const NoteOverride& o) noexcept
     return note;
 }
 
+namespace {
+int send_priority(const music::MidiEvent& event) noexcept
+{
+    switch (event.type) {
+        case music::MidiEventType::NoteOff: return 0;
+        case music::MidiEventType::ControlChange:
+        case music::MidiEventType::ProgramChange:
+        case music::MidiEventType::PitchBend: return 1;
+        case music::MidiEventType::NoteOn: return 3;
+        default: return 2;
+    }
+}
+}  // namespace
+
+void canonical_order(std::vector<notation::TimedMidiEvent>& events)
+{
+    std::sort(events.begin(), events.end(), [](const notation::TimedMidiEvent& a, const notation::TimedMidiEvent& b) {
+        if (a.tick != b.tick) return a.tick < b.tick;
+        const int pa = send_priority(a.event), pb = send_priority(b.event);
+        if (pa != pb) return pa < pb;
+        if (a.source_id != b.source_id) return a.source_id < b.source_id;
+        if (a.role != b.role) return a.role < b.role;
+        if (a.event.type != b.event.type) return a.event.type < b.event.type;
+        if (a.event.channel != b.event.channel) return a.event.channel < b.event.channel;
+        if (a.event.data1 != b.event.data1) return a.event.data1 < b.event.data1;
+        return a.event.data2 < b.event.data2;
+    });
+}
+
+notation::RenderResult render_score_events(const Track& track, const notation::ExpressionMap& map, Ticks from,
+                                           Ticks to)
+{
+    const TrackVersion* version = track.active_version();
+    if (!version) return {};
+    notation::MidiRenderer renderer(map);
+    notation::RenderOptions options;
+    options.channel = static_cast<std::uint8_t>(std::clamp(track.midi_channel, 0, 15));
+    options.from_tick = from;
+    options.to_tick = to;
+    renderer.set_options(options);
+    notation::RenderResult r = renderer.render(version->score);
+    canonical_order(r.events);
+    std::sort(r.unmapped_articulations.begin(), r.unmapped_articulations.end());
+    std::sort(r.out_of_range_notes.begin(), r.out_of_range_notes.end());
+    return r;
+}
+
 RenderedTrack render_track(const Track& track, const notation::ExpressionMap& map, bool performance)
+{
+    return finish_render(track, map, render_score_events(track, map), performance);
+}
+
+RenderedTrack finish_render(const Track& track, const notation::ExpressionMap& map, const notation::RenderResult& r,
+                            bool performance)
 {
     RenderedTrack out;
     const TrackVersion* version = track.active_version();
     if (!version) return out;
     const int channel = std::clamp(track.midi_channel, 0, 15);
-
-    notation::MidiRenderer renderer(map);
-    notation::RenderOptions options;
-    options.channel = static_cast<std::uint8_t>(channel);
-    renderer.set_options(options);
-    notation::RenderResult r = renderer.render(version->score);
 
     auto override_for = [&](notation::EventId id) -> const NoteOverride* {
         if (!performance || id == notation::kInvalidEventId) return nullptr;
@@ -47,25 +94,27 @@ RenderedTrack render_track(const Track& track, const notation::ExpressionMap& ma
     };
 
     // Pair note-ons with note-offs per (channel, pitch), first in first out.
-    std::map<std::pair<int, int>, std::deque<std::pair<const notation::TimedMidiEvent*, Ticks>>> open;
+    // A FIFO per (channel, pitch): a vector and a read position, which
+    // costs nothing until a pitch is used.
+    std::vector<std::vector<const notation::TimedMidiEvent*>> open(16 * 128);
+    std::vector<std::size_t> open_head(16 * 128, 0);
     std::vector<std::pair<NoteEvent, notation::EventId>> notes;
     // Notes whose override moves the dynamics controller: (performed note, offset).
     std::vector<std::pair<NoteEvent, int>> cc_spans;
     for (const auto& e : r.events) {
         const auto& m = e.event;
         const int pitch = m.data1;
-        const auto key = std::make_pair(static_cast<int>(m.channel), pitch);
+        const auto key = static_cast<std::size_t>((m.channel & 15) * 128 + (pitch & 127));
         const bool on = m.type == music::MidiEventType::NoteOn && m.data2 > 0;
         const bool off = m.type == music::MidiEventType::NoteOff ||
                          (m.type == music::MidiEventType::NoteOn && m.data2 == 0);
         const NoteOverride* o = override_for(e.source_id);
         if (on) {
-            open[key].emplace_back(&e, e.tick);
+            open[key].push_back(&e);
         } else if (off) {
             auto& q = open[key];
-            if (q.empty()) continue;
-            const auto* start = q.front().first;
-            q.pop_front();
+            if (open_head[key] >= q.size()) continue;
+            const auto* start = q[open_head[key]++];
             NoteEvent n{start->tick, std::max<Ticks>(1, e.tick - start->tick), pitch, start->event.data2,
                         static_cast<int>(m.channel), {}};
             const NoteOverride* so = override_for(start->source_id);

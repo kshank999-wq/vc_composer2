@@ -15,6 +15,7 @@
 
 #include "vcc/core/Midi.h"
 #include "vcc/notation/ExpressionMap.h"
+#include "vcc/notation/MidiRenderer.h"
 #include "vcc/project/Project.h"
 
 namespace vcc::project {
@@ -37,6 +38,21 @@ notation::ExpressionMap expression_map_named(const std::string& name);
 /// notes are as written (what the piano roll shows as the written position).
 RenderedTrack render_track(const Track& track, const notation::ExpressionMap& map, bool performance = true);
 RenderedTrack render_track(const Track& track, bool performance = true);
+
+/// The notation render of a track's active version, before performance
+/// and regions: events in canonical order (by tick, then send order, then
+/// source note), so two renders of the same score compare equal event for
+/// event. With `to > from` only the notes and markings in that range.
+notation::RenderResult render_score_events(const Track& track, const notation::ExpressionMap& map, Ticks from = 0,
+                                           Ticks to = 0);
+/// The track's MIDI from a score render: notes paired, overrides applied
+/// (with `performance`), regions added. `render_track` is
+/// `finish_render(render_score_events(...))`; RenderCache supplies the
+/// score render from its cache instead.
+RenderedTrack finish_render(const Track& track, const notation::ExpressionMap& map, const notation::RenderResult& r,
+                            bool performance);
+/// Sorts rendered events into the canonical order.
+void canonical_order(std::vector<notation::TimedMidiEvent>& events);
 
 /// Applies one override to a rendered note (clamped: never before zero,
 /// never shorter than a tick, velocity 1-127).

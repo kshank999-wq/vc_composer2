@@ -1,6 +1,8 @@
 #include "vcc/notation/MidiRenderer.h"
 
 #include <algorithm>
+#include <tuple>
+#include <set>
 #include <cmath>
 
 namespace vcc::notation {
@@ -442,6 +444,17 @@ RenderResult MidiRenderer::render_staff(const Score& score, std::size_t staff_in
 
     const bool whole = options_.renders_whole_score();
 
+    // Where tied notes end, by voice and written pitch: a note starting at
+    // one of these continues a tie. Collected once, so finding out costs a
+    // lookup rather than a pass over every earlier note (which made a long
+    // part quadratic to render). A tied note ending where another starts
+    // began before it, so it is always an earlier note in the staff.
+    std::set<std::tuple<int, int, int, int, Ticks>> tie_ends;
+    for (const ScoreNote& candidate : staff_notes)
+        if (candidate.tied_to_next && !candidate.is_rest)
+            tie_ends.emplace(candidate.voice, static_cast<int>(candidate.pitch.step), candidate.pitch.octave,
+                             candidate.pitch.alteration, candidate.end_tick());
+
     for (std::size_t index = 0; index < staff_notes.size(); ++index) {
         const ScoreNote& note = staff_notes[index];
         if (!whole && (note.end_tick() <= options_.from_tick
@@ -451,16 +464,12 @@ RenderResult MidiRenderer::render_staff(const Score& score, std::size_t staff_in
 
         // A note continuing a tie is rendered as part of the chain that
         // started it, not on its own.
-        bool continues_tie = false;
-        for (std::size_t earlier = 0; earlier < index; ++earlier) {
-            const ScoreNote& candidate = staff_notes[earlier];
-            if (candidate.tied_to_next && !candidate.is_rest
-                && candidate.voice == note.voice && candidate.pitch == note.pitch
-                && candidate.end_tick() == note.start_tick) {
-                continues_tie = true;
-                break;
-            }
-        }
+        const bool continues_tie =
+            !tie_ends.empty()
+            && tie_ends.count(std::make_tuple(static_cast<int>(note.voice), static_cast<int>(note.pitch.step),
+                                              static_cast<int>(note.pitch.octave),
+                                              static_cast<int>(note.pitch.alteration), note.start_tick))
+                   > 0;
         if (continues_tie)
             continue;
 

@@ -73,6 +73,7 @@
 #include "audio/AutomationRt.h"
 #include "audio/Instrument.h"
 #include "audio/PluginHost.h"
+#include "vcc/project/RenderCache.h"
 #include "vcc/audio/SpscRingBuffer.h"
 #include "vcc/core/Midi.h"
 #include "vcc/session/Session.h"
@@ -379,6 +380,9 @@ private:
     int next_watch_ = 1;
     std::map<const void*, int> watch_ids_;
     std::map<int, std::pair<std::string, std::string>> insert_watch_targets_, instrument_watch_targets_;
+    /// Each track's MIDI, kept between rebuilds and re-rendered only where
+    /// an edit reaches (Main Spec §8). Message thread only.
+    project::RenderCache render_cache_;
     // Delay compensation (message thread)
     std::map<std::string, std::shared_ptr<DelayLine>> delay_lines_;
     std::map<std::string, int> strip_latency_;

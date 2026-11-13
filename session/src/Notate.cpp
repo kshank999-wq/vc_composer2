@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <optional>
 #include <set>
+#include <tuple>
 
 #include "vcc/interchange/Transposition.h"
 #include "vcc/music/MidiFile.h"
@@ -204,6 +205,33 @@ std::pair<Ticks, Ticks> written_span(const nt::Score& score, nt::EventId note)
     if (!n) return {0, 0};
     const auto chain = chain_of(score, score.staff_index_of(note), *n);
     return {chain.front().start_tick, chain.back().end_tick()};
+}
+
+std::map<nt::EventId, std::pair<Ticks, Ticks>> written_spans(const nt::Score& score)
+{
+    std::map<nt::EventId, std::pair<Ticks, Ticks>> out;
+    for (std::size_t s = 0; s < score.staff_count(); ++s) {
+        // Open chains by where they continue: (voice, sounding pitch, tick) -> head.
+        std::map<std::tuple<int, int, Ticks>, nt::EventId> open;
+        for (const auto& n : score.notes(s)) {
+            if (n.is_rest || n.grace) {
+                if (n.grace) out[n.id] = {n.start_tick, n.end_tick()};
+                continue;
+            }
+            const auto key = std::make_tuple(static_cast<int>(n.voice), nt::midi_note_number(n.pitch), n.start_tick);
+            nt::EventId head = n.id;
+            if (auto it = open.find(key); it != open.end()) {
+                head = it->second;
+                open.erase(it);
+                out[head].second = n.end_tick();
+            } else {
+                out[head] = {n.start_tick, n.end_tick()};
+            }
+            if (n.tied_to_next)
+                open[std::make_tuple(static_cast<int>(n.voice), nt::midi_note_number(n.pitch), n.end_tick())] = head;
+        }
+    }
+    return out;
 }
 
 std::string describe(const NotateOption& option)

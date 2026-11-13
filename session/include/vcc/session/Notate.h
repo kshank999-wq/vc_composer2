@@ -88,6 +88,10 @@ NotatePlan plan_notate_region(const project::Track& track, const std::string& re
 /// {start, end}, or {0, 0} for an unknown note.
 std::pair<Ticks, Ticks> written_span(const notation::Score& score, notation::EventId note);
 
+/// `written_span` for every note that starts a tie chain (or stands alone),
+/// in one pass over the score.
+std::map<notation::EventId, std::pair<Ticks, Ticks>> written_spans(const notation::Score& score);
+
 /// What a plan option did, in a sentence for the status bar.
 std::string describe(const NotateOption& option);
 

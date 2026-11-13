@@ -147,10 +147,23 @@ points.
   - Every option is a complete outcome, applied as one undo step, and is
     refused if the score changed after it was planned.
 
-**Next:**
-
-1. **Rendered cache.** MIDI by dirty time range, using the ported event diff,
-   so an edit costs its own size.
+- **Rendered cache** (`vcc/project/RenderCache.h`). The playback engine and
+  the Sequencer keep each track's MIDI between edits:
+  - Scores are compared note by note (by stable id) and marking by marking.
+    Only the window an edit reaches is re-rendered: the changed notes' bars
+    plus one either side, widened until no tie chain crosses an edge, and
+    from a changed dynamic or hairpin to the end. Everything else is kept.
+  - Unchanged tracks cost a comparison. A change to the staves, the
+    expression map, the channel or the version renders the track whole.
+    Overrides and regions are re-applied only when they or the render
+    changed.
+  - The result equals a whole render event for event: renders are in a
+    canonical order, and a test checks the two over 1,320 random edits.
+  - The renderer's tie search was quadratic and is now a lookup. Together,
+    one edit to a 24-track, 1,200-notes-per-track project went from about
+    19 ms to under 1 ms.
+  - Still whole-track work: pairing note-ons with note-offs and applying
+    overrides (about 0.5 ms for 2,400 notes).
 
 ## Build and test
 
@@ -195,6 +208,7 @@ Spec test coverage at this stage:
 | Main §20: temp tracks excluded from deliverables | `test_project`, `test_workflow` |
 | Main §8: performance overrides (offsets, clamping, undo, humanize seed, CC, save) | `test_performance` |
 | Main §8: MIDI → notation (grid edits, overrides, tuplet/overlap/spelling prompts, region notation) | `test_notate` |
+| Main §8: rendered cache (equals a whole render over random edits; cost per edit) | `test_render_cache` |
 
 ## Repository layout
 
@@ -232,14 +246,13 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 
 ### Immediate next steps
 
-1. Build the Main Spec §8 rendered cache (see above).
-2. Engine hardening:
+1. Engine hardening:
    - saving the delay-compensation switch with the project.
-3. Picture follow-ups:
+2. Picture follow-ups:
    - picture + score draft export (needs an encoder);
    - automated conform;
    - Windows FFmpeg in CI;
    - an LGPL FFmpeg for distribution.
-4. Notation exchange follow-ups (§16): repeats/endings and lyrics in
+3. Notation exchange follow-ups (§16): repeats/endings and lyrics in
    MusicXML, font subsetting to shrink PDFs, collision-aware vertical
    spacing in the full score.
