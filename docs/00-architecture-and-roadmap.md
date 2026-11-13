@@ -246,11 +246,15 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 
 ### Immediate next steps
 
-1. Picture follow-ups:
+1. The Edit window UI spec (`docs/spec/ui/`): Composer and Producer views on
+   one project, a hardware-console look. What is built, what is missing,
+   the open decisions and a build order are in
+   `05-ui-spec-gap-analysis.md`.
+2. Picture follow-ups:
    - picture + score draft export (needs an encoder);
    - automated conform;
    - Windows FFmpeg in CI;
    - an LGPL FFmpeg for distribution.
-2. Notation exchange follow-ups (§16): repeats/endings and lyrics in
+3. Notation exchange follow-ups (§16): repeats/endings and lyrics in
    MusicXML, font subsetting to shrink PDFs, collision-aware vertical
    spacing in the full score.

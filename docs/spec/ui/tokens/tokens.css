@@ -1,0 +1,108 @@
+/* Composer 2 — design tokens
+   Themeable values (LED, LCD, staff paper) must be switchable at runtime.
+   Source of truth: SPEC.md › Design tokens. */
+
+:root {
+  /* ---- Themeable: hardware lights ---- */
+  --led: #FFB547;                    /* options: #FF5A4E red, #4FD1FF cyan, #9BF07A green */
+  --ledglow: rgba(255, 181, 71, .6); /* --led at 60% */
+  --lcd: #6EE7D2;                    /* options: #9BF07A green, #FFC266 amber, #9CC2FF blue */
+  --glow: rgba(110, 231, 210, .55);  /* --lcd at 55% */
+
+  /* ---- Themeable: staff paper (Dark default) ---- */
+  --paper: #14171B;
+  --ink: #E7EBF0;
+  --staff: #525B66;
+  --grid: rgba(255, 255, 255, .04);
+
+  /* ---- Chassis ---- */
+  --chassis: #0C0D0F;
+  --panel-top: #23272C;
+  --panel-bottom: #1A1D21;
+  --edge: #08090A;
+  --silk: #8E98A3;            /* silkscreen labels */
+  --text: #D3D9E0;
+  --text-bright: #E7EBF0;
+  --lcd-bg: #06100D;
+  --led-off: #2B2E32;
+  --meter-off: #24282D;
+
+  /* ---- Status ---- */
+  --meter-green: #3DDC84;
+  --meter-amber: #FFC24A;
+  --meter-red: #FF5A4E;
+  --marker: #F5D547;
+  --rec: #FF5A4E;
+  --solo: #FFC24A;
+  --mute: #4FD1FF;
+  --input-monitor: #3DDC84;
+
+  /* ---- Track colours ---- */
+  --trk-flute: #4FA8E8;
+  --trk-violins: #E0699A;
+  --trk-piano: #A78BFA;
+  --trk-cellos: #2EC4B6;
+  --trk-contrabass: #8FC85A;
+  --trk-djembe: #E46F4B;
+  --trk-udu: #D98C5F;
+
+  /* ---- Track-type tags (Producer view) ---- */
+  --type-inst: #C9A2FF;
+  --type-midi: #4FD1FF;
+  --type-audio: #3DDC84;
+  --type-aux: #F5D547;
+
+  /* ---- Type ---- */
+  --font-silk: 'Barlow Condensed', sans-serif;
+  --font-lcd: 'Share Tech Mono', monospace;
+  --font-ui: 'Inter', sans-serif;
+  --font-music: 'Bravura', 'Noto Music', serif;
+  --font-dyn: Georgia, 'Times New Roman', serif;
+
+  /* ---- Shape & depth ---- */
+  --r-panel: 8px;
+  --r-key: 5px;
+  --r-lcd: 4px;
+  --gap-panel: 10px;
+  --pad-page: 14px;
+  --shadow-panel: inset 0 1px 0 rgba(255,255,255,.07), 0 2px 10px rgba(0,0,0,.55);
+  --shadow-key: inset 0 1px 0 rgba(255,255,255,.15), 0 2px 0 #08090A, 0 3px 6px rgba(0,0,0,.45);
+  --shadow-key-on: inset 0 1px 0 rgba(255,255,255,.2), inset 0 0 0 1px var(--led), 0 1px 0 #08090A, 0 0 10px var(--ledglow);
+  --shadow-lcd: inset 0 2px 8px rgba(0,0,0,.95), inset 0 0 0 1px #000, 0 1px 0 rgba(255,255,255,.08);
+
+  /* ---- Score geometry ---- */
+  --staff-space: 7px;
+  --bar-width: 120px;          /* at 100% horizontal zoom */
+  --clef-zone: 46px;
+  --track-header: 220px;
+  --lane-single: 108px;
+  --lane-grand: 184px;
+
+  /* ---- Producer lane heights ---- */
+  --lane-midi-collapsed: 72px;
+  --lane-audio: 84px;
+  --lane-aux: 60px;
+  --lane-inst-expanded: 272px;
+  --pianoroll-row: 9px;
+
+  /* ---- Keyboard ---- */
+  --kb-white: 22px;            /* × key zoom (1–3) */
+  --kb-height: 96px;           /* + (zoom − 1) × 48px */
+}
+
+/* Staff paper theme */
+[data-staff="paper"] {
+  --paper: #F1ECE1;
+  --ink: #1B1A18;
+  --staff: #8C8579;
+  --grid: rgba(0, 0, 0, .07);
+}
+
+/* Component recipes */
+.panel { background: linear-gradient(180deg, var(--panel-top), var(--panel-bottom)); border: 1px solid var(--edge); border-radius: var(--r-panel); box-shadow: var(--shadow-panel); }
+.silk  { font: 600 11px/1 var(--font-silk); letter-spacing: .14em; text-transform: uppercase; color: var(--silk); }
+.lcd   { background: var(--lcd-bg); border-radius: var(--r-lcd); box-shadow: var(--shadow-lcd); color: var(--lcd); font-family: var(--font-lcd); text-shadow: 0 0 6px var(--glow); }
+.key   { border: 1px solid var(--edge); border-radius: var(--r-key); background: linear-gradient(180deg, #3C4148, #2A2E34); box-shadow: var(--shadow-key); color: var(--text); font: 600 12px/1 var(--font-silk); letter-spacing: .06em; text-transform: uppercase; }
+.key[aria-pressed="true"] { background: linear-gradient(180deg, #4A4F57, #363B42); box-shadow: var(--shadow-key-on); color: #fff; }
+.led   { width: 6px; height: 6px; border-radius: 50%; background: var(--led-off); box-shadow: inset 0 1px 1px rgba(0,0,0,.7); }
+.led.on { background: var(--led); box-shadow: 0 0 6px var(--ledglow), inset 0 0 1px rgba(255,255,255,.7); }
