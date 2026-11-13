@@ -20,7 +20,7 @@ and the document model. The work is mostly presentation.
 | Regions: trim, split, fade, gain, takes | Yes for audio clips. MIDI regions can be moved and notated, but have no trim or split yet. |
 | Plug-in hosting, inserts, sends, PDC, automation | Yes: Read, Touch, Latch and Write, with lanes for every control. |
 | Mixer with strips and master | Yes: the hardware-style console. |
-| Print score to audio | Partly. Stem and mix bounces render offline to WAV. Nothing yet records them onto new Audio tracks in the session. |
+| Print score to audio | Partly. Stem and mix bounces render offline to WAV, and any track can already hold audio clips. Nothing yet prints a track onto its own audio lane. |
 | Parts and score export (Score stage) | Yes: PDF parts, full score PDF, MusicXML. |
 | Markers, tempo map, meter map | Yes in the model. Chord symbols per bar are not stored yet. |
 
@@ -87,11 +87,10 @@ and the document model. The work is mostly presentation.
 - A Clips list in the left rack, with Import.
 - Right panel: channel strip, the Print score to audio panel and the
   Master panel.
-- Print to new Audio tracks:
-  - "<Track>_PRINT_01.wav", with the region growing while it records;
-  - real-time as well as offline;
-  - progress LCD;
-  - hiding or deactivating the source tracks afterwards.
+- Print to audio onto the instrument track's own audio lane (see
+  Decisions; this replaces the spec's separate "<Track>_PRINT_01" Audio
+  tracks), with the region growing while it records, real time as well
+  as offline, and a progress LCD.
 - Master panel:
   - integrated LUFS and true-peak meters;
   - master chain slots;
@@ -106,58 +105,87 @@ and the document model. The work is mostly presentation.
   - quantize, input quantize and merge.
 - MIDI CC lanes, consolidate, comping across MIDI takes.
 
-## Where the spec and the app disagree (needs a decision)
+## Decisions (November 13, 2026)
 
-1. **Cmd+Tab toggles views.** On macOS, Cmd+Tab is the system app
-   switcher and never reaches the app. Proposal: Ctrl+Tab on both
-   platforms, and Cmd+` or a Cmd+1/2-style chord on macOS. Cmd+1–4 are
-   taken by voices in the spec.
-2. **Note-value keys.** The spec has 7 for whole, 6 half, 5 quarter,
-   4 eighth, 3 16th and 2 32nd, with `.` for dotted, `/` for triplet and
-   0 for rest. The app's default profile has 1 for whole up to 7 for a
-   64th. Proposal: the spec's layout becomes the default profile, and the
-   current one stays as a selectable profile.
-3. **Ticks in the counter.** The spec counts 960 per quarter. The engine
-   uses 2880. Display at 960 (an exact third) and keep 2880 inside.
-   Nested tuplets show the nearest tick.
-4. **MP3 export.** This needs an encoder. LAME is LGPL; it would ship
-   like FFmpeg, as a separate library, and is recorded as a licence gate
-   in `01-decisions-and-license-gates.md`. FLAC and WAV need nothing new.
-5. **Producer edit modes (Shuffle, Slip, Spot, Grid)** are
-   Pro Tools-specific behaviour. Implementing behaviour is fine; the look
-   must stay our own (the spec says the same of the Avid screenshot).
-6. **Workspaces.** The spec has two views; the app has Composer and
-   Sequencer plus a separate console window. Sequencer becomes Producer
-   view, and the console moves into the Mixer deck and channel strip.
-   It can stay available as a full window too.
+1. **One app, two views of the same data.** Composer and Producer are
+   two tabs (two buttons) at the top of one window, over one project. The
+   notation is the source; it renders to MIDI; Producer shows that MIDI.
+   Switching keeps the playhead, selection, zoom and scroll. Shortcut:
+   Ctrl+Tab on both platforms, plus Cmd+` on macOS, because macOS keeps
+   Cmd+Tab for switching apps.
+2. **Every instrument track carries its own audio.** In Producer view an
+   instrument track has its MIDI lane and, under it in the same track, an
+   audio lane. "Print to audio" records the track's instrument output onto
+   that lane. It is not a separate Audio track. The track then plays
+   MIDI, its printed audio, or both, and is mixed as one channel.
+   - The model already allows this: any track version can hold audio
+     clips, and the engine plays them.
+   - What is new is the choice of source, the print path, and showing
+     both lanes.
+   - Plain Audio tracks (live recordings) and Aux tracks stay as they are.
+3. **Note-value keys follow Finale and Sibelius**, which agree:
+   - 1 is a 64th, 2 a 32nd, 3 a 16th, 4 an eighth, 5 a quarter, 6 a half,
+     7 a whole and 8 a breve;
+   - `.` is a dot and 0 is a rest;
+   - this is the spec's own layout (7 whole … 2 32nd), extended to 1
+     and 8;
+   - the app's current reversed layout becomes a selectable profile.
+4. **Ticks.** Editing and every display count 960 per quarter. The engine
+   keeps 2880 inside, an exact factor of three. Musical time stays
+   separate from the audio sample clock: they meet only through the tempo
+   map, and audio stays placed in seconds.
+5. **Licensing: free formats only for now.**
+   - WAV for prints, bounces and the master.
+   - FLAC is free (BSD-licensed and already inside JUCE), so it is
+     allowed.
+   - MP3 master export is wanted eventually but not now. It needs an
+     encoder (LAME, LGPL), to be decided when the time comes.
 
-## Proposed build order
+## Build order (revised)
 
-This follows the spec's own order. Each step is compared side by side
-with the mockups at 1680 × 1240, using the same headless screenshots as
-the rest of the app.
-
-1. Theme tokens and base components: panel, keycap, LED, LCD, small knob,
-   ring knob, meters, fader, wheel. Embed the fonts.
-2. Shell layout: top deck, toolbar, left rack, edit window frame,
-   inspector, keyboard deck, status strip. Include the Composer | Producer
-   switch and the stage bar, wrapping under 1280 px.
-3. Composer view lanes:
-   - spec geometry;
-   - phrase blocks (with their data model);
-   - four-row ruler and overview;
-   - sticky headers and clef zone;
-   - selection in `--led`.
-4. Keyboard deck: 88 keys, zoom, lit keys, step input.
-5. Interactions: one store for selection and inspector, and the shortcut
-   table.
-6. Producer view:
-   - track types and the New track panel;
-   - expandable lanes with the inline piano roll;
-   - waveforms and automation;
-   - channel strip;
-   - Mixer deck.
-7. Print score to audio onto new Audio tracks (offline first, then real
-   time).
-8. Master panel: LUFS and true peak, master chain, Export master (WAV and
-   FLAC first; MP3 after the licence decision).
+1. **Theme and base controls.** Tokens with runtime LED, LCD and Dark or
+   Paper staff colours; the embedded fonts; and the controls: panel,
+   keycap, LED, LCD, small knob, ring knob, meters, fader, wheel.
+2. **The window shell with the two tabs.** Composer | Producer on the
+   nameplate.
+   - Top deck: transport, counters in 960-tick bars|beats|ticks,
+     Tempo/Meter/Key LCDs, master meters.
+   - Toolbar frame, left rack, edit window frame, right panel, bottom
+     deck, status strip, stage bar.
+   - Both tabs show the existing views inside the new shell first, so the
+     app works at every step.
+   - Switching keeps the playhead, selection, zoom and scroll.
+3. **Shared selection and shortcuts.** One selection drives the counters,
+   the inspector, the lit keys and both views. Add the shortcut table,
+   with the Finale/Sibelius note values as the default profile.
+4. **Composer view lanes to the spec:**
+   - staff geometry;
+   - sticky track headers and clef zone;
+   - four-row ruler (bars, markers, chords, tempo) and the overview
+     strip;
+   - phrase blocks, with their data model;
+   - selection in the LED colour;
+   - the inspector (articulation, dynamics, Velocity and Humanize knobs on
+     performance overrides, voice, transpose).
+5. **The keyboard deck.** 88 keys, key zoom from 1× to 3× keeping the
+   anchor centred, lit keys, step input, octave shift, pitch and mod
+   wheels.
+6. **Producer view tracks.**
+   - One row per track: the instrument track's MIDI lane plus its own
+     audio lane, plain Audio tracks and Aux tracks.
+   - Expand and collapse, with the piano roll and velocity lane inline,
+     and drag-to-resize.
+   - Waveforms, automation lanes, the New track panel and the Clips list.
+   - The choice of MIDI, audio or both per track.
+7. **Print to audio**, onto the track's own audio lane:
+   - per track or for several at once;
+   - offline first, then real time;
+   - selection or song, with or without effects;
+   - 48 kHz / 24-bit WAV;
+   - a progress LCD;
+   - the instrument switched to its printed audio when done.
+8. **Mix:** the channel strip in the right panel and the Mixer deck at the
+   bottom, both on the existing console engine and its automation.
+9. **Master:** live integrated LUFS and true peak, the master chain slots,
+   a loudness target, and Export master to WAV and FLAC. MP3 waits for
+   the encoder decision.
