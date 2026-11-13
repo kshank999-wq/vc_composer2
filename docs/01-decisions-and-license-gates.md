@@ -65,6 +65,7 @@ Approved by the product owner and done. See `02-original-vc-composer-reuse-audit
 | Core Audio / AudioUnit | macOS audio, optional AU hosting | Apple SDK terms | AU hosting optional (Main Spec §3) |
 | VST2 | Legacy plug-in hosting | Steinberg no longer licenses VST2 to new developers. **Verify** | Conditional; do not promise (Main Spec §3, §21) |
 | Bravura (SMuFL) | Music font | SIL Open Font License; already embedded in the original VC Composer | Bundling OK with OFL notice |
+| Barlow Condensed, Share Tech Mono, Inter | Interface fonts (silk-screen labels, LCDs, UI text) | SIL Open Font License 1.1; notices in `resources/fonts/*/OFL.txt` | Bundling OK with OFL notice |
 | FFmpeg (libavformat, libavcodec, libswscale, libavutil) | Picture decoding (D16) | LGPL 2.1+ **only when built without `--enable-gpl` / `--enable-nonfree`**. Distribution builds must link an LGPL-configured FFmpeg dynamically and ship its source offer. Ubuntu's packages are GPL-configured, so they are fine for development and CI but **not for shipping**. Codec patents (H.264/HEVC) also need checking. **Verify** | Before any public build with picture |
 | Time-stretch | Warp/stretch | Rubber Band (GPL/commercial), Signalsmith Stretch (MIT). **Verify** | Before Main Phase 3 warp |
 | MusicXML | Notation interchange | W3C Community Group specification | Implement natively |

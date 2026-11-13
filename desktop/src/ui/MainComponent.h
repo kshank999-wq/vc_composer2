@@ -31,6 +31,10 @@ public:
     void open_file(const juce::File& file);
     bool save(bool save_as);
     void show_mixer();
+    /// Every hardware control of the UI spec, in the current theme.
+    void show_control_gallery();
+    juce::PopupMenu theme_menu();
+    juce::DocumentWindow* control_gallery() noexcept { return gallery_window_.get(); }
     void import_musicxml();
     void export_musicxml();
     void export_parts_pdf_dialog();
@@ -96,6 +100,7 @@ private:
     std::map<std::string, std::unique_ptr<PluginWindow>> plugin_windows_;
     std::map<std::string, std::unique_ptr<BuiltinInsertWindow>> builtin_windows_;
     std::unique_ptr<juce::FileChooser> chooser_;
+    std::unique_ptr<juce::DocumentWindow> gallery_window_;
     int ticks_ = 0;
     int status_age_ = 0;
     bool punch_ = false;

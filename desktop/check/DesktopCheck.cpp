@@ -21,6 +21,7 @@
 #include "vcc/project/Stems.h"
 #include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
+#include "ui/hw/HwGallery.h"
 #include "ui/VideoWindow.h"
 #include "vcc/media/VideoDecoder.h"
 #include "vcc/project/Automation.h"
@@ -1344,6 +1345,144 @@ void performance_checks(AppContext& ctx, MainComponent& main, const std::string&
     session.undo();
 }
 
+/// Pixels of `image` within `tolerance` (per channel) of `colour`.
+int pixels_near(const juce::Image& image, juce::Colour colour, int tolerance = 18)
+{
+    int n = 0;
+    const juce::Image::BitmapData data(image, juce::Image::BitmapData::readOnly);
+    for (int y = 0; y < image.getHeight(); ++y)
+        for (int x = 0; x < image.getWidth(); ++x) {
+            const auto c = data.getPixelColour(x, y);
+            if (std::abs(c.getRed() - colour.getRed()) <= tolerance &&
+                std::abs(c.getGreen() - colour.getGreen()) <= tolerance &&
+                std::abs(c.getBlue() - colour.getBlue()) <= tolerance)
+                ++n;
+        }
+    return n;
+}
+
+/// UI spec step 1 (docs/spec/ui/SPEC.md): the theme, the fonts and the
+/// hardware controls, in the Control Gallery.
+void hardware_control_checks(MainComponent& main, const juce::File& dir)
+{
+    auto& theme = hw::Theme::get();
+    check(hw::fonts::loaded(), "Barlow Condensed, Share Tech Mono and Inter are embedded and load");
+    main.show_control_gallery();
+    pump(300);
+    auto* window = main.control_gallery();
+    auto* gallery = window ? dynamic_cast<hw::Gallery*>(window->getContentComponent()) : nullptr;
+    check(gallery != nullptr, "View > Control Gallery opens");
+    if (!gallery) return;
+    shoot(*gallery, dir, "20-controls-amber-cyan");
+    const auto before = gallery->createComponentSnapshot(gallery->getLocalBounds());
+
+    // Theme: switched live, everything repaints, remembered.
+    theme.set_led(hw::Theme::led_choices()[1].colour);  // red
+    theme.set_lcd(hw::Theme::lcd_choices()[1].colour);  // green
+    pump(150);
+    shoot(*gallery, dir, "21-controls-red-green");
+    const auto after = gallery->createComponentSnapshot(gallery->getLocalBounds());
+    const int amber_before = pixels_near(before, juce::Colour(0xffffb547));
+    const int amber_after = pixels_near(after, juce::Colour(0xffffb547));
+    const int red_after = pixels_near(after, juce::Colour(0xffff5a4e));
+    const int green_after = pixels_near(after, juce::Colour(0xff9bf07a));
+    check(amber_before > 200 && amber_after < amber_before / 4 && red_after > 200 && green_after > 200,
+          "LED and LCD colours change everywhere at once (amber " + juce::String(amber_before) + " -> " +
+              juce::String(amber_after) + " px; red " + juce::String(red_after) + ", green " + juce::String(green_after) +
+              ")");
+    int lit_theme_keys = 0;
+    for (auto* c : gallery->getChildren())
+        if (auto* k = dynamic_cast<hw::Keycap*>(c);
+            k && k->getToggleState() && (k->getButtonText() == "Red" || k->getButtonText() == "Green"))
+            ++lit_theme_keys;
+    check(lit_theme_keys == 2, "the gallery's theme keys follow a change made elsewhere");
+    auto& settings = hw::ui_settings();
+    check(juce::Colour::fromString(settings.getValue("led_colour")) == hw::Theme::led_choices()[1].colour &&
+              juce::Colour::fromString(settings.getValue("lcd_colour")) == hw::Theme::lcd_choices()[1].colour,
+          "the theme is remembered in the settings");
+    theme.set_paper(true);
+    check(theme.staff_paper() == juce::Colour(0xfff1ece1) && theme.ink() == juce::Colour(0xff1b1a18),
+          "paper staves switch the staff colours");
+    theme.set_paper(false);
+    theme.set_led(hw::Theme::led_choices()[0].colour);
+    theme.set_lcd(hw::Theme::lcd_choices()[0].colour);
+
+    // Keycaps: real buttons; a radio group lights exactly one.
+    auto& step = gallery->step_key();
+    check(step.getToggleState() && step.getTitle() == "Step", "a keycap is a button with an accessible name");
+    if (auto* parent = step.getParentComponent())
+        for (auto* c : parent->getChildren())
+            if (auto* k = dynamic_cast<hw::Keycap*>(c); k && k->getButtonText() == "Insert") {
+                k->triggerClick();
+                pump(50);
+                check(k->getToggleState() && !step.getToggleState(), "entry-mode keys light exactly one");
+                step.triggerClick();
+                pump(50);
+                break;
+            }
+
+    // Ring knob: 15 LEDs over the range; drag up to raise, Shift for fine.
+    auto& vel = gallery->velocity();
+    vel.setValue(127.0, juce::sendNotificationSync);
+    const int full = vel.lit_leds();
+    vel.setValue(0.0, juce::sendNotificationSync);
+    check(full == 15 && vel.lit_leds() == 0, "the ring knob lights 15 LEDs at the top, none at the bottom");
+    auto drag = [&](juce::Component& c, float dy, bool shift) {
+        const auto mods = juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier |
+                                             (shift ? juce::ModifierKeys::shiftModifier : 0));
+        const juce::Point<float> p(40.0f, 40.0f);
+        auto ev = [&](juce::Point<float> at) {
+            const auto now = juce::Time::getCurrentTime();
+            return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at, mods,
+                                    juce::MouseInputSource::defaultPressure, 0.0f, 0.0f, 0.0f, 0.0f, &c, &c, now, p,
+                                    now, 1, true);
+        };
+        c.mouseDown(ev(p));
+        c.mouseDrag(ev(p + juce::Point<float>(0.0f, dy)));
+        c.mouseUp(ev(p + juce::Point<float>(0.0f, dy)));
+    };
+    drag(vel, -40.0f, false);
+    const double coarse = vel.getValue();
+    vel.setValue(0.0, juce::sendNotificationSync);
+    drag(vel, -40.0f, true);
+    const double fine = vel.getValue();
+    check(coarse > 20.0 && fine > 0.0 && fine < coarse / 3.0,
+          "dragging a knob up raises it, five times finer with Shift (" + juce::String(coarse, 1) + " vs " +
+              juce::String(fine, 1) + ")");
+
+    // Meters: fall 20 dB a second, hold the peak 1.5 s.
+    auto& m = gallery->master_left();
+    m.push(0.0f);
+    const int top = m.lit_segments();
+    m.advance(1.0f);
+    const int after_1s = m.lit_segments();
+    const int held = m.peak_segment();
+    m.advance(1.0f);
+    const float peak_db = m.ballistics().peak;
+    check(top == 30 && after_1s == 20 && held == 30 && std::abs(peak_db - (-10.0f)) < 0.01f,
+          "meters fall 20 dB a second and hold the peak for 1.5 s (" + juce::String(top) + " -> " +
+              juce::String(after_1s) + " segments, peak " + juce::String(peak_db, 1) + " dB after 2 s)");
+
+    // Fader law, and the pitch wheel springing back.
+    auto& f = gallery->fader();
+    f.set_db(0.0);
+    const bool unity = std::abs(f.db()) < 1e-9;
+    f.set_db(-std::numeric_limits<double>::infinity());
+    check(unity && f.getValue() == 0.0 && hw::Fader::proportion_for(6.0) == 1.0,
+          "the fader reads +6 at the top, 0 dB at its mark and off at the bottom");
+    f.set_db(-4.5);
+    auto& wheel = gallery->pitch_wheel();
+    wheel.setValue(0.8, juce::sendNotificationSync);
+    const auto at = juce::Point<float>(10.0f, 10.0f);
+    const auto now = juce::Time::getCurrentTime();
+    wheel.mouseUp(juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys(),
+                                   juce::MouseInputSource::defaultPressure, 0.0f, 0.0f, 0.0f, 0.0f, &wheel, &wheel, now,
+                                   at, now, 1, false));
+    check(wheel.getValue() == 0.0, "the pitch wheel springs back to centre when let go");
+    shoot(*gallery, dir, "22-controls-after-use");
+    window->setVisible(false);
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -2157,6 +2296,7 @@ int main(int argc, char** argv)
         ipc_wait_checks(dir);
         hosting_checks(ctx, dir);
         insert_window_checks(ctx, dir);
+        hardware_control_checks(window.main(), dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

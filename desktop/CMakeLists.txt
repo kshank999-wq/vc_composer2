@@ -46,6 +46,17 @@ juce_add_binary_data(vcc_music_font_data
     NAMESPACE vcc_music_font_data
     SOURCES "${vcc_font_dir}/Bravura.otf" "${vcc_font_dir}/bravura_metadata.json")
 
+# The interface fonts (all SIL OFL): silk-screen labels, LCD readouts, UI text.
+set(vcc_ui_fonts "${PROJECT_SOURCE_DIR}/resources/fonts")
+juce_add_binary_data(vcc_ui_font_data
+    HEADER_NAME "VccUiFontData.h"
+    NAMESPACE vcc_ui_font_data
+    SOURCES "${vcc_ui_fonts}/BarlowCondensed/BarlowCondensed-SemiBold.ttf"
+            "${vcc_ui_fonts}/BarlowCondensed/BarlowCondensed-Bold.ttf"
+            "${vcc_ui_fonts}/ShareTechMono/ShareTechMono-Regular.ttf"
+            "${vcc_ui_fonts}/Inter/Inter-Regular.ttf"
+            "${vcc_ui_fonts}/Inter/Inter-SemiBold.ttf")
+
 # One target per content folder: file names repeat between folders
 # (instruments/historical.json, templates/historical.json).
 file(GLOB vcc_content_root CONFIGURE_DEPENDS "${VCC_CONTENT_DIR}/*.json")
@@ -57,7 +68,7 @@ juce_add_binary_data(vcc_content_instruments_data HEADER_NAME "VccContentInstrum
     NAMESPACE vcc_content_instruments SOURCES ${vcc_content_instruments})
 juce_add_binary_data(vcc_content_templates_data HEADER_NAME "VccContentTemplates.h"
     NAMESPACE vcc_content_templates SOURCES ${vcc_content_templates})
-foreach(t vcc_music_font_data vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data)
+foreach(t vcc_music_font_data vcc_ui_font_data vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data)
     set_target_properties(${t} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endforeach()
 
@@ -85,7 +96,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 target_link_libraries(vcc_desktop
     PUBLIC vcc_ui_notation vcc_session vcc_media vcc_picture vcc_cues vcc_templates vcc_project vcc_theory vcc_ostinato vcc_engine vcc_audio vcc_juce
-    PRIVATE vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data)
+    PRIVATE vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_ui_font_data)
 
 juce_add_gui_app(VCComposer2
     PRODUCT_NAME "VC Composer 2"

@@ -1,5 +1,8 @@
 #include "ui/MainComponent.h"
 
+#include "ui/hw/HwGallery.h"
+#include "ui/hw/HwTheme.h"
+
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include "ui/CueManager.h"
@@ -199,6 +202,8 @@ private:
 MainComponent::MainComponent(AppContext& context)
     : context_(context), transport_(context), tracks_(context), composer_(context), sequencer_(context)
 {
+    // The UI theme (LED, LCD, staves) the user chose last time.
+    hw::Theme::get().attach(&hw::ui_settings());
     addAndMakeVisible(transport_);
     addAndMakeVisible(tracks_);
     addAndMakeVisible(composer_);
@@ -590,6 +595,45 @@ void MainComponent::save_as_template()
         files::write_file_atomic(folder.getChildFile(slug + ".json").getFullPathName().toStdString(), json::write(pack));
         context_.status("Saved template \"" + name + "\" - it is in the template browser under Custom");
     }), true);
+}
+
+juce::PopupMenu MainComponent::theme_menu()
+{
+    // The spec's themeable colours (docs/spec/ui/SPEC.md): live, remembered.
+    auto& theme = hw::Theme::get();
+    juce::PopupMenu m;
+    m.addSectionHeader("LED colour");
+    for (const auto& c : hw::Theme::led_choices())
+        m.addItem(juce::String(c.name) + " LEDs", true, theme.led() == c.colour,
+                  [colour = c.colour] { hw::Theme::get().set_led(colour); });
+    m.addSectionHeader("LCD colour");
+    for (const auto& c : hw::Theme::lcd_choices())
+        m.addItem(juce::String(c.name) + " LCDs", true, theme.lcd() == c.colour,
+                  [colour = c.colour] { hw::Theme::get().set_lcd(colour); });
+    m.addSectionHeader("Staves");
+    m.addItem("Dark staves", true, !theme.paper(), [] { hw::Theme::get().set_paper(false); });
+    m.addItem("Paper staves", true, theme.paper(), [] { hw::Theme::get().set_paper(true); });
+    return m;
+}
+
+void MainComponent::show_control_gallery()
+{
+    if (!gallery_window_) {
+        class Window final : public juce::DocumentWindow {
+        public:
+            Window() : juce::DocumentWindow("Control Gallery", hw::tok::chassis, juce::DocumentWindow::closeButton)
+            {
+                setUsingNativeTitleBar(true);
+                setContentOwned(new hw::Gallery(), true);
+                setResizable(false, false);
+            }
+            void closeButtonPressed() override { setVisible(false); }
+        };
+        gallery_window_ = std::make_unique<Window>();
+        gallery_window_->centreWithSize(gallery_window_->getWidth(), gallery_window_->getHeight());
+    }
+    gallery_window_->setVisible(true);
+    gallery_window_->toFront(true);
 }
 
 void MainComponent::show_mixer()
@@ -984,6 +1028,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportFullScorePdf, cmd::exportStems, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
                 cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::addAudioTrack, cmd::importAudio,
                 cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
+                cmd::showControlGallery,
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
@@ -1060,6 +1105,7 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.addDefaultKeypress('2', cmdKey);
             break;
         case cmd::showMixer: info.setInfo("Mixer", "", "View", 0); info.addDefaultKeypress('m', cmdKey); break;
+        case cmd::showControlGallery: info.setInfo("Control Gallery", "", "View", 0); break;
         case cmd::showVideo: info.setInfo("Picture", "", "View", 0); info.addDefaultKeypress('3', cmdKey); break;
         case cmd::showCueManager: info.setInfo("Cue Manager", "", "View", 0); info.addDefaultKeypress('4', cmdKey); break;
         case cmd::importPicture: info.setInfo("Import Picture...", "", "File", 0); info.addDefaultKeypress('i', cmdKey | shift); break;
@@ -1130,6 +1176,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showComposer: show_workspace(Workspace::Composer); break;
         case cmd::showSequencer: show_workspace(Workspace::Sequencer); break;
         case cmd::showMixer: show_mixer(); break;
+        case cmd::showControlGallery: show_control_gallery(); break;
         case cmd::showVideo: show_video_window(context_); break;
         case cmd::showCueManager: show_cue_manager(context_); break;
         case cmd::importPicture:
@@ -1208,6 +1255,9 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         case 2:
             for (auto id : {cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo, cmd::showCueManager})
                 m.addCommandItem(c, id);
+            m.addSeparator();
+            m.addSubMenu("Theme", theme_menu());
+            m.addCommandItem(c, cmd::showControlGallery);
             break;
         case 3:
             for (auto id : {cmd::play, cmd::rewind}) m.addCommandItem(c, id);

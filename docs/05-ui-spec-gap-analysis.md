@@ -143,7 +143,20 @@ and the document model. The work is mostly presentation.
 
 ## Build order (revised)
 
-1. **Theme and base controls.** Tokens with runtime LED, LCD and Dark or
+1. **Theme and base controls.** *Done (November 2026).* `desktop/src/ui/hw/`:
+   - `HwTheme` holds the tokens and the runtime theme. LED, LCD and Dark
+     or Paper staves are switched from View › Theme, repaint every window
+     at once, and are remembered.
+   - The three fonts are embedded.
+   - `HwControls` has the panel, keycap (toggle, LED dot, glyphs, solid
+     R/S/M), LED, LCD, small knob, ring knob (15 LEDs), meters (20 dB/s
+     fall, 1.5 s peak hold), fader (+6 … −∞) and the pitch and mod
+     wheels.
+   - View › Control Gallery lays them out like the mockup's top deck and
+     toolbar. The headless check photographs it in two themes and tests
+     each control's behaviour.
+
+   The original step 1 description: Tokens with runtime LED, LCD and Dark or
    Paper staff colours; the embedded fonts; and the controls: panel,
    keycap, LED, LCD, small knob, ring knob, meters, fader, wheel.
 2. **The window shell with the two tabs.** Composer | Producer on the
