@@ -912,6 +912,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
 {
     sync_processors();
     const auto& d = session_.data();
+    const bool pdc_on = d.delay_compensation;
     const MixPlan plan = make_plan(d, played_tracks(session_, export_mode_), render_override_ ? &*render_override_ : nullptr);
     auto snap = std::make_unique<PlaybackSnapshot>();
     std::map<std::string, std::shared_ptr<ClipStream>> live_streams;
@@ -1046,7 +1047,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
     }
     const int master = plan.master;
     const int total = master >= 0 && master < static_cast<int>(nb) ? bus_out[static_cast<std::size_t>(master)] : 0;
-    compensation_ = pdc_ ? total : 0;
+    compensation_ = pdc_on ? total : 0;
     snap->comp = compensation_;
     std::set<std::string> live_lines;
     auto line_for = [&](const std::string& key, int delay) -> std::shared_ptr<DelayLine> {
@@ -1058,7 +1059,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
     };
     auto set_edges = [&](PlaybackSnapshot::Strip& st, const std::string& id, int out_latency) {
         auto edge = [&](int dest) {
-            if (!pdc_ || dest < 0 || dest >= static_cast<int>(nb)) return 0;
+            if (!pdc_on || dest < 0 || dest >= static_cast<int>(nb)) return 0;
             return bus_in[static_cast<std::size_t>(dest)] - out_latency;
         };
         st.out_delay = edge(st.output);
@@ -1175,7 +1176,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
     for (std::size_t b = 0; b < nb; ++b) {
         const project::Bus* bus = plan.buses[b];
         if (!bus) continue;
-        const int pre = pdc_ ? bus_in[b] : 0;
+        const int pre = pdc_on ? bus_in[b] : 0;
         automate(snap->buses[b].strip, plan.bus_ids[b], bus->automation_mode, bus->automation, bus->sends, bus->inserts,
                  nullptr, pre, pre + bus_own[b]);
     }
@@ -2238,12 +2239,12 @@ std::vector<int> PlaybackEngine::current_latencies() const
 
 void PlaybackEngine::set_delay_compensation(bool on)
 {
-    if (pdc_ == on) return;
-    pdc_ = on;
-    rebuild_now();
+    // The switch belongs to the project (saved, undoable); the engine
+    // follows it on its next rebuild, which the edit triggers.
+    if (session_.set_delay_compensation(on)) rebuild_now();
 }
 
-bool PlaybackEngine::delay_compensation() const noexcept { return pdc_; }
+bool PlaybackEngine::delay_compensation() const noexcept { return session_.data().delay_compensation; }
 
 int PlaybackEngine::latency_samples(const std::string& strip_id) const
 {

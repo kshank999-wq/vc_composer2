@@ -127,6 +127,9 @@ public:
     bool set_tempo(double bpm);
     bool set_meter(const TimeSignature& signature);
     bool set_key(const std::string& key);
+    /// Plug-in delay compensation on or off, saved with the project. One
+    /// undo step; false when it is already so.
+    bool set_delay_compensation(bool on);
 
     /// Replaces the active version's score with an edited copy (the Composer
     /// view edits a working copy and commits each change here).

@@ -735,6 +735,7 @@ json::Value Project::to_json() const
     root.set("frame_rate", to_string(d.frame_rate));
     root.set("start_timecode", d.start_timecode);
     root.set("sample_rate", d.sample_rate);
+    root.set("delay_compensation", d.delay_compensation);
 
     json::Array tracks;
     for (const auto& t : d.tracks) {
@@ -931,6 +932,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
     ProjectData d;
     d.name = doc.get_string("name", "Untitled");
     d.key = doc.get_string("key", "C major");
+    d.delay_compensation = doc.get_bool("delay_compensation", true);
     bool first = true;
     for (const auto& m : doc.get("meter") ? doc.get("meter")->as_array() : json::Array{}) {
         auto sig = TimeSignature::parse(m.get_string("signature"));

@@ -436,6 +436,10 @@ struct ProjectData {
     FrameRate frame_rate = FrameRate::Fps24;
     std::string start_timecode = "01:00:00:00";
     int sample_rate = 48000;
+    /// Plug-in delay compensation (Main Spec §12): every strip lined up
+    /// with the slowest path. Saved with the project, so a mix sounds the
+    /// same when it is reopened. Older files, which did not say, have it on.
+    bool delay_compensation = true;
     std::vector<Track> tracks;
     std::vector<Bus> buses;
     Production production;

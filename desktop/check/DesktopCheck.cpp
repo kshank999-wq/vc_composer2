@@ -885,6 +885,22 @@ void delay_compensation_checks(AppContext& ctx, const juce::File& dir, const std
         check(l - r == 1000 && engine.compensation_samples() == 0,
               "PDC off: misaligned by the plug-in's latency (wet " + juce::String(l) + ", dry " + juce::String(r) + ")");
     }
+    // The switch belongs to the project: saved with it, and undoable.
+    check(!session.data().delay_compensation && session.undo_label() == "Delay compensation off",
+          "turning PDC off is a change to the project, with its own undo step");
+    {
+        std::string err;
+        const auto path = dir.getChildFile("pdc-off.vcc2").getFullPathName().toStdString();
+        session.save_as(path, &err);
+        session.set_delay_compensation(true);
+        check(session.open(path, &err) && !session.data().delay_compensation, "a project saved with PDC off reopens with it off");
+        engine.rebuild_now();  // as the engine's timer would after the document changed
+        check(!engine.delay_compensation() && engine.compensation_samples() == 0, "the engine follows the reopened project");
+        session.set_delay_compensation(true);
+        session.undo();
+        engine.rebuild_now();
+        check(!engine.delay_compensation(), "undo turns PDC back off, and the engine follows");
+    }
     engine.set_delay_compensation(true);
 
     // The plug-in changes its latency while running: detected, re-aligned.

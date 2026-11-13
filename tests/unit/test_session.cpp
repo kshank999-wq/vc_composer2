@@ -301,3 +301,34 @@ TEST_CASE("recorded clips land on the playlist as takes, one undo step per pass"
     CHECK_EQ(s.data().find_track(a)->active_version()->audio_clips.size(), 1u);
     CHECK_EQ(s.data().find_track(a)->active_version()->audio_clips[0].lane, 0);
 }
+
+TEST_CASE("the delay-compensation switch is saved with the project and undoable")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    CHECK(s.data().delay_compensation);  // on for a new project
+    CHECK(!s.set_delay_compensation(true));  // already on: no undo step
+    REQUIRE(s.set_delay_compensation(false));
+    CHECK(!s.data().delay_compensation);
+    CHECK_EQ(s.undo_label(), std::string("Delay compensation off"));
+    CHECK(s.dirty());
+    REQUIRE(s.undo());
+    CHECK(s.data().delay_compensation);
+    REQUIRE(s.redo());
+
+    const auto path = tmp("pdc-off.vcc2.json");
+    std::string err;
+    REQUIRE(s.save_as(path, &err));
+    session::Session r(catalogs());
+    REQUIRE(r.open(path, &err));
+    CHECK(!r.data().delay_compensation);
+
+    // A file from before the switch was saved has it on.
+    auto doc = json::parse(*files::read_file(path));
+    REQUIRE(doc);
+    REQUIRE(doc->remove("delay_compensation"));
+    REQUIRE(files::write_file_atomic(path, json::write(*doc)));
+    session::Session old(catalogs());
+    REQUIRE(old.open(path, &err));
+    CHECK(old.data().delay_compensation);
+}

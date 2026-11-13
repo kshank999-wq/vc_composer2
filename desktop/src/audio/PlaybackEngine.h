@@ -387,7 +387,6 @@ private:
     std::map<std::string, std::shared_ptr<DelayLine>> delay_lines_;
     std::map<std::string, int> strip_latency_;
     int compensation_ = 0;
-    bool pdc_ = true;
     std::vector<int> latencies_seen_;
     // What is heard: the render position minus the compensation (audio thread writes).
     std::atomic<std::int64_t> heard_samples_{0};

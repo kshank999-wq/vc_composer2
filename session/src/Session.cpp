@@ -486,6 +486,15 @@ bool Session::set_meter(const TimeSignature& sig)
     });
 }
 
+bool Session::set_delay_compensation(bool on)
+{
+    return edit(on ? "Delay compensation on" : "Delay compensation off", [&](project::ProjectData& d) {
+        if (d.delay_compensation == on) return false;
+        d.delay_compensation = on;
+        return true;
+    });
+}
+
 bool Session::set_key(const std::string& key)
 {
     if (!theory::Key::parse(key)) return false;
