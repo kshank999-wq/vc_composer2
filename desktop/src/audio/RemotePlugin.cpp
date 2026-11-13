@@ -379,14 +379,14 @@ void RemotePluginInstance::run_block(juce::AudioBuffer<float>& buffer, juce::Mid
     auto wait_done = [&]() {
         if (!offline) {
             const double budget = 1000.0 * n / std::max(1.0, sample_rate_);
-            return ipc::wait_for_change(sh->done, sent_ - 1, budget) || sh->done.load() == sent_;
+            return shared_.wait(ipc::Word::done, sent_ - 1, budget) || sh->done.load() == sent_;
         }
         // Offline: as long as it takes, unless the process dies (or stops
         // answering for a long time, then it is treated as crashed).
         const auto start = juce::Time::getMillisecondCounter();
         while (sh->done.load(std::memory_order_acquire) != sent_) {
             if (crashed()) return false;
-            ipc::wait_for_change(sh->done, sent_ - 1, 100.0);
+            shared_.wait(ipc::Word::done, sent_ - 1, 100.0);
             if (juce::Time::getMillisecondCounter() - start > 60000) {
                 process_->mark_crashed();  // hung: treated as crashed (with its process)
                 return false;
@@ -421,7 +421,7 @@ void RemotePluginInstance::run_block(juce::AudioBuffer<float>& buffer, juce::Mid
     sh->num_samples.store(n, std::memory_order_relaxed);
     sh->bypassed.store(bypassed ? 1 : 0, std::memory_order_relaxed);
     sh->request.store(++sent_, std::memory_order_release);
-    ipc::wake(sh->request);
+    shared_.wake(ipc::Word::request);
 
     if (!wait_done()) {
         late_.fetch_add(1);

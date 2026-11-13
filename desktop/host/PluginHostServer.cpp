@@ -98,7 +98,7 @@ void Instance::run()
     auto& sh = *shared_.get();
     std::uint32_t seen = sh.request.load(std::memory_order_acquire);
     while (!threadShouldExit()) {
-        if (!vcc::ipc::wait_for_change(sh.request, seen, 100.0)) {
+        if (!shared_.wait(vcc::ipc::Word::request, seen, 100.0)) {
 #if JUCE_LINUX || JUCE_MAC
             // The app is gone (killed, or crashed hard): leave at once
             // rather than wait for the connection's ping timeout.
@@ -109,7 +109,7 @@ void Instance::run()
         seen = sh.request.load(std::memory_order_acquire);
         process_block();
         sh.done.store(seen, std::memory_order_release);
-        vcc::ipc::wake(sh.done);
+        shared_.wake(vcc::ipc::Word::done);
     }
 }
 

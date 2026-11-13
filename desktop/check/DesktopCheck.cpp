@@ -15,6 +15,7 @@
 #include "ui/CueManager.h"
 #include "ui/ScoreExchange.h"
 #include "audio/StemRenderer.h"
+#include "audio/PluginIpc.h"
 #include "audio/RemotePlugin.h"
 #include "ui/StemExport.h"
 #include "vcc/project/Stems.h"
@@ -983,6 +984,57 @@ void delay_compensation_checks(AppContext& ctx, const juce::File& dir, const std
     }
 }
 
+/// The kernel wait the plug-in IPC uses (futex / os_sync / ulock / named
+/// events): one block mapped twice, as two processes map it. A waiter
+/// blocks on the shared word; another thread changes it 5 ms later and
+/// wakes it. A wake that does not work shows as the waiter only noticing at
+/// its 100 ms timeout.
+void ipc_wait_checks(const juce::File& dir)
+{
+    const auto file = dir.getChildFile("ipc-wait-check.shm");
+    ipc::SharedBlock host, plugin;
+    const bool opened = host.open(file, true) && plugin.open(file, false);
+    check(opened, juce::String("the shared block opens from both sides (wait: ") + ipc::wait_mechanism() + ")");
+    if (!opened) return;
+    std::vector<double> wake_ms;
+    for (int round = 0; round < 20; ++round) {
+        const std::uint32_t seen = host.get()->request.load();
+        std::atomic<bool> ready{false};
+        double waited = -1.0;
+        std::thread waiter([&] {
+            ready = true;
+            const auto t0 = std::chrono::steady_clock::now();
+            plugin.wait(ipc::Word::request, seen, 1000.0);
+            waited = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        });
+        while (!ready) std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));  // the waiter is now blocked in the kernel
+        host.get()->request.store(seen + 1, std::memory_order_release);
+        host.wake(ipc::Word::request);
+        waiter.join();
+        wake_ms.push_back(waited - 5.0);
+    }
+    std::sort(wake_ms.begin(), wake_ms.end());
+    const double median = wake_ms[wake_ms.size() / 2], worst = wake_ms.back();
+    check(median < 2.0 && worst < 20.0,
+          juce::String("a blocked waiter wakes as soon as the other side signals (") + ipc::wait_mechanism() +
+              ": median " + juce::String(std::max(0.0, median), 3) + " ms after the 5 ms, worst " +
+              juce::String(std::max(0.0, worst), 3) + " ms)");
+    // And the other way, as the plug-in side signals a finished block.
+    const std::uint32_t done = plugin.get()->done.load();
+    std::thread signaller([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        plugin.get()->done.store(done + 1, std::memory_order_release);
+        plugin.wake(ipc::Word::done);
+    });
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool changed = host.wait(ipc::Word::done, done, 1000.0);
+    const double back = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    signaller.join();
+    check(changed && back < 25.0, "the finished-block signal wakes the host side too (" + juce::String(back, 2) + " ms)");
+    file.deleteFile();
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -1210,6 +1262,13 @@ int main(int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI gui;
     const juce::File dir(argc > 1 ? juce::String(argv[1]) : juce::File::getCurrentWorkingDirectory().getChildFile("screenshots").getFullPathName());
     dir.createDirectory();
+    // `vcc_desktop_check <dir> --ipc-only`: just the plug-in IPC wait check
+    // (fast; for checking the kernel wait on a new platform or machine).
+    if (argc > 2 && juce::String(argv[2]) == "--ipc-only") {
+        ipc_wait_checks(dir);
+        std::printf("%s: %d failure(s)\n", failures == 0 ? "PASSED" : "FAILED", failures);
+        return failures == 0 ? 0 : 1;
+    }
     // The plug-in list and scan failures go to a throwaway settings folder,
     // never the user's own.
     const auto settings = dir.getChildFile("settings");
@@ -1785,6 +1844,7 @@ int main(int argc, char** argv)
         console_and_recording_checks(ctx, dir);
         automation_checks(ctx, dir, plugin_track.empty() ? std::nullopt : std::optional<project::PluginRef>(plugin_ref));
         delay_compensation_checks(ctx, dir, plugin_track.empty() ? std::nullopt : std::optional<project::PluginRef>(plugin_ref));
+        ipc_wait_checks(dir);
         hosting_checks(ctx, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)

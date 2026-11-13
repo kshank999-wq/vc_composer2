@@ -5,9 +5,13 @@
 // shared-memory block holding one audio block, its MIDI, two lock-free
 // parameter rings (host -> plug-in for automation, plug-in -> host for the
 // plug-in's own editor), and a request/done sequence pair the two sides wait
-// on. On Linux the waits are futexes on the shared words, so a round trip
-// costs microseconds; elsewhere they spin briefly and then sleep in short
-// steps.
+// on. The waits block in the kernel until the other side changes the word,
+// so a round trip costs microseconds on every platform:
+//   Linux    futex on the shared word (FUTEX_WAIT/WAKE, not private)
+//   macOS    os_sync_wait_on_address with the SHARED flags (macOS 14.4+),
+//            else the __ulock calls it is built on (10.12+), else polling
+//   Windows  a pair of named auto-reset events per block (WaitOnAddress
+//            works within one process only)
 //
 // Everything here is plain data in a mapped file: no pointers, no
 // constructors that matter (zeroed memory is the initial state).
@@ -83,24 +87,42 @@ struct Shared {
 
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free, "shared-memory atomics must be lock free");
 
-/// Waits until `word` is no longer `seen`, or `timeout_ms` passes (< 0:
-/// forever). Returns true when it changed.
-bool wait_for_change(std::atomic<std::uint32_t>& word, std::uint32_t seen, double timeout_ms) noexcept;
-/// Wakes whoever waits on `word` (after it has been changed).
-void wake(std::atomic<std::uint32_t>& word) noexcept;
+/// The two words the processes wait on.
+enum class Word { request, done };
+
+/// Which kernel wait this build and system use ("futex", "os_sync",
+/// "ulock", "events", "polling"), for the checks and diagnostics.
+const char* wait_mechanism() noexcept;
 
 /// A shared-memory block backed by a file both processes map.
 class SharedBlock {
 public:
+    SharedBlock() = default;
+    ~SharedBlock();
+    SharedBlock(const SharedBlock&) = delete;
+    SharedBlock& operator=(const SharedBlock&) = delete;
+
     /// Creates (host) or opens (plug-in process) the block at `file`.
     bool open(const juce::File& file, bool create);
     Shared* get() const noexcept { return shared_; }
     const juce::File& file() const noexcept { return file_; }
 
+    /// Waits until `word` is no longer `seen`, or `timeout_ms` passes (< 0:
+    /// forever). Returns true when it changed. Real-time safe: no allocation.
+    bool wait(Word word, std::uint32_t seen, double timeout_ms) noexcept;
+    /// Wakes whoever waits on `word` (after it has been changed).
+    void wake(Word word) noexcept;
+
 private:
+    std::atomic<std::uint32_t>& word_ref(Word w) const noexcept
+    {
+        return w == Word::request ? shared_->request : shared_->done;
+    }
+
     juce::File file_;
     std::unique_ptr<juce::MemoryMappedFile> map_;
     Shared* shared_ = nullptr;
+    void* events_[2] = {nullptr, nullptr};  ///< Windows: named auto-reset events (request, done).
 };
 
 /// A message: request id, the instance it is for, command, then the
