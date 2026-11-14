@@ -84,6 +84,13 @@ public:
     shell::MixerDeck& mixer_deck() noexcept { return mixer_deck_; }
     /// The Producer view's bottom deck: the mixer (default) or the keyboard.
     void show_bottom_mixer(bool mixer);
+    /// The mixer full screen (the whole window under the toolbar, faders as
+    /// long as it allows) or compact (the bottom deck). Cmd/Ctrl+M and the
+    /// toolbar's Mixer key toggle it; the deck's own key switches size.
+    void set_mixer_full(bool full, bool compact_after = true);
+    bool mixer_full() const noexcept { return mixer_full_; }
+    /// The console window: every strip's EQ, dynamics, sends and inserts.
+    void show_console_window();
     /// In a short window the Producer column shows Channel (0) or Print (1).
     void show_right_tab(int tab);
     bool right_tabs() const noexcept { return right_tabs_; }
@@ -153,6 +160,8 @@ private:
     shell::KeyboardDeck keyboard_;
     shell::MixerDeck mixer_deck_;
     bool bottom_mixer_ = true;
+    bool mixer_full_ = false;
+    Workspace before_mixer_ = Workspace::Producer;  ///< Where Cmd/Ctrl+M returns to.
     TrackPanel tracks_;
     juce::StretchableLayoutManager layout_;
     std::unique_ptr<juce::StretchableLayoutResizerBar> divider_;

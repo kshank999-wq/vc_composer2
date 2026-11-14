@@ -2276,6 +2276,34 @@ void mix_checks(MainWindow& window, const juce::File& dir)
     pump(80);
     check(deck.isVisible() && main.edit_frame().stage_key(2).getToggleState(), "the Mix stage shows the mixer deck");
 
+    // Full screen: the deck's key; the strips (and their faders) run the window's height.
+    const int compact_h = deck.strip_count() > 0 ? deck.strip(0).getHeight() : 0;
+    deck.full_key().triggerClick();
+    pump(100);
+    const int full_h = deck.strip_count() > 0 ? deck.strip(0).getHeight() : 0;
+    check(main.mixer_full() && deck.full() && deck.getY() < main.edit_frame().getBottom() - 100 &&
+              full_h > 2 * compact_h - 40 && deck.full_key().getButtonText() == "Compact",
+          "Full screen fills the window under the toolbar; the faders run its height (strips " + juce::String(compact_h) +
+              " -> " + juce::String(full_h) + " px)");
+    shoot(main, dir, "35b-mixer-full");
+    deck.full_key().triggerClick();
+    pump(100);
+    check(!main.mixer_full() && deck.isVisible() && deck.getHeight() == shell::MixerDeck::kHeight,
+          "Compact puts the mixer back in the bottom deck");
+    // Cmd/Ctrl+M (the toolbar's Mixer key) from the Composer view, and back.
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(50);
+    main.show_mixer();
+    pump(80);
+    const bool opened = main.mixer_full() && deck.isVisible();
+    main.show_mixer();
+    pump(80);
+    check(opened && !main.mixer_full() && main.workspace() == MainComponent::Workspace::Composer,
+          "Cmd/Ctrl+M opens the full-screen mixer and closes it back to the view it came from");
+    main.show_workspace(MainComponent::Workspace::Producer);
+    main.show_bottom_mixer(true);
+    pump(80);
+
     // One strip per track and group/FX bus, and the master pinned at the right.
     std::size_t buses = 0;
     for (const auto& b : session.data().buses) buses += b.kind != "master" ? 1u : 0u;
@@ -3907,7 +3935,7 @@ int main(int argc, char** argv)
         performance_checks(ctx, window.main(), track, dir);
         window.main().show_workspace(MainComponent::Workspace::Composer);
 
-        window.main().show_mixer();
+        window.main().show_console_window();
         if (auto* m = window.main().mixer_window()) {
             m->setSize(1100, 460);
             shoot(*m, dir, "03-mixer");

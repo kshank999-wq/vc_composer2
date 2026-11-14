@@ -793,3 +793,22 @@ macOS, Linux and Windows. What it took:
       its meter); unkeyed again it ignores the kick; a keyed compressor
       insert ducks the same; keyed processing allocates nothing.
       `test_producer_tracks` covers the session side and saving.
+
+16. **Full-screen mixer. Done.**
+    - The mixer is meant to be used full screen: the toolbar's **Mixer** key
+      (View > Mixer, Cmd/Ctrl+M) opens it over everything under the
+      toolbar, from either view. Strips are wider (96 px, the master
+      136 px) and each fader runs the window's height (about 490 px at
+      1440 x 900, against 120 px in the bottom deck). Pressing the key
+      again returns to the view it was opened from; choosing a view does
+      too.
+    - **Full screen / Compact** in the mixer's header switches size:
+      Compact puts it back in the bottom deck of the Producer view, under
+      the tracks and the inline piano roll (and Full screen brings it up
+      again). The Keyboard key still swaps the bottom deck to the keyboard.
+    - The Console key opens the console window (every strip's EQ,
+      dynamics, sends and inserts), which the Mixer key used to open.
+    - **Checks.** Full screen: the deck covers the window under the toolbar
+      and the strips run its height; Compact returns it to the 262 px
+      bottom deck; Cmd/Ctrl+M from the Composer view opens it and closes it
+      back to the Composer view. Screenshot `35b-mixer-full`.

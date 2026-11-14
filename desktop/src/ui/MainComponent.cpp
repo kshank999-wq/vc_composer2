@@ -242,7 +242,13 @@ MainComponent::MainComponent(AppContext& context)
     print_tab_.onClick = [this] { show_right_tab(1); };
     addChildComponent(mixer_deck_);
     keyboard_.on_mixer = [this] { show_bottom_mixer(true); };
-    mixer_deck_.on_keyboard = [this] { show_bottom_mixer(false); };
+    mixer_deck_.on_keyboard = [this] {
+        mixer_full_ = false;
+        mixer_deck_.set_full(false);
+        show_bottom_mixer(false);
+    };
+    mixer_deck_.on_full = [this](bool full) { set_mixer_full(full); };
+    mixer_deck_.on_console = [this] { show_console_window(); };
     addAndMakeVisible(tracks_);
     addAndMakeVisible(composer_);
     addChildComponent(sequencer_);
@@ -382,16 +388,23 @@ void MainComponent::resized()
     deck_.setBounds(r.removeFromTop(shell::TopDeck::height_for(getWidth())));
     // The bottom deck: the keyboard (as tall as its key zoom needs), or in
     // the Producer view the mixer.
-    const bool mixer_deck = workspace_ == Workspace::Producer && bottom_mixer_;
+    const bool mixer_deck = (workspace_ == Workspace::Producer && bottom_mixer_) || mixer_full_;
     keyboard_.setVisible(!mixer_deck);
     mixer_deck_.setVisible(mixer_deck);
     keyboard_.show_mixer_key(workspace_ == Workspace::Producer);
     auto& deck = mixer_deck ? static_cast<juce::Component&>(mixer_deck_) : keyboard_;
+    const auto below_top = r;  // for the full-screen mixer
     deck.setBounds(r.removeFromBottom(mixer_deck ? shell::MixerDeck::kHeight : keyboard_.preferred_height()));
     r.removeFromBottom(kGap);
     r.removeFromTop(kGap);
     toolbar_.setBounds(r.removeFromTop(60));
     r.removeFromTop(kGap);
+    if (mixer_full_) {
+        // Full screen: the mixer takes everything under the toolbar, over the
+        // edit window, the side panels and the bottom deck.
+        mixer_deck_.setBounds(below_top.withTop(r.getY()));
+        mixer_deck_.toFront(false);
+    }
 
     const bool producer = workspace_ == Workspace::Producer;
     // Under ~1280 px the right panel drops below the edit window.
@@ -545,6 +558,10 @@ void MainComponent::show_workspace(Workspace w)
     // One project, two views: the playhead, the selection and each view's
     // own zoom and scroll stay as they are.
     workspace_ = w;
+    if (mixer_full_) {  // choosing a view leaves the full-screen mixer
+        mixer_full_ = false;
+        mixer_deck_.set_full(false);
+    }
     const bool producer = w == Workspace::Producer;
     composer_.setVisible(!producer);
     sequencer_.setVisible(producer);
@@ -941,7 +958,29 @@ void MainComponent::show_control_gallery()
     gallery_window_->toFront(true);
 }
 
-void MainComponent::show_mixer()
+void MainComponent::show_mixer() { set_mixer_full(!mixer_full_, false); }
+
+void MainComponent::set_mixer_full(bool full, bool compact_after)
+{
+    if (full && !mixer_full_) before_mixer_ = workspace_;
+    mixer_full_ = full;
+    mixer_deck_.set_full(full);
+    if (!full) {
+        if (compact_after) {
+            // Compact: the mixer in the bottom deck, under the Producer view's tracks and piano roll.
+            if (workspace_ != Workspace::Producer) show_workspace(Workspace::Producer);
+            bottom_mixer_ = true;
+        } else if (workspace_ != before_mixer_) {
+            show_workspace(before_mixer_);  // closed with Cmd/Ctrl+M: back where it was opened
+        }
+    }
+    resized();
+    if (full) mixer_deck_.grabKeyboardFocus();
+    context_.status(full ? "Mixer full screen - Compact (or Cmd/Ctrl+M) returns to the bottom deck"
+                         : "Mixer in the bottom deck");
+}
+
+void MainComponent::show_console_window()
 {
     if (!mixer_) {
         mixer_ = std::make_unique<MixerWindow>(context_);

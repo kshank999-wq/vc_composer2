@@ -184,7 +184,7 @@ MixerDeck::MixerDeck(AppContext& context) : hw::Panel({}, true), context_(contex
     viewport_.setViewedComponent(&holder_, false);
     viewport_.setScrollBarsShown(false, true);
     viewport_.setScrollBarThickness(6);
-    for (auto* k : {&keyboard_, &console_}) {
+    for (auto* k : {&keyboard_, &console_, &full_key_}) {
         addAndMakeVisible(*k);
         k->set_legend_size(10.0f);
         k->setWantsKeyboardFocus(false);
@@ -194,7 +194,14 @@ MixerDeck::MixerDeck(AppContext& context) : hw::Panel({}, true), context_(contex
     keyboard_.onClick = [this] {
         if (on_keyboard) on_keyboard();
     };
-    console_.onClick = [this] { context_.commands.invokeDirectly(cmd::showMixer, true); };
+    console_.onClick = [this] {
+        if (on_console) on_console();
+    };
+    full_key_.setComponentID("mixer_full_key");
+    full_key_.setTooltip("Full screen mixer, or back to the compact mixer at the bottom (Cmd/Ctrl+M)");
+    full_key_.onClick = [this] {
+        if (on_full) on_full(!full_);
+    };
     listener_ = context_.session.add_listener([this](session::Change c) {
         if (c == session::Change::Document || c == session::Change::Selection) rebuild();
     });
@@ -262,6 +269,15 @@ void MixerDeck::timerCallback()
     }
 }
 
+void MixerDeck::set_full(bool full)
+{
+    if (full_ == full) return;
+    full_ = full;
+    full_key_.setButtonText(full ? "Compact" : "Full screen");
+    resized();
+    repaint();
+}
+
 void MixerDeck::resized()
 {
     auto r = getLocalBounds().reduced(16, 0);
@@ -269,25 +285,28 @@ void MixerDeck::resized()
     keyboard_.setBounds(header.removeFromRight(92));
     header.removeFromRight(6);
     console_.setBounds(header.removeFromRight(84));
+    header.removeFromRight(6);
+    full_key_.setBounds(header.removeFromRight(100));
     r.removeFromBottom(8);
     const int h = r.getHeight() - 8;
+    const int strip_w = full_ ? kStripFull : kStrip, master_w = full_ ? kMasterStripFull : kMasterStrip;
     if (master_) {
-        master_->setBounds(r.removeFromRight(kMasterStrip).withHeight(h));
+        master_->setBounds(r.removeFromRight(master_w).withHeight(h));
         r.removeFromRight(8);
     }
     viewport_.setBounds(r);
     int x = 0;
     for (auto& s : strips_) {
-        s->setBounds(x, 0, kStrip, h);
-        x += kStrip + 4;
+        s->setBounds(x, 0, strip_w, h);
+        x += strip_w + 4;
     }
     holder_.setSize(std::max(x, r.getWidth()), h);
 }
 
 void MixerDeck::paintOverChildren(juce::Graphics& g)
 {
-    hw::paint::silk(g, "Mixer", {30.0f, 5.0f, 80.0f, 22.0f}, 11.0f);
-    hw::paint::silk(g, juce::String(strips_.size()) + " strips + master", {100.0f, 5.0f, 160.0f, 22.0f}, 9.5f);
+    hw::paint::silk(g, full_ ? "Mixer - full screen" : "Mixer", {30.0f, 5.0f, full_ ? 160.0f : 80.0f, 22.0f}, 11.0f);
+    hw::paint::silk(g, juce::String(strips_.size()) + " strips + master", {full_ ? 190.0f : 100.0f, 5.0f, 160.0f, 22.0f}, 9.5f);
 }
 
 }  // namespace vcc::desktop::shell

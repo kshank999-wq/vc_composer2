@@ -19,14 +19,26 @@ namespace vcc::desktop::shell {
 
 class MixerDeck final : public hw::Panel, private juce::Timer {
 public:
+    /// The compact deck's height (at the bottom, where the keyboard deck is).
     static constexpr int kHeight = 262;
     static constexpr int kStrip = 78, kMasterStrip = 112;
+    /// Full screen: wider strips, and faders as long as the window allows.
+    static constexpr int kStripFull = 96, kMasterStripFull = 136;
 
     explicit MixerDeck(AppContext& context);
     ~MixerDeck() override;
 
     /// The Keyboard key: back to the keyboard deck.
     std::function<void()> on_keyboard;
+    /// The Full screen / Compact key: asks for the other size.
+    std::function<void(bool full)> on_full;
+    /// The Console key: the console window (EQ, dynamics and sends per strip).
+    std::function<void()> on_console;
+    /// Full screen (the whole window under the toolbar) or compact (the bottom deck).
+    void set_full(bool full);
+    bool full() const noexcept { return full_; }
+    hw::Keycap& full_key() { return full_key_; }
+    hw::Keycap& console_key() { return console_; }
 
     class Strip;
     int strip_count() const noexcept { return static_cast<int>(strips_.size()); }
@@ -48,7 +60,8 @@ private:
     juce::Component holder_;
     std::vector<std::unique_ptr<Strip>> strips_;
     std::vector<std::string> ids_;
-    hw::Keycap keyboard_{"Keyboard"}, console_{"Console"};
+    hw::Keycap keyboard_{"Keyboard"}, console_{"Console"}, full_key_{"Full screen"};
+    bool full_ = false;
 };
 
 class MixerDeck::Strip final : public juce::Component {
