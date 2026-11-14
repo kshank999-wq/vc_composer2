@@ -141,7 +141,8 @@ target_sources(vcc_plugin_host PRIVATE host/PluginHostServer.cpp src/audio/Plugi
 target_include_directories(vcc_plugin_host PRIVATE src)
 target_compile_definitions(vcc_plugin_host PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1
                                                    JUCE_PLUGINHOST_AU=1 JUCE_PLUGINHOST_LADSPA=0
-                                                   JUCE_DISPLAY_SPLASH_SCREEN=0)
+                                                   JUCE_DISPLAY_SPLASH_SCREEN=0
+                                                   JUCE_MODAL_LOOPS_PERMITTED=1)  # its macOS loop runs in slices
 target_link_libraries(vcc_plugin_host PRIVATE juce::juce_audio_utils
                                       PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 set_target_properties(vcc_plugin_host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")

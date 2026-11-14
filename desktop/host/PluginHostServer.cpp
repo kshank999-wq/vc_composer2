@@ -17,6 +17,8 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <cstdlib>
 #include <map>
 
@@ -398,7 +400,27 @@ int main(int argc, char* argv[])
     host_log("connected");
     // Proof that this process's message loop runs (logged once).
     juce::MessageManager::callAsync([] { host_log("message loop running"); });
+    // Diagnostics: a heartbeat from another thread, to tell a frozen process
+    // from a stuck message thread.
+    std::atomic<bool> leaving{false};
+    std::thread heartbeat([&leaving] {
+        for (int i = 1; i <= 4 && !leaving.load(); ++i) {
+            for (int k = 0; k < 20 && !leaving.load(); ++k) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (!leaving.load()) host_log("heartbeat " + juce::String(i));
+        }
+    });
+#if JUCE_MAC
+    // Not [NSApp run] (what runDispatchLoop does): a helper with no bundle
+    // never got as far as its first message that way on macOS. The run loop
+    // is run directly, a slice at a time, which handles the same messages.
+    host_log("running the message loop in slices");
+    while (juce::MessageManager::getInstance()->runDispatchLoopUntil(100)) {
+    }
+#else
     juce::MessageManager::getInstance()->runDispatchLoop();
+#endif
+    leaving = true;
+    heartbeat.join();
     server.shut_down();
     return 0;
 }
