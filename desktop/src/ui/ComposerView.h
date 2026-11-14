@@ -46,6 +46,11 @@ public:
 
     /// Performs a shortcut-profile command on the selected track.
     void perform(composer::Command command);
+    /// Step input from a key on the deck's keyboard: enters the sounding
+    /// pitch `midi` at the cursor with the current value (as written for a
+    /// transposing staff, spelt in its key), or adds it to the chord just
+    /// entered. False when no instrument track is being written on.
+    bool enter_midi(int midi, bool chord);
     /// Larger or smaller staves (the toolbar's Zoom keys).
     void zoom(bool larger);
     /// Scrolls so `tick` is the left edge of the lanes.

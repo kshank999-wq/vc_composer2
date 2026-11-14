@@ -10,6 +10,7 @@
 #include "ui/composer/ComposerRuler.h"
 #include "ui/composer/LaneParts.h"
 #include "ui/hw/HwControls.h"
+#include "vcc/interchange/Transposition.h"
 #include "vcc/ui/KeyMapping.h"
 
 namespace vcc::desktop {
@@ -487,6 +488,21 @@ void ComposerView::perform(Command command)
         }
     }
     handle(editor_->apply(command));
+}
+
+bool ComposerView::enter_midi(int midi, bool chord)
+{
+    if (!editor_) return false;
+    const auto cur = editor_->cursor();
+    const auto staff_index = std::min(cur.staff_index, working_.staff_count() - 1);
+    const auto& staff = working_.staff(staff_index);
+    const int written = midi - staff.total_transposition();
+    if (written < 0 || written > 127) return false;
+    const auto key = interchange::written_key(working_.key_signature_at(cur.tick), staff.transposition_semitones);
+    const auto pitch = notation::spell_midi_note(written, key);
+    handle(chord ? editor_->add_to_chord(pitch) : editor_->insert_pitch(pitch));
+    just_entered_ = true;
+    return true;
 }
 
 void ComposerView::ask_for_input(Command command)

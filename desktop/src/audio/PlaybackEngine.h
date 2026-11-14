@@ -158,6 +158,12 @@ public:
     bool recording() const noexcept;
     void set_punch(bool on, Ticks in, Ticks out);
     bool punch() const noexcept;
+    /// Loop playback: on reaching `out` while playing, the playhead jumps
+    /// back to `in`, sample-accurately (notes off, delay lines cleared, as
+    /// any jump). Starting after `out` plays on.
+    void set_loop(bool on, Ticks in, Ticks out);
+    bool loop() const noexcept { return loop_.load(); }
+    std::pair<Ticks, Ticks> loop_range() const noexcept { return {loop_in_ticks_, loop_out_ticks_}; }
     /// Seconds recorded in the current pass.
     double record_seconds() const noexcept;
     /// Called on the message thread after a pass is placed (one undo step),
@@ -241,6 +247,19 @@ public:
 
     /// Live MIDI input is played on this track's instrument.
     void set_live_track(const std::string& track_id);
+    /// Plays a message on the live track as if from a MIDI keyboard (the
+    /// on-screen keys and wheels). Not shifted by the live octave.
+    void send_live(const juce::MidiMessage& m);
+    /// Octaves added to notes from MIDI input devices (the deck's Octave keys).
+    void set_live_octave(int octaves) noexcept { live_octave_ = octaves; }
+    int live_octave() const noexcept { return live_octave_.load(); }
+    /// A live note (device or on-screen) is held down.
+    bool live_held(int note) const noexcept
+    {
+        return note >= 0 && note < 128 && live_held_[static_cast<std::size_t>(note)].load(std::memory_order_relaxed) > 0;
+    }
+    /// The message thread's view of a live message passing through (both sources).
+    void note_live(const juce::MidiMessage& m) noexcept;
 
     std::function<void()> on_transport_changed;
 
@@ -349,6 +368,9 @@ private:
     std::atomic<bool> playing_{false};
     std::atomic<bool> play_request_{false};
     std::atomic<bool> stop_request_{false};
+    std::atomic<bool> loop_{false};
+    std::atomic<std::int64_t> loop_in_{0}, loop_out_{0};  ///< Samples.
+    Ticks loop_in_ticks_ = 0, loop_out_ticks_ = 0;
     std::atomic<std::int64_t> locate_request_{-1};
     std::atomic<std::int64_t> position_samples_{0};
     std::atomic<bool> metronome_{false};
@@ -397,6 +419,8 @@ private:
     bool rolling_ = false;         // audio thread: playing at the last block
 
     juce::MidiMessageCollector live_input_;
+    std::atomic<int> live_octave_{0};
+    std::array<std::atomic<int>, 128> live_held_{};
     std::string live_track_;
     std::atomic<int> live_track_index_{-1};
     std::unique_ptr<juce::MidiInputCallback> midi_callback_;

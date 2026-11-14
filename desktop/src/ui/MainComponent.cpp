@@ -210,6 +210,7 @@ MainComponent::MainComponent(AppContext& context)
       inspector_(context),
       channel_(context),
       status_strip_(context),
+      keyboard_(context),
       tracks_(context),
       composer_(context),
       sequencer_(context)
@@ -219,7 +220,7 @@ MainComponent::MainComponent(AppContext& context)
     // The Edit window (docs/spec/ui): top deck, toolbar, left rack, the
     // edit window around the current view, right panel, status strip.
     for (auto* c : std::initializer_list<juce::Component*>{&deck_, &toolbar_, &edit_, &markers_, &selection_,
-                                                           &inspector_, &status_strip_})
+                                                           &inspector_, &status_strip_, &keyboard_})
         addAndMakeVisible(c);
     addChildComponent(new_track_);
     addChildComponent(channel_);
@@ -241,6 +242,17 @@ MainComponent::MainComponent(AppContext& context)
     };
     toolbar_.on_command = run;
     inspector_.on_command = run;
+    // The keyboard deck: step input into the Composer view, which grows the
+    // deck (and shrinks the edit window) as the keys zoom.
+    keyboard_.on_command = run;
+    keyboard_.cursor = [this] { return composer_.cursor(); };
+    keyboard_.on_step = [this](int midi, bool chord) {
+        if (workspace_ != Workspace::Composer || !composer_.note_entry()) return false;
+        const bool ok = composer_.enter_midi(midi, chord);
+        composer_.grabKeyboardFocus();
+        return ok;
+    };
+    keyboard_.on_height_changed = [this] { resized(); };
 
     layout_.setItemLayout(0, 220, 520, 300);
     layout_.setItemLayout(1, 5, 5, 5);
@@ -267,6 +279,11 @@ MainComponent::MainComponent(AppContext& context)
                 sequencer_.set_range(sel.from, sel.to);
                 syncing_range_ = false;
                 if (punch_) set_punch(true);
+            }
+            // A loop follows the range; clearing the range ends it.
+            if (context_.engine.loop() && context_.engine.loop_range() != std::make_pair(sel.from, sel.to)) {
+                if (sel.has_range()) context_.engine.set_loop(true, sel.from, sel.to);
+                else set_loop(false);
             }
         }
         if (c == session::Change::Document) {
@@ -336,6 +353,9 @@ void MainComponent::resized()
     status_strip_.setBounds(r.removeFromBottom(18));
     r.reduce(kPad, kPad);
     deck_.setBounds(r.removeFromTop(shell::TopDeck::height_for(getWidth())));
+    // The keyboard deck across the bottom, as tall as its key zoom needs.
+    keyboard_.setBounds(r.removeFromBottom(keyboard_.preferred_height()));
+    r.removeFromBottom(kGap);
     r.removeFromTop(kGap);
     toolbar_.setBounds(r.removeFromTop(60));
     r.removeFromTop(kGap);
@@ -379,11 +399,17 @@ void MainComponent::resized()
         inspector_.set_horizontal(true);
         inspector_.setBounds(right_area);
     } else {
-        // The Composer column: what is selected, then the inspector.
-        selection_.setBounds(right_area.removeFromTop(190));
+        // The Composer column: what is selected, then the inspector. A tall
+        // keyboard deck makes it short: the inspector goes compact, then the
+        // selection readout gives up height (down to 110 px).
+        const bool compact = right_area.getHeight() < 190 + kGap + composer_ui::Inspector::preferred_height(false);
+        const int insp_h = composer_ui::Inspector::preferred_height(compact);
+        const int sel_h = juce::jlimit(110, 190, right_area.getHeight() - kGap - insp_h);
+        selection_.setBounds(right_area.removeFromTop(sel_h));
         right_area.removeFromTop(kGap);
         inspector_.set_horizontal(false);
-        inspector_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), 420)));
+        inspector_.set_compact(compact);
+        inspector_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), insp_h)));
     }
     const auto content = edit_.getBounds().getIntersection(edit_.content_area() + edit_.getPosition());
     composer_.setBounds(content);
@@ -1045,6 +1071,33 @@ void MainComponent::toggle_record()
     context_.commands.commandStatusChanged();
 }
 
+void MainComponent::set_loop(bool on)
+{
+    auto& session = context_.session;
+    auto sel = session.selection();
+    if (on && !sel.has_range()) {
+        // No range yet: loop the bar the playhead is in.
+        const auto& m = session.data().meter;
+        const int bar = m.bar_at(context_.engine.position());
+        syncing_range_ = false;
+        session.set_selection_range(m.bar_start(bar), m.bar_start(bar + 1));
+        sel = session.selection();
+    }
+    const bool changed = on != context_.engine.loop();
+    context_.engine.set_loop(on, sel.from, sel.to);
+    deck_.update_position();
+    context_.commands.commandStatusChanged();
+    if (changed) {
+        if (on) {
+            const auto& d = session.data();
+            context_.status("Loop " + shell::bars_beats_ticks(d.meter, sel.from) + juce::String::fromUTF8(" \xe2\x86\x92 ") +
+                            shell::bars_beats_ticks(d.meter, sel.to));
+        } else {
+            context_.status("Loop off");
+        }
+    }
+}
+
 void MainComponent::set_punch(bool on)
 {
     const auto range = sequencer_.range();
@@ -1208,7 +1261,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
 {
     c.addArray({cmd::newProject, cmd::newFromTemplate, cmd::open, cmd::save, cmd::saveAs, cmd::exportMidi,
                 cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportFullScorePdf, cmd::exportStems, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
-                cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::addAudioTrack, cmd::importAudio,
+                cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::toggleLoop, cmd::addAudioTrack, cmd::importAudio,
                 cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
                 cmd::showControlGallery, cmd::toggleView, cmd::zoomIn, cmd::zoomOut,
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
@@ -1272,6 +1325,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             // R, as in most DAWs; in the Composer's note entry R is the rest key and wins there.
             info.setInfo("Record", "Record enable", "Transport", context_.engine.record_enabled() ? juce::ApplicationCommandInfo::isTicked : 0);
             info.addDefaultKeypress('r', 0);
+            break;
+        case cmd::toggleLoop:
+            info.setInfo("Loop Playback", "Play the selected range over and over", "Transport",
+                         context_.engine.loop() ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.addDefaultKeypress('l', 0);
             break;
         case cmd::togglePunch:
             info.setInfo("Punch In/Out", "Record only inside the sequencer ruler range", "Transport",
@@ -1360,6 +1418,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::toggleMetronome: context_.engine.set_metronome(!context_.engine.metronome()); break;
         case cmd::toggleRecord: toggle_record(); break;
         case cmd::togglePunch: set_punch(!punch_); break;
+        case cmd::toggleLoop: set_loop(!context_.engine.loop()); break;
         case cmd::addAudioTrack: new_audio_track(); break;
         case cmd::importAudio: import_audio(); break;
         case cmd::addAuxBus: new_bus(true); break;
@@ -1467,7 +1526,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         case 3:
             for (auto id : {cmd::play, cmd::rewind}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::toggleRecord, cmd::togglePunch}) m.addCommandItem(c, id);
+            for (auto id : {cmd::toggleLoop, cmd::toggleRecord, cmd::togglePunch}) m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::toggleMetronome, cmd::addHit}) m.addCommandItem(c, id);
             break;

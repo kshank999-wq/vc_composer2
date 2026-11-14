@@ -1,6 +1,7 @@
 #include "vcc/session/Session.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <set>
 
@@ -469,6 +470,22 @@ void Session::store_plugin_state(const std::string& id, const std::string& state
     project_.modify_unrecorded([&](project::ProjectData& d) {
         if (project::Track* t = d.find_track(id); t && t->instrument_plugin.state_base64 != state) {
             t->instrument_plugin.state_base64 = state;
+            changed = true;
+        }
+    });
+    if (changed && !dirty_) {
+        dirty_ = true;
+        notify(Change::File);
+    }
+}
+
+void Session::set_key_zoom(double zoom)
+{
+    zoom = std::clamp(zoom, 1.0, 3.0);
+    bool changed = false;
+    project_.modify_unrecorded([&](project::ProjectData& d) {
+        if (std::abs(d.key_zoom - zoom) > 1e-9) {
+            d.key_zoom = zoom;
             changed = true;
         }
     });

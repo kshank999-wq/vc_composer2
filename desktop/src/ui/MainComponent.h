@@ -11,6 +11,7 @@
 #include "ui/SequencerView.h"
 #include "ui/TrackPanel.h"
 #include "ui/composer/Inspector.h"
+#include "ui/shell/KeyboardDeck.h"
 #include "ui/shell/ShellPanels.h"
 #include "ui/shell/TopDeck.h"
 
@@ -58,6 +59,9 @@ public:
     std::vector<std::string> import_audio_files(const juce::Array<juce::File>& files);
     /// Punch in/out on the sequencer's ruler range (off when there is none).
     void set_punch(bool on);
+    /// Loop playback over the shared selection's range (one bar at the
+    /// playhead when there is none).
+    void set_loop(bool on);
     bool punch() const noexcept { return punch_; }
     shell::TopDeck& deck() noexcept { return deck_; }
     shell::Toolbar& toolbar() noexcept { return toolbar_; }
@@ -66,6 +70,7 @@ public:
     shell::NewTrackPanel& new_track_panel() noexcept { return new_track_; }
     shell::SelectionPanel& selection_panel() noexcept { return selection_; }
     composer_ui::Inspector& inspector() noexcept { return inspector_; }
+    shell::KeyboardDeck& keyboard() noexcept { return keyboard_; }
     shell::ChannelPanel& channel_panel() noexcept { return channel_; }
     shell::StatusStrip& status_strip() noexcept { return status_strip_; }
     /// The stage bar: 0 Compose, 1 Score, 2 Mix, 3 Master.
@@ -116,6 +121,7 @@ private:
     composer_ui::Inspector inspector_;
     shell::ChannelPanel channel_;
     shell::StatusStrip status_strip_;
+    shell::KeyboardDeck keyboard_;
     TrackPanel tracks_;
     juce::StretchableLayoutManager layout_;
     std::unique_ptr<juce::StretchableLayoutResizerBar> divider_;

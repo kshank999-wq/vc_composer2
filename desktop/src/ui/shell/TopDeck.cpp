@@ -121,7 +121,7 @@ TopDeck::TopDeck(AppContext& context) : context_(context)
     const char* names[] = {"Return to zero", "Rewind", "Fast forward", "Stop", "Play", "Record", "Loop"};
     const char* tips[] = {"Return to the start (Home)", "Back one bar", "Forward one bar", "Stop",
                           "Play / stop (Space)", "Record enable (R): records while playing, onto every armed track",
-                          "Loop playback (coming with the Producer view tracks)"};
+                          "Loop playback (L): plays the selected range over and over"};
     for (int i = 0; i < 7; ++i) {
         transport_.push_back(std::make_unique<hw::Keycap>(names[i], false));
         auto& k = *transport_.back();
@@ -133,7 +133,8 @@ TopDeck::TopDeck(AppContext& context) : context_(context)
     transport_[4]->set_lit_colour(hw::tok::meter_green);
     transport_[5]->set_glyph_lit(hw::tok::rec);
     transport_[5]->setComponentID("transport_record");
-    transport_[6]->setEnabled(false);
+    transport_[6]->setComponentID("transport_loop");
+    transport_[6]->onClick = [this] { context_.commands.invokeDirectly(cmd::toggleLoop, true); };
     auto& engine = context_.engine;
     transport_[0]->onClick = [this] { context_.engine.locate(0); };
     transport_[1]->onClick = [this] {
@@ -260,6 +261,7 @@ void TopDeck::update_position()
                     "\nLENGTH  " + length_bbt(d.meter, from, to));
 
     transport_[4]->setToggleState(engine.playing(), juce::dontSendNotification);
+    transport_[6]->setToggleState(engine.loop(), juce::dontSendNotification);
     // Record: solid red when enabled, flashing while a pass is recording.
     const bool armed = engine.record_enabled();
     const bool recording = engine.recording();

@@ -133,6 +133,8 @@ public:
     /// Plug-in delay compensation on or off, saved with the project. One
     /// undo step; false when it is already so.
     bool set_delay_compensation(bool on);
+    /// The keyboard deck's key zoom, saved with the project without an undo step.
+    void set_key_zoom(double zoom);
 
     /// Replaces the active version's score with an edited copy (the Composer
     /// view edits a working copy and commits each change here).

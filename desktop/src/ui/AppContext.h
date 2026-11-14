@@ -54,6 +54,7 @@ enum : juce::CommandID {
     toggleMetronome,
     toggleRecord,
     togglePunch,
+    toggleLoop,
     showComposer = 0x1300,
     showSequencer,
     showMixer,

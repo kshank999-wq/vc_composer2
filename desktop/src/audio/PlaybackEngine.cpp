@@ -661,12 +661,40 @@ void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::Au
 
 class LiveMidiCallback final : public juce::MidiInputCallback {
 public:
-    explicit LiveMidiCallback(juce::MidiMessageCollector& c) : collector_(c) {}
-    void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& m) override { collector_.addMessageToQueue(m); }
+    LiveMidiCallback(juce::MidiMessageCollector& c, PlaybackEngine& engine) : collector_(c), engine_(engine) {}
+    void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& m) override
+    {
+        // The deck's Octave keys shift what a MIDI keyboard plays.
+        juce::MidiMessage shifted = m;
+        if ((m.isNoteOn() || m.isNoteOff()) && engine_.live_octave() != 0) {
+            const int note = m.getNoteNumber() + 12 * engine_.live_octave();
+            if (note < 0 || note > 127) return;
+            shifted.setNoteNumber(note);
+        }
+        engine_.note_live(shifted);
+        collector_.addMessageToQueue(shifted);
+    }
 
 private:
     juce::MidiMessageCollector& collector_;
+    PlaybackEngine& engine_;
 };
+
+void PlaybackEngine::note_live(const juce::MidiMessage& m) noexcept
+{
+    if (!(m.isNoteOn() || m.isNoteOff())) return;
+    auto& held = live_held_[static_cast<std::size_t>(m.getNoteNumber() & 127)];
+    if (m.isNoteOn()) held.fetch_add(1, std::memory_order_relaxed);
+    else if (held.load(std::memory_order_relaxed) > 0) held.fetch_sub(1, std::memory_order_relaxed);
+}
+
+void PlaybackEngine::send_live(const juce::MidiMessage& m)
+{
+    juce::MidiMessage stamped = m;
+    stamped.setTimeStamp(juce::Time::getMillisecondCounterHiRes() * 0.001);
+    note_live(stamped);
+    live_input_.addMessageToQueue(stamped);
+}
 
 PlaybackEngine::PlaybackEngine(session::Session& session, PluginHost& plugins)
     : session_(session), plugins_(plugins), files_(std::make_unique<DiskStreamer>())
@@ -678,7 +706,8 @@ PlaybackEngine::PlaybackEngine(session::Session& session, PluginHost& plugins)
         request_rebuild();
         if (writing_pass_ && !committing_) refresh_writes();
     });
-    midi_callback_ = std::make_unique<LiveMidiCallback>(live_input_);
+    for (auto& h : live_held_) h.store(0);
+    midi_callback_ = std::make_unique<LiveMidiCallback>(live_input_, *this);
     live_input_.reset(sample_rate_);
     rebuild_now();
     startTimerHz(30);
@@ -1216,6 +1245,12 @@ void PlaybackEngine::rebuild_now()
 void PlaybackEngine::play()
 {
     const bool was = playing_.load();
+    // The loop's samples follow tempo and sample-rate changes made since it was set.
+    if (loop_.load()) {
+        const auto& tempo = session_.data().tempo;
+        loop_in_ = static_cast<std::int64_t>(std::llround(tempo.seconds_at(loop_in_ticks_) * sample_rate_));
+        loop_out_ = static_cast<std::int64_t>(std::llround(tempo.seconds_at(loop_out_ticks_) * sample_rate_));
+    }
     play_request_ = true;
     playing_ = true;
     begin_pass();
@@ -1509,6 +1544,17 @@ void PlaybackEngine::set_punch(bool on, Ticks in, Ticks out)
 
 bool PlaybackEngine::punch() const noexcept { return punch_.load(); }
 
+void PlaybackEngine::set_loop(bool on, Ticks in, Ticks out)
+{
+    loop_in_ticks_ = std::max<Ticks>(0, std::min(in, out));
+    loop_out_ticks_ = std::max(in, out);
+    const auto& tempo = session_.data().tempo;
+    loop_in_ = static_cast<std::int64_t>(std::llround(tempo.seconds_at(loop_in_ticks_) * sample_rate_));
+    loop_out_ = static_cast<std::int64_t>(std::llround(tempo.seconds_at(loop_out_ticks_) * sample_rate_));
+    loop_ = on && loop_out_.load() > loop_in_.load();
+    if (on_transport_changed) on_transport_changed();
+}
+
 double PlaybackEngine::record_seconds() const noexcept
 {
     return static_cast<double>(recorded_samples_.load()) / sample_rate_;
@@ -1732,8 +1778,23 @@ void PlaybackEngine::process(const float* const* inputs, int num_inputs, float* 
     service_passes();
 
     const int max_block = current_ ? current_->max_block : num_samples;
-    for (int offset = 0; offset < num_samples; offset += max_block)
-        process_chunk(inputs, num_inputs, outputs, num_outputs, offset, std::min(max_block, num_samples - offset));
+    for (int offset = 0; offset < num_samples;) {
+        int n = std::min(max_block, num_samples - offset);
+        // Loop playback: a block that crosses the loop's end stops there and
+        // the rest of it plays from the loop's start.
+        bool wrap = false;
+        if (loop_.load(std::memory_order_relaxed) && playing_.load(std::memory_order_relaxed) &&
+            locate_request_.load(std::memory_order_relaxed) < 0) {
+            const std::int64_t pos = position_samples_.load(), out = loop_out_.load(std::memory_order_relaxed);
+            if (pos < out && pos + n >= out) {
+                n = static_cast<int>(out - pos);
+                wrap = true;
+            }
+        }
+        if (n > 0) process_chunk(inputs, num_inputs, outputs, num_outputs, offset, n);
+        if (wrap) locate_request_.store(loop_in_.load(std::memory_order_relaxed));
+        offset += n;
+    }
 }
 
 void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, float* const* outputs, int num_outputs,

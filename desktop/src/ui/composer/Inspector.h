@@ -31,6 +31,10 @@ public:
     void refresh_legends();
     /// Laid out in columns, for when the inspector sits under the edit window.
     void set_horizontal(bool horizontal);
+    /// Smaller keys and knobs, for a short column.
+    void set_compact(bool compact);
+    /// The height the inspector needs, full size or compact.
+    static int preferred_height(bool compact);
 
     void resized() override;
     void paintOverChildren(juce::Graphics& g) override;
@@ -63,6 +67,7 @@ private:
     int shown_velocity_ = -1;
     int gesture_ = 0;
     bool horizontal_ = false;
+    bool compact_ = false;
     std::uint64_t seed_ = 1;
 };
 

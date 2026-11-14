@@ -221,8 +221,15 @@ and the document model. The work is mostly presentation.
        Cmd/Ctrl+1–4.
      - Edit › Keyboard Shortcuts switches between Composer 2, VC Composer,
        Finale style and Sibelius style, and remembers the choice.
-   - **Still to come:** L for loop waits for loop playback. The
-     note-value keycaps with their number legends arrived in step 4.
+   - **Loop (L).** L, the deck's Loop key and Transport › Loop Playback
+     loop the shared selection's range. With no range, they loop the bar
+     the playhead is in and show it as the range.
+     - The loop follows the range as it changes; clearing the range ends
+       the loop.
+     - The engine jumps back at the loop's end to the exact sample: notes
+       off and delay lines cleared, as for any jump. Playback that starts
+       after the loop's end plays on.
+   - The note-value keycaps with their number legends arrived in step 4.
 
    The original step 3 description: One selection drives the counters,
    the inspector, the lit keys and both views. Add the shortcut table,
@@ -299,9 +306,46 @@ and the document model. The work is mostly presentation.
      with a new document (`Session::document_generation`).
    - **Checks.** `tests/unit/test_phrases` and the desktop check's
      Composer-lane section; screenshots 28 and 29.
-5. **The keyboard deck.** 88 keys, key zoom from 1× to 3× keeping the
-   anchor centred, lit keys, step input, octave shift, pitch and mod
-   wheels.
+5. **The keyboard deck. Done** (`ui/shell/KeyboardDeck`).
+   - **Keys.** 88 keys, A0 to C8 (52 white, 36 black).
+     - At 1× they are 22 px wide and 96 px tall: 1144 px, which fits at
+       1680 px.
+     - The deck is 140 px at 1× and 236 px at 3×. The edit window above
+       shrinks to make room.
+     - The key fills, the C labels and the dot on middle C follow the
+       spec.
+   - **Zoom.**
+     - A slider from 1× to 3× in 0.05 steps, − and + keys (±0.25×), and a
+       zoom LCD.
+     - 88 · Fit returns to 1×.
+     - Zoom to selection sets 2.5× around the selected notes.
+     - Ctrl/Cmd + wheel zooms around the pointer; the plain wheel scrolls
+       sideways.
+     - Zooming keeps the anchor centred: the selection's middle note,
+       else the sounding notes, else middle C.
+     - Each project remembers its zoom (`ProjectData::key_zoom`, saved
+       without an undo step).
+   - **Lit keys.** Keys light for the selected notes as they sound, or
+     for what is sounding while it plays, plus any key held.
+     - A lit note off-screen is eased into view (150 ms).
+   - **Playing.**
+     - A click plays the note on the selected track. The velocity comes
+       from how far down the key it lands.
+     - With Enter on and note entry on in the Composer view, the note is
+       entered at the cursor with the current value. For a transposing
+       staff it is entered as written, spelt in that staff's key.
+     - Shift-click, or the Chord key, adds to the chord. Tie ties the
+       note.
+     - The step LCD shows the next bar and beat, the value, the voice and
+       the velocity.
+   - **Wheels and octave.**
+     - The pitch wheel springs back; the mod wheel sends CC 1.
+     - Octave ± shifts what a MIDI keyboard plays (shown ±0, +1…). It
+       does not move the on-screen keyboard.
+   - **Short windows.** When the deck makes the right column short, the
+     inspector goes compact and the selection readout gives up height.
+   - **Still to come:** the Follow toggle in the edit window's title bar.
+     Following is always on for now.
 6. **Producer view tracks.**
    - One row per track: the instrument track's MIDI lane plus its own
      audio lane, plain Audio tracks and Aux tracks.

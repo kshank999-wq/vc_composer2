@@ -452,6 +452,9 @@ struct ProjectData {
     /// with the slowest path. Saved with the project, so a mix sounds the
     /// same when it is reopened. Older files, which did not say, have it on.
     bool delay_compensation = true;
+    /// The keyboard deck's key zoom (1-3), remembered with the project
+    /// (docs/spec/ui, "Behavior rules" 3). A view setting: no undo step.
+    double key_zoom = 1.0;
     std::vector<Track> tracks;
     std::vector<Bus> buses;
     Production production;

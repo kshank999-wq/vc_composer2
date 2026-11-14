@@ -13,7 +13,7 @@ using composer::Command;
 
 namespace {
 juce::String utf8(const char* s) { return juce::String::fromUTF8(s); }
-constexpr int kKeyH = 26, kGap = 6, kLabel = 14;
+constexpr int kLabel = 14;
 }  // namespace
 
 Inspector::Inspector(AppContext& context) : hw::Panel("Inspector"), context_(context)
@@ -206,6 +206,16 @@ void Inspector::refresh_legends()
         if (artic_cmd_[i] != Command::StartSlur) artic_[i]->setButtonText(key_legend(context_.shortcuts, artic_cmd_[i]));
 }
 
+void Inspector::set_compact(bool compact)
+{
+    if (compact_ == compact) return;
+    compact_ = compact;
+    resized();
+    repaint();
+}
+
+int Inspector::preferred_height(bool compact) { return compact ? 324 : 420; }
+
 void Inspector::set_horizontal(bool horizontal)
 {
     if (horizontal_ == horizontal) return;
@@ -288,8 +298,10 @@ void Inspector::refresh()
 void Inspector::resized()
 {
     auto c = content().reduced(4, 0);
+    // Compact when the column is short (a tall keyboard deck below).
+    const int kKeyH = compact_ ? 20 : 26, kGap = compact_ ? 3 : 6, knob = compact_ ? 46 : 84;
     // A block of keys under its label, `cols` across, in `area`.
-    auto grid = [](std::vector<std::unique_ptr<hw::Keycap>>& keys, int cols, juce::Rectangle<int>& area) {
+    auto grid = [kKeyH, kGap](std::vector<std::unique_ptr<hw::Keycap>>& keys, int cols, juce::Rectangle<int>& area) {
         area.removeFromTop(kLabel);
         const int kw = (area.getWidth() - (cols - 1) * kGap) / cols;
         const int rows = (static_cast<int>(keys.size()) + cols - 1) / cols;
@@ -304,12 +316,12 @@ void Inspector::resized()
         }
         area.removeFromTop(4);
     };
-    auto knobs = [this](juce::Rectangle<int> area) {
+    auto knobs = [this, knob](juce::Rectangle<int> area) {
         area.removeFromTop(kLabel);
-        auto top = area.removeFromTop(84);
+        auto top = area.removeFromTop(knob);
         const int half = area.getWidth() / 2;
-        velocity_.setBounds(juce::Rectangle<int>(84, 84).withCentre({top.getX() + half / 2, top.getCentreY()}));
-        humanize_.setBounds(juce::Rectangle<int>(84, 84).withCentre({top.getX() + half + half / 2, top.getCentreY()}));
+        velocity_.setBounds(juce::Rectangle<int>(knob, knob).withCentre({top.getX() + half / 2, top.getCentreY()}));
+        humanize_.setBounds(juce::Rectangle<int>(knob, knob).withCentre({top.getX() + half + half / 2, top.getCentreY()}));
         auto lcds = area.removeFromTop(18);
         vel_lcd_.setBounds(juce::Rectangle<int>(56, 18).withCentre({lcds.getX() + half / 2, lcds.getCentreY()}));
         hum_lcd_.setBounds(juce::Rectangle<int>(56, 18).withCentre({lcds.getX() + half + half / 2, lcds.getCentreY()}));
@@ -332,8 +344,8 @@ void Inspector::resized()
     }
     grid(artic_, 3, c);
     grid(dyn_, 4, c);
-    knobs(c.removeFromTop(kLabel + 84 + 18));
-    c.removeFromTop(10);
+    knobs(c.removeFromTop(kLabel + knob + 18));
+    c.removeFromTop(compact_ ? 4 : 10);
     grid(voice_, 4, c);
     grid(transpose_, 4, c);
 }
@@ -346,10 +358,10 @@ void Inspector::paintOverChildren(juce::Graphics& g)
     if (!artic_.empty()) label("Articulation", *artic_.front());
     if (!dyn_.empty()) label("Dynamics", *dyn_.front());
     hw::paint::silk(g, "Velocity",
-                    {static_cast<float>(velocity_.getX()), static_cast<float>(velocity_.getY() - kLabel + 2), 84.0f, 12.0f}, 10.0f,
+                    {static_cast<float>(velocity_.getX()), static_cast<float>(velocity_.getY() - kLabel + 2), static_cast<float>(velocity_.getWidth()), 12.0f}, 10.0f,
                     juce::Justification::centred);
     hw::paint::silk(g, "Humanize",
-                    {static_cast<float>(humanize_.getX()), static_cast<float>(humanize_.getY() - kLabel + 2), 84.0f, 12.0f}, 10.0f,
+                    {static_cast<float>(humanize_.getX()), static_cast<float>(humanize_.getY() - kLabel + 2), static_cast<float>(humanize_.getWidth()), 12.0f}, 10.0f,
                     juce::Justification::centred);
     if (!voice_.empty()) label("Voice", *voice_.front());
     if (!transpose_.empty()) label("Transpose", *transpose_.front());

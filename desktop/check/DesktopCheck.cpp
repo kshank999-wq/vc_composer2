@@ -1145,6 +1145,14 @@ void insert_window_checks(AppContext& ctx, const juce::File& dir)
     check(find_dialog("Compressor - Dialogue (insert 2)") == nullptr, "a window closes when its insert is replaced");
 }
 
+juce::Component* find_by_id(juce::Component& root, const juce::String& id)
+{
+    if (root.getComponentID() == id) return &root;
+    for (auto* c : root.getChildren())
+        if (auto* f = find_by_id(*c, id)) return f;
+    return nullptr;
+}
+
 juce::Component* find_named(juce::Component& root, const juce::String& name)
 {
     if (root.getName() == name) return &root;
@@ -1828,6 +1836,125 @@ void composer_lane_checks(MainWindow& window, const juce::File& dir)
     check(varied && insp.performed_velocity() == 100,
           "Humanize writes timing overrides, keeps the velocity set, never the score");
     shoot(main, dir, "29-composer-inspector");
+}
+
+/// Loop playback (L) and the keyboard deck (step 5).
+void loop_and_keyboard_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.horror.psychological");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(200);
+    const Ticks bar = 4 * kTicksPerQuarter;
+
+    // The engine loops sample-accurately: offline, one bar looped.
+    {
+        PlaybackEngine e(session, ctx.plugins);
+        e.prepare_offline(48000.0, 512);
+        e.set_loop(true, 0, bar);
+        e.locate(0);
+        e.play();
+        juce::AudioBuffer<float> out(2, 512);
+        double furthest = 0.0, last = 0.0;
+        int wraps = 0;
+        const double bar_seconds = session.data().tempo.seconds_at(bar);
+        for (int b = 0; b < static_cast<int>(2.5 * bar_seconds * 48000.0 / 512.0); ++b) {
+            e.render_offline(out, 512);
+            const double s = e.position_seconds();
+            if (s < last) ++wraps;
+            furthest = std::max(furthest, s);
+            last = s;
+        }
+        check(wraps == 2 && furthest <= bar_seconds + 1e-6,
+              "loop playback jumps back at the loop's end, never past it (" + juce::String(wraps) + " wraps, furthest " +
+                  juce::String(furthest, 3) + " s of " + juce::String(bar_seconds, 3) + " s)");
+        e.stop();
+    }
+    // L and the deck's Loop key: with no range, the bar at the playhead.
+    auto* keys = ctx.commands.getKeyMappings();
+    check(keys->containsMapping(cmd::toggleLoop, juce::KeyPress('l')), "L toggles loop playback");
+    ctx.engine.locate(bar + kTicksPerQuarter);
+    ctx.commands.invokeDirectly(cmd::toggleLoop, false);
+    pump(80);
+    auto* loop_key = find_by_id(main, "transport_loop");
+    check(ctx.engine.loop() && ctx.engine.loop_range() == std::make_pair(bar, 2 * bar) &&
+              session.selection().from == bar && session.selection().to == 2 * bar && loop_key &&
+              dynamic_cast<juce::Button*>(loop_key)->getToggleState(),
+          "Loop with no range loops the playhead's bar, shows it as the range and lights the Loop key");
+    session.set_selection_range(0, 2 * bar);
+    pump(50);
+    check(ctx.engine.loop_range() == std::make_pair(Ticks{0}, 2 * bar), "the loop follows the selection's range");
+    ctx.commands.invokeDirectly(cmd::toggleLoop, false);
+    pump(50);
+    check(!ctx.engine.loop(), "L again turns the loop off");
+    ctx.engine.locate(0);
+
+    // The keyboard deck: 88 keys, 22 px each at 1x, 96 px tall; a 140 px deck.
+    auto& deck = main.keyboard();
+    auto& piano = deck.keys();
+    deck.set_zoom(1.0);
+    pump(50);
+    check(piano.getWidth() == 1144 && piano.getHeight() == 96 && deck.getHeight() == 140,
+          "88 keys, A0-C8, 1144 x 96 px at 1x in a 140 px deck (" + juce::String(piano.getWidth()) + " x " +
+              juce::String(piano.getHeight()) + ", deck " + juce::String(deck.getHeight()) + ")");
+    int whites = 0, blacks = 0;
+    for (int n = shell::PianoKeys::kLowest; n <= shell::PianoKeys::kHighest; ++n) (shell::PianoKeys::is_black(n) ? blacks : whites)++;
+    check(whites == 52 && blacks == 36, "52 white keys and 36 black keys");
+    const int edit_before = main.composer().getHeight();
+    deck.set_zoom(2.0);
+    pump(80);
+    const auto vr = deck.visible_range();
+    check(piano.getHeight() == 144 && deck.getHeight() == 188 && main.composer().getHeight() < edit_before,
+          "zooming to 2x makes the keys taller and the deck grows, shrinking the edit window");
+    check(vr.first <= 60 && vr.second >= 60 &&
+              std::abs(piano.centre_of(60) - (piano.centre_of(vr.first) + piano.centre_of(vr.second)) / 2.0f) <
+                  static_cast<float>(piano.key_width()),
+          "zoom keeps the anchor (middle C) centred");
+    check(std::abs(session.data().key_zoom - 2.0) < 1e-9 && deck.zoom_lcd().text() == "2.00x",
+          "the key zoom shows on its LCD and is remembered with the project");
+    deck.zoom_slider().setValue(1.55, juce::sendNotificationSync);
+    pump(30);
+    check(std::abs(deck.zoom() - 1.55) < 1e-9, "the zoom slider zooms live in 0.05 steps");
+
+    // Step input: a key played enters the note at the Composer view's cursor.
+    auto& composer = main.composer();
+    composer.grabKeyboardFocus();
+    const auto track = session.selected_track();
+    const auto count = [&] {
+        int n = 0;
+        for (const auto& note : session.data().find_track(track)->active_version()->score.notes(0))
+            if (!note.is_rest) ++n;
+        return n;
+    };
+    const int before = count();
+    const juce::Point<float> d(piano.centre_of(62), static_cast<float>(piano.getHeight()) - 10.0f);
+    piano.mouseDown(mouse_event(piano, d, d, false));
+    pump(30);
+    const bool held = ctx.engine.live_held(62) && piano.lit()[62];
+    piano.mouseUp(mouse_event(piano, d, d, false));
+    pump(80);
+    const auto* t = session.data().find_track(track);
+    bool entered_d = false;
+    for (const auto& note : t->active_version()->score.notes(0))
+        if (!note.is_rest && notation::midi_note_number(note.pitch) + t->active_version()->score.staff(0).total_transposition() == 62)
+            entered_d = true;
+    check(count() == before + 1 && entered_d, "a key played on the deck enters its note at the cursor (step input)");
+    check(held, "a key held lights and sounds on the selected track");
+    deck.refresh();
+    check(piano.lit()[62] && deck.step_lcd().text().contains("NEXT") && deck.step_lcd().text().contains("VEL"),
+          "the entered note stays lit as the selection; the step LCD shows the next position, value and velocity");
+    deck.zoom_to_selection();
+    pump(50);
+    check(std::abs(deck.zoom() - 2.5) < 1e-9, "Zoom to selection sets 2.5x around the selected notes");
+    deck.set_octave(1);
+    check(ctx.engine.live_octave() == 1 && deck.octave_lcd().text() == "+1", "Octave + shifts MIDI keyboard input and shows +1");
+    deck.set_octave(0);
+    shoot(main, dir, "30-keyboard-deck");
+    deck.set_zoom(1.0);
+    pump(50);
 }
 
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
@@ -2647,6 +2774,7 @@ int main(int argc, char** argv)
         shell_checks(window, dir);
         selection_and_shortcut_checks(window, dir);
         composer_lane_checks(window, dir);
+        loop_and_keyboard_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);
