@@ -42,6 +42,14 @@ public:
 
     /// The selected audio clip: {track id, clip id}, empty when none.
     std::pair<std::string, std::string> selected_clip() const;
+    /// Selects a clip (the Clips list): its track, the clip, scrolled into view.
+    void select_clip(const std::string& track_id, const std::string& clip_id);
+    /// The track whose piano roll is open inline (empty: none).
+    std::string expanded_track() const;
+    void set_expanded_track(const std::string& track_id);
+    /// A track's row height in the lanes (0 when it has none).
+    int row_height(const std::string& track_id) const;
+    void set_row_height(const std::string& track_id, int height);
 
     /// Swaps a take (a clip on a lane > 0) onto the main lane as one undo step;
     /// the clips it overlaps there move to the take's lane.

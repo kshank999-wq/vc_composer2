@@ -775,6 +775,7 @@ json::Value Project::to_json() const
         o.set("input", t.input);
         o.set("input_stereo", t.input_stereo);
         o.set("monitor", t.monitor);
+        o.set("playback", t.playback);
         if (!t.automation.empty()) o.set("automation", automation_to_json(t.automation));
         o.set("automation_mode", t.automation_mode);
         o.set("include_in_export", t.include_in_export);
@@ -1010,6 +1011,8 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.input = static_cast<int>(j.get_int("input", 0));
         t.input_stereo = j.get_bool("input_stereo");
         t.monitor = j.get_string("monitor", "auto");
+        t.playback = j.get_string("playback", "both");
+        if (t.playback != "midi" && t.playback != "audio") t.playback = "both";
         if (t.monitor != "auto" && t.monitor != "input" && t.monitor != "off")
             return fail("track " + t.id + ": unknown monitor mode '" + t.monitor + "'");
         if (auto e = automation_from_json(j.get("automation"), t.automation, unique); !e.empty())

@@ -346,13 +346,48 @@ and the document model. The work is mostly presentation.
      inspector goes compact and the selection readout gives up height.
    - **Still to come:** the Follow toggle in the edit window's title bar.
      Following is always on for now.
-6. **Producer view tracks.**
-   - One row per track: the instrument track's MIDI lane plus its own
-     audio lane, plain Audio tracks and Aux tracks.
-   - Expand and collapse, with the piano roll and velocity lane inline,
-     and drag-to-resize.
-   - Waveforms, automation lanes, the New track panel and the Clips list.
-   - The choice of MIDI, audio or both per track.
+6. **Producer view tracks. Done.**
+   - **Rows.** One row per track:
+     - Instrument and MIDI tracks are 72 px: the MIDI lane above, and the
+       track's own 26 px audio lane at the bottom.
+     - Audio tracks are 84 px and aux/bus rows 60 px.
+     - Clips on an instrument track's audio lane are the same clips as an
+       audio track's. They draw as waveforms, can be moved, trimmed,
+       faded and gain-dragged, and have take lanes.
+   - **What a track plays.** Each instrument or MIDI track plays its MIDI,
+     its audio lane, or both (`Track::playback`, saved, one undo step,
+     `Session::set_playback`).
+     - The engine sends no notes to the instrument on Audio. On MIDI the
+       audio lane is silent and dimmed.
+     - The instrument stays loaded either way, for a MIDI keyboard.
+   - **Track header** (220 px, to the spec):
+     - colour stripe, chevron, type tag (INST, MIDI, AUDIO, AUX),
+       number and name LCDs;
+     - R, S, M and I (input monitor) keys, the automation key and a
+       volume LCD;
+     - MIDI | Audio | Both keys on instrument rows.
+     When expanded, it adds:
+     - the IN › OUT routing LCD;
+     - insert slots A–E with LEDs (amber when bypassed);
+     - Print and Freeze, shown but not working until step 7;
+     - Piano roll | Score.
+   - **Expanding.**
+     - The chevron, a double-click, or the Piano Roll key opens a track
+       at 272 px with the piano roll and its velocity lane inline. The
+       roll's keyboard sits at the right of the header column.
+     - The open roll follows the selected track.
+     - A new document opens with its selected track expanded.
+     - The bottom piano-roll panel is gone.
+     - The velocity lane is 48 px, as the spec has it.
+   - **Resizing.** Drag a header's bottom edge to resize any row; the
+     expanded height is remembered apart from the collapsed one.
+   - **Clips list.** It sits in the Producer left rack, under New track
+     and the tracks, and lists every audio clip, including those on
+     instrument tracks' audio lanes. Clicking one selects it, scrolls to
+     it and moves the playhead there.
+   - **Checks.** `tests/unit/test_producer_tracks` and the desktop check's
+     Producer-track section (the audio lane is heard on Audio and Both
+     and silent on MIDI); screenshot 31.
 7. **Print to audio**, onto the track's own audio lane:
    - per track or for several at once;
    - offline first, then real time;

@@ -206,6 +206,7 @@ MainComponent::MainComponent(AppContext& context)
       edit_(context),
       markers_(context),
       new_track_(context),
+      clips_(context),
       selection_(context),
       inspector_(context),
       channel_(context),
@@ -223,6 +224,7 @@ MainComponent::MainComponent(AppContext& context)
                                                            &inspector_, &status_strip_, &keyboard_})
         addAndMakeVisible(c);
     addChildComponent(new_track_);
+    addChildComponent(clips_);
     addChildComponent(channel_);
     addAndMakeVisible(tracks_);
     addAndMakeVisible(composer_);
@@ -375,8 +377,11 @@ void MainComponent::resized()
     divider_->setBounds(divider_->getBounds().reduced(1, 0));
     // The rack: Composer = tracks, then markers; Producer = new track, then tracks.
     if (producer) {
+        // New track, the tracks, then the clips (docs/spec/ui, Producer left rack).
         new_track_.setBounds(rack.removeFromTop(200));
         rack.removeFromTop(kGap);
+        clips_.setBounds(rack.removeFromBottom(juce::jlimit(120, 240, rack.getHeight() / 3)));
+        rack.removeFromBottom(kGap);
         tracks_.setBounds(rack);
     } else {
         const int markers_h = juce::jlimit(120, 260, rack.getHeight() / 3);
@@ -456,6 +461,7 @@ void MainComponent::show_workspace(Workspace w)
     selection_.setVisible(!producer);
     inspector_.setVisible(!producer);
     new_track_.setVisible(producer);
+    clips_.setVisible(producer);
     channel_.setVisible(producer);
     deck_.set_producer(producer);
     toolbar_.set_producer(producer);

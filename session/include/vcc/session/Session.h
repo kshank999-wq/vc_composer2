@@ -119,6 +119,9 @@ public:
     bool set_output_bus(const std::string& track_id, const std::string& bus_id);
     bool set_bus_gain(const std::string& bus_id, double gain_db);
     bool set_include_in_export(const std::string& track_id, bool include);
+    /// What an instrument or MIDI track plays: "midi", "audio" (its audio
+    /// lane) or "both". One undo step; false when unchanged or not one of those.
+    bool set_playback(const std::string& track_id, const std::string& playback);
     bool set_active_version(const std::string& track_id, const std::string& version_id);
     std::optional<std::string> duplicate_version(const std::string& track_id);
     bool set_instrument_plugin(const std::string& track_id, const project::PluginRef& plugin);

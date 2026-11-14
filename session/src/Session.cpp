@@ -412,6 +412,17 @@ bool Session::set_include_in_export(const std::string& id, bool include)
     }));
 }
 
+bool Session::set_playback(const std::string& id, const std::string& playback)
+{
+    if (playback != "midi" && playback != "audio" && playback != "both") return false;
+    const std::string label = playback == "midi" ? "Play MIDI" : playback == "audio" ? "Play audio lane" : "Play MIDI and audio";
+    return edit(label, on_track(id, [&](project::Track& t) {
+        if (t.kind == project::TrackKind::Audio || t.kind == project::TrackKind::Aux || t.playback == playback) return false;
+        t.playback = playback;
+        return true;
+    }));
+}
+
 bool Session::set_active_version(const std::string& id, const std::string& version)
 {
     if (!project_.set_active_version(id, version)) return false;

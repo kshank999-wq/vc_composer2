@@ -4,6 +4,8 @@
 #include <cmath>
 
 #include "AppResources.h"
+#include "ui/SequencerView.h"
+#include "ui/Theme.h"
 #include "ui/TrackPanel.h"
 #include "ui/composer/KeyLegend.h"
 #include "ui/console/ConsoleStyle.h"
@@ -428,6 +430,109 @@ void MarkersPanel::paintOverChildren(juce::Graphics& g)
         g.setFont(hw::fonts::lcd(11.0f));
         g.drawText(items_[static_cast<std::size_t>(i)].where, row.withTrimmedRight(4), juce::Justification::centredRight,
                    false);
+    }
+}
+
+// --- Clips ------------------------------------------------------------------------------------
+
+ClipsPanel::ClipsPanel(AppContext& context) : hw::Panel("Clips"), context_(context)
+{
+    listener_ = context_.session.add_listener([this](session::Change c) {
+        if (c == session::Change::Document) refresh();
+    });
+    refresh();
+}
+
+ClipsPanel::~ClipsPanel() { context_.session.remove_listener(listener_); }
+
+void ClipsPanel::refresh()
+{
+    const auto& d = context_.session.data();
+    items_.clear();
+    for (const auto& t : d.tracks) {
+        const auto* v = t.active_version();
+        if (!v) continue;
+        for (const auto& c : v->audio_clips) {
+            if (c.lane != 0) continue;
+            const Ticks tick = d.tempo.tick_at_seconds(c.start_seconds);
+            const juce::String name = c.name.empty() ? juce::File(juce::String(c.file)).getFileNameWithoutExtension()
+                                                     : juce::String(c.name);
+            items_.push_back({name, juce::String(t.name), juce::String(d.meter.bar_at(tick)) + "  " + juce::String(c.length, 1) + "s",
+                              t.id, c.id, colour_from_hex(t.color), tick});
+        }
+    }
+    std::stable_sort(items_.begin(), items_.end(), [](const Item& a, const Item& b) { return a.tick < b.tick; });
+    repaint();
+}
+
+int ClipsPanel::row_at(juce::Point<int> p) const
+{
+    const auto c = content();
+    if (!c.contains(p)) return -1;
+    const int i = (p.y - c.getY()) / 30;
+    return i < static_cast<int>(items_.size()) ? i : -1;
+}
+
+void ClipsPanel::mouseMove(const juce::MouseEvent& e)
+{
+    const int h = row_at(e.getPosition());
+    if (h != hover_) {
+        hover_ = h;
+        repaint();
+    }
+}
+
+void ClipsPanel::mouseUp(const juce::MouseEvent& e)
+{
+    if (const int i = row_at(e.getPosition()); i >= 0) choose(i);
+}
+
+void ClipsPanel::choose(int i)
+{
+    if (i < 0 || i >= static_cast<int>(items_.size())) return;
+    const auto item = items_[static_cast<std::size_t>(i)];
+    context_.engine.locate(item.tick);
+    if (auto* seq = SequencerView::find(context_)) seq->select_clip(item.track_id, item.clip_id);
+    else context_.session.select_track(item.track_id);
+    repaint();
+}
+
+void ClipsPanel::paintOverChildren(juce::Graphics& g)
+{
+    const auto c = content();
+    if (items_.empty()) {
+        g.setColour(hw::tok::silk);
+        g.setFont(hw::fonts::ui(12.0f));
+        g.drawFittedText("No audio clips yet - record, import WAV, or print the score to audio", c.withHeight(36),
+                         juce::Justification::topLeft, 2);
+        return;
+    }
+    std::pair<std::string, std::string> selected;
+    if (auto* seq = SequencerView::find(context_)) selected = seq->selected_clip();
+    for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+        const auto row = juce::Rectangle<int>(c.getX(), c.getY() + i * 30, c.getWidth(), 28);
+        if (row.getBottom() > c.getBottom()) break;
+        const auto& it = items_[static_cast<std::size_t>(i)];
+        const bool sel = selected.first == it.track_id && selected.second == it.clip_id;
+        if (i == hover_ || sel) {
+            g.setColour(juce::Colours::white.withAlpha(sel ? 0.07f : 0.04f));
+            g.fillRoundedRectangle(row.toFloat(), 3.0f);
+        }
+        if (sel) {
+            g.setColour(hw::Theme::get().led().withAlpha(0.7f));
+            g.drawRoundedRectangle(row.toFloat().reduced(0.5f), 3.0f, 1.0f);
+        }
+        g.setColour(it.colour);
+        g.fillRect(row.withWidth(3).reduced(0, 4));
+        auto text = row.withTrimmedLeft(10).withTrimmedRight(4);
+        g.setColour(hw::tok::text);
+        g.setFont(hw::fonts::ui(12.0f));
+        g.drawText(it.name, text.removeFromTop(15), juce::Justification::centredLeft, true);
+        g.setColour(hw::tok::silk);
+        g.setFont(hw::fonts::ui(10.5f));
+        g.drawText(it.track, text.withTrimmedRight(70), juce::Justification::centredLeft, true);
+        g.setFont(hw::fonts::lcd(10.5f));
+        g.drawText(it.where, text, juce::Justification::centredRight, false);
     }
 }
 

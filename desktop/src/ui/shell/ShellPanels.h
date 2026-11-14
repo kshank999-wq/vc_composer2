@@ -113,6 +113,34 @@ private:
     int hover_ = -1;
 };
 
+/// Clips (Producer view): every audio clip in the project, on audio tracks
+/// and on instrument tracks' own audio lanes; click to select one and go to it.
+class ClipsPanel final : public hw::Panel {
+public:
+    explicit ClipsPanel(AppContext& context);
+    ~ClipsPanel() override;
+    void paintOverChildren(juce::Graphics& g) override;
+    void mouseUp(const juce::MouseEvent& e) override;
+    void mouseMove(const juce::MouseEvent& e) override;
+    int rows() const noexcept { return static_cast<int>(items_.size()); }
+    /// Selects row `i` (as a click does).
+    void choose(int i);
+
+private:
+    struct Item {
+        juce::String name, track, where;
+        std::string track_id, clip_id;
+        juce::Colour colour;
+        Ticks tick = 0;
+    };
+    void refresh();
+    int row_at(juce::Point<int> p) const;
+    AppContext& context_;
+    int listener_ = 0;
+    std::vector<Item> items_;
+    int hover_ = -1;
+};
+
 /// New track (Producer view): a type, a count, mono or stereo, Create.
 class NewTrackPanel final : public hw::Panel {
 public:

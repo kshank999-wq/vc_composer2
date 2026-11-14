@@ -12,6 +12,7 @@
 #include "ui/Theme.h"
 #include "ui/TrackPanel.h"
 #include "ui/WaveformCache.h"
+#include "ui/hw/HwControls.h"
 #include "ui/hw/HwTheme.h"
 #include "vcc/project/Automation.h"
 #include "vcc/project/Performance.h"
@@ -23,20 +24,26 @@ namespace vcc::desktop {
 
 namespace {
 
-constexpr int kHeader = 150;      ///< Lane header / keyboard column width.
+constexpr int kHeader = 220;      ///< Track header / keyboard column width (docs/spec/ui, Producer track header).
 constexpr int kScroll = 10;       ///< Vertical scroll bar width (right edge of every band).
 constexpr int kToolbar = 32;
 constexpr int kRuler = 34;
-constexpr int kLaneHeight = 56;
+constexpr int kLaneHeight = 72;   ///< An instrument or MIDI track, collapsed.
+constexpr int kAudioRow = 84;     ///< An audio track.
+constexpr int kExpandedRow = 272; ///< An instrument track expanded: piano roll and velocity inline.
+constexpr int kAudioLane = 26;    ///< An instrument track's own audio lane, at the bottom of its row.
+constexpr int kHeaderTop = 52;    ///< Header rows 1-2; an expanded row's piano roll starts under them.
+constexpr int kRollInset = kHeader - 62;  ///< The inline piano roll leaves the header's left part to it.
+constexpr int kMinRow = 48;
 constexpr int kDivider = 6;
 constexpr int kHScroll = 12;
 constexpr int kRollHeader = 30;
-constexpr int kVelocity = 64;
+constexpr int kVelocity = 48;
 constexpr int kKeyHeight = 11;
 constexpr int kTakeHeight = 40;   ///< One take lane under an audio track.
 constexpr int kEdge = 6;          ///< Grab width of a clip's trim edges and handles.
 constexpr double kMinClip = 0.01; ///< Shortest clip a trim leaves, seconds.
-constexpr int kBusHeight = 34;    ///< A bus row (automation only) at the bottom.
+constexpr int kBusHeight = 60;    ///< An aux / bus row (automation only) at the bottom.
 
 const juce::String kScoreHint =
     "Written in the score - drag to rewrite it (the score follows); Alt-drag to change only how it is played";
@@ -79,6 +86,14 @@ struct LaneView {
     std::vector<project::AudioClip> clips;  ///< Every lane, sorted by lane then start.
     std::vector<std::string> clip_paths;    ///< Resolved file of each clip.
     std::vector<int> takes;                 ///< Distinct take lanes (> 0) in use, ascending.
+    // Producer track header (docs/spec/ui).
+    int number = 0;
+    bool midi_only = false;  ///< A MIDI track (external instrument) rather than an Instrument track.
+    bool mute = false, solo = false, monitor_input = false;
+    double gain_db = 0.0;
+    std::string playback = "both";
+    std::vector<int> inserts;  ///< Per insert slot: 0 empty, 1 active, 2 bypassed.
+    juce::String route;        ///< "IN 1 > MASTER".
     // Automation (Main Spec §12).
     bool bus = false;                       ///< A bus row (master, fx, group): automation only.
     juce::String bus_kind;
@@ -246,7 +261,38 @@ struct Model final : AutomationTimeline {
         if (rows.empty()) rows.push_back({nullptr, AutomationLaneView::kPlaceholderHeight});
         return rows;
     }
-    int base_height(const LaneView& l) const { return l.bus ? kBusHeight : kLaneHeight; }
+    /// The track whose piano roll is open inline (one at a time; it follows the selection).
+    std::string expanded;
+    /// Rows the user resized: track id, or id + "#x" for its expanded height.
+    std::map<std::string, int> heights;
+    std::function<void()> expanded_changed;
+
+    bool has_audio_lane(const LaneView& l) const { return !l.audio && !l.bus && !l.reference; }
+    bool is_expanded(const LaneView& l) const { return has_audio_lane(l) && expanded == l.id; }
+    int base_height(const LaneView& l) const
+    {
+        if (l.bus) return kBusHeight;
+        const std::string key = is_expanded(l) ? l.id + "#x" : l.id;
+        if (auto it = heights.find(key); it != heights.end()) return it->second;
+        return is_expanded(l) ? kExpandedRow : l.audio ? kAudioRow : kLaneHeight;
+    }
+    /// The smallest a row can be dragged to.
+    int min_height(const LaneView& l) const
+    {
+        return is_expanded(l) ? kHeaderTop + kRollHeader + kVelocity + 4 * kKeyHeight + kAudioLane : kMinRow;
+    }
+    /// Where a track's main-lane clips sit: the whole row of an audio track,
+    /// the audio lane at the bottom of an instrument track's.
+    juce::Rectangle<int> clip_row(const LaneView& l, juce::Rectangle<int> base) const
+    {
+        return has_audio_lane(l) ? base.withTop(base.getBottom() - kAudioLane) : base;
+    }
+    void set_expanded(const std::string& id)
+    {
+        if (expanded == id) return;
+        expanded = id;
+        if (expanded_changed) expanded_changed();
+    }
     int takes_height(const LaneView& l) const
     {
         const bool open = !l.takes.empty() && show_takes.count(l.id) > 0;
@@ -364,9 +410,26 @@ struct Model final : AutomationTimeline {
         end = session.content_end();
         double audio_end = 0.0;
         lanes.clear();
+        int number = 0;
         for (const auto* t : session.music_tracks()) {
             LaneView l;
             l.id = t->id;
+            l.number = ++number;
+            l.midi_only = t->kind == project::TrackKind::MidiOnly;
+            l.mute = t->mute;
+            l.solo = t->solo;
+            l.monitor_input = t->monitor == "input";
+            l.gain_db = t->gain_db;
+            l.playback = t->playback;
+            for (const auto& slot : t->inserts)
+                l.inserts.push_back(slot.kind.empty() ? 0 : (slot.bypass || slot.suggestion) ? 2 : 1);
+            {
+                juce::String in = t->input < 0 ? juce::String("NO IN")
+                                               : "IN " + juce::String(t->input + 1) + (t->input_stereo ? "-" + juce::String(t->input + 2) : "");
+                juce::String out = t->output_bus_id.empty() ? juce::String("MASTER") : juce::String(t->output_bus_id).toUpperCase();
+                if (const auto* b = d.find_bus(t->output_bus_id)) out = juce::String(b->name).toUpperCase();
+                l.route = in + juce::String::fromUTF8(" \xe2\x80\xba ") + out;
+            }
             l.name = juce::String(t->name);
             l.colour = colour_from_hex(t->color);
             l.reference = t->kind == project::TrackKind::Reference;
@@ -549,10 +612,10 @@ void paint_playhead(juce::Graphics& g, const Model& m, juce::Rectangle<int> area
 void Model::paint_timeline_grid(juce::Graphics& g, juce::Rectangle<int> area) const { paint_grid(g, *this, area, 0, true); }
 
 /// The "A" box in a track or bus header that shows its automation lanes.
-juce::Rectangle<int> automation_button(const LaneView& l, juce::Rectangle<int> row)
+juce::Rectangle<int> automation_button(const LaneView&, juce::Rectangle<int> row)
 {
-    return l.bus ? juce::Rectangle<int>(kHeader - 30, row.getY() + 10, 22, 15)
-                 : juce::Rectangle<int>(kHeader - 30, row.getY() + 24, 22, 15);
+    // Row 2 of the header, left of the volume readout.
+    return {kHeader - 96, row.getY() + 30, 24, 18};
 }
 
 void paint_automation_button(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> row, bool open)
@@ -560,13 +623,9 @@ void paint_automation_button(juce::Graphics& g, const LaneView& l, juce::Rectang
     const auto r = automation_button(l, row).toFloat();
     const bool has = std::any_of(l.automation.begin(), l.automation.end(), [](const auto& a) { return a.points.size() > 1; });
     const juce::Colour mc = automation_ui::mode_colour(l.mode);
-    const juce::Colour c = has ? mc : colours::text_dim;
-    g.setColour(open ? c.withAlpha(0.28f) : colours::panel_raised);
-    g.fillRoundedRectangle(r, 3.0f);
-    g.setColour(open || has ? c.withAlpha(0.85f) : colours::outline.brighter(0.2f));
-    g.drawRoundedRectangle(r.reduced(0.5f), 3.0f, 1.0f);
-    g.setColour(open ? colours::text : (has ? c : colours::text_dim));
-    g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+    hw::paint::keycap(g, r, open, {}, open ? mc : juce::Colour());
+    g.setColour(open ? juce::Colours::white : (has ? mc : hw::tok::text));
+    g.setFont(hw::fonts::silk(11.0f, 0.06f));
     g.drawText("A", r, juce::Justification::centred, false);
 }
 
@@ -887,6 +946,7 @@ public:
         vscroll_.setRangeLimits(0.0, std::max(content, visible));
         vscroll_.setCurrentRange(scroll_y_, visible, juce::dontSendNotification);
         layout_automation(false);
+        layout_roll();
     }
 
     /// Places an AutomationLaneView on every shown automation row (reusing
@@ -1016,6 +1076,16 @@ public:
     void mouseDown(const juce::MouseEvent& e) override
     {
         drag_ = Drag::None;
+        resize_track_.clear();
+        // The bottom edge of a header resizes its row.
+        if (e.x < kHeader && !e.mods.isPopupMenu())
+            if (const auto* l = resize_edge_at(e.getPosition())) {
+                resize_track_ = l->id;
+                resize_key_ = m_.is_expanded(*l) ? l->id + "#x" : l->id;
+                resize_start_ = m_.base_height(*l);
+                resize_min_ = m_.min_height(*l);
+                return;
+            }
         const Hit hit = hit_at(e.y);
         if (!hit.lane) {
             select_clip({}, {});
@@ -1035,8 +1105,13 @@ public:
         }
         m_.ctx.session.select_track(track);
         if (e.x < kHeader) {
-            if (e.mods.isPopupMenu()) TrackPanel::show_track_menu(m_.ctx, track);
-            else if (!lane.takes.empty() && disclosure_rect(hit.row).contains(e.getPosition())) toggle_takes(track);
+            if (e.mods.isPopupMenu()) {
+                TrackPanel::show_track_menu(m_.ctx, track);
+                return;
+            }
+            if (hit.take == 0 && header_click(lane, hit.row, e.getPosition())) return;
+            if (!lane.takes.empty() && !m_.has_audio_lane(lane) && disclosure_rect(hit.row).contains(e.getPosition()))
+                toggle_takes(track);
             return;
         }
         const int index = clip_at(lane, hit, e.position);
@@ -1051,7 +1126,7 @@ public:
             show_clip_menu(lane, c);
             return;
         }
-        drag_ = zone_for(c, clip_rect(c, hit.row), e.position);
+        drag_ = zone_for(c, clip_rect(c, clip_row_of(lane, hit)), e.position);
         drag_track_ = track;
         drag_clip_ = c;
         drag_label_ = unique_label(drag_ == Drag::Move       ? "Move clip"
@@ -1067,6 +1142,12 @@ public:
 
     void mouseDrag(const juce::MouseEvent& e) override
     {
+        if (!resize_track_.empty()) {
+            m_.heights[resize_key_] = juce::jlimit(resize_min_, 600, resize_start_ + e.getDistanceFromDragStartY());
+            update_scroll();
+            repaint();
+            return;
+        }
         if (drag_ == Drag::None) return;
         const project::AudioClip o = drag_clip_;
         const bool free = e.mods.isCommandDown();  // Cmd/Ctrl: no snapping
@@ -1130,17 +1211,25 @@ public:
         if (drag_ == Drag::Gain) m_.ctx.status("Clip gain " + db_text(c.gain_db));
     }
 
-    void mouseUp(const juce::MouseEvent&) override { drag_ = Drag::None; }
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        drag_ = Drag::None;
+        resize_track_.clear();
+    }
 
     void mouseMove(const juce::MouseEvent& e) override
     {
         auto shape = juce::MouseCursor::NormalCursor;
+        if (e.x < kHeader && resize_edge_at(e.getPosition())) {
+            setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+            return;
+        }
         const Hit hit = hit_at(e.y);
         if (hit.lane && e.x >= kHeader) {
             const int index = clip_at(*hit.lane, hit, e.position);
             if (index >= 0) {
                 const auto& c = hit.lane->clips[static_cast<std::size_t>(index)];
-                switch (zone_for(c, clip_rect(c, hit.row), e.position)) {
+                switch (zone_for(c, clip_rect(c, clip_row_of(*hit.lane, hit)), e.position)) {
                     case Drag::TrimLeft:
                     case Drag::TrimRight: shape = juce::MouseCursor::LeftRightResizeCursor; break;
                     case Drag::FadeIn:
@@ -1161,9 +1250,10 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override
     {
         const Hit hit = hit_at(e.y);
-        if (hit.lane && !hit.lane->audio && !hit.lane->bus && hit.take == 0) {
+        if (hit.lane && m_.has_audio_lane(*hit.lane) && hit.take == 0) {
+            // Double-click a track to open (or close) its piano roll inline.
             m_.ctx.session.select_track(hit.lane->id);
-            if (m_.open_piano_roll) m_.open_piano_roll();
+            m_.set_expanded(m_.is_expanded(*hit.lane) ? std::string() : hit.lane->id);
         }
     }
 
@@ -1237,6 +1327,69 @@ public:
 private:
     enum class Drag { None, Move, TrimLeft, TrimRight, FadeIn, FadeOut, Gain };
 
+    /// The track whose header's bottom edge is under `p`, or null.
+    const LaneView* resize_edge_at(juce::Point<int> p) const
+    {
+        int top = -scroll_y_;
+        for (const auto& l : m_.lanes) {
+            if (!l.bus) {
+                const int bottom = top + m_.base_height(l);
+                if (p.y >= bottom - 4 && p.y <= bottom) return &l;
+            }
+            top += m_.row_height(l);
+        }
+        return nullptr;
+    }
+
+    /// A click on a header's keys. True when it hit one.
+    bool header_click(const LaneView& l, juce::Rectangle<int> row, juce::Point<int> pt)
+    {
+        auto& session = m_.ctx.session;
+        const auto p = header_parts(l, row);
+        const std::string id = l.id;
+        if (p.chevron.contains(pt)) {
+            m_.set_expanded(m_.is_expanded(l) ? std::string() : id);
+            return true;
+        }
+        if (l.bus) return false;
+        if (p.rec.contains(pt)) {
+            session.set_record_armed(id, !l.armed);
+            return true;
+        }
+        if (p.solo.contains(pt)) {
+            session.set_solo(id, !l.solo);
+            return true;
+        }
+        if (p.mute.contains(pt)) {
+            session.set_mute(id, !l.mute);
+            return true;
+        }
+        if (p.input.contains(pt)) {
+            const std::string mode = l.monitor_input ? "auto" : "input";
+            session.update_track_mix(id, "Monitor " + id, [mode](project::Track& t) { t.monitor = mode; });
+            return true;
+        }
+        const char* values[] = {"midi", "audio", "both"};
+        for (std::size_t i = 0; i < 3; ++i)
+            if (p.source[i].contains(pt)) {
+                session.set_playback(id, values[i]);
+                return true;
+            }
+        if (p.roll.contains(pt)) {
+            m_.set_expanded({});
+            return true;
+        }
+        if (p.score.contains(pt)) {
+            m_.ctx.commands.invokeDirectly(cmd::showComposer, true);
+            return true;
+        }
+        if (p.print.contains(pt) || p.freeze.contains(pt)) {
+            m_.ctx.status("Print to audio and Freeze come with the next step (print score to audio)");
+            return true;
+        }
+        return false;
+    }
+
     struct Hit {
         const LaneView* lane = nullptr;
         int take = 0;  ///< 0: the track's main row; otherwise the take lane shown
@@ -1274,6 +1427,7 @@ private:
     {
         scroll_y_ = juce::roundToInt(start);
         layout_automation(false);
+        layout_roll();
         repaint();
     }
 
@@ -1352,7 +1506,7 @@ private:
 
     static juce::Rectangle<int> disclosure_rect(juce::Rectangle<int> row)
     {
-        return {14, row.getY() + kLaneHeight - 17, kHeader - 20, 14};
+        return {26, row.getY() + kHeaderTop, 130, 16};
     }
 
     static juce::Rectangle<float> gain_rect(juce::Rectangle<float> r)
@@ -1365,12 +1519,20 @@ private:
     int clip_at(const LaneView& l, const Hit& hit, juce::Point<float> p) const
     {
         if (hit.take == 0 && l.clips.empty()) return -1;
+        const auto row = clip_row_of(l, hit);
         for (int i = static_cast<int>(l.clips.size()); --i >= 0;) {
             const auto& c = l.clips[static_cast<std::size_t>(i)];
             if (c.lane != hit.take) continue;
-            if (clip_rect(c, hit.row).expanded(2.0f, 0.0f).contains(p)) return i;
+            if (clip_rect(c, row).expanded(2.0f, 0.0f).contains(p)) return i;
         }
         return -1;
+    }
+
+    /// The row a hit's clips sit in: the take row, or the main clip row
+    /// (an instrument track's audio lane).
+    juce::Rectangle<int> clip_row_of(const LaneView& l, const Hit& hit) const
+    {
+        return hit.take == 0 ? m_.clip_row(l, hit.row) : hit.row;
     }
 
     Drag zone_for(const project::AudioClip& c, juce::Rectangle<float> r, juce::Point<float> p) const
@@ -1427,58 +1589,159 @@ private:
         menu.showMenuAsync({});
     }
 
-    void paint_header(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> row, bool selected)
+    /// The Producer track header's parts (docs/spec/ui, "Producer track header"),
+    /// for a track's base row.
+    struct HeaderParts {
+        juce::Rectangle<int> chevron, tag, number, name, rec, solo, mute, input, volume, resize;
+        std::array<juce::Rectangle<int>, 3> source;  ///< MIDI, Audio, Both.
+        // Expanded only.
+        juce::Rectangle<int> route, inserts, print, freeze, roll, score;
+    };
+
+    HeaderParts header_parts(const LaneView& l, juce::Rectangle<int> row) const
     {
-        auto header = row.withWidth(kHeader).withHeight(kLaneHeight);
-        g.setColour(selected ? colours::panel_raised : colours::panel);
-        g.fillRect(row.withWidth(kHeader).withTrimmedRight(1));
-        g.setColour(l.colour);
-        g.fillRect(header.withWidth(5));
-        auto text = header.reduced(14, 7).withTrimmedLeft(-2);
-        g.setColour(l.reference ? colours::accent_warm : (selected ? colours::text : colours::text.withAlpha(0.85f)));
-        g.setFont(juce::FontOptions(13.0f, selected ? juce::Font::bold : juce::Font::plain));
-        auto name_row = text.removeFromTop(18);
-        if (l.armed) {
-            g.setColour(colours::playhead);
-            g.fillEllipse(name_row.removeFromRight(10).withSizeKeepingCentre(9, 9).toFloat());
-            g.setColour(l.reference ? colours::accent_warm : (selected ? colours::text : colours::text.withAlpha(0.85f)));
+        HeaderParts p;
+        const int y = row.getY();
+        if (m_.has_audio_lane(l)) p.chevron = {9, y + 8, 14, 16};
+        p.tag = {26, y + 8, 44, 16};
+        p.number = {74, y + 6, 24, 20};
+        p.name = {102, y + 6, kHeader - 110, 20};
+        if (!l.bus) {
+            p.rec = {26, y + 30, 22, 18};
+            p.solo = {51, y + 30, 22, 18};
+            p.mute = {76, y + 30, 22, 18};
+            p.input = {101, y + 30, 22, 18};
+            p.volume = {kHeader - 66, y + 30, 56, 18};
         }
-        g.drawText(l.name, name_row, juce::Justification::centredLeft, true);
-        g.setColour(colours::text_dim);
-        g.setFont(juce::FontOptions(11.0f));
-        juce::String sub = l.reference ? juce::String("Temp / reference")
-                           : l.audio   ? juce::String(l.stereo ? "Audio - stereo" : "Audio - mono")
-                                       : l.version;
-        if (l.armed) sub << "  - armed";
-        g.drawText(sub, text.removeFromTop(15).withTrimmedRight(26), juce::Justification::centredLeft, true);
+        if (m_.has_audio_lane(l))
+            for (int i = 0; i < 3; ++i) p.source[static_cast<std::size_t>(i)] = {26 + i * 40, y + kHeaderTop, 38, 16};
+        if (m_.is_expanded(l) && row.getHeight() >= kHeaderTop + 120) {
+            p.route = {10, y + 76, kRollInset - 16, 18};
+            p.inserts = {10, y + 100, kRollInset - 16, 14};
+            p.print = {10, y + 120, 68, 20};
+            p.freeze = {82, y + 120, kRollInset - 92, 20};
+            p.roll = {10, y + 146, 68, 20};
+            p.score = {82, y + 146, kRollInset - 92, 20};
+        }
+        p.resize = {0, row.getBottom() - 4, kHeader, 5};
+        return p;
+    }
+
+    static juce::Colour type_colour(const LaneView& l)
+    {
+        if (l.bus) return hw::tok::type_aux;
+        if (l.audio || l.reference) return hw::tok::type_audio;
+        return l.midi_only ? hw::tok::type_midi : hw::tok::type_instrument;
+    }
+
+    static void key(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& legend, bool on, juce::Colour solid = {},
+                    bool enabled = true)
+    {
+        if (r.isEmpty()) return;
+        hw::paint::keycap(g, r.toFloat(), on, solid);
+        const bool solid_on = on && !solid.isTransparent();
+        g.setColour((solid_on ? juce::Colour(0xff101214) : on ? juce::Colours::white : hw::tok::text)
+                        .withAlpha(enabled ? 1.0f : 0.35f));
+        g.setFont(hw::fonts::silk(10.0f, 0.06f));
+        g.drawText(legend.toUpperCase(), r.toFloat().translated(0.0f, on ? 0.5f : -0.5f), juce::Justification::centred, false);
+    }
+
+    void paint_header(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> rows, bool selected)
+    {
+        const auto row = rows.withHeight(m_.base_height(l));
+        const auto column = rows.withWidth(kHeader);
+        g.setGradientFill(juce::ColourGradient::vertical(selected ? hw::tok::panel_top.brighter(0.08f) : hw::tok::panel_top,
+                                                         static_cast<float>(column.getY()), hw::tok::panel_bottom,
+                                                         static_cast<float>(column.getBottom())));
+        g.fillRect(column);
+        g.setColour(hw::tok::edge);
+        g.drawHorizontalLine(column.getBottom() - 1, 0.0f, static_cast<float>(kHeader));
+        // The colour stripe.
+        g.setColour(l.colour);
+        g.fillRect(column.withWidth(5));
+        if (selected) {
+            g.setColour(hw::Theme::get().led().withAlpha(0.7f));
+            g.drawRect(row.withWidth(kHeader).withTrimmedLeft(5), 1);
+        }
+        const auto p = header_parts(l, row);
+        // Chevron: expand or collapse the piano roll.
+        if (!p.chevron.isEmpty()) {
+            juce::Path tri;
+            const auto cr = p.chevron.toFloat();
+            const float cx = cr.getCentreX(), cy = cr.getCentreY();
+            if (m_.is_expanded(l)) tri.addTriangle(cx - 5.0f, cy - 3.0f, cx + 5.0f, cy - 3.0f, cx, cy + 4.0f);
+            else tri.addTriangle(cx - 3.0f, cy - 5.0f, cx - 3.0f, cy + 5.0f, cx + 4.0f, cy);
+            g.setColour(hw::tok::text);
+            g.fillPath(tri);
+        }
+        // Type tag, number and name.
+        const auto tc = type_colour(l);
+        g.setColour(tc.withAlpha(0.18f));
+        g.fillRoundedRectangle(p.tag.toFloat(), 3.0f);
+        g.setColour(tc);
+        g.drawRoundedRectangle(p.tag.toFloat().reduced(0.5f), 3.0f, 1.0f);
+        g.setFont(hw::fonts::silk(9.5f, 0.08f));
+        const juce::String tag = l.bus ? (l.bus_kind == "master" ? "MASTER" : "AUX")
+                                 : (l.audio || l.reference) ? "AUDIO"
+                                 : l.midi_only ? "MIDI"
+                                               : "INST";
+        g.drawText(tag, p.tag, juce::Justification::centred, false);
+        hw::paint::lcd_window(g, p.number.toFloat());
+        hw::paint::lcd_text(g, l.bus ? juce::String("--") : juce::String(l.number).paddedLeft('0', 2), p.number.toFloat(), 11.0f,
+                            juce::Justification::centred);
+        hw::paint::lcd_window(g, p.name.toFloat());
+        hw::paint::lcd_text(g, l.name.toUpperCase(), p.name.toFloat().reduced(5.0f, 0.0f), 11.0f, juce::Justification::centredLeft,
+                            l.reference ? 0.7f : 1.0f);
         paint_automation_button(g, l, row, m_.show_automation.count(l.id) > 0);
-        if (!l.takes.empty()) {
+        if (l.bus) return;
+        // R S M I, and the volume.
+        key(g, p.rec, "R", l.armed, hw::tok::rec);
+        key(g, p.solo, "S", l.solo, hw::tok::solo);
+        key(g, p.mute, "M", l.mute, hw::tok::mute);
+        key(g, p.input, "I", l.monitor_input, hw::tok::input_monitor);
+        hw::paint::lcd_window(g, p.volume.toFloat());
+        hw::paint::lcd_text(g, l.gain_db <= -59.95 ? juce::String("-INF") : juce::String(l.gain_db, 1) + " dB",
+                            p.volume.toFloat().reduced(4.0f, 0.0f), 10.0f, juce::Justification::centredRight);
+        // What the track plays: its MIDI, its audio lane, or both.
+        if (m_.has_audio_lane(l)) {
+            const char* names[] = {"MIDI", "Audio", "Both"};
+            const char* values[] = {"midi", "audio", "both"};
+            for (std::size_t i = 0; i < 3; ++i) key(g, p.source[i], names[i], l.playback == values[i]);
+        } else if (!l.takes.empty()) {
             const bool open = m_.show_takes.count(l.id) > 0;
             auto d = disclosure_rect(row);
             juce::Path tri;
             const float cx = static_cast<float>(d.getX()) + 4.0f, cy = static_cast<float>(d.getCentreY());
             if (open) tri.addTriangle(cx - 4.0f, cy - 2.5f, cx + 4.0f, cy - 2.5f, cx, cy + 3.0f);
             else tri.addTriangle(cx - 2.5f, cy - 4.0f, cx - 2.5f, cy + 4.0f, cx + 3.0f, cy);
-            g.setColour(colours::text_dim);
+            g.setColour(hw::tok::text);
             g.fillPath(tri);
-            g.setFont(juce::FontOptions(10.5f));
             const int n = static_cast<int>(l.takes.size());
-            g.drawText(juce::String(n) + (n == 1 ? " take lane" : " take lanes"), d.withTrimmedLeft(12),
-                       juce::Justification::centredLeft, true);
-        } else if (!l.reference && !l.audio) {
-            int count = static_cast<int>(l.score_notes.size());
-            for (const auto& r : l.regions) count += static_cast<int>(r.notes.size());
-            if (count > 0) {
-                g.setFont(juce::FontOptions(10.0f));
-                g.drawText(juce::String(count) + (count == 1 ? " note" : " notes"), text, juce::Justification::centredLeft);
-            }
+            hw::paint::silk(g, juce::String(n) + (n == 1 ? " take lane" : " take lanes"), d.withTrimmedLeft(12).toFloat(), 9.5f);
         } else if (l.audio) {
             int n = 0;
-            for (const auto& c : l.clips) n += c.lane == 0 ? 1 : 0;
-            if (n > 0) {
-                g.setFont(juce::FontOptions(10.0f));
-                g.drawText(juce::String(n) + (n == 1 ? " clip" : " clips"), text, juce::Justification::centredLeft);
+            for (const auto& clip : l.clips) n += clip.lane == 0 ? 1 : 0;
+            hw::paint::silk(g, juce::String(l.stereo ? "Stereo" : "Mono") + (n > 0 ? juce::String::fromUTF8(" \xc2\xb7 ") + juce::String(n) + (n == 1 ? " clip" : " clips") : juce::String()),
+                            disclosure_rect(row).toFloat(), 9.5f);
+        }
+        // Expanded: routing, inserts, print and freeze, piano roll | score.
+        if (!p.route.isEmpty()) {
+            hw::paint::lcd_window(g, p.route.toFloat());
+            hw::paint::lcd_text(g, l.route, p.route.toFloat().reduced(5.0f, 0.0f), 9.5f);
+            auto ins = p.inserts;
+            hw::paint::silk(g, "Ins", ins.removeFromLeft(26).toFloat(), 9.0f);
+            for (int i = 0; i < 5; ++i) {
+                const int state = i < static_cast<int>(l.inserts.size()) ? l.inserts[static_cast<std::size_t>(i)] : 0;
+                auto cell = ins.removeFromLeft(ins.getWidth() / (5 - i));
+                hw::paint::led(g, {static_cast<float>(cell.getX()) + 5.0f, static_cast<float>(cell.getCentreY())}, state == 1,
+                               state == 2 ? hw::tok::meter_amber : hw::Theme::get().led(), 5.0f);
+                hw::paint::silk(g, juce::String::charToString(static_cast<juce::juce_wchar>('A' + i)),
+                                cell.withTrimmedLeft(10).toFloat(), 8.5f);
             }
+            key(g, p.print, "Print", false, {}, false);
+            key(g, p.freeze, "Freeze", false, {}, false);
+            key(g, p.roll, "Piano roll", true);
+            key(g, p.score, "Score", false);
         }
     }
 
@@ -1584,11 +1847,11 @@ private:
     void paint_lane(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> rows, juce::Rectangle<int> timeline,
                     bool selected)
     {
-        const auto row = rows.withHeight(kLaneHeight);
+        const auto row = rows.withHeight(m_.base_height(l));
         paint_header(g, l, rows, selected);
 
         // Take lanes under the track.
-        if (m_.row_height(l) > kLaneHeight) {
+        if (m_.takes_height(l) > 0) {
             for (std::size_t k = 0; k < l.takes.size(); ++k) {
                 const auto take_row = juce::Rectangle<int>(0, row.getBottom() + static_cast<int>(k) * kTakeHeight,
                                                            rows.getWidth(), kTakeHeight);
@@ -1641,18 +1904,42 @@ private:
                            body.reduced(10, 0), juce::Justification::centredLeft);
             }
         } else {
-            paint_notes(g, l, body);
+            // The MIDI lane above, the track's own audio lane below.
+            const auto audio_lane = m_.clip_row(l, row).withLeft(kHeader).withRight(timeline.getRight());
+            auto midi = body.withBottom(audio_lane.getY());
+            if (m_.is_expanded(l)) midi = midi.withHeight(kHeaderTop);  // the piano roll fills the rest
+            const float dim = l.playback == "audio" ? 0.35f : 1.0f;
+            {
+                juce::Graphics::ScopedSaveState s(g);
+                g.reduceClipRegion(midi);
+                if (dim < 1.0f) g.beginTransparencyLayer(dim);
+                paint_notes(g, l, midi);
+                if (dim < 1.0f) g.endTransparencyLayer();
+            }
+            g.setColour(juce::Colours::black.withAlpha(0.28f));
+            g.fillRect(audio_lane);
+            g.setColour(hw::tok::type_audio.withAlpha(0.22f));
+            g.drawHorizontalLine(audio_lane.getY(), static_cast<float>(audio_lane.getX()), static_cast<float>(audio_lane.getRight()));
+            if (!has_main_clips && !(l.armed && m_.recording)) {
+                hw::paint::silk(g, l.playback == "midi" ? "Audio lane (off: this track plays its MIDI)"
+                                                        : "Audio lane - print the score to audio, or record here",
+                                audio_lane.reduced(10, 0).toFloat(), 9.0f, juce::Justification::centredLeft,
+                                hw::tok::silk.withAlpha(0.6f));
+            }
         }
 
+        const auto clips_row = m_.clip_row(l, row);
+        if (l.playback == "midi" && m_.has_audio_lane(l)) g.beginTransparencyLayer(0.4f);
         for (std::size_t i = 0; i < l.clips.size(); ++i)
-            if (l.clips[i].lane == 0) paint_clip(g, l, i, row, body, false);
+            if (l.clips[i].lane == 0) paint_clip(g, l, i, clips_row, body, false);
+        if (l.playback == "midi" && m_.has_audio_lane(l)) g.endTransparencyLayer();
 
         // A pass being recorded grows from where it started to the playhead.
         if (l.armed && m_.recording && m_.playhead > m_.record_start) {
             const float x0 = static_cast<float>(m_.x_of(static_cast<double>(m_.record_start)));
             const float x1 = static_cast<float>(m_.x_of(static_cast<double>(m_.playhead)));
-            auto rr = juce::Rectangle<float>(x0, static_cast<float>(row.getY()) + 3.0f, x1 - x0,
-                                             static_cast<float>(row.getHeight()) - 6.0f);
+            auto rr = juce::Rectangle<float>(x0, static_cast<float>(clips_row.getY()) + 3.0f, x1 - x0,
+                                             static_cast<float>(clips_row.getHeight()) - 6.0f);
             g.setColour(colours::playhead.withAlpha(0.28f));
             g.fillRoundedRectangle(rr, 3.0f);
             g.setColour(colours::playhead);
@@ -1721,36 +2008,40 @@ private:
     std::string drag_track_, drag_label_;
     project::AudioClip drag_clip_;
     double file_length_ = 0.0;  ///< Of the dragged clip's file, when known.
+    std::string resize_track_, resize_key_;
+    int resize_start_ = 0, resize_min_ = kMinRow;
+    juce::Component* roll_ = nullptr;
+    std::function<void(int inset)> roll_inset_;
+
+public:
+    /// The piano roll, placed inline in the expanded track's row.
+    void set_roll(juce::Component* roll, std::function<void(int)> set_inset)
+    {
+        roll_ = roll;
+        roll_inset_ = std::move(set_inset);
+        if (roll_) addChildComponent(*roll_);
+        layout_roll();
+    }
+    void layout_roll()
+    {
+        if (!roll_) return;
+        int top = -scroll_y_;
+        for (const auto& l : m_.lanes) {
+            if (m_.is_expanded(l)) {
+                const int h = m_.base_height(l) - kHeaderTop - kAudioLane;
+                roll_->setBounds(0, top + kHeaderTop, getWidth() - kScroll, std::max(0, h));
+                if (roll_inset_) roll_inset_(kRollInset);
+                roll_->setVisible(h > 0);
+                return;
+            }
+            top += m_.row_height(l);
+        }
+        roll_->setVisible(false);
+    }
+
+private:
     std::map<std::string, std::unique_ptr<AutomationLaneView>> views_;  ///< "owner/lane id" ("owner/+": empty row)
     std::vector<std::unique_ptr<AutomationLaneView>> graveyard_;
-};
-
-// --- Divider between the lanes and the piano roll ----------------------------------------------
-
-class Divider final : public juce::Component {
-public:
-    std::function<void(int)> on_drag;  ///< y delta since the drag began
-    std::function<void()> on_begin;
-
-    Divider() { setMouseCursor(juce::MouseCursor::UpDownResizeCursor); }
-    void paint(juce::Graphics& g) override
-    {
-        g.fillAll(colours::panel);
-        g.setColour(colours::outline);
-        g.drawHorizontalLine(0, 0.0f, static_cast<float>(getWidth()));
-        g.drawHorizontalLine(getHeight() - 1, 0.0f, static_cast<float>(getWidth()));
-        g.setColour(colours::text_dim.withAlpha(0.5f));
-        const float cx = getWidth() / 2.0f;
-        for (int i = -1; i <= 1; ++i) g.fillEllipse(cx + i * 7.0f - 1.5f, getHeight() / 2.0f - 1.5f, 3.0f, 3.0f);
-    }
-    void mouseDown(const juce::MouseEvent&) override
-    {
-        if (on_begin) on_begin();
-    }
-    void mouseDrag(const juce::MouseEvent& e) override
-    {
-        if (on_drag) on_drag(e.getDistanceFromDragStartY());
-    }
 };
 
 // --- Piano roll ------------------------------------------------------------------------------------
@@ -2015,13 +2306,21 @@ public:
     {
         const auto* l = m_.selected_lane();
         const std::string id = l ? l->id : std::string{};
+        std::size_t count = 0;
+        if (l) {
+            count = l->score_notes.size();
+            for (const auto& r : l->regions) count += r.notes.size();
+        }
         if (id != track_) {
             track_ = id;
             selection_.clear();
             perf_sel_.clear();
             drag_ = Drag::None;
             centre_on_notes();
+        } else if (note_count_ == 0 && count > 0) {
+            centre_on_notes();  // the track's first notes: bring them into view
         }
+        note_count_ = count;
         // Drop selected notes that no longer exist.
         if (l) {
             std::vector<NoteKey> kept;
@@ -2076,11 +2375,26 @@ public:
         auto header = r.removeFromTop(kRollHeader);
         snap_.setBounds(header.withTrimmedLeft(kHeader).removeFromLeft(110).reduced(0, 4));
         vscroll_.setBounds(getWidth() - kScroll, kRollHeader, kScroll, grid_area().getHeight());
+        // Opened or resized inline: the track's notes back in the middle.
+        if (grid_area().getHeight() != last_grid_height_) {
+            last_grid_height_ = grid_area().getHeight();
+            centre_on_notes();
+        }
         update_scroll();
     }
 
+    /// Inline in a track row: the header's left part belongs to the row.
+    void set_inset(int inset)
+    {
+        if (inset == inset_) return;
+        inset_ = inset;
+        repaint();
+    }
+    bool hitTest(int x, int y) override { return x >= inset_ && juce::Component::hitTest(x, y); }
+
     void paint(juce::Graphics& g) override
     {
+        if (inset_ > 0) g.reduceClipRegion(inset_, 0, getWidth() - inset_, getHeight());
         g.fillAll(colours::background);
         const auto* l = m_.selected_lane();
         paint_header(g, l);
@@ -3346,6 +3660,9 @@ private:
             }
     }
 
+    int last_grid_height_ = -1;
+    std::size_t note_count_ = 0;
+    int inset_ = 0;
     Model& m_;
     juce::ScrollBar vscroll_{true};
     juce::ComboBox snap_;
@@ -3381,11 +3698,19 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
     explicit Impl(SequencerView& o, AppContext& c)
         : owner(o), model(c), toolbar(model), ruler(model), lanes(model), roll(model)
     {
-        for (juce::Component* comp : std::initializer_list<juce::Component*>{&toolbar, &ruler, &lanes, &divider, &roll, &hscroll})
+        for (juce::Component* comp : std::initializer_list<juce::Component*>{&toolbar, &ruler, &lanes, &hscroll})
             owner.addAndMakeVisible(comp);
+        // The piano roll opens inline, in the expanded track's row (docs/spec/ui).
+        lanes.set_roll(&roll, [this](int inset) { roll.set_inset(inset); });
+        model.expanded_changed = [this] {
+            toolbar.roll_button().setToggleState(!model.expanded.empty(), juce::dontSendNotification);
+            lanes.update_scroll();
+            lanes.ensure_visible(model.expanded);
+            roll.document_changed();
+            lanes.repaint();
+        };
         style_scrollbar(hscroll);
         hscroll.addListener(this);
-        toolbar.roll_button().setToggleState(true, juce::dontSendNotification);
         toolbar.roll_button().onClick = [this] { set_roll_visible(toolbar.roll_button().getToggleState()); };
         model.view_changed = [this] { view_changed(); };
         model.open_piano_roll = [this] { set_roll_visible(true); };
@@ -3401,21 +3726,28 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
         };
         ruler.setComponentID("sequencer_ruler");
         lanes.setComponentID("sequencer_lanes");
-        divider.on_begin = [this] { drag_start_height = roll_height; };
-        divider.on_drag = [this](int dy) {
-            roll_height = juce::jlimit(kRollHeader + kVelocity + 4 * kKeyHeight, std::max(200, owner.getHeight() - 160),
-                                       drag_start_height - dy);
-            owner.resized();
-        };
         listener = c.session.add_listener([this](session::Change change) {
             if (change == session::Change::Document) {
                 model.rebuild();
+                // A new document opens with its selected track's piano roll inline.
+                if (model.ctx.session.document_generation() != generation) {
+                    generation = model.ctx.session.document_generation();
+                    const auto* sel = model.selected_lane();
+                    model.expanded = sel && model.has_audio_lane(*sel) ? sel->id : std::string();
+                    model.heights.clear();
+                    toolbar.roll_button().setToggleState(!model.expanded.empty(), juce::dontSendNotification);
+                }
                 lanes.update_scroll();
                 lanes.layout_automation(true);
                 roll.document_changed();
                 update_hscroll();
                 owner.repaint();
             } else if (change == session::Change::Selection) {
+                // An open piano roll follows the selected track.
+                if (!model.expanded.empty()) {
+                    const auto* sel = model.selected_lane();
+                    if (sel && model.has_audio_lane(*sel)) model.set_expanded(sel->id);
+                }
                 roll.document_changed();
                 lanes.ensure_visible(model.ctx.session.selected_track());
                 owner.repaint();
@@ -3423,16 +3755,20 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
         });
         model.rebuild();
         lanes.layout_automation(true);
+        generation = c.session.document_generation();
+        // The selected instrument track starts with its piano roll open.
+        if (const auto* sel = model.selected_lane(); sel && model.has_audio_lane(*sel)) model.set_expanded(sel->id);
+        toolbar.roll_button().setToggleState(!model.expanded.empty(), juce::dontSendNotification);
     }
 
     ~Impl() override { model.ctx.session.remove_listener(listener); }
 
+    /// Opens or closes the selected track's piano roll inline.
     void set_roll_visible(bool visible)
     {
-        roll_visible = visible;
-        toolbar.roll_button().setToggleState(visible, juce::dontSendNotification);
-        owner.resized();
-        if (visible) roll.document_changed();
+        const auto* sel = model.selected_lane();
+        model.set_expanded(visible && sel && model.has_audio_lane(*sel) ? sel->id : std::string());
+        toolbar.roll_button().setToggleState(!model.expanded.empty(), juce::dontSendNotification);
     }
 
     void layout()
@@ -3442,16 +3778,8 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
         toolbar.setBounds(r.removeFromTop(kToolbar));
         ruler.setBounds(r.removeFromTop(kRuler));
         hscroll.setBounds(r.removeFromBottom(kHScroll).withTrimmedLeft(kHeader).withTrimmedRight(kScroll));
-        divider.setVisible(roll_visible);
-        roll.setVisible(roll_visible);
-        if (roll_visible) {
-            if (roll_height <= 0) roll_height = juce::jmax(260, r.getHeight() * 52 / 100);
-            const int h = juce::jlimit(kRollHeader + kVelocity + 40, std::max(kRollHeader + kVelocity + 40, r.getHeight() - 90),
-                                       roll_height);
-            roll.setBounds(r.removeFromBottom(h));
-            divider.setBounds(r.removeFromBottom(kDivider));
-        }
         lanes.setBounds(r);
+        lanes.layout_roll();
         update_hscroll();
     }
 
@@ -3519,13 +3847,10 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
     Toolbar toolbar;
     Ruler ruler;
     LaneArea lanes;
-    Divider divider;
     PianoRoll roll;
     juce::ScrollBar hscroll{false};
     int listener = 0;
-    bool roll_visible = true;
-    int roll_height = 0;
-    int drag_start_height = 0;
+    std::uint64_t generation = 0;
 };
 
 namespace {
@@ -3605,6 +3930,45 @@ bool SequencerView::promote_take(session::Session& session, const std::string& t
 std::pair<std::string, std::string> SequencerView::selected_clip() const
 {
     return {impl_->model.clip_track, impl_->model.clip_id};
+}
+
+void SequencerView::select_clip(const std::string& track_id, const std::string& clip_id)
+{
+    auto& m = impl_->model;
+    context_.session.select_track(track_id);
+    const LaneView* lane = nullptr;
+    const auto* clip = m.clip(track_id, clip_id, &lane);
+    if (!clip) return;
+    m.clip_track = track_id;
+    m.clip_id = clip_id;
+    const double start = static_cast<double>(m.tempo.tick_at_seconds(clip->start_seconds));
+    if (start < m.view_start || start > m.view_start + m.visible_ticks() * 0.9) m.set_view_start(start - m.visible_ticks() * 0.1);
+    impl_->lanes.ensure_visible(track_id);
+    impl_->lanes.repaint();
+}
+
+std::string SequencerView::expanded_track() const { return impl_->model.expanded; }
+
+void SequencerView::set_expanded_track(const std::string& track_id)
+{
+    if (!track_id.empty()) context_.session.select_track(track_id);
+    impl_->model.set_expanded(track_id);
+}
+
+int SequencerView::row_height(const std::string& track_id) const
+{
+    const auto* l = impl_->model.lane(track_id);
+    return l ? impl_->model.base_height(*l) : 0;
+}
+
+void SequencerView::set_row_height(const std::string& track_id, int height)
+{
+    auto& m = impl_->model;
+    const auto* l = m.lane(track_id);
+    if (!l) return;
+    m.heights[m.is_expanded(*l) ? track_id + "#x" : track_id] = juce::jlimit(m.min_height(*l), 600, height);
+    impl_->lanes.update_scroll();
+    impl_->lanes.repaint();
 }
 
 void SequencerView::paint(juce::Graphics& g) { g.fillAll(colours::background); }

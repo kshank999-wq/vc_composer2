@@ -71,6 +71,7 @@ public:
     shell::SelectionPanel& selection_panel() noexcept { return selection_; }
     composer_ui::Inspector& inspector() noexcept { return inspector_; }
     shell::KeyboardDeck& keyboard() noexcept { return keyboard_; }
+    shell::ClipsPanel& clips_panel() noexcept { return clips_; }
     shell::ChannelPanel& channel_panel() noexcept { return channel_; }
     shell::StatusStrip& status_strip() noexcept { return status_strip_; }
     /// The stage bar: 0 Compose, 1 Score, 2 Mix, 3 Master.
@@ -117,6 +118,7 @@ private:
     shell::EditFrame edit_;
     shell::MarkersPanel markers_;
     shell::NewTrackPanel new_track_;
+    shell::ClipsPanel clips_;
     shell::SelectionPanel selection_;
     composer_ui::Inspector inspector_;
     shell::ChannelPanel channel_;

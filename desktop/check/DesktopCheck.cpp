@@ -1957,6 +1957,131 @@ void loop_and_keyboard_checks(MainWindow& window, const juce::File& dir)
     pump(50);
 }
 
+/// Producer view tracks (step 6): instrument rows with their own audio lane,
+/// what each plays, expanding with the piano roll inline, resizing, the
+/// header keys and the Clips list.
+void producer_track_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.horror.psychological");
+    std::string error;
+    session.save_as(dir.getChildFile("producer-check.vcc2").getFullPathName().toStdString(), &error);
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(200);
+    auto& seq = main.sequencer();
+    const auto tracks = session.music_tracks();
+    std::vector<std::string> inst;
+    for (const auto* t : tracks)
+        if (t->kind == project::TrackKind::Instrument) inst.push_back(t->id);
+    if (inst.size() < 2) {
+        check(false, "the template has instrument tracks");
+        return;
+    }
+    const std::string first = inst[0], second = inst[1];
+    session.select_track(first);
+    pump(80);
+
+    // Rows: 272 px expanded with the piano roll inline, 72 collapsed, 84 audio.
+    auto* roll = find_named(main, "vcc-piano-roll");
+    auto* lanes = find_by_id(main, "sequencer_lanes");
+    check(seq.expanded_track() == first && seq.row_height(first) == 272 && seq.row_height(second) == 72 && roll &&
+              roll->isVisible() && roll->getParentComponent() == lanes,
+          "the selected instrument track opens 272 px tall with its piano roll inline; others are 72 px");
+    const auto audio = session.add_audio_track("Vox", false);
+    pump(80);
+    check(seq.row_height(audio) == 84, "an audio track's row is 84 px");
+    session.select_track(second);
+    pump(80);
+    check(seq.expanded_track() == second && seq.row_height(first) == 72, "the open piano roll follows the selected track");
+    seq.set_expanded_track(first);
+    pump(80);
+
+    // Dragging the bottom edge of a header resizes the row.
+    if (lanes) {
+        const int h = seq.row_height(first);
+        drag(*lanes, {100.0f, static_cast<float>(h - 2)}, {100.0f, static_cast<float>(h + 38)});
+        pump(50);
+        check(seq.row_height(first) == h + 40, "dragging a header's bottom edge resizes the row (" + juce::String(h) +
+                                                    " -> " + juce::String(seq.row_height(first)) + ")");
+        // The MIDI | Audio | Both keys choose what the track plays.
+        const juce::Point<float> audio_key(26.0f + 40.0f + 19.0f, 52.0f + 8.0f);
+        lanes->mouseDown(mouse_event(*lanes, audio_key, audio_key, false));
+        lanes->mouseUp(mouse_event(*lanes, audio_key, audio_key, false));
+        pump(50);
+        check(session.data().find_track(first)->playback == "audio", "the header's Audio key makes the track play its audio lane");
+        session.undo();
+        // S and M.
+        const juce::Point<float> solo(51.0f + 11.0f, 30.0f + 9.0f);
+        lanes->mouseDown(mouse_event(*lanes, solo, solo, false));
+        lanes->mouseUp(mouse_event(*lanes, solo, solo, false));
+        pump(50);
+        check(session.data().find_track(first)->solo, "the header's S key solos the track");
+        session.set_solo(first, false);
+    }
+
+    // The instrument track's own audio lane: a printed WAV plays when the
+    // track plays audio (or both), and is silent when it plays MIDI.
+    const auto file = dir.getChildFile("Audio Files").getChildFile("print.wav");
+    file.getParentDirectory().createDirectory();
+    file.deleteFile();
+    {
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(2).withBitsPerSample(24));
+        juce::AudioBuffer<float> wave(2, 48000 * 4);
+        for (int i = 0; i < wave.getNumSamples(); ++i) {
+            const float s = 0.3f * std::sin(2.0f * juce::MathConstants<float>::pi * 330.0f * static_cast<float>(i) / 48000.0f);
+            wave.setSample(0, i, s);
+            wave.setSample(1, i, s);
+        }
+        if (writer) writer->writeFromAudioSampleBuffer(wave, 0, wave.getNumSamples());
+    }
+    project::AudioClip clip;
+    clip.file = "Audio Files/print.wav";
+    clip.name = "Celli_PRINT_01";
+    clip.length = 4.0;
+    clip.channels = 2;
+    clip.file_sample_rate = 48000.0;
+    const auto clip_ids = session.add_audio_clips({{first, clip}}, "Print");
+    pump(100);
+    auto level = [&](const std::string& playback) {
+        session.set_playback(first, playback);
+        for (const auto& id : inst)
+            if (id != first) session.set_mute(id, true);
+        PlaybackEngine e(session, ctx.plugins);
+        e.prepare_offline(48000.0, 512);
+        e.locate(0);
+        e.play();
+        juce::AudioBuffer<float> out(2, 512);
+        double energy = 0.0;
+        for (int b = 0; b < 120; ++b) {
+            e.render_offline(out, 512);
+            if (b >= 20) energy += out.getRMSLevel(0, 0, 512);
+        }
+        e.stop();
+        return energy / 100.0;
+    };
+    const double heard_audio = level("audio"), heard_both = level("both"), heard_midi = level("midi");
+    check(heard_audio > 0.05 && heard_both > 0.05 && heard_midi < 0.005,
+          "an instrument track's audio lane plays on Audio and Both, and is silent on MIDI (" + juce::String(heard_audio, 3) +
+              " / " + juce::String(heard_both, 3) + " / " + juce::String(heard_midi, 4) + ")");
+    session.set_playback(first, "both");
+    for (const auto& id : inst) session.set_mute(id, false);
+    pump(80);
+
+    // The Clips list: the printed clip, click to select it and go there.
+    auto& clips = main.clips_panel();
+    check(clips.isVisible() && clips.rows() == 1, "the Clips list in the Producer rack lists the clip on the track's audio lane");
+    clips.choose(0);
+    pump(80);
+    check(!clip_ids.empty() && seq.selected_clip() == std::make_pair(first, clip_ids.front()),
+          "choosing a clip in the list selects it in its track's audio lane");
+    shoot(main, dir, "31-producer-tracks");
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -2775,6 +2900,7 @@ int main(int argc, char** argv)
         selection_and_shortcut_checks(window, dir);
         composer_lane_checks(window, dir);
         loop_and_keyboard_checks(window, dir);
+        producer_track_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

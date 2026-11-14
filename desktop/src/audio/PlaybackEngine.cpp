@@ -987,15 +987,21 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
                 watch_plugin(pi->instance(), pi, pi->has_watch(),
                              [pi](std::unique_ptr<ParameterWatch> w) { pi->set_watch(std::move(w)); },
                              instrument_watch_targets_, t->id, "plugin:");
-            project::RenderedTrack r = render_cache_.render(*t);
-            if (st.instrument->wants_keyswitches()) r.notes.insert(r.notes.end(), r.keyswitches.begin(), r.keyswitches.end());
-            st.events = to_events(r.notes, r.controllers, d.tempo, sample_rate_);
+            // A track set to play only its audio lane keeps its instrument
+            // (for a MIDI keyboard) but sends it none of its notes.
+            if (t->playback != "audio") {
+                project::RenderedTrack r = render_cache_.render(*t);
+                if (st.instrument->wants_keyswitches()) r.notes.insert(r.notes.end(), r.keyswitches.begin(), r.keyswitches.end());
+                st.events = to_events(r.notes, r.controllers, d.tempo, sample_rate_);
+            }
             st.midi.ensureSize(4096);
         }
         if (const project::TrackVersion* v = t->active_version()) {
             juce::StringArray problems;
+            // An instrument track set to "midi" leaves its audio lane silent.
+            const bool lane_silent = has_instrument(*t) && t->playback == "midi";
             for (const auto& c : v->audio_clips) {
-                if (c.lane != 0 || c.muted || c.length <= 0.0) continue;
+                if (lane_silent || c.lane != 0 || c.muted || c.length <= 0.0) continue;
                 const std::int64_t length = std::llround(c.length * sample_rate_);
                 const std::int64_t offset = std::llround(std::max(0.0, c.source_offset) * sample_rate_);
                 const std::string path = session_.resolve_audio_path(c.file);

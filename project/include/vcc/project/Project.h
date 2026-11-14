@@ -298,6 +298,10 @@ struct Track {
     bool input_stereo = false;  ///< Records input, input + 1.
     bool record_armed = false;
     std::string monitor = "auto";  ///< "auto" (input while armed and stopped/recording), "input", "off".
+    /// What an instrument or MIDI track plays (docs/spec/ui, Producer view):
+    /// "midi" (its notes through its instrument), "audio" (only its own
+    /// audio lane - say, the score printed to audio) or "both".
+    std::string playback = "both";
     std::vector<AutomationLane> automation;
     std::string automation_mode = "read";
     bool include_in_export = true;  ///< False for Reference tracks unless the user opts in.
