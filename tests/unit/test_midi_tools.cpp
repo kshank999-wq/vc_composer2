@@ -254,3 +254,56 @@ TEST_CASE("importing a MIDI file: parts become tracks with regions, tempo and me
     CHECK(!s.import_midi_file(path, {}, 0).error.empty());
     std::filesystem::remove(path);
 }
+
+TEST_CASE("MIDI comping: a range of a take replaces the main lane's notes there; promote swaps")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Keys", "keys.piano");
+    const Ticks bar = s.data().meter.bar_start(2);
+    project::MidiRegion take1, take2;
+    take1.start = take2.start = 0;
+    take1.end = take2.end = 2 * bar;
+    for (int i = 0; i < 8; ++i) {
+        take1.notes.push_back({i * Q, Q / 2, 60, 80, 0, {}});
+        take2.notes.push_back({i * Q, Q / 2, 72, 90, 0, {}});
+    }
+    take2.controllers.push_back({Q * 5, 0, 64, 127});
+    s.add_recorded_regions({{t, take1}}, "Record MIDI");
+    s.add_recorded_regions({{t, take2}}, "Record MIDI");  // take 2 main, take 1 on lane 1
+    auto regions = [&] { return s.data().find_track(t)->active_version()->regions; };
+    std::string take1_id;
+    for (const auto& r : regions())
+        if (r.lane == 1) take1_id = r.id;
+    REQUIRE(!take1_id.empty());
+
+    // Beats 3-5 (ticks 2Q..5Q) from take 1: its 60s there, take 2's 72s elsewhere.
+    CHECK(s.comp_region_take(t, take1_id, 2 * Q, 5 * Q));
+    CHECK(s.undo_label() == "Comp take");
+    const project::MidiRegion* main = nullptr;
+    for (const auto& r : regions())
+        if (r.lane == 0) main = &r;
+    REQUIRE(main != nullptr);
+    std::vector<NoteEvent> notes = main->notes;
+    std::sort(notes.begin(), notes.end());
+    REQUIRE(notes.size() == 8);
+    for (const auto& n : notes) CHECK(n.pitch == (n.start >= 2 * Q && n.start < 5 * Q ? 60 : 72));
+    CHECK(main->controllers.size() == 1);  // the pedal at 5Q is outside the range: kept
+
+    // A range over take 1 where the main lane has nothing: a new main region.
+    s.undo();
+    project::MidiRegion late;
+    late.start = 4 * bar;
+    late.end = 5 * bar;
+    late.notes = {{4 * bar, Q, 50, 70, 0, {}}};
+    late.lane = 0;
+    s.add_recorded_regions({{t, late}}, "Record MIDI");  // lands on lane 0, nothing overlaps
+    // Promote take 1: take 2 (main, overlapping) goes to take 1's lane.
+    CHECK(s.promote_region_take(t, take1_id));
+    int main_60 = 0;
+    for (const auto& r : regions())
+        if (r.lane == 0)
+            for (const auto& n : r.notes) main_60 += n.pitch == 60 ? 1 : 0;
+    CHECK(main_60 == 8);
+    CHECK(!s.promote_region_take(t, take1_id));  // already on the main lane
+}

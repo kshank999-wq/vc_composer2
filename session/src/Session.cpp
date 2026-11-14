@@ -1377,6 +1377,83 @@ bool Session::draw_region_controller(const std::string& track_id, const std::str
     });
 }
 
+bool Session::comp_region_take(const std::string& track_id, const std::string& take_region_id, Ticks from, Ticks to)
+{
+    if (to <= from) return false;
+    const std::string new_id = project_.ids().next("rgn");
+    return edit("Comp take", [&](project::ProjectData& d) {
+        project::Track* t = d.find_track(track_id);
+        project::TrackVersion* v = t ? t->active_version() : nullptr;
+        if (!v) return false;
+        const project::MidiRegion* take = nullptr;
+        for (const auto& r : v->regions)
+            if (r.id == take_region_id && r.lane > 0) take = &r;
+        if (!take) return false;
+        from = std::max(from, take->start);
+        to = std::min(to, take->end);
+        if (to <= from) return false;
+        auto inside = [&](Ticks tick) { return tick >= from && tick < to; };
+        std::vector<NoteEvent> notes;
+        std::vector<ControllerEvent> controllers;
+        for (const auto& n : take->notes)
+            if (inside(n.start)) notes.push_back(n);
+        for (const auto& e : take->controllers)
+            if (inside(e.tick)) controllers.push_back(e);
+        // The main lane makes room: what starts in the range goes.
+        bool changed = false;
+        for (auto& r : v->regions) {
+            if (r.lane != 0) continue;
+            const auto n0 = r.notes.size(), c0 = r.controllers.size();
+            r.notes.erase(std::remove_if(r.notes.begin(), r.notes.end(), [&](const NoteEvent& n) { return inside(n.start); }),
+                          r.notes.end());
+            r.controllers.erase(std::remove_if(r.controllers.begin(), r.controllers.end(),
+                                               [&](const ControllerEvent& e) { return inside(e.tick); }),
+                                r.controllers.end());
+            changed = changed || r.notes.size() != n0 || r.controllers.size() != c0;
+        }
+        if (notes.empty() && controllers.empty()) return changed;
+        // Into the main-lane region the range starts in (or overlaps), else a new one.
+        project::MidiRegion* target = nullptr;
+        for (auto& r : v->regions)
+            if (r.lane == 0 && r.start <= from && from < r.end) target = &r;
+        if (!target)
+            for (auto& r : v->regions)
+                if (r.lane == 0 && r.start < to && from < r.end) target = &r;
+        if (!target) {
+            project::MidiRegion r;
+            r.id = new_id;
+            r.start = d.meter.bar_start(d.meter.bar_at(from));
+            r.end = d.meter.bar_start(d.meter.bar_at(to - 1) + 1);
+            r.source = take->source;
+            v->regions.push_back(std::move(r));
+            target = &v->regions.back();
+        }
+        target->notes.insert(target->notes.end(), notes.begin(), notes.end());
+        target->controllers.insert(target->controllers.end(), controllers.begin(), controllers.end());
+        project::remove_overlaps(target->notes);
+        fit_region(*target, d.meter);
+        return true;
+    });
+}
+
+bool Session::promote_region_take(const std::string& track_id, const std::string& take_region_id)
+{
+    return edit("Promote take", [&](project::ProjectData& d) {
+        project::Track* t = d.find_track(track_id);
+        project::TrackVersion* v = t ? t->active_version() : nullptr;
+        if (!v) return false;
+        project::MidiRegion* take = nullptr;
+        for (auto& r : v->regions)
+            if (r.id == take_region_id) take = &r;
+        if (!take || take->lane == 0) return false;
+        const int lane = take->lane;
+        for (auto& r : v->regions)
+            if (r.lane == 0 && r.start < take->end && take->start < r.end) r.lane = lane;
+        take->lane = 0;
+        return true;
+    });
+}
+
 bool Session::set_input_quantize(const std::string& track_id, Ticks grid)
 {
     return edit("Input quantize", on_track(track_id, [&](project::Track& t) {

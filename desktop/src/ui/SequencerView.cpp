@@ -80,7 +80,8 @@ struct LaneView {
     /// Written start and end of each score note's tie chain, in the score.
     std::map<notation::EventId, std::pair<Ticks, Ticks>> score_span;
     std::map<notation::EventId, project::NoteOverride> performance;
-    std::vector<RegionView> regions;
+    std::vector<RegionView> regions;       ///< Main lane: what plays.
+    std::vector<RegionView> take_regions;  ///< MIDI takes on take lanes (silent).
     int lo = 48, hi = 72;  ///< Pitch span for the lane's mini roll.
     int range_lo = 21, range_hi = 108;
     // Audio (Main Spec §11).
@@ -498,8 +499,12 @@ struct Model final : AutomationTimeline {
                     l.score_ids.clear();
                     l.score_written.clear();
                 }
-                for (const auto& r : v->regions)
-                    l.regions.push_back(RegionView{r.id, r.source, r.start, r.end, r.lane, r.notes, r.controllers});
+                for (const auto& r : v->regions) {
+                    (r.lane == 0 ? l.regions : l.take_regions)
+                        .push_back(RegionView{r.id, r.source, r.start, r.end, r.lane, r.notes, r.controllers});
+                    if (r.lane > 0 && std::find(l.takes.begin(), l.takes.end(), r.lane) == l.takes.end()) l.takes.push_back(r.lane);
+                }
+                std::sort(l.takes.begin(), l.takes.end());
             }
             int lo = 128, hi = -1;
             auto take = [&](const NoteEvent& n) {
@@ -1239,6 +1244,21 @@ public:
         const int index = clip_at(lane, hit, e.position);
         if (index < 0) {
             select_clip({}, {});
+            // A MIDI take: drag across it to comp that part onto the main lane.
+            if (const auto* take = take_region_at(lane, hit, e.position)) {
+                grabKeyboardFocus();
+                if (e.mods.isPopupMenu()) {
+                    show_take_region_menu(lane, *take);
+                    return;
+                }
+                drag_ = Drag::Comp;
+                drag_track_ = track;
+                comp_midi_ = take->id;
+                comp_lo_ = m_.tempo.seconds_at(take->start);
+                comp_hi_ = m_.tempo.seconds_at(take->end);
+                comp_row_ = hit.row.toFloat().withX(static_cast<float>(kHeader)).withWidth(static_cast<float>(getWidth() - kHeader));
+                comp_from_ = comp_to_ = comp_seconds(e.x, e.mods.isCommandDown());
+            }
             return;
         }
         const auto& c = lane.clips[static_cast<std::size_t>(index)];
@@ -1255,6 +1275,9 @@ public:
         // the main lane. Alt-drag moves the take instead.
         if (hit.take > 0 && drag_ == Drag::Move && !e.mods.isAltDown()) {
             drag_ = Drag::Comp;
+            comp_midi_.clear();
+            comp_lo_ = c.start_seconds;
+            comp_hi_ = c.end_seconds();
             comp_row_ = rect.withX(static_cast<float>(kHeader)).withWidth(static_cast<float>(getWidth() - kHeader));
             comp_from_ = comp_to_ = comp_seconds(e.x, e.mods.isCommandDown());
         }
@@ -1356,8 +1379,14 @@ public:
             drag_ = Drag::None;
             repaint();
             const double a = std::min(comp_from_, comp_to_), b = std::max(comp_from_, comp_to_);
-            if (b - a > 0.01 && m_.ctx.session.comp_take(drag_track_, drag_clip_.id, a, b))
+            if (!comp_midi_.empty()) {
+                const Ticks ta = m_.tempo.tick_at_seconds(a), tb = m_.tempo.tick_at_seconds(b);
+                if (tb > ta && m_.ctx.session.comp_region_take(drag_track_, comp_midi_, ta, tb))
+                    m_.ctx.status("Comped " + juce::String(b - a, 2) + " s of this MIDI take onto the main lane");
+                comp_midi_.clear();
+            } else if (b - a > 0.01 && m_.ctx.session.comp_take(drag_track_, drag_clip_.id, a, b)) {
                 m_.ctx.status("Comped " + juce::String(b - a, 2) + " s onto the main lane");
+            }
         }
         drag_ = Drag::None;
         resize_track_.clear();
@@ -1387,6 +1416,8 @@ public:
                     case Drag::Comp:
                     case Drag::None: shape = juce::MouseCursor::NormalCursor; break;
                 }
+            } else if (take_region_at(*hit.lane, hit, e.position)) {
+                shape = juce::MouseCursor::IBeamCursor;  // a MIDI take: drag to comp
             }
         } else if (hit.lane && !hit.lane->takes.empty() && disclosure_rect(hit.row).contains(e.getPosition())) {
             shape = juce::MouseCursor::PointingHandCursor;
@@ -1403,6 +1434,8 @@ public:
             // Double-click a take: the whole take onto the main lane.
             const int index = clip_at(*hit.lane, hit, e.position);
             if (index >= 0) promote_take(m_.ctx.session, hit.lane->id, hit.lane->clips[static_cast<std::size_t>(index)].id);
+            else if (const auto* take = take_region_at(*hit.lane, hit, e.position))
+                m_.ctx.session.promote_region_take(hit.lane->id, take->id);
             return;
         }
         if (hit.lane && m_.has_audio_lane(*hit.lane) && hit.take == 0) {
@@ -1866,6 +1899,20 @@ private:
         return Drag::Move;
     }
 
+    void show_take_region_menu(const LaneView& lane, const RegionView& r)
+    {
+        const std::string track = lane.id, id = r.id;
+        juce::PopupMenu menu;
+        menu.addSectionHeader("MIDI take (lane " + juce::String(r.lane) + ")");
+        menu.addItem("Promote take", [this, track, id] { m_.ctx.session.promote_region_take(track, id); });
+        menu.addItem("Comp all of it onto the main lane", [this, track, id, from = r.start, to = r.end] {
+            m_.ctx.session.comp_region_take(track, id, from, to);
+        });
+        const bool open = m_.show_takes.count(track) > 0;
+        menu.addItem(open ? "Hide take lanes" : "Show take lanes", [this, track] { toggle_takes(track); });
+        menu.showMenuAsync({});
+    }
+
     void show_clip_menu(const LaneView& lane, const project::AudioClip& c)
     {
         auto& session = m_.ctx.session;
@@ -2207,6 +2254,8 @@ private:
                 g.reduceClipRegion(body);
                 for (std::size_t i = 0; i < l.clips.size(); ++i)
                     if (l.clips[i].lane == l.takes[k]) paint_clip(g, l, i, take_row, body, true);
+                for (const auto& r : l.take_regions)
+                    if (r.lane == l.takes[k]) paint_take_region(g, l, r, take_row);
             }
         }
 
@@ -2340,6 +2389,46 @@ private:
             }
     }
 
+    /// A MIDI take in its take lane: the region and a mini roll of its notes.
+    void paint_take_region(juce::Graphics& g, const LaneView& l, const RegionView& r, juce::Rectangle<int> take_row) const
+    {
+        const auto rr = take_region_rect(r, take_row);
+        g.setColour(l.colour.withAlpha(0.10f));
+        g.fillRoundedRectangle(rr, 3.0f);
+        g.setColour(l.colour.withAlpha(0.55f));
+        g.drawRoundedRectangle(rr, 3.0f, 1.0f);
+        g.setColour(colours::text_dim);
+        g.setFont(juce::FontOptions(9.5f));
+        g.drawText(short_source(r.source), rr.withHeight(11.0f).reduced(4.0f, 0.0f), juce::Justification::centredLeft, true);
+        const auto area = rr.withTrimmedTop(11.0f).reduced(0.0f, 2.0f);
+        const float span = static_cast<float>(std::max(12, l.hi - l.lo + 1));
+        g.setColour(l.colour.brighter(0.4f).withAlpha(0.85f));
+        for (const auto& n : r.notes) {
+            const float x0 = static_cast<float>(m_.x_of(static_cast<double>(n.start)));
+            const float x1 = static_cast<float>(m_.x_of(static_cast<double>(n.end())));
+            const float y = area.getBottom() - (static_cast<float>(juce::jlimit(l.lo, l.hi, n.pitch) - l.lo) + 0.5f) /
+                                                   span * area.getHeight();
+            g.fillRect(juce::Rectangle<float>(x0, y - 1.0f, std::max(1.5f, x1 - x0 - 0.5f), 2.0f));
+        }
+    }
+
+    juce::Rectangle<float> take_region_rect(const RegionView& r, juce::Rectangle<int> take_row) const
+    {
+        const float x0 = static_cast<float>(m_.x_of(static_cast<double>(r.start)));
+        const float x1 = static_cast<float>(m_.x_of(static_cast<double>(r.end)));
+        return {x0 + 0.5f, static_cast<float>(take_row.getY()) + 2.0f, std::max(2.0f, x1 - x0 - 1.0f),
+                static_cast<float>(take_row.getHeight()) - 5.0f};
+    }
+
+    /// The MIDI take under `p` in a take row, or null.
+    const RegionView* take_region_at(const LaneView& l, const Hit& hit, juce::Point<float> p) const
+    {
+        if (hit.take <= 0) return nullptr;
+        for (auto it = l.take_regions.rbegin(); it != l.take_regions.rend(); ++it)
+            if (it->lane == hit.take && take_region_rect(*it, hit.row).contains(p)) return &*it;
+        return nullptr;
+    }
+
     Model& m_;
     juce::ScrollBar vscroll_{true};
     int scroll_y_ = 0;
@@ -2352,12 +2441,14 @@ private:
     std::string drop_track_;
     // Swipe comping: the range in project seconds, inside the take.
     double comp_from_ = 0.0, comp_to_ = 0.0;
+    double comp_lo_ = 0.0, comp_hi_ = 0.0;  ///< The take's span.
+    std::string comp_midi_;                 ///< A MIDI take being comped (empty: an audio take).
     juce::Rectangle<float> comp_row_;
     double comp_seconds(int x, bool free) const
     {
         const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(std::llround(m_.tick_of(x))));
         const double s = m_.tempo.seconds_at(free ? t : m_.snap(t, m_.clip_grid(), false));
-        return juce::jlimit(drag_clip_.start_seconds, drag_clip_.end_seconds(), s);
+        return juce::jlimit(comp_lo_, comp_hi_, s);
     }
     std::string resize_track_, resize_key_;
     int resize_start_ = 0, resize_min_ = kMinRow;

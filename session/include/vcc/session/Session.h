@@ -276,6 +276,14 @@ public:
     /// CC"). The region grows, to whole bars, to hold them.
     bool draw_region_controller(const std::string& track_id, const std::string& region_id, int cc, Ticks from, Ticks to,
                                 std::vector<ControllerEvent> points);
+    /// MIDI comping: the notes (by where they start) and controllers of a
+    /// take region (lane > 0) between `from` and `to` replace the main
+    /// lane's there ("Comp take"). They join the main-lane region at `from`,
+    /// or a new one of whole bars. Returns false when nothing changed.
+    bool comp_region_take(const std::string& track_id, const std::string& take_region_id, Ticks from, Ticks to);
+    /// Swaps a MIDI take onto the main lane; main-lane regions it overlaps
+    /// go to its lane ("Promote take").
+    bool promote_region_take(const std::string& track_id, const std::string& take_region_id);
     /// Input quantize for MIDI recorded onto the track (0: off). One undo step.
     bool set_input_quantize(const std::string& track_id, Ticks grid);
 
