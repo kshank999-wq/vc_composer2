@@ -208,7 +208,7 @@ ImportSummary Session::import_musicxml(const std::string& xml, bool replace_proj
             t.instrument_standard_id = p.instrument;
             t.include_in_export = true;
             t.output_bus_id = "bus-master";
-            t.versions.push_back({p.version, "Version 1", {}, p.part->score, {}, {}, {}, std::nullopt, {}});
+            t.versions.push_back({p.version, "Version 1", {}, p.part->score, {}, {}, {}, std::nullopt, {}, {}});
             t.active_version_id = p.version;
             const templates::InstrumentDef* def = catalogs_.instruments.find(p.instrument);
             if (def) {

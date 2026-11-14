@@ -148,6 +148,7 @@ void Session::reset(project::Project p, const std::string& path)
     path_ = path;
     dirty_ = false;
     selection_ = {};
+    ++generation_;
     auto tracks = music_tracks();
     if (!tracks.empty()) selection_.track = tracks.front()->id;
     notify(Change::Document);

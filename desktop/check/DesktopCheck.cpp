@@ -22,6 +22,9 @@
 #include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
 #include "ui/hw/HwGallery.h"
+#include "ui/composer/ComposerRuler.h"
+#include "ui/composer/Inspector.h"
+#include "ui/composer/LaneParts.h"
 #include "ui/VideoWindow.h"
 #include "vcc/media/VideoDecoder.h"
 #include "vcc/project/Automation.h"
@@ -1697,6 +1700,136 @@ void selection_and_shortcut_checks(MainWindow& window, const juce::File& dir)
     main.use_shortcut_profile("Composer 2");
 }
 
+/// Step 4 (docs/05): the Composer view's lanes, ruler rows, phrase blocks,
+/// note-value keypad and inspector.
+void composer_lane_checks(MainWindow& window, const juce::File& dir)
+{
+    using composer::Command;
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.horror.psychological");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(200);
+    const std::string track = session.selected_track();
+    auto& composer = main.composer();
+    composer.grabKeyboardFocus();
+    const Ticks q = kTicksPerQuarter, bar = 4 * kTicksPerQuarter;
+
+    // Geometry: 220 px headers, a 108 px single-staff row and a 120 px bar at 100%.
+    check(composer.strip_count() > 1 && composer.header(0).getWidth() == composer_ui::TrackHeader::kWidth,
+          "each track row starts with its 220 px header");
+    const int row = composer.header(0).getHeight();
+    check(row >= 104 && row <= 112, "a single-staff row is 108 px at 100% (" + juce::String(row) + ")");
+    auto& lane0 = composer.lane(0);
+    const float bar_px = lane0.x_of_tick(2 * bar) - lane0.x_of_tick(bar);
+    check(std::abs(bar_px - 120.0f) < 1.5f, "a bar of 4/4 is 120 px at 100% (" + juce::String(bar_px, 1) + ")");
+    bool aligned = true;
+    for (int i = 1; i < composer.strip_count(); ++i)
+        if (std::abs(composer.lane(i).x_of_tick(bar) - lane0.x_of_tick(bar)) > 0.5f) aligned = false;
+    check(aligned, "bars line up across every lane, key signature or not");
+    check(std::abs(composer.x_of_tick(bar) - (220.0f + lane0.x_of_tick(bar))) < 0.5f,
+          "the ruler rows share the lanes' timeline");
+
+    // A C chord in bar 1, then a line in bar 2; the 6 key (half) is lit after
+    // choosing it from the toolbar for the next note.
+    composer.keyPressed(juce::KeyPress('7'));
+    composer.keyPressed(juce::KeyPress('c'));
+    composer.keyPressed(juce::KeyPress('E', juce::ModifierKeys::shiftModifier, 'E'));
+    composer.keyPressed(juce::KeyPress('G', juce::ModifierKeys::shiftModifier, 'G'));
+    composer.keyPressed(juce::KeyPress('5'));
+    for (const char ch : {'d', 'e', 'f', 'g'}) composer.keyPressed(juce::KeyPress(ch));
+    pump(80);
+    if (auto* k = main.toolbar().command_key(Command::SelectDurationHalf)) k->triggerClick();
+    pump(150);
+    const auto* half = main.toolbar().command_key(Command::SelectDurationHalf);
+    const auto* quarter = main.toolbar().command_key(Command::SelectDurationQuarter);
+    check(half && quarter && half->getToggleState() && !quarter->getToggleState() &&
+              composer.cursor() && composer.cursor()->duration.value == notation::NoteValue::Half,
+          "the note-value keypad chooses the next note's value and lights it");
+    check(half && half->getButtonText() == "6" && quarter->getButtonText() == "5",
+          "the keypad prints the Finale/Sibelius numbers (5 quarter, 6 half)");
+    const auto& chords = composer.ruler().chords();
+    // D Phrygian spells the E as E flat: a C minor chord.
+    check(!chords.empty() && chords[0] == "Cm", "the Chords row reads the score (bar 1: " +
+                                                    juce::String(chords.empty() ? "-" : chords[0]) + ")");
+
+    // Header keys write the track.
+    composer.header(0).solo_key().triggerClick();
+    pump(50);
+    check(session.data().find_track(track)->solo,
+          "a header's S key solos its track");
+    composer.header(0).solo_key().triggerClick();
+    pump(50);
+
+    // A phrase block on bar 2: dragging its name moves it a bar with its notes.
+    const auto phrase = session.add_phrase(track, "Chorus melody", bar, 2 * bar);
+    pump(80);
+    auto bar2_notes = [&] {
+        int n = 0;
+        for (const auto& note : session.data().find_track(track)->active_version()->score.notes(0))
+            if (!note.is_rest && note.start_tick >= 2 * bar && note.start_tick < 3 * bar) ++n;
+        return n;
+    };
+    auto& layer = composer.phrases(0);
+    const float x0 = lane0.x_of_tick(bar) + 20.0f;
+    drag(layer, {x0, 8.0f}, {x0 + bar_px, 8.0f});
+    pump(80);
+    const auto* v = session.data().find_track(track)->active_version();
+    check(!v->phrases.empty() && v->phrases.front().start == 2 * bar && bar2_notes() == 4,
+          "dragging a phrase block's name moves it a bar, notes and all");
+    shoot(main, dir, "28-composer-lanes");
+    session.undo();
+    pump(80);
+    // Its right edge trims it on beats.
+    const float right = lane0.x_of_tick(2 * bar) - 2.0f;
+    drag(layer, {right, 40.0f}, {right - bar_px / 2.0f, 40.0f});
+    pump(80);
+    v = session.data().find_track(track)->active_version();
+    check(!v->phrases.empty() && v->phrases.front().end == bar + 2 * q, "dragging a block's edge trims it on the beat");
+    session.remove_phrase(track, phrase);
+
+    // The inspector, on bar 2's notes.
+    std::vector<notation::EventId> ids;
+    for (const auto& note : session.data().find_track(track)->active_version()->score.notes(0))
+        if (!note.is_rest && note.start_tick >= bar) ids.push_back(note.id);
+    session.select_notes(track, ids);
+    pump(80);
+    auto& insp = main.inspector();
+    insp.articulation_key(1).triggerClick();  // staccato
+    pump(80);
+    bool stacc = !ids.empty();
+    for (auto id : ids)
+        if (const auto* n = session.data().find_track(track)->active_version()->score.find_note(id))
+            if (!notation::has_articulation(n->articulations, notation::Articulation::Staccato)) stacc = false;
+    check(stacc && insp.articulation_key(1).getToggleState(),
+          "the Staccato key marks every selected note and lights");
+    insp.dynamic_key(3).triggerClick();  // mf
+    pump(80);
+    check(insp.dynamic_key(3).getToggleState(), "the mf key writes a dynamic where the selection starts and lights");
+    insp.set_velocity(100);
+    pump(50);
+    check(insp.performed_velocity() == 100, "the Velocity knob sets the notes' performed velocity (" +
+                                                juce::String(insp.performed_velocity()) + ")");
+    const int before = notation::midi_note_number(
+        session.data().find_track(track)->active_version()->score.find_note(ids.front())->pitch);
+    insp.transpose_key(2).triggerClick();  // +1
+    pump(80);
+    const auto* moved = session.data().find_track(track)->active_version()->score.find_note(ids.front());
+    check(moved && notation::midi_note_number(moved->pitch) == before + 1, "Transpose +1 raises the notes a semitone");
+    insp.apply_humanize(60.0);
+    pump(50);
+    const auto* perf = session.performance_of(track);
+    bool varied = false;
+    if (perf)
+        for (const auto& [id, o] : *perf)
+            if (o.onset != 0) varied = true;
+    check(varied && insp.performed_velocity() == 100,
+          "Humanize writes timing overrides, keeps the velocity set, never the score");
+    shoot(main, dir, "29-composer-inspector");
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -2513,6 +2646,7 @@ int main(int argc, char** argv)
         hardware_control_checks(window.main(), dir);
         shell_checks(window, dir);
         selection_and_shortcut_checks(window, dir);
+        composer_lane_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

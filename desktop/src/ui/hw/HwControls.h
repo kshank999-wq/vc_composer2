@@ -86,6 +86,14 @@ public:
     void set_dynamic_legend(bool on) { dynamic_ = on; repaint(); }
     /// A small second line under the legend.
     void set_sublegend(const juce::String& s) { sublegend_ = s; repaint(); }
+    /// A music symbol (a SMuFL glyph in `font`) as the face, with the legend
+    /// small in the bottom-right corner, as a keypad key prints its number.
+    void set_music_symbol(const juce::String& symbol, const juce::Font& font)
+    {
+        symbol_ = symbol;
+        symbol_font_ = font;
+        repaint();
+    }
 
     bool lit() const;
 
@@ -103,6 +111,8 @@ private:
     Glyph glyph_ = Glyph::None;
     float legend_size_ = 12.0f;
     juce::String sublegend_;
+    juce::String symbol_;
+    juce::Font symbol_font_{juce::FontOptions{}};
 };
 
 // --- LED -----------------------------------------------------------------------------------------

@@ -131,6 +131,11 @@ public:
     void mouseWheelMove(const juce::MouseEvent& event,
                         const juce::MouseWheelDetails& wheel) override;
 
+    /// Where a tick is drawn, in this view's pixels, and the tick under a
+    /// pixel: for rulers and overlays that line up with the notes.
+    float x_of_tick(notation::Ticks tick);
+    notation::Ticks tick_at_x(float x);
+
     /// The layout currently on screen. Exposed for testing, and for a
     /// container that needs the extent to size a scrollbar.
     const engraving::LayoutResult& layout() const noexcept { return layout_; }

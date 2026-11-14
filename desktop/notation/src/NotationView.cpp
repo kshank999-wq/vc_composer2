@@ -204,6 +204,18 @@ void NotationView::relayout()
         static_cast<float>(-layout_.extent.x * settings_.pixels_per_staff_space), 0.0f);
 }
 
+float NotationView::x_of_tick(notation::Ticks tick)
+{
+    relayout_if_needed();
+    return static_cast<float>(timeline_.x_for_tick(tick) * settings_.pixels_per_staff_space) + settings_.origin.x;
+}
+
+notation::Ticks NotationView::tick_at_x(float x)
+{
+    relayout_if_needed();
+    return timeline_.tick_for_x((static_cast<double>(x) - settings_.origin.x) / settings_.pixels_per_staff_space);
+}
+
 engraving::Point NotationView::to_staff_spaces(juce::Point<int> position) const
 {
     const double scale = settings_.pixels_per_staff_space;

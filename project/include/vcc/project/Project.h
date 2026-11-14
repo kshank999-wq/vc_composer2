@@ -121,6 +121,16 @@ struct NoteOverride {
 bool operator==(const NoteOverride& a, const NoteOverride& b) noexcept;
 bool operator!=(const NoteOverride& a, const NoteOverride& b) noexcept;
 
+/// A phrase block (docs/spec/ui, "Phrase blocks"): a named, coloured span
+/// of a staff ("FLUTE · CHORUS MELODY"), the Composer view's clip. Moving a
+/// block moves the notes inside it; trimming it changes only its span.
+struct Phrase {
+    std::string id;
+    std::string name;
+    Ticks start = 0;
+    Ticks end = 0;  ///< Exclusive.
+};
+
 /// A non-destructive alternative of a track's content (Main Spec §15).
 struct TrackVersion {
     std::string id;
@@ -138,6 +148,8 @@ struct TrackVersion {
     /// Audio on this version's playlist (audio and reference tracks; any
     /// track may carry printed audio).
     std::vector<AudioClip> audio_clips;
+    /// Phrase blocks over the score, in time order.
+    std::vector<Phrase> phrases;
 };
 
 /// A hosted instrument plug-in on a track (Main Spec §10.6: "persist plugin

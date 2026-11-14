@@ -297,6 +297,21 @@ void Keycap::paintButton(juce::Graphics& g, bool highlighted, bool down)
         return;
     }
     g.setColour(ink);
+    if (symbol_.isNotEmpty()) {
+        // The glyph centred by its own outline (a music font's ascent says
+        // nothing about where a note sits), the legend in the corner.
+        juce::GlyphArrangement ga;
+        ga.addLineOfText(symbol_font_, symbol_, 0.0f, 0.0f);
+        const auto bb = ga.getBoundingBox(0, -1, true);
+        const auto target = face.withTrimmedRight(face.getWidth() * 0.18f).getCentre();
+        ga.moveRangeOfGlyphs(0, -1, target.x - bb.getCentreX(), target.y - bb.getCentreY());
+        g.setColour(on && solid_.isTransparent() ? Theme::get().led().brighter(0.4f) : ink);
+        ga.draw(g);
+        g.setColour(ink.withAlpha(0.62f));
+        g.setFont(fonts::lcd(9.0f));
+        g.drawText(getButtonText(), face.expanded(2.0f, 1.0f), juce::Justification::bottomRight, false);
+        return;
+    }
     if (dynamic_) {
         g.setFont(fonts::dynamics(legend_size_));
         g.drawText(getButtonText(), face, juce::Justification::centred, false);

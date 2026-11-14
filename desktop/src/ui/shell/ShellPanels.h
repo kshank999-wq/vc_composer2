@@ -10,6 +10,8 @@
 
 #include "ui/AppContext.h"
 #include "ui/hw/HwControls.h"
+#include "vcc/composer/ShortcutProfile.h"
+#include "vcc/notation/MusicalTime.h"
 #include "vcc/project/RenderCache.h"
 
 namespace vcc::desktop::shell {
@@ -25,6 +27,15 @@ public:
     void update(bool punch, bool pencil);
     std::function<void(bool larger)> on_zoom;
     std::function<void(bool on)> on_pencil;
+    /// A Composer key (note entry, value, dot, accidental) ran a notation command.
+    std::function<void(composer::Command)> on_command;
+    /// Lights the Composer keys from the editor: entry on, the value it
+    /// enters, dot, triplet, rest.
+    void set_entry_state(bool entry, const notation::Duration& value, bool rest);
+    /// Re-reads the keys' number legends from the active shortcut profile.
+    void refresh_legends();
+    /// The Composer key for a command, or null.
+    hw::Keycap* command_key(composer::Command c);
 
     void resized() override;
     void paint(juce::Graphics& g) override;
@@ -45,6 +56,7 @@ private:
     bool producer_ = false;
     std::vector<std::unique_ptr<hw::Keycap>> keys_;
     std::vector<Group> groups_;
+    std::vector<std::pair<hw::Keycap*, composer::Command>> command_keys_;
 };
 
 // --- Edit window frame ---------------------------------------------------------------------

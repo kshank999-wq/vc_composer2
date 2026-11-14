@@ -308,7 +308,7 @@ std::string Project::add_track(const std::string& name, TrackKind kind, const st
         t.include_in_export = kind != TrackKind::Reference;
         t.output_bus_id = "bus-master";
         if (kind != TrackKind::Folder) {
-            t.versions.push_back({version, "Version 1", {}, score_for_track(t.name), {}, {}, {}, std::nullopt, {}});
+            t.versions.push_back({version, "Version 1", {}, score_for_track(t.name), {}, {}, {}, std::nullopt, {}, {}});
             t.active_version_id = version;
         }
         d.tracks.push_back(t);
@@ -388,6 +388,8 @@ std::optional<std::string> Project::duplicate_version(const std::string& track_i
     std::string id = ids_.next("ver");
     std::vector<std::string> region_ids;
     for (std::size_t i = 0; i < t->active_version()->regions.size(); ++i) region_ids.push_back(ids_.next("rgn"));
+    std::vector<std::string> phrase_ids;
+    for (std::size_t i = 0; i < t->active_version()->phrases.size(); ++i) phrase_ids.push_back(ids_.next("phr"));
     std::string label = name.empty() ? "Version " + std::to_string(t->versions.size() + 1) : name;
     bool ok = edit("Duplicate version of " + t->name, [&](ProjectData& d) {
         Track* tr = d.find_track(track_id);
@@ -395,6 +397,7 @@ std::optional<std::string> Project::duplicate_version(const std::string& track_i
         copy.id = id;
         copy.name = label;
         for (std::size_t i = 0; i < copy.regions.size(); ++i) copy.regions[i].id = region_ids[i];
+        for (std::size_t i = 0; i < copy.phrases.size(); ++i) copy.phrases[i].id = phrase_ids[i];
         tr->versions.push_back(copy);
         tr->active_version_id = id;
         return true;
@@ -818,6 +821,13 @@ json::Value Project::to_json() const
                                                     {"file_sample_rate", c.file_sample_rate}});
                 vo.set("audio_clips", clips);
             }
+            if (!v.phrases.empty()) {
+                json::Array phrases;
+                for (const auto& ph : v.phrases)
+                    phrases.emplace_back(
+                        json::Object{{"id", ph.id}, {"name", ph.name}, {"start", ph.start}, {"end", ph.end}});
+                vo.set("phrases", phrases);
+            }
             versions.emplace_back(vo);
         }
         o.set("versions", versions);
@@ -1043,6 +1053,16 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
                     return fail("region " + r.id + ": " + err);
                 if (r.end <= r.start) return fail("region " + r.id + ": empty range");
                 v.regions.push_back(std::move(r));
+            }
+            for (const auto& pj : vj.get("phrases") ? vj.get("phrases")->as_array() : json::Array{}) {
+                Phrase ph;
+                ph.id = pj.get_string("id");
+                if (!unique(ph.id)) return fail("missing or duplicate phrase id '" + ph.id + "'");
+                ph.name = pj.get_string("name");
+                ph.start = pj.get_int("start");
+                ph.end = pj.get_int("end");
+                if (ph.end <= ph.start) return fail("phrase " + ph.id + ": empty range");
+                v.phrases.push_back(ph);
             }
             for (const auto& cj : vj.get("audio_clips") ? vj.get("audio_clips")->as_array() : json::Array{}) {
                 AudioClip c;

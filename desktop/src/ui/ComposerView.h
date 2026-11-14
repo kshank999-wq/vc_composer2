@@ -1,13 +1,17 @@
-// The Composer workspace (Main Spec §7): every instrument track's staves on a
-// shared timeline, aligned bar for bar, with notation entry on the selected
-// track through the notation editor ported from the original VC Composer.
+// The Composer workspace (Main Spec §7; docs/spec/ui/SPEC.md, "Composer
+// view"): the overview strip and the four ruler rows, then one row per
+// instrument track - the 220 px track header and the lane with its staves
+// and phrase blocks - aligned bar for bar, with notation entry on the
+// selected track through the notation editor ported from the original VC
+// Composer.
 //
 // The selected track is edited on a working copy of its score; each change is
-// committed to the project as one undo step, so Undo, versions, the Sequencer
-// and playback all see the same notes (Main Spec §8).
+// committed to the project as one undo step, so Undo, versions, the Producer
+// view and playback all see the same notes (Main Spec §8).
 #pragma once
 
 #include <memory>
+#include <optional>
 
 #include "ui/AppContext.h"
 #include "vcc/editing/ScoreEditor.h"
@@ -15,7 +19,16 @@
 
 namespace vcc::desktop {
 
-class ComposerView final : public juce::Component, private juce::ScrollBar::Listener {
+namespace composer_ui {
+class ComposerRuler;
+class TrackHeader;
+class PhraseLayer;
+}  // namespace composer_ui
+
+class ComposerView final : public juce::Component,
+                           private juce::ScrollBar::Listener,
+                           private juce::ChangeListener,
+                           private juce::Timer {
 public:
     explicit ComposerView(AppContext& context);
     ~ComposerView() override;
@@ -24,6 +37,8 @@ public:
     bool note_entry() const noexcept { return note_entry_; }
     /// The notes selected in the score being edited (the shared selection's notes).
     std::vector<notation::EventId> selected_notes() const;
+    /// The editor's cursor (value, dots, rest, voice), when a track is being written on.
+    std::optional<editing::EditCursor> cursor() const;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -31,30 +46,41 @@ public:
 
     /// Performs a shortcut-profile command on the selected track.
     void perform(composer::Command command);
+    /// Larger or smaller staves (the toolbar's Zoom keys).
+    void zoom(bool larger);
+    /// Scrolls so `tick` is the left edge of the lanes.
+    void set_origin(Ticks tick);
+    Ticks origin() const noexcept { return origin_; }
+
+    // For the checks.
+    composer_ui::ComposerRuler& ruler() { return *ruler_; }
+    int strip_count() const noexcept { return static_cast<int>(strips_.size()); }
+    composer_ui::TrackHeader& header(int i);
+    composer_ui::PhraseLayer& phrases(int i);
+    ui::NotationView& lane(int i);
+    /// The x of `tick` in this component (the ruler's and lanes' shared timeline).
+    float x_of_tick(Ticks tick);
 
 private:
     class Strip;
-    class Palette;
 
     void rebuild();
     void reload_working_copy(bool new_editor);
     void apply_view_settings();
+    void apply_colours();
+    void align_clef_zones();
     void handle(const editing::EditResult& result);
     void ask_for_input(composer::Command command);
-    void set_origin(Ticks tick);
     void scrollBarMoved(juce::ScrollBar*, double start) override { set_origin(static_cast<Ticks>(start)); }
-
-public:
-    /// Larger or smaller staves (the toolbar's Zoom keys).
-    void zoom(bool larger);
-
-private:
+    void changeListenerCallback(juce::ChangeBroadcaster*) override { apply_colours(); }
+    void timerCallback() override;
     void strip_clicked(Strip& strip, const engraving::InsertionPoint* point, notation::EventId id);
     Ticks visible_ticks() const;
+    engraving::LayoutOptions lane_layout() const;
 
     AppContext& context_;
     int listener_ = 0;
-    std::unique_ptr<Palette> palette_;
+    std::unique_ptr<composer_ui::ComposerRuler> ruler_;
     juce::Viewport viewport_;
     juce::Component strips_holder_;
     std::vector<std::unique_ptr<Strip>> strips_;
@@ -67,8 +93,11 @@ private:
     std::string editing_version_;
     bool note_entry_ = true;
     Ticks origin_ = 0;
-    double spaces_per_quarter_ = ui::NotationView::kDefaultSpacesPerQuarter;
-    double pixels_per_space_ = 8.0;
+    std::uint64_t generation_ = 0;
+    /// The spec's 100%: a 7 px staff space and a 120 px bar of 4/4.
+    static constexpr double kSpaceAt100 = 7.0;
+    static constexpr double kSpacesPerQuarter = 30.0 / 7.0;
+    double pixels_per_space_ = kSpaceAt100;
     bool committing_ = false;
     bool syncing_ = false;  ///< Exchanging the selection with the session.
     /// The selection is only the note just typed: a duration key then sets

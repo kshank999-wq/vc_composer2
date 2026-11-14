@@ -221,22 +221,84 @@ and the document model. The work is mostly presentation.
        Cmd/Ctrl+1–4.
      - Edit › Keyboard Shortcuts switches between Composer 2, VC Composer,
        Finale style and Sibelius style, and remembers the choice.
-   - **Still to come:** L for loop waits for loop playback; the note-value
-     keycaps with their number legends come with the Composer view's
-     toolbar in step 4.
+   - **Still to come:** L for loop waits for loop playback. The
+     note-value keycaps with their number legends arrived in step 4.
 
    The original step 3 description: One selection drives the counters,
    the inspector, the lit keys and both views. Add the shortcut table,
    with the Finale/Sibelius note values as the default profile.
-4. **Composer view lanes to the spec:**
-   - staff geometry;
-   - sticky track headers and clef zone;
-   - four-row ruler (bars, markers, chords, tempo) and the overview
-     strip;
-   - phrase blocks, with their data model;
-   - selection in the LED colour;
-   - the inspector (articulation, dynamics, Velocity and Humanize knobs on
-     performance overrides, voice, transpose).
+4. **Composer view lanes to the spec. Done.**
+   - **Rows.** Each instrument track is one row: a 220 px header, then
+     its lane.
+     - Rows are 108 px for one staff and 184 px for a grand staff, with a
+       7 px staff space and a 120 px bar of 4/4 at 100%.
+     - The clef zone is 46 px and stays put as the lanes scroll.
+     - A key signature widens the clef zone, and every lane then takes
+       the widest one, so bars line up from track to track.
+     - Staves take the theme's paper, ink and staff colours. The
+       selection and the cursor are in the LED colour; the playhead is in
+       the LCD colour.
+   - **Track header** (`ui/composer/LaneParts`):
+     - the colour stripe, a number LCD and a scribble strip with the name
+       and sound;
+     - R, S and M keys that fill solid when on;
+     - a staff tag (Treble, Bass, Alto, Perc, Grand staff and so on);
+     - Vol and Pan knobs with LCD values, one console gesture each;
+     - the track's meter;
+     - a right-click menu: a new phrase from the selection or at the
+       playhead, and the track menu.
+   - **Ruler** (`ui/composer/ComposerRuler`):
+     - The overview strip shows the whole piece, one row per track, with
+       its phrases (or bars that have notes) and a box for what is
+       visible. Click or drag the box to scroll.
+     - Bars|Beats shows bar numbers, beat ticks, the selection's range bar
+       and the playhead cap. Click to locate; drag to set the range,
+       snapped to beats.
+     - Markers shows cue flags and hit points; click one to locate.
+     - Chords reads a symbol for each bar from every track's notes, spelt
+       in the key (`ChordDetect`).
+     - Tempo shows the tempo line and its marking.
+   - **Phrase blocks.** `TrackVersion::phrases` holds an id, a name and a
+     span, and is saved with the project.
+     - Session functions: add, rename, set span, move, split, duplicate
+       and remove. Each is one undo step, and a drag is one undo step.
+     - Moving a block carries its notes, dynamics, hairpins and slurs, and
+       refuses to land on other notes.
+     - Duplicating a block copies its notes with their performance
+       overrides.
+     - On screen, a block has a 9% fill, a 55% outline and a solid name
+       strip ("CELLI · CHORUS MELODY").
+     - Drag the name to move by bars and the edges to trim on beats.
+       Right-click to rename, split at the playhead, duplicate, select its
+       notes or remove the block.
+   - **Toolbar.** The Composer toolbar has:
+     - Note entry, with an LED;
+     - a note-value keypad in Bravura (whole to 32nd, dot, triplet,
+       rest);
+     - accidentals.
+     The keys print their shortcut from the active profile, as a keypad
+     prints its numbers (7–2, `.`, `/`, 0, −, 9, =). They follow a
+     profile switch, and the value, dot, triplet and rest keys light from
+     the editor.
+   - **Inspector** (`ui/composer/Inspector`), under the selection panel,
+     or in columns under the edit window below 1280 px:
+     - Articulation, 3 × 2: accent, staccato, tenuto, marcato,
+       staccatissimo and slur. A key lights when every selected note has
+       its mark.
+     - Dynamics, 4 × 2: pp to ff, plus crescendo and diminuendo. They are
+       written where the selection starts, as in Finale and Sibelius.
+     - Velocity sets the selected notes' performed velocity, and Humanize
+       humanizes them when released. Both write performance overrides, so
+       the score is unchanged. A velocity set with the Velocity knob
+       survives Humanize.
+     - Voice 1–4.
+     - Transpose by a semitone or an octave
+       (`Session::transpose_notes`, which follows ties and spells the
+       notes in the key).
+   - **New document.** The editor's cursor and the scroll start afresh
+     with a new document (`Session::document_generation`).
+   - **Checks.** `tests/unit/test_phrases` and the desktop check's
+     Composer-lane section; screenshots 28 and 29.
 5. **The keyboard deck.** 88 keys, key zoom from 1× to 3× keeping the
    anchor centred, lit keys, step input, octave shift, pitch and mod
    wheels.

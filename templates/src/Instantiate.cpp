@@ -346,7 +346,7 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
             }
 
             t.versions.push_back({track_ids[i].second, "Version 1", {}, score_for_instrument(def, t.name), {}, {}, {},
-                                  std::nullopt, {}});
+                                  std::nullopt, {}, {}});
             t.active_version_id = track_ids[i].second;
             d.tracks.push_back(std::move(t));
         }

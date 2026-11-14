@@ -207,6 +207,7 @@ MainComponent::MainComponent(AppContext& context)
       markers_(context),
       new_track_(context),
       selection_(context),
+      inspector_(context),
       channel_(context),
       status_strip_(context),
       tracks_(context),
@@ -218,7 +219,7 @@ MainComponent::MainComponent(AppContext& context)
     // The Edit window (docs/spec/ui): top deck, toolbar, left rack, the
     // edit window around the current view, right panel, status strip.
     for (auto* c : std::initializer_list<juce::Component*>{&deck_, &toolbar_, &edit_, &markers_, &selection_,
-                                                           &status_strip_})
+                                                           &inspector_, &status_strip_})
         addAndMakeVisible(c);
     addChildComponent(new_track_);
     addChildComponent(channel_);
@@ -232,6 +233,14 @@ MainComponent::MainComponent(AppContext& context)
         else sequencer_.zoom(larger);
     };
     toolbar_.on_pencil = [this](bool on) { sequencer_.set_pencil_mode(on); };
+    // The Composer keys and the inspector run notation commands on the
+    // score being written, and hand the keyboard back to it.
+    auto run = [this](composer::Command c) {
+        composer_.perform(c);
+        composer_.grabKeyboardFocus();
+    };
+    toolbar_.on_command = run;
+    inspector_.on_command = run;
 
     layout_.setItemLayout(0, 220, 520, 300);
     layout_.setItemLayout(1, 5, 5, 5);
@@ -332,16 +341,13 @@ void MainComponent::resized()
     r.removeFromTop(kGap);
 
     const bool producer = workspace_ == Workspace::Producer;
-    juce::Component& right = producer ? static_cast<juce::Component&>(channel_) : selection_;
     // Under ~1280 px the right panel drops below the edit window.
     const bool narrow = getWidth() < 1280;
     juce::Rectangle<int> right_area;
     if (!narrow) {
         right_area = r.removeFromRight(kRight);
         r.removeFromRight(kGap);
-        right_area = right_area.withHeight(producer ? std::min(right_area.getHeight(), 420) : 190);
     }
-
     // Left rack | edit window, with the divider between them.
     juce::Component* items[] = {&markers_, divider_.get(), &edit_};
     layout_.layOutComponents(items, 3, r.getX(), r.getY(), r.getWidth(), r.getHeight(), false, true);
@@ -360,11 +366,25 @@ void MainComponent::resized()
     }
     auto edit = edit_.getBounds();
     if (narrow) {
-        right_area = edit.removeFromBottom(producer ? 330 : 170);
+        right_area = edit.removeFromBottom(producer ? 330 : 190);
         edit.removeFromBottom(kGap);
         edit_.setBounds(edit);
     }
-    right.setBounds(right_area);
+    if (producer) {
+        channel_.setBounds(narrow ? right_area : right_area.withHeight(std::min(right_area.getHeight(), 420)));
+    } else if (narrow) {
+        // Selection, then the inspector in columns beside it.
+        selection_.setBounds(right_area.removeFromLeft(kRight));
+        right_area.removeFromLeft(kGap);
+        inspector_.set_horizontal(true);
+        inspector_.setBounds(right_area);
+    } else {
+        // The Composer column: what is selected, then the inspector.
+        selection_.setBounds(right_area.removeFromTop(190));
+        right_area.removeFromTop(kGap);
+        inspector_.set_horizontal(false);
+        inspector_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), 420)));
+    }
     const auto content = edit_.getBounds().getIntersection(edit_.content_area() + edit_.getPosition());
     composer_.setBounds(content);
     sequencer_.setBounds(content);
@@ -408,6 +428,7 @@ void MainComponent::show_workspace(Workspace w)
     sequencer_.setVisible(producer);
     markers_.setVisible(!producer);
     selection_.setVisible(!producer);
+    inspector_.setVisible(!producer);
     new_track_.setVisible(producer);
     channel_.setVisible(producer);
     deck_.set_producer(producer);
@@ -427,7 +448,17 @@ void MainComponent::timerCallback()
     const auto& sel = context_.session.selection();
     deck_.set_range(sel.from, sel.to);
     toolbar_.update(punch_, sequencer_.pencil_mode());
-    if (composer_.isVisible()) composer_.set_playhead(tick, playing);
+    if (composer_.isVisible()) {
+        composer_.set_playhead(tick, playing);
+        // The Composer keys light from the editor: entry, value, dot, rest, voice.
+        if (const auto cur = composer_.cursor()) {
+            toolbar_.set_entry_state(composer_.note_entry(), cur->duration, cur->rest_mode);
+            inspector_.set_voice(cur->voice);
+        } else {
+            toolbar_.set_entry_state(composer_.note_entry(), notation::Duration{}, false);
+            inspector_.set_voice(-1);
+        }
+    }
     if (sequencer_.isVisible()) sequencer_.set_playhead(tick, playing);
     // A plug-in that crashed in its own process: the session plays on without it.
     if (const auto crashed = context_.engine.take_newly_crashed_plugins(); !crashed.isEmpty())
@@ -758,6 +789,8 @@ bool MainComponent::use_shortcut_profile(const std::string& name)
     for (auto& p : profiles)
         if (p.name() == name) {
             context_.shortcuts = std::move(p);
+            toolbar_.refresh_legends();
+            inspector_.refresh_legends();
             hw::ui_settings().setValue("shortcut_profile", juce::String(name));
             hw::ui_settings().saveIfNeeded();
             return true;

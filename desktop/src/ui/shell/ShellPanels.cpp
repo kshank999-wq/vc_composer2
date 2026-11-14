@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
+#include "AppResources.h"
 #include "ui/TrackPanel.h"
+#include "ui/composer/KeyLegend.h"
 #include "ui/console/ConsoleStyle.h"
 #include "ui/shell/TopDeck.h"
 
@@ -39,27 +41,70 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
 
     // Composer view.
     {
+        Group entry{"Entry"};
+        auto& note = add(entry, "Note entry", 100, false);
+        note.set_led_dot(true);
+        note.setComponentID("composer_entry");
+        note.setTooltip("Note entry: letters A-G enter notes, Shift+letter adds to a chord");
+        note.onClick = [this] {
+            if (on_command) on_command(composer::Command::ToggleKeyboardEntryMode);
+        };
+        command_keys_.emplace_back(&note, composer::Command::ToggleKeyboardEntryMode);
+        groups_.push_back(entry);
         Group view{"View"};
-        auto& track = add(view, "Track", 64, true);
+        auto& track = add(view, "Track", 58, true);
         track.setToggleState(true, juce::dontSendNotification);
         track.setTooltip("Track view: one staff per track");
-        auto& page = add(view, "Page", 58);
+        auto& page = add(view, "Page", 52);
         page.setEnabled(false);
         page.setTooltip("Page view (coming with the Score stage)");
         add(view, "Mixer", 62).onClick = invoke(cmd::showMixer);
         groups_.push_back(view);
+        Group tools{"Tools"};
+        add(tools, "Chords", 66).onClick = invoke(cmd::chordExplorer);
+        add(tools, "Ostinato", 74).onClick = invoke(cmd::ostinatoCreator);
+        groups_.push_back(tools);
+        // The note value keypad, as Finale and Sibelius lay it out: the
+        // number rising with the value, 5 the quarter; dot, triplet, rest.
+        const auto& mf = music_font();
+        const juce::Font note_font = mf.loaded ? mf.font.font_for_staff_space(4.4) : juce::Font(juce::FontOptions(14.0f));
+        const juce::Font acc_font = mf.loaded ? mf.font.font_for_staff_space(5.0) : juce::Font(juce::FontOptions(14.0f));
+        auto music_key = [&](Group& g, composer::Command c, const char* glyph, const char* tip, const juce::Font& f) -> hw::Keycap& {
+            auto& k = add(g, {}, 34, false);
+            if (mf.loaded) k.set_music_symbol(juce::String::fromUTF8(glyph), f);
+            k.setTooltip(tip);
+            k.setComponentID("composer_cmd_" + juce::String(static_cast<int>(c)));
+            k.onClick = [this, c] {
+                if (on_command) on_command(c);
+            };
+            command_keys_.emplace_back(&k, c);
+            return k;
+        };
+        Group value{"Note value"};
+        using C = composer::Command;
+        music_key(value, C::SelectDurationWhole, "\xee\xb2\xa2", "Whole note", note_font);
+        music_key(value, C::SelectDurationHalf, "\xee\xb2\xa3", "Half note", note_font);
+        music_key(value, C::SelectDurationQuarter, "\xee\xb2\xa5", "Quarter note", note_font);
+        music_key(value, C::SelectDurationEighth, "\xee\xb2\xa7", "Eighth note", note_font);
+        music_key(value, C::SelectDurationSixteenth, "\xee\xb2\xa9", "Sixteenth note", note_font);
+        music_key(value, C::SelectDurationThirtySecond, "\xee\xb2\xab", "Thirty-second note", note_font);
+        music_key(value, C::ToggleDot, "\xee\xb2\xb7", "Dot", acc_font);
+        music_key(value, C::ToggleTuplet, "\xee\xa2\x83", "Triplet", note_font);
+        music_key(value, C::ToggleRest, "\xee\x93\xa5", "Rest", note_font);
+        groups_.push_back(value);
+        Group acc{"Accidental"};
+        music_key(acc, C::AccidentalFlat, "\xee\x89\xa0", "Flat", acc_font);
+        music_key(acc, C::AccidentalNatural, "\xee\x89\xa1", "Natural", acc_font);
+        music_key(acc, C::AccidentalSharp, "\xee\x89\xa2", "Sharp", acc_font);
+        groups_.push_back(acc);
         Group zoom{"Zoom"};
-        add(zoom, "-", 36).onClick = [this] {
+        add(zoom, "-", 34).onClick = [this] {
             if (on_zoom) on_zoom(false);
         };
-        add(zoom, "+", 36).onClick = [this] {
+        add(zoom, "+", 34).onClick = [this] {
             if (on_zoom) on_zoom(true);
         };
         groups_.push_back(zoom);
-        Group tools{"Tools"};
-        add(tools, "Chords", 70).onClick = invoke(cmd::chordExplorer);
-        add(tools, "Ostinato", 78).onClick = invoke(cmd::ostinatoCreator);
-        groups_.push_back(tools);
         Group picture{"Picture"};
         add(picture, "Picture", 70).onClick = invoke(cmd::showVideo);
         add(picture, "Cues", 56).onClick = invoke(cmd::showCueManager);
@@ -114,7 +159,43 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
         };
         groups_.push_back(zoom);
     }
+    refresh_legends();
     set_producer(false);
+}
+
+void Toolbar::refresh_legends()
+{
+    for (auto& [k, c] : command_keys_) {
+        if (c == composer::Command::ToggleKeyboardEntryMode) {
+            k->setTooltip("Note entry (" + composer_ui::key_legend(context_.shortcuts, c) +
+                          "): letters A-G enter notes, Shift+letter adds to a chord");
+            continue;
+        }
+        k->setButtonText(composer_ui::key_legend(context_.shortcuts, c));
+    }
+}
+
+hw::Keycap* Toolbar::command_key(composer::Command c)
+{
+    for (auto& [k, cmd] : command_keys_)
+        if (cmd == c) return k;
+    return nullptr;
+}
+
+void Toolbar::set_entry_state(bool entry, const notation::Duration& value, bool rest)
+{
+    using C = composer::Command;
+    auto lit = [this](C c, bool on) {
+        if (auto* k = command_key(c); k && k->getToggleState() != on) k->setToggleState(on, juce::dontSendNotification);
+    };
+    lit(C::ToggleKeyboardEntryMode, entry);
+    const C values[] = {C::None, C::SelectDurationWhole, C::SelectDurationHalf, C::SelectDurationQuarter,
+                        C::SelectDurationEighth, C::SelectDurationSixteenth, C::SelectDurationThirtySecond};
+    const int v = static_cast<int>(value.value);
+    for (int i = 1; i < 7; ++i) lit(values[i], i == v);
+    lit(C::ToggleDot, value.dots > 0);
+    lit(C::ToggleTuplet, value.tuplet.is_tuplet());
+    lit(C::ToggleRest, rest);
 }
 
 hw::Keycap* Toolbar::key(const juce::String& legend)

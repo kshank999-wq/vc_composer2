@@ -66,6 +66,9 @@ public:
     const Catalogs& catalogs() const noexcept { return catalogs_; }
     const project::Project& project() const noexcept { return project_; }
     const project::ProjectData& data() const noexcept { return project_.data(); }
+    /// Counts documents: a new, opened or template-made project is a new one,
+    /// even where its track and version ids repeat the last one's.
+    std::uint64_t document_generation() const noexcept { return generation_; }
 
     // --- Listeners ------------------------------------------------------------
     using Listener = std::function<void(Change)>;
@@ -291,6 +294,31 @@ public:
     bool apply_notate(const std::string& track_id, const NotatePlan& plan, std::size_t option, const std::string& label,
                       bool coalesce = false);
 
+    // --- Phrase blocks (docs/spec/ui, "Phrase blocks") --------------------------------
+    // Named spans of a track's score on its active version: the Composer
+    // view's clips. `why`, when given, says why an edit was refused.
+    /// A new block over [from, to). Returns its id, or empty.
+    std::string add_phrase(const std::string& track_id, const std::string& name, Ticks from, Ticks to);
+    bool rename_phrase(const std::string& track_id, const std::string& phrase_id, const std::string& name);
+    /// Changes the span only (trimming); same-label calls coalesce (a drag).
+    bool set_phrase_span(const std::string& track_id, const std::string& phrase_id, Ticks from, Ticks to,
+                         const std::string& label);
+    /// Moves the block and everything written in it (notes, dynamics,
+    /// hairpins, slurs) by `delta`. Refused when it would land on notes
+    /// written outside the block.
+    bool move_phrase(const std::string& track_id, const std::string& phrase_id, Ticks delta,
+                     std::string* why = nullptr);
+    /// Splits the block in two at `at`; both keep their notes.
+    bool split_phrase(const std::string& track_id, const std::string& phrase_id, Ticks at);
+    /// A copy of the block and its notes right after it. Returns the new id.
+    std::string duplicate_phrase(const std::string& track_id, const std::string& phrase_id, std::string* why = nullptr);
+    /// Removes the block; its notes stay.
+    bool remove_phrase(const std::string& track_id, const std::string& phrase_id);
+
+    /// Transposes score notes (and the notes tied on from them) by
+    /// semitones, spelled in the staff's written key. One undo step.
+    bool transpose_notes(const std::string& track_id, const std::vector<notation::EventId>& notes, int semitones);
+
     // --- Stems (Main Spec §16) ---------------------------------------------------------
     /// The project's stems, or sensible defaults when it has none (group
     /// buses, then instrument families).
@@ -342,6 +370,7 @@ private:
     void notify(Change change);
     void document_changed();
     void reset(project::Project project, const std::string& path);
+    std::uint64_t generation_ = 0;
 
     const Catalogs& catalogs_;
     project::Project project_;
