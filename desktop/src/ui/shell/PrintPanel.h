@@ -25,7 +25,13 @@ public:
     /// Starts printing the ticked tracks with the panel's settings (the red key).
     void start();
     void cancel();
-    bool printing() const noexcept { return job_ != nullptr; }
+    bool printing() const noexcept { return job_ != nullptr || live_; }
+    /// Offline (rendered, faster than real time) or Real-time (played live
+    /// and recorded: the way to print external MIDI hardware).
+    hw::Keycap& offline_key() { return offline_; }
+    hw::Keycap& realtime_key() { return realtime_; }
+    /// A real-time print's results arrived (the engine calls this when the range has played).
+    void live_finished(const std::vector<PlaybackEngine::LivePrintResult>& results, bool cancelled);
     /// Runs the print in progress to the end (the checks).
     void finish_now();
 
@@ -61,7 +67,9 @@ private:
     std::set<std::string> ticked_;
     int scroll_ = 0;
     hw::Keycap selection_{"Selection", true}, song_{"Song", true}, fx_{"Include FX", true}, play_audio_{"Play audio", true},
-        record_{"Record score to audio"};
+        record_{"Record score to audio"}, offline_{"Offline", true}, realtime_{"Real-time", true};
+    bool live_ = false, live_fx_ = false, live_play_ = true;
+    Ticks live_start_ = 0;
     hw::Lcd lcd_{"READY", 11.0f};
     std::unique_ptr<PrintJob> job_;
     std::vector<PrintItem> last_;

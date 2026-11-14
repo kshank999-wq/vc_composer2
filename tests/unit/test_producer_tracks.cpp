@@ -91,3 +91,26 @@ TEST_CASE("a print lands on the track's own audio lane as one undo step, the las
     const auto a = s.add_audio_track("Vox", false);
     CHECK(s.place_prints({{a, clip}}, false, true).empty());
 }
+
+TEST_CASE("a MIDI track sends to an external device, saved and undoable")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto m = s.add_midi_track("Analog Synth");
+    REQUIRE(!m.empty());
+    CHECK(s.data().find_track(m)->kind == project::TrackKind::MidiOnly);
+    CHECK(s.data().find_track(m)->midi_output.empty());
+    CHECK(s.set_midi_output(m, "Hardware Synth Port 1"));
+    CHECK(!s.set_midi_output(m, "Hardware Synth Port 1"));
+    const std::string path = std::string(VCC_TEST_TMP_DIR) + "/midi-out.vcc2.json";
+    std::string err;
+    REQUIRE(s.save_as(path, &err));
+    session::Session r(catalogs());
+    REQUIRE(r.open(path, &err));
+    CHECK(r.data().find_track(m)->midi_output == "Hardware Synth Port 1");
+    s.undo();
+    CHECK(s.data().find_track(m)->midi_output.empty());
+    // Only MIDI tracks send to hardware.
+    const auto f = s.add_track("Flute", "woodwinds.flute");
+    CHECK(!s.set_midi_output(f, "Hardware Synth Port 1"));
+}

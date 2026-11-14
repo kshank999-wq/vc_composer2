@@ -306,6 +306,11 @@ struct Track {
     /// the track plays its audio lane they are bypassed, so they are not
     /// heard twice. Set by Print to audio with effects.
     bool printed_fx = false;
+    /// A MIDI track's external MIDI output device (its name), or empty: its
+    /// notes then play the track's instrument. The hardware's sound comes
+    /// back on the track's audio input (`input`), which a real-time print
+    /// records.
+    std::string midi_output;
     std::vector<AutomationLane> automation;
     std::string automation_mode = "read";
     bool include_in_export = true;  ///< False for Reference tracks unless the user opts in.

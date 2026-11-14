@@ -12,6 +12,9 @@
 #include "MainWindow.h"
 #include "PlatformFixes.h"
 #include "audio/CueRenderer.h"
+#include <mutex>
+#include "audio/MidiOut.h"
+#include "audio/PrintToAudio.h"
 #include "audio/Mp3Encoder.h"
 #include "ui/CueManager.h"
 #include "ui/ScoreExchange.h"
@@ -2582,6 +2585,195 @@ void follow_checks(MainWindow& window, const juce::File& dir)
     ctx.engine.locate(0);
 }
 
+/// Real-time print and external MIDI: a MIDI track plays a (virtual)
+/// hardware synth whose return comes back on its input, printed live
+/// together with an instrument track.
+void realtime_print_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    // The "hardware": a virtual MIDI port that records what it is sent, and when.
+    struct TestSynth final : MidiSink {
+        std::mutex lock;
+        std::vector<std::pair<juce::MidiMessage, double>> got;
+        void send(const juce::MidiMessage& m) override
+        {
+            std::lock_guard<std::mutex> g(lock);
+            got.emplace_back(m, juce::Time::getMillisecondCounterHiRes());
+        }
+    };
+    auto synth = std::make_shared<TestSynth>();
+    MidiOutRouter::register_virtual("VCC Test Synth", synth);
+    check(MidiOutRouter::device_names().contains("VCC Test Synth"), "MIDI outputs are listed (with the test's virtual port)");
+
+    session.new_from_template("cinematic.horror.psychological");
+    const auto project_dir = dir.getChildFile("realtime-check");
+    project_dir.deleteRecursively();
+    project_dir.createDirectory();
+    std::string error;
+    session.save_as(project_dir.getChildFile("rt.vcc2").getFullPathName().toStdString(), &error);
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(100);
+    // New track > MIDI makes a MIDI track.
+    auto& nt = main.new_track_panel();
+    nt.type_key(0).setToggleState(true, juce::sendNotificationSync);
+    nt.set_count(1);
+    check(nt.create() == 1 && session.data().find_track(session.selected_track())->kind == project::TrackKind::MidiOnly,
+          "New track > MIDI makes a MIDI track");
+    const std::string midi = session.selected_track();
+    std::string inst;
+    for (const auto* t : session.music_tracks())
+        if (t->kind == project::TrackKind::Instrument) {
+            inst = t->id;
+            break;
+        }
+    main.show_workspace(MainComponent::Workspace::Composer);
+    auto& composer = main.composer();
+    for (const auto& [track, keys] : std::vector<std::pair<std::string, std::string>>{{midi, "5cdef"}, {inst, "5gab"}}) {
+        session.select_track(track);
+        pump(80);
+        composer.grabKeyboardFocus();
+        for (const char ch : keys) composer.keyPressed(juce::KeyPress(ch));
+        pump(50);
+    }
+    session.set_midi_output(midi, "VCC Test Synth");
+    session.update_track_mix(midi, "Return", [](project::Track& t) {
+        t.input = 0;
+        t.input_stereo = true;
+    });
+    main.show_workspace(MainComponent::Workspace::Producer);
+    session.select_track(midi);
+    pump(100);
+    auto& channel = main.channel_panel();
+    check(channel.midi_out_lcd().isVisible() && channel.midi_out_lcd().text().contains("VCC TEST SYNTH") &&
+              channel.input_lcd().text().startsWith("RET"),
+          "a MIDI track's channel strip shows its MIDI out and its return (" + channel.midi_out_lcd().text() + ", " +
+              channel.input_lcd().text() + ")");
+
+    // Offline cannot print hardware.
+    {
+        PrintRequest rq;
+        rq.tracks = {midi};
+        rq.end = 2 * 4 * kTicksPerQuarter;
+        const auto items = print_to_audio(ctx, rq);
+        check(!items.empty() && !items.front().ok && items.front().message.contains("real time"),
+              "an offline print of a hardware track says to print it in real time (" +
+                  (items.empty() ? juce::String() : items.front().message) + ")");
+    }
+    // An engine with no audio device (and not rendering offline) refuses.
+    {
+        PlaybackEngine idle(session, ctx.plugins);
+        const auto why = idle.start_live_print({{midi, project_dir.getChildFile("x.wav"), true, false}}, 0, 4 * kTicksPerQuarter, 0.0);
+        check(!idle.live_printing() && why.contains("audio device"), "a real-time print needs an audio device (" + why + ")");
+    }
+    auto& panel = main.print_panel();
+    // A short window: the column shows Channel | Print as tabs.
+    main.show_right_tab(0);
+    check(main.right_tabs() && main.channel_panel().isVisible() && !panel.isVisible(),
+          "in a short window the Producer column has Channel | Print tabs");
+    main.show_right_tab(1);
+    check(panel.realtime_key().isShowing() && panel.offline_key().getToggleState() && !main.channel_panel().isVisible(),
+          "the Print tab shows the Print panel, which offers Offline and Real-time");
+
+    // Live, on an engine driven as a device would be: the synth's "return"
+    // is a tone on inputs 1-2; the instrument track prints with it.
+    const Ticks bar = 4 * kTicksPerQuarter;
+    PlaybackEngine e(session, ctx.plugins);
+    e.prepare_offline(48000.0, 512);
+    std::vector<PlaybackEngine::LivePrintResult> results;
+    bool cancelled = true;
+    e.on_live_print_finished = [&](const std::vector<PlaybackEngine::LivePrintResult>& r, bool c) {
+        results = r;
+        cancelled = c;
+    };
+    const auto midi_file = project_dir.getChildFile("Audio Files").getChildFile("MIDI_1_PRINT_01.wav");
+    const auto inst_file = project_dir.getChildFile("Audio Files").getChildFile("Celli_live_PRINT_01.wav");
+    const auto start_error = e.start_live_print({{midi, midi_file, true, false}, {inst, inst_file, false, false}}, 0, 2 * bar, 1.0);
+    check(start_error.isEmpty() && e.live_printing() && e.playing(), "a real-time print starts the transport (" + start_error + ")");
+    juce::AudioBuffer<float> input(2, 512), out(2, 512);
+    long long t = 0;
+    for (int guard = 0; e.live_printing() && guard < 2000; ++guard) {
+        for (int i = 0; i < 512; ++i, ++t) {
+            const float v = 0.25f * std::sin(2.0f * juce::MathConstants<float>::pi * 220.0f * static_cast<float>(t) / 48000.0f);
+            input.setSample(0, i, v);
+            input.setSample(1, i, v);
+        }
+        e.render_offline_with_input(input, out, 512);
+        e.service_live_print();
+    }
+    pump(300);  // the MIDI sender plays what was due
+    check(!e.live_printing() && !cancelled && results.size() == 2 && results[0].ok && results[1].ok && !e.playing(),
+          "the print ends by itself after the range and its tail, and stops the transport");
+    std::vector<int> notes;
+    {
+        std::lock_guard<std::mutex> g(synth->lock);
+        for (const auto& [m, when] : synth->got)
+            if (m.isNoteOn()) notes.push_back(m.getNoteNumber());
+    }
+    // C D E F typed in D Phrygian: C D E-flat F.
+    check(notes == std::vector<int>{60, 62, 63, 65},
+          "the MIDI track's notes go out to the hardware (" + juce::String(static_cast<int>(notes.size())) + " note-ons)");
+    // The instrument's live print is the same audio as its offline print.
+    {
+        PrintRequest rq;
+        rq.tracks = {inst};
+        rq.end = 2 * bar;
+        rq.play_audio = false;
+        const auto offline = print_to_audio(ctx, rq);
+        session.undo();
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> a(formats.createReaderFor(inst_file));
+        std::unique_ptr<juce::AudioFormatReader> b(offline.empty() ? nullptr : formats.createReaderFor(offline.front().file));
+        double diff = 0.0, ref = 0.0;
+        if (a && b) {
+            const int n = static_cast<int>(std::min<juce::int64>(std::min(a->lengthInSamples, b->lengthInSamples), 48000 * 4));
+            juce::AudioBuffer<float> x(2, n), y(2, n);
+            a->read(&x, 0, n, 0, true, true);
+            b->read(&y, 0, n, 0, true, true);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < n; ++i) {
+                    const double d = static_cast<double>(x.getSample(ch, i)) - y.getSample(ch, i);
+                    diff += d * d;
+                    ref += static_cast<double>(y.getSample(ch, i)) * y.getSample(ch, i);
+                }
+        }
+        const double null_db = ref > 0.0 ? 10.0 * std::log10(std::max(diff, 1e-30) / ref) : 0.0;
+        check(a && b && null_db < -60.0, "an instrument printed in real time nulls against its offline print (" +
+                                              juce::String(null_db, 1) + " dB)");
+    }
+    // The hardware's return is what was recorded.
+    {
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> r(formats.createReaderFor(midi_file));
+        float hi = 0.0f;
+        if (r) {
+            juce::AudioBuffer<float> b(2, 48000);
+            r->read(&b, 0, static_cast<int>(std::min<juce::int64>(r->lengthInSamples, 48000)), 0, true, true);
+            hi = b.getMagnitude(0, 0, 48000);
+        }
+        check(r && std::abs(hi - 0.25f) < 0.01f, "the MIDI track's print is its return input (peak " + juce::String(hi, 3) + ")");
+    }
+    // Placed like an offline print: one undo step, the tracks then play it.
+    const auto placed = place_live_prints(ctx, results, 0, false, true);
+    const auto* mt = session.data().find_track(midi);
+    bool on_lane = false;
+    for (const auto& c : mt->active_version()->audio_clips) on_lane = on_lane || (c.lane == 0 && juce::String(c.name).contains("PRINT"));
+    check(placed.size() == 2 && !placed[0].clip_id.empty() && on_lane && mt->playback == "audio" &&
+              session.undo_label() == "Print 2 tracks to audio",
+          "the real-time prints land on the tracks' own audio lanes, as one undo step");
+    pump(100);
+    shoot(main, dir, "37-realtime-print");
+    main.show_right_tab(0);
+    session.select_track(midi);
+    pump(100);
+    shoot(main, dir, "38-midi-channel");
+    MidiOutRouter::unregister_virtual("VCC Test Synth");
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -3405,6 +3597,7 @@ int main(int argc, char** argv)
         mix_checks(window, dir);
         master_checks(window, dir);
         follow_checks(window, dir);
+        realtime_print_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

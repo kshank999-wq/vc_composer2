@@ -231,6 +231,14 @@ MainComponent::MainComponent(AppContext& context)
     addChildComponent(channel_);
     addChildComponent(print_);
     addChildComponent(master_);
+    for (auto* k : {&channel_tab_, &print_tab_}) {
+        addChildComponent(*k);
+        k->set_led_dot(true);
+        k->set_legend_size(10.5f);
+        k->setWantsKeyboardFocus(false);
+    }
+    channel_tab_.onClick = [this] { show_right_tab(0); };
+    print_tab_.onClick = [this] { show_right_tab(1); };
     addChildComponent(mixer_deck_);
     keyboard_.on_mixer = [this] { show_bottom_mixer(true); };
     mixer_deck_.on_keyboard = [this] { show_bottom_mixer(false); };
@@ -265,6 +273,7 @@ MainComponent::MainComponent(AppContext& context)
     keyboard_.on_height_changed = [this] { resized(); };
     // A header's Print key prints that track; Freeze prints it with effects.
     sequencer_.on_print_track = [this](const std::string& track, bool freeze) {
+        show_right_tab(1);  // in a short window, the Print tab shows the print's progress
         print_.print_tracks({track}, freeze);
     };
 
@@ -416,6 +425,7 @@ void MainComponent::resized()
         edit.removeFromBottom(kGap);
         edit_.setBounds(edit);
     }
+    right_tabs_ = false;
     master_.setVisible(producer && master_stage_);
     channel_.setVisible(producer && !master_stage_);
     print_.setVisible(producer && !master_stage_);
@@ -428,10 +438,21 @@ void MainComponent::resized()
             channel_.setBounds(right_area.removeFromLeft(kRight));
             right_area.removeFromLeft(kGap);
             print_.setBounds(right_area.withWidth(std::min(right_area.getWidth(), kRight)));
+        } else if (right_area.getHeight() < 300 + kGap + 252) {
+            // Too short for both: Channel | Print tabs, one panel at a time.
+            right_tabs_ = true;
+            auto tabs = right_area.removeFromTop(24);
+            channel_tab_.setBounds(tabs.removeFromLeft(tabs.getWidth() / 2 - 3));
+            tabs.removeFromLeft(6);
+            print_tab_.setBounds(tabs);
+            right_area.removeFromTop(kGap);
+            channel_.setVisible(right_tab_ == 0);
+            print_.setVisible(right_tab_ == 1);
+            channel_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), 420)));
+            print_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), 360)));
         } else {
-            // A short column: the channel strip keeps at least 240 px.
-            const int print_h = juce::jlimit(222, 330, std::min(right_area.getHeight() - kGap - 420,
-                                                                 right_area.getHeight() - kGap - 240));
+            // The channel strip, then Print to audio under it.
+            const int print_h = juce::jlimit(252, 360, right_area.getHeight() - kGap - 300);
             print_.setBounds(right_area.removeFromBottom(print_h));
             right_area.removeFromBottom(kGap);
             channel_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), 420)));
@@ -455,6 +476,10 @@ void MainComponent::resized()
         inspector_.set_compact(compact);
         inspector_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), insp_h)));
     }
+    channel_tab_.setVisible(right_tabs_);
+    print_tab_.setVisible(right_tabs_);
+    channel_tab_.setToggleState(right_tab_ == 0, juce::dontSendNotification);
+    print_tab_.setToggleState(right_tab_ == 1, juce::dontSendNotification);
     const auto content = edit_.getBounds().getIntersection(edit_.content_area() + edit_.getPosition());
     composer_.setBounds(content);
     sequencer_.setBounds(content);
@@ -468,6 +493,12 @@ void MainComponent::set_follow(bool on)
     edit_.refresh_follow();
     context_.commands.commandStatusChanged();
     context_.status(on ? "Follow on: the edit window scrolls with the playhead" : "Follow off: the edit window stays where you put it");
+}
+
+void MainComponent::show_right_tab(int tab)
+{
+    right_tab_ = tab;
+    resized();
 }
 
 void MainComponent::show_bottom_mixer(bool mixer)

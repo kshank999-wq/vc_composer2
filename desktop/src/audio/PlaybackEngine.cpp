@@ -177,6 +177,12 @@ struct PlaybackSnapshot {
         bool input_stereo = false;
         juce::AudioBuffer<float> buffer;
         juce::MidiBuffer midi;
+        /// External MIDI: the router's sink (-1 none) and the channel for
+        /// notes off. `external`: the notes go to hardware, never the instrument.
+        int midi_out = -1;
+        int midi_channel = 0;
+        bool external = false;
+        int print_slot = -1;  ///< Real-time print: this track's take, or -1.
     };
     struct Bus {
         Strip strip;
@@ -585,7 +591,7 @@ void automate_strip(PlaybackSnapshot::Strip& st, std::int64_t pos, int n, bool p
 /// the strip's output (a bus, or the device for the master), through the
 /// edge's compensation delay unless `low_latency`.
 void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::AudioBuffer<float>& buf, int n,
-                   bool playing, bool low_latency) noexcept
+                   bool playing, bool low_latency, float* const* after_inserts = nullptr) noexcept
 {
     StripDsp& d = *strip.dsp;
     const StripParams& p = d.use_eff ? d.eff : d.params.latest();
@@ -597,6 +603,11 @@ void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::Au
             if (!ins->bypass.load(std::memory_order_relaxed)) ins->process(l, r, n);
             else ins->process_bypassed(l, r, n);
         }
+    }
+    // A real-time print with effects takes the signal here, before the fader.
+    if (after_inserts) {
+        juce::FloatVectorOperations::copy(after_inserts[0], l, n);
+        juce::FloatVectorOperations::copy(after_inserts[1], r, n);
     }
     // Automated mute: before the sends and the fader, like the static mute.
     if (d.mute_mode == 1 && d.mute_curve) {
@@ -669,6 +680,187 @@ void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::Au
 
 // --- Engine ------------------------------------------------------------------------------
 
+// --- Real-time print ----------------------------------------------------------------------
+
+struct PlaybackEngine::LivePrint {
+    struct Take {
+        std::string track_id;
+        juce::File file;
+        std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> writer;
+        bool from_input = false, post_inserts = false, stereo = true;
+        int input = -1;
+        std::int64_t offset = 0;  ///< Latency at the file's start, samples.
+        // Audio thread while printing.
+        std::int64_t written = 0, dropped = 0, last_loud = 0;
+        float peak = 0.0f;
+        juce::AudioBuffer<float> scratch;  ///< After the inserts, for a print with effects.
+    };
+    std::vector<Take> takes;
+    double sample_rate = 48000.0;
+    std::int64_t start = 0, end = 0;  ///< Render samples: the range, then its tail and the latency.
+    std::atomic<std::int64_t> position{0};
+    std::atomic<bool> done{false};
+
+    /// Audio thread: the part of a block inside the print's range.
+    void capture(Take& take, const float* const* src, std::int64_t pos, int n) noexcept
+    {
+        const std::int64_t a = std::max(pos, start), b = std::min(pos + n, end);
+        if (b <= a || !take.writer) return;
+        const int skip = static_cast<int>(a - pos), count = static_cast<int>(b - a);
+        const float* chans[2] = {src[0] + skip, src[1] + skip};
+        float peak = 0.0f;
+        for (int c = 0; c < 2; ++c) peak = std::max(peak, juce::FloatVectorOperations::findMaximum(chans[c], count));
+        for (int c = 0; c < 2; ++c) peak = std::max(peak, -juce::FloatVectorOperations::findMinimum(chans[c], count));
+        if (take.writer->write(chans, count)) {
+            take.written += count;
+            if (peak >= 1.0e-4f) take.last_loud = take.written;
+            take.peak = std::max(take.peak, peak);
+        } else {
+            take.dropped += count;
+        }
+    }
+};
+
+juce::String PlaybackEngine::start_live_print(const std::vector<LivePrintSource>& sources, Ticks start, Ticks end,
+                                              double tail_seconds)
+{
+    if (live_) return "A real-time print is already running";
+    if (!device_running_.load() && !prepared_offline_)
+        return "Real-time printing plays the song: it needs an audio device (Tools > Audio)";
+    if (sources.empty()) return "Tick the tracks to print first";
+    auto lp = std::make_unique<LivePrint>();
+    lp->sample_rate = sample_rate_;
+    const auto& tempo = session_.data().tempo;
+    lp->start = std::llround(tempo.seconds_at(start) * sample_rate_);
+    std::int64_t longest_offset = 0;
+    if (!writer_thread_) {
+        writer_thread_ = std::make_unique<juce::TimeSliceThread>("VCC recording writer");
+        writer_thread_->startThread(juce::Thread::Priority::high);
+    }
+    juce::StringArray problems;
+    for (const auto& src : sources) {
+        const auto* t = session_.data().find_track(src.track_id);
+        if (!t) continue;
+        LivePrint::Take take;
+        take.track_id = src.track_id;
+        take.file = src.file;
+        take.from_input = src.from_input;
+        take.post_inserts = src.post_inserts && !src.from_input;
+        take.input = t->input;
+        take.stereo = t->input_stereo;
+        if (take.from_input && take.input < 0) {
+            problems.add(juce::String(t->name) + ": choose the input its hardware comes back on");
+            continue;
+        }
+        // What the file starts late by: the hardware's round trip (and the
+        // compensation its MIDI was delayed by), or the instrument's own latency.
+        if (take.from_input) {
+            take.offset = latency_samples_.load() + compensation_;
+        } else {
+            const int inst = instrument_latency_.count(t->id) ? instrument_latency_[t->id] : 0;
+            const int strip = strip_latency_.count(t->id) ? strip_latency_[t->id] : inst;
+            take.offset = take.post_inserts ? strip : inst;
+        }
+        longest_offset = std::max(longest_offset, take.offset);
+        take.scratch.setSize(2, std::max(block_size_, 4096));
+        take.file.getParentDirectory().createDirectory();
+        take.file.deleteFile();
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(take.file);
+        if (!static_cast<juce::FileOutputStream*>(stream.get())->openedOk()) {
+            problems.add(juce::String(t->name) + ": cannot write " + take.file.getFullPathName());
+            continue;
+        }
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(sample_rate_).withNumChannels(2).withBitsPerSample(24));
+        if (!writer) {
+            problems.add(juce::String(t->name) + ": cannot write a WAV file there");
+            continue;
+        }
+        take.writer = std::make_unique<juce::AudioFormatWriter::ThreadedWriter>(writer.release(), *writer_thread_,
+                                                                                static_cast<int>(sample_rate_ * 10.0));
+        lp->takes.push_back(std::move(take));
+    }
+    if (lp->takes.empty()) return problems.isEmpty() ? juce::String("Nothing to print") : problems.joinIntoString("; ");
+    lp->end = std::llround((tempo.seconds_at(end) + tail_seconds) * sample_rate_) + longest_offset;
+    lp->position = lp->start;
+    live_takes_ids_.clear();
+    for (const auto& take : lp->takes) live_takes_ids_.push_back(take.track_id);
+    live_cancel_ = false;
+    live_released_ = false;
+    live_ = std::move(lp);
+    rebuild_now();  // the printed tracks: their MIDI, not their clips
+    live_ptr_.store(live_.get(), std::memory_order_release);
+    locate(start);
+    play();
+    return problems.isEmpty() ? juce::String() : "Not printing " + problems.joinIntoString("; ");
+}
+
+double PlaybackEngine::live_print_progress() const noexcept
+{
+    if (!live_ || live_->end <= live_->start) return 0.0;
+    return std::clamp(static_cast<double>(live_->position.load() - live_->start) / static_cast<double>(live_->end - live_->start),
+                      0.0, 1.0);
+}
+
+void PlaybackEngine::cancel_live_print()
+{
+    if (!live_) return;
+    live_cancel_ = true;
+    service_live_print();
+}
+
+void PlaybackEngine::service_live_print()
+{
+    if (!live_) return;
+    if (!live_->done.load(std::memory_order_acquire) && !live_cancel_) {
+        if (playing()) return;
+        live_cancel_ = true;  // stopped before the end: nothing is placed
+    }
+    // Hand back from the audio thread (offline, this thread is the audio thread).
+    if (device_running_.load()) {
+        live_release_.store(true, std::memory_order_release);
+        for (int i = 0; i < 250 && !live_released_.load(std::memory_order_acquire); ++i) juce::Thread::sleep(2);
+    } else {
+        live_ptr_.store(nullptr);
+    }
+    live_released_ = false;
+    live_release_ = false;
+    if (playing()) stop();
+    const bool cancelled = live_cancel_;
+    std::vector<LivePrintResult> results;
+    for (auto& take : live_->takes) {
+        take.writer.reset();  // flushes and closes the file
+        LivePrintResult r;
+        r.track_id = take.track_id;
+        r.file = take.file;
+        r.sample_rate = live_->sample_rate;
+        r.peak = take.peak;
+        r.source_offset = static_cast<double>(take.offset) / live_->sample_rate;
+        // The clip: the range and what rings past it (trailing silence left out).
+        const std::int64_t range = live_->end - live_->start;
+        const std::int64_t keep = std::min(take.written, std::max(take.last_loud + static_cast<std::int64_t>(live_->sample_rate / 10),
+                                                                  std::min(range, take.offset + 1)));
+        r.length = static_cast<double>(keep - take.offset) / live_->sample_rate;
+        if (cancelled) {
+            r.message = "cancelled";
+        } else if (take.dropped > 0) {
+            r.message = "the disk could not keep up";
+        } else if (take.peak < 1.0e-4f || r.length <= 0.0) {
+            r.message = take.from_input ? "nothing came back on its input" : "nothing sounds in that range";
+        } else {
+            r.ok = true;
+            r.message = take.file.getFileName();
+        }
+        if (!r.ok) take.file.deleteFile();
+        results.push_back(r);
+    }
+    live_.reset();
+    live_takes_ids_.clear();
+    live_cancel_ = false;
+    rebuild_now();
+    if (on_live_print_finished) on_live_print_finished(results, cancelled);
+}
+
 class LiveMidiCallback final : public juce::MidiInputCallback {
 public:
     LiveMidiCallback(juce::MidiMessageCollector& c, PlaybackEngine& engine) : collector_(c), engine_(engine) {}
@@ -716,6 +908,7 @@ PlaybackEngine::PlaybackEngine(session::Session& session, PluginHost& plugins)
         request_rebuild();
         if (writing_pass_ && !committing_) refresh_writes();
     });
+    midi_router_ = std::make_unique<MidiOutRouter>();
     for (auto& h : live_held_) h.store(0);
     midi_callback_ = std::make_unique<LiveMidiCallback>(live_input_, *this);
     live_input_.reset(sample_rate_);
@@ -776,6 +969,9 @@ void PlaybackEngine::prepare_offline(double sample_rate, int block_size)
     files_->set_synchronous(true);  // offline: reads fill their own buffers
     prepare_all(sample_rate, block_size);
     latency_samples_ = 0;
+    output_latency_ = 0;
+    offline_ = true;
+    prepared_offline_ = true;
     rebuild_now();
 }
 
@@ -803,6 +999,9 @@ void PlaybackEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     // device, so instruments can be re-prepared without racing the audio thread.
     prepare_all(device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples());
     latency_samples_ = device->getInputLatencyInSamples() + device->getOutputLatencyInSamples();
+    output_latency_ = device->getOutputLatencyInSamples();
+    offline_ = false;
+    prepared_offline_ = false;
     num_inputs_ = device->getActiveInputChannels().countNumberOfSetBits();
     device_running_ = true;
     rebuild_now();
@@ -836,6 +1035,7 @@ void PlaybackEngine::timerCallback()
     if (rebuild_pending_ || current_latencies() != latencies_seen_) rebuild_now();
     retire_garbage();
     collect_finished_passes();
+    service_live_print();
 }
 
 void PlaybackEngine::retire_garbage()
@@ -991,6 +1191,20 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         PlaybackSnapshot::Track st;
         st.strip = make_strip(t->id, plan.track_sends[k], plan.track_output[k]);
         st.strip.fx_bypassed = t->printed_fx && t->playback == "audio" && has_instrument(*t);
+        // A real-time print of this track: its MIDI always, its own clips never.
+        int live_slot = -1;
+        if (live_)
+            for (std::size_t s = 0; s < live_takes_ids_.size(); ++s)
+                if (live_takes_ids_[s] == t->id) live_slot = static_cast<int>(s);
+        st.print_slot = live_slot;
+        if (live_slot >= 0) st.strip.fx_bypassed = false;
+        // External MIDI: notes to the hardware (a virtual port also offline;
+        // real hardware only while the device runs), never to the instrument.
+        if (t->kind == project::TrackKind::MidiOnly && !t->midi_output.empty() && (t->playback != "audio" || live_slot >= 0)) {
+            st.external = true;
+            st.midi_out = midi_router_->sink_for(juce::String(t->midi_output), !offline_);
+            st.midi_channel = std::clamp(t->midi_channel, 0, 15);
+        }
         if (print_tap_ && print_tap_->track_id == t->id) {
             snap->tap_track = static_cast<int>(k);
             snap->tap_post_inserts = print_tap_->post_inserts;
@@ -1006,7 +1220,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
                              instrument_watch_targets_, t->id, "plugin:");
             // A track set to play only its audio lane keeps its instrument
             // (for a MIDI keyboard) but sends it none of its notes.
-            const bool printing_this = print_tap_ && print_tap_->track_id == t->id;
+            const bool printing_this = (print_tap_ && print_tap_->track_id == t->id) || live_slot >= 0;
             if (t->playback != "audio" || printing_this) {
                 project::RenderedTrack r = render_cache_.render(*t);
                 if (st.instrument->wants_keyswitches()) r.notes.insert(r.notes.end(), r.keyswitches.begin(), r.keyswitches.end());
@@ -1017,7 +1231,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         if (const project::TrackVersion* v = t->active_version()) {
             juce::StringArray problems;
             // An instrument track set to "midi" leaves its audio lane silent.
-            const bool lane_silent = has_instrument(*t) && t->playback == "midi";
+            const bool lane_silent = (has_instrument(*t) && t->playback == "midi") || live_slot >= 0;
             for (const auto& c : v->audio_clips) {
                 if (lane_silent || c.lane != 0 || c.muted || c.length <= 0.0) continue;
                 const std::int64_t length = std::llround(c.length * sample_rate_);
@@ -1053,6 +1267,8 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         }
         st.mono = is_mono_track(*t);
         st.monitor = t->monitor == "off" ? 0 : t->monitor == "input" ? 2 : 1;
+        // Hardware is heard through its return, always (unless monitoring is off).
+        if (st.external && st.monitor != 0) st.monitor = 2;
         st.armed = t->record_armed;
         st.input = t->input;
         st.input_stereo = t->input_stereo;
@@ -1087,6 +1303,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         if (static_cast<int>(k) == snap->tap_track)
             print_tap_latency_ = instrument_latency[k] + (snap->tap_post_inserts ? inserts_latency(st.strip, st.strip.inserts.size()) : 0);
         strip_latency_[plan.tracks[k]->id] = track_out[k];
+        instrument_latency_[plan.tracks[k]->id] = instrument_latency[k];
         auto arrive = [&](int dest) {
             if (dest >= 0 && dest < static_cast<int>(nb)) bus_in[static_cast<std::size_t>(dest)] = std::max(bus_in[static_cast<std::size_t>(dest)], track_out[k]);
         };
@@ -1794,6 +2011,13 @@ void PlaybackEngine::process(const float* const* inputs, int num_inputs, float* 
                              int num_samples) noexcept
 {
     if (spill_ && retired_.push(spill_)) spill_ = nullptr;
+    // A real-time print: picked up, or handed back when asked.
+    if (live_release_.load(std::memory_order_acquire)) {
+        live_ptr_.store(nullptr, std::memory_order_release);
+        live_release_.store(false);
+        live_released_.store(true, std::memory_order_release);
+    }
+    live_rt_ = live_ptr_.load(std::memory_order_acquire);
     if (spill_ == nullptr) {
         if (PlaybackSnapshot* incoming = pending_.exchange(nullptr)) {
             if (current_ && !retired_.push(current_)) spill_ = current_;  // queue full: hand back next block
@@ -1852,7 +2076,11 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
     }
     if (s && (stopping || locate >= 0)) {
         for (auto& t : s->tracks)
+        {
             if (t.instrument) t.instrument->all_notes_off();
+            if (t.midi_out >= 0)
+                midi_router_->push(t.midi_out, juce::MidiMessage::allNotesOff(t.midi_channel + 1), juce::Time::getMillisecondCounterHiRes());
+        }
         if (locate >= 0) {
             position_samples_ = locate;
             s->seek(locate);
@@ -1916,7 +2144,33 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
                 t.midi.clear();
                 if (playing) gather(t.events, t.cursor, pos, n, t.midi);
                 if (static_cast<int>(i) == s->live_track && !tapped) live_input_.removeNextBlockOfMessages(t.midi, n);
-                t.instrument->process(buf, t.midi, n);
+                if (!t.external) t.instrument->process(buf, t.midi, n);
+                // External MIDI: each message stamped with when it should sound,
+                // with the delay compensation and the output latency, so the
+                // hardware lines up with what is heard.
+                if (t.midi_out >= 0 && !tapped) {
+                    const double now = juce::Time::getMillisecondCounterHiRes();
+                    const double ms_per_sample = 1000.0 / s->sample_rate;
+                    const double ahead = static_cast<double>(offset + comp + output_latency_.load(std::memory_order_relaxed));
+                    for (const auto meta : t.midi)
+                        midi_router_->push(t.midi_out, meta.getMessage(), now + (ahead + meta.samplePosition) * ms_per_sample);
+                }
+            }
+            // A real-time print takes the instrument here (before the strip).
+            LivePrint* lp = live_rt_;
+            const bool printing_live = lp && playing && t.print_slot >= 0 && t.print_slot < static_cast<int>(lp->takes.size());
+            if (printing_live) {
+                auto& take = lp->takes[static_cast<std::size_t>(t.print_slot)];
+                if (!take.from_input && !take.post_inserts) lp->capture(take, buf.getArrayOfReadPointers(), pos, n);
+                else if (take.from_input) {
+                    const float* src[2] = {nullptr, nullptr};
+                    const int left = take.input;
+                    const int right = take.stereo ? take.input + 1 : take.input;
+                    if (inputs && left >= 0 && left < num_inputs && inputs[left]) src[0] = inputs[left] + offset;
+                    if (inputs && right >= 0 && right < num_inputs && inputs[right]) src[1] = inputs[right] + offset;
+                    if (src[0] && !src[1]) src[1] = src[0];
+                    if (src[0]) lp->capture(take, src, pos, n);
+                }
             }
             if (tapped) {
                 // The print: the instrument's signal, with the strip's
@@ -1952,7 +2206,17 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
             }
             // Low-latency monitoring: what the performer plays skips the compensation.
             const bool low_latency = monitor_input || (static_cast<int>(i) == s->live_track && (!playing || t.armed));
-            process_strip(*s, t.strip, buf, n, playing, low_latency);
+            if (printing_live && lp->takes[static_cast<std::size_t>(t.print_slot)].post_inserts) {
+                auto& take = lp->takes[static_cast<std::size_t>(t.print_slot)];
+                process_strip(*s, t.strip, buf, n, playing, low_latency, take.scratch.getArrayOfWritePointers());
+                lp->capture(take, take.scratch.getArrayOfReadPointers(), pos, n);
+            } else {
+                process_strip(*s, t.strip, buf, n, playing, low_latency);
+            }
+        }
+        if (LivePrint* lp = live_rt_; lp && playing) {
+            lp->position.store(pos + n, std::memory_order_relaxed);
+            if (pos + n >= lp->end) lp->done.store(true, std::memory_order_release);
         }
         for (int bi : s->bus_order) {
             if (s->tap_track >= 0) break;  // a print is the track alone

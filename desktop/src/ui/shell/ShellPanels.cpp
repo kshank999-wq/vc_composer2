@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "AppResources.h"
+#include "audio/MidiOut.h"
 #include "ui/SequencerView.h"
 #include "ui/Theme.h"
 #include "ui/TrackPanel.h"
@@ -594,7 +595,12 @@ int NewTrackPanel::create()
     }
     int made = 0;
     for (int i = 0; i < count_value_; ++i) {
-        if (types_[2]->getToggleState()) {
+        if (types_[0]->getToggleState()) {
+            const auto n = static_cast<int>(std::count_if(s.data().tracks.begin(), s.data().tracks.end(), [](const project::Track& t) {
+                return t.kind == project::TrackKind::MidiOnly;
+            }));
+            if (!s.add_midi_track("MIDI " + std::to_string(n + 1)).empty()) ++made;
+        } else if (types_[2]->getToggleState()) {
             const auto n = static_cast<int>(std::count_if(s.data().tracks.begin(), s.data().tracks.end(),
                                                           [](const project::Track& t) {
                                                               return t.kind == project::TrackKind::Audio;
@@ -605,7 +611,8 @@ int NewTrackPanel::create()
         }
     }
     if (made > 0 && context_.status)
-        context_.status("Created " + juce::String(made) + (types_[2]->getToggleState() ? " audio track" : " aux bus") +
+        context_.status("Created " + juce::String(made) +
+                        (types_[0]->getToggleState() ? " MIDI track" : types_[2]->getToggleState() ? " audio track" : " aux bus") +
                         (made == 1 ? "" : "s"));
     return made;
 }
@@ -742,6 +749,26 @@ ChannelPanel::ChannelPanel(AppContext& context)
     in_.set_on_click([this] {
         if (!track_.empty()) console::show_input_menu(context_, track_, in_);
     });
+    addChildComponent(midi_out_);
+    midi_out_.setTooltip("MIDI out: send this MIDI track's notes to an external instrument; its sound comes back on the "
+                         "track's input (print it with Real-time)");
+    midi_out_.set_on_click([this] {
+        if (track_.empty()) return;
+        const auto* t = context_.session.data().find_track(track_);
+        if (!t) return;
+        juce::PopupMenu m;
+        m.addSectionHeader("MIDI out");
+        m.addItem(1, "None (the track's own instrument)", true, t->midi_output.empty());
+        const auto names = MidiOutRouter::device_names();
+        if (names.isEmpty()) m.addItem(-1, "No MIDI output devices", false);
+        for (int i = 0; i < names.size(); ++i) m.addItem(100 + i, names[i], true, names[i].toStdString() == t->midi_output);
+        auto& ctx = context_;
+        const std::string id = track_;
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&midi_out_), [&ctx, id, names](int r) {
+            if (r == 1) ctx.session.set_midi_output(id, {});
+            else if (r >= 100 && r - 100 < names.size()) ctx.session.set_midi_output(id, names[r - 100].toStdString());
+        });
+    });
     out_.set_on_click([this] {
         if (!track_.empty()) console::show_output_menu(context_, track_, out_);
     });
@@ -864,8 +891,15 @@ void ChannelPanel::refresh()
         sends_[i]->setValue(level, juce::dontSendNotification);
         sends_[i]->setTooltip(send_names_[i] + "  " + juce::String(level, 1) + " dB");
     }
-    in_.set_text(console::input_text(context_, track_));
+    // A MIDI track: where its notes go, and its return (the input).
+    const bool was_external = external_;
+    external_ = t->kind == project::TrackKind::MidiOnly;
+    midi_out_.setVisible(external_);
+    midi_out_.set_text("MIDI " + juce::String::fromUTF8("\xe2\x80\xba ") +
+                       (t->midi_output.empty() ? juce::String("INSTRUMENT") : juce::String(t->midi_output).toUpperCase()));
+    in_.set_text((external_ && !t->midi_output.empty() ? "RET " : "") + console::input_text(context_, track_));
     out_.set_text(console::output_text(context_, track_));
+    if (was_external != external_) resized();
     repaint();
 }
 
@@ -908,6 +942,10 @@ void ChannelPanel::resized()
         c.removeFromTop(sends_.empty() ? 0 : 12);
     }
     c.removeFromTop(6);
+    if (external_) {
+        midi_out_.setBounds(c.removeFromBottom(20));
+        c.removeFromBottom(4);
+    }
     auto io = c.removeFromBottom(20);
     in_.setBounds(io.removeFromLeft(io.getWidth() / 2 - 3));
     io.removeFromLeft(6);

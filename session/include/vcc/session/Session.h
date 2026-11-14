@@ -222,6 +222,11 @@ public:
     bool remove_bus(const std::string& bus_id);
     /// A new audio track (mono or stereo input) with an empty playlist.
     std::string add_audio_track(const std::string& name, bool stereo);
+    /// A MIDI track: notes, sent to an external MIDI device (set_midi_output)
+    /// or played by its instrument. Its audio input is the hardware's return.
+    std::string add_midi_track(const std::string& name);
+    /// A MIDI track's external MIDI output device by name (empty: none). One undo step.
+    bool set_midi_output(const std::string& track_id, const std::string& device);
     /// Record-arms a track. Not an undo step and does not dirty the project.
     void set_record_armed(const std::string& track_id, bool armed);
     /// Places clips (one recording pass, or an import) as one undo step. With

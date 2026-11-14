@@ -204,6 +204,8 @@ public:
     hw::SmallKnob& send(int i) { return *sends_[static_cast<std::size_t>(i)]; }
     const std::string& send_bus(int i) const { return send_bus_[static_cast<std::size_t>(i)]; }
     hw::Lcd& input_lcd() { return in_; }
+    /// A MIDI track's external MIDI output (click for the devices); hidden for other tracks.
+    hw::Lcd& midi_out_lcd() { return midi_out_; }
     hw::Lcd& output_lcd() { return out_; }
 
 private:
@@ -219,7 +221,8 @@ private:
     hw::Fader fader_;
     hw::SmallKnob pan_;
     hw::Meter meter_l_{hw::Meter::Orientation::Vertical, 20}, meter_r_{hw::Meter::Orientation::Vertical, 20};
-    hw::Lcd db_{{}, 13.0f}, pan_lcd_{{}, 11.0f}, in_{{}, 10.5f}, out_{{}, 10.5f};
+    hw::Lcd db_{{}, 13.0f}, pan_lcd_{{}, 11.0f}, in_{{}, 10.5f}, out_{{}, 10.5f}, midi_out_{{}, 10.5f};
+    bool external_ = false;  ///< The selected track is a MIDI track (it can send to hardware).
     hw::Keycap mute_{"M", true}, solo_{"S", true};
     std::vector<std::unique_ptr<hw::Keycap>> modes_;
     bool compact_ = false;

@@ -10,7 +10,7 @@ constexpr int kRow = 18;
 
 PrintPanel::PrintPanel(AppContext& context) : hw::Panel("Print to audio"), context_(context)
 {
-    for (auto* k : {&selection_, &song_, &fx_, &play_audio_, &record_}) {
+    for (auto* k : {&selection_, &song_, &fx_, &play_audio_, &record_, &offline_, &realtime_}) {
         addAndMakeVisible(*k);
         k->setWantsKeyboardFocus(false);
         k->set_legend_size(10.0f);
@@ -19,6 +19,18 @@ PrintPanel::PrintPanel(AppContext& context) : hw::Panel("Print to audio"), conte
     selection_.setRadioGroupId(0x7071);
     song_.setRadioGroupId(0x7071);
     song_.setToggleState(true, juce::dontSendNotification);
+    offline_.setRadioGroupId(0x7072);
+    realtime_.setRadioGroupId(0x7072);
+    offline_.setToggleState(true, juce::dontSendNotification);
+    offline_.set_led_dot(true);
+    realtime_.set_led_dot(true);
+    offline_.setTooltip("Render offline, faster than real time (instruments and plug-ins in the app)");
+    realtime_.setTooltip("Play the range live and record it as it plays: for MIDI tracks on external hardware "
+                         "(recorded from their audio input), and plug-ins that only work in real time");
+    // A real-time print ends in the engine: its files come back here.
+    context_.engine.on_live_print_finished = [this](const std::vector<PlaybackEngine::LivePrintResult>& results, bool cancelled) {
+        live_finished(results, cancelled);
+    };
     for (auto* k : {&selection_, &song_, &fx_, &play_audio_}) k->set_led_dot(true);
     play_audio_.setToggleState(true, juce::dontSendNotification);
     selection_.setTooltip("Print only the selected range (bars dragged on the ruler)");
@@ -30,7 +42,7 @@ PrintPanel::PrintPanel(AppContext& context) : hw::Panel("Print to audio"), conte
     record_.setComponentID("print_record");
     record_.setTooltip("Print the ticked tracks onto their own audio lanes (48 kHz / 24-bit WAV, offline)");
     record_.onClick = [this] {
-        if (job_) cancel();
+        if (job_ || live_) cancel();
         else start();
     };
     listener_ = context_.session.add_listener([this](session::Change c) {
@@ -42,6 +54,7 @@ PrintPanel::PrintPanel(AppContext& context) : hw::Panel("Print to audio"), conte
 PrintPanel::~PrintPanel()
 {
     stopTimer();
+    context_.engine.on_live_print_finished = nullptr;
     context_.session.remove_listener(listener_);
 }
 
@@ -83,8 +96,40 @@ void PrintPanel::start()
 
 void PrintPanel::print_tracks(const std::vector<std::string>& tracks, bool include_fx)
 {
-    if (job_ || tracks.empty()) return;
+    if (job_ || live_ || tracks.empty()) return;
     context_.engine.stop();
+    if (realtime_.getToggleState()) {
+        // Real time: every track at once, played live and recorded.
+        std::vector<PlaybackEngine::LivePrintSource> sources;
+        for (const auto& id : tracks) {
+            const auto* t = context_.session.data().find_track(id);
+            if (!t) continue;
+            PlaybackEngine::LivePrintSource src;
+            src.track_id = id;
+            src.file = print_file_for(context_, juce::String(t->name));
+            src.from_input = !t->midi_output.empty();
+            src.post_inserts = include_fx;
+            sources.push_back(src);
+        }
+        const auto& sel = context_.session.selection();
+        const bool range = selection_.getToggleState() && sel.has_range();
+        live_start_ = range ? sel.from : 0;
+        const Ticks end = range ? sel.to : std::max<Ticks>(context_.session.content_end(), kTicksPerWhole);
+        live_fx_ = include_fx;
+        live_play_ = play_audio_.getToggleState();
+        const auto error = context_.engine.start_live_print(sources, live_start_, end, 2.0);
+        if (!context_.engine.live_printing()) {
+            if (context_.status) context_.status("Real-time print: " + error);
+            lcd_.set_text("NOT STARTED");
+            return;
+        }
+        if (error.isNotEmpty() && context_.status) context_.status(error);
+        live_ = true;
+        record_.setButtonText("Cancel");
+        lcd_.set_text("REAL TIME  " + juce::String(sources.size()) + (sources.size() == 1 ? " TRACK" : " TRACKS") + "\n0%");
+        startTimerHz(30);
+        return;
+    }
     PrintRequest rq;
     rq.tracks = tracks;
     rq.include_fx = include_fx;
@@ -106,6 +151,10 @@ void PrintPanel::print_tracks(const std::vector<std::string>& tracks, bool inclu
 
 void PrintPanel::cancel()
 {
+    if (live_) {
+        context_.engine.cancel_live_print();
+        return;
+    }
     if (!job_) return;
     job_->cancel();
     job_->step(0.0);
@@ -120,8 +169,41 @@ void PrintPanel::finish_now()
     finished();
 }
 
+void PrintPanel::live_finished(const std::vector<PlaybackEngine::LivePrintResult>& results, bool cancelled)
+{
+    live_ = false;
+    stopTimer();
+    record_.setButtonText("Record score to audio");
+    if (cancelled) {
+        last_.clear();
+        lcd_.set_text("CANCELLED");
+        if (context_.status) context_.status("Real-time print cancelled; nothing was placed");
+        repaint();
+        return;
+    }
+    last_ = place_live_prints(context_, results, live_start_, live_fx_, live_play_);
+    int ok = 0;
+    juce::StringArray problems;
+    for (const auto& i : last_) {
+        if (i.ok) ++ok;
+        else problems.add(i.track_name.upToFirstOccurrenceOf(juce::String::fromUTF8(" \xe2\x80\x94"), false, false) + ": " + i.message);
+    }
+    lcd_.set_text("DONE  " + juce::String(ok) + " / " + juce::String(last_.size()) + "\nREAL TIME  24-BIT  WAV");
+    if (context_.status)
+        context_.status("Printed " + juce::String(ok) + " of " + juce::String(last_.size()) + " in real time" +
+                        (problems.isEmpty() ? juce::String() : " (" + problems.joinIntoString("; ") + ")"));
+    repaint();
+}
+
 void PrintPanel::timerCallback()
 {
+    if (live_) {
+        const auto& d = context_.session.data();
+        lcd_.set_text("REAL TIME  BAR " + juce::String(d.meter.bar_at(context_.engine.position())) + "\n" +
+                      juce::String(juce::roundToInt(context_.engine.live_print_progress() * 100.0)) + "%");
+        repaint();
+        return;
+    }
     if (!job_) {
         stopTimer();
         return;
@@ -154,7 +236,7 @@ juce::Rectangle<int> PrintPanel::list_area() const
 {
     auto c = content();
     c.removeFromTop(4);
-    return c.withHeight(std::max(kRow * 2, c.getHeight() - 146));
+    return c.withHeight(std::max(kRow * 2, c.getHeight() - 176));
 }
 
 void PrintPanel::resized()
@@ -164,6 +246,10 @@ void PrintPanel::resized()
     c.setTop(list.getBottom() + 8);
     auto row = c.removeFromTop(24);
     const int half = (row.getWidth() - 6) / 2;
+    offline_.setBounds(row.removeFromLeft(half));
+    realtime_.setBounds(row.removeFromRight(half));
+    c.removeFromTop(6);
+    row = c.removeFromTop(24);
     selection_.setBounds(row.removeFromLeft(half));
     song_.setBounds(row.removeFromRight(half));
     c.removeFromTop(6);

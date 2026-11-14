@@ -77,6 +77,9 @@ public:
     shell::MixerDeck& mixer_deck() noexcept { return mixer_deck_; }
     /// The Producer view's bottom deck: the mixer (default) or the keyboard.
     void show_bottom_mixer(bool mixer);
+    /// In a short window the Producer column shows Channel (0) or Print (1).
+    void show_right_tab(int tab);
+    bool right_tabs() const noexcept { return right_tabs_; }
     /// Follow on or off (the title bar's key, View > Follow Playhead, Cmd/Ctrl+Shift+F); remembered.
     void set_follow(bool on);
     bool bottom_mixer() const noexcept { return bottom_mixer_; }
@@ -135,7 +138,10 @@ private:
     shell::ChannelPanel channel_;
     shell::PrintPanel print_;
     shell::MasterPanel master_;
-    bool master_stage_ = false;  ///< The Master stage: the right column is the Master panel.
+    bool master_stage_ = false;
+    hw::Keycap channel_tab_{"Channel"}, print_tab_{"Print"};
+    int right_tab_ = 0;
+    bool right_tabs_ = false;  ///< The Master stage: the right column is the Master panel.
     shell::StatusStrip status_strip_;
     shell::KeyboardDeck keyboard_;
     shell::MixerDeck mixer_deck_;

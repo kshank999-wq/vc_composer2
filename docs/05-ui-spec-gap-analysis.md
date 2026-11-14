@@ -445,9 +445,46 @@ and the document model. The work is mostly presentation.
      a percentage and a red bar. The print renders in slices on a timer,
      so the window stays live, and the red key becomes Cancel while it
      runs.
-   - **Still to come: real-time printing.** It matters only for sound that
-     cannot be rendered offline: external MIDI hardware, which the app
-     does not send to yet. Offline renders every hosted instrument exactly.
+   - **Real-time printing. Done**, with external MIDI out:
+     - **MIDI tracks.** New track › MIDI makes one
+       (`Session::add_midi_track`). The channel strip's **MIDI ›** readout
+       picks an output device (`Track::midi_output`, saved, one undo step).
+       The notes then go to the hardware, not the track's instrument, and
+       the hardware is heard through the track's input (shown as RET).
+     - **How MIDI goes out** (`audio/MidiOut`). The audio thread stamps
+       each message with when it should sound: the block's time, plus the
+       delay compensation, plus the output latency, so the hardware lines
+       up with what is heard. It pushes the message onto a lock-free queue,
+       and a sender thread waits for that time and sends it.
+     - **Notes off.** All notes off goes out on stop and on any jump.
+     - **Offline renders** never play real hardware. Tests register a
+       virtual port.
+     - **The sender thread** starts only once a track uses external MIDI.
+     - **Print panel: Offline | Real-time.**
+       - Real-time plays the range live and records every ticked track in
+         one pass (`PlaybackEngine::start_live_print`).
+       - An instrument track records its instrument (before the strip, or
+         after its inserts with Include FX), from its MIDI, never its
+         clips.
+       - A MIDI track on hardware records its audio input, its synth's
+         return, with the round-trip latency and the compensation taken
+         off.
+       - The audio thread only copies into threaded disk writers. The
+         print ends itself after the range and a 2 s tail, stopping the
+         transport.
+       - Stopping or Cancel throws it away; finished, it is placed like an
+         offline print (`place_live_prints`), as one undo step.
+       - It needs a running audio device and says so otherwise. An offline
+         print of a hardware track says to print it in real time.
+     - **Short windows.** When both panels do not fit, the Producer column
+       shows **Channel | Print** tabs. A header's Print or Freeze switches
+       to the Print tab.
+     - **Checks.**
+       - A virtual synth receives the MIDI track's notes.
+       - Its return is what lands in the file.
+       - An instrument printed in real time nulls bit-exactly against its
+         offline print.
+       - Both land on their audio lanes as one undo step.
    - **Checks.** The `place_prints` unit test, and the desktop check's
      print section covering format, placement, undo, the null, selection,
      Freeze and a silent track. Screenshots 32 and 33.

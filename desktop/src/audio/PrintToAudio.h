@@ -17,6 +17,7 @@
 
 #include <juce_core/juce_core.h>
 
+#include "audio/PlaybackEngine.h"
 #include "vcc/core/Time.h"
 
 namespace vcc::desktop {
@@ -82,6 +83,12 @@ private:
     int index_ = 0;
     bool cancelled_ = false, finished_ = false;
 };
+
+/// Places a real-time print's files (PlaybackEngine::start_live_print) on
+/// their tracks' audio lanes from `start`, as one undo step, like an
+/// offline print. Returns the items, with the clip ids of those placed.
+std::vector<PrintItem> place_live_prints(AppContext& context, const std::vector<PlaybackEngine::LivePrintResult>& results,
+                                         Ticks start, bool include_fx, bool play_audio);
 
 /// Prints synchronously (the checks, and menu commands that need no window).
 std::vector<PrintItem> print_to_audio(AppContext& context, const PrintRequest& request);

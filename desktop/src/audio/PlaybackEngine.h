@@ -72,6 +72,7 @@
 
 #include "audio/AutomationRt.h"
 #include "audio/Instrument.h"
+#include "audio/MidiOut.h"
 #include "audio/PluginHost.h"
 #include "vcc/project/RenderCache.h"
 #include "vcc/audio/Loudness.h"
@@ -152,6 +153,42 @@ public:
     /// plays (BS.1770 K-weighted mean square and true peak), for the Master
     /// panel's LUFS and dBTP readings. Drained by the message thread.
     std::vector<audio::LoudnessBlock> take_loudness_blocks();
+    // --- External MIDI and real-time print -------------------------------------------
+    /// External MIDI out: a MIDI track with a `midi_output` sends its notes
+    /// there (through the router) instead of to its instrument, and hears the
+    /// hardware on its audio input.
+    MidiOutRouter& midi_router() noexcept { return *midi_router_; }
+    /// Print to audio in real time: the transport plays the range live and
+    /// each source is recorded as it plays - an instrument track's
+    /// instrument (before the strip, or after its inserts), or a MIDI
+    /// track's audio input (its hardware's return, the round-trip latency
+    /// taken off). Returns an empty string, or why it cannot start.
+    struct LivePrintSource {
+        std::string track_id;
+        juce::File file;
+        bool from_input = false;
+        bool post_inserts = false;
+    };
+    struct LivePrintResult {
+        std::string track_id;
+        juce::File file;
+        bool ok = false;
+        juce::String message;
+        double sample_rate = 48000.0;
+        double source_offset = 0.0;  ///< Seconds of latency at the file's start, skipped by the clip.
+        double length = 0.0;         ///< Seconds, the range and its ringing tail.
+        float peak = 0.0f;
+    };
+    juce::String start_live_print(const std::vector<LivePrintSource>& sources, Ticks start, Ticks end, double tail_seconds);
+    bool live_printing() const noexcept { return live_ != nullptr; }
+    double live_print_progress() const noexcept;
+    /// Stops a real-time print and throws its files away.
+    void cancel_live_print();
+    /// Message thread: finishes a print whose range has played (or that was
+    /// stopped); the timer calls it.
+    void service_live_print();
+    std::function<void(const std::vector<LivePrintResult>& results, bool cancelled)> on_live_print_finished;
+
     /// Starts the analysis afresh (with the meter's reset).
     void reset_loudness() noexcept { loudness_reset_ = true; }
     StripMeter take_deck_meter(const std::string& strip_id, int reader = 0);
@@ -375,6 +412,18 @@ private:
     bool export_mode_ = false;
     std::optional<RenderOverride> render_override_;
     std::optional<PrintTap> print_tap_;
+    struct LivePrint;
+    std::unique_ptr<LivePrint> live_;                  // message thread
+    std::atomic<LivePrint*> live_ptr_{nullptr};        // handed to the audio thread
+    LivePrint* live_rt_ = nullptr;                     // audio thread, per callback
+    std::atomic<bool> live_release_{false}, live_released_{false};
+    bool live_cancel_ = false;
+    std::vector<std::string> live_takes_ids_;  ///< The print's tracks, by slot (message thread).
+    std::unique_ptr<MidiOutRouter> midi_router_;
+    bool offline_ = true;
+    bool prepared_offline_ = false;  ///< Driven by render_offline (the checks, bounces), not a device.
+    std::atomic<int> output_latency_{0};
+    std::map<std::string, int> instrument_latency_;
     audio::LoudnessAnalyser loudness_;                    // audio thread, once prepared
     audio::SpscQueue<audio::LoudnessBlock> loudness_blocks_{512};
     std::atomic<bool> loudness_reset_{false};

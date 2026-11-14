@@ -1031,6 +1031,29 @@ std::string Session::add_audio_track(const std::string& name, bool stereo)
     return id;
 }
 
+std::string Session::add_midi_track(const std::string& name)
+{
+    std::string id = project_.add_track(name.empty() ? "MIDI" : name, project::TrackKind::MidiOnly);
+    project_.modify_unrecorded([&](project::ProjectData& d) {
+        if (project::Track* t = d.find_track(id)) {
+            t->input_stereo = true;  // a synth's stereo return
+            t->family = "midi";
+        }
+    });
+    document_changed();
+    select_track(id);
+    return id;
+}
+
+bool Session::set_midi_output(const std::string& id, const std::string& device)
+{
+    return edit(device.empty() ? "MIDI out: none" : "MIDI out: " + device, on_track(id, [&](project::Track& t) {
+        if (t.kind != project::TrackKind::MidiOnly || t.midi_output == device) return false;
+        t.midi_output = device;
+        return true;
+    }));
+}
+
 void Session::set_record_armed(const std::string& id, bool armed)
 {
     const project::Track* t = data().find_track(id);

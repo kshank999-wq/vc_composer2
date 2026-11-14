@@ -95,6 +95,11 @@ bool PrintJob::begin_track()
         item.message = "not an instrument or MIDI track";
         return false;
     }
+    if (!t->midi_output.empty()) {
+        // Hardware cannot be rendered offline: it has to play.
+        item.message = "plays external MIDI (" + juce::String(t->midi_output) + "): print it in real time";
+        return false;
+    }
     item.file = print_file_for(context_, item.track_name);
     if (!item.file.getParentDirectory().createDirectory()) {
         item.message = "cannot create " + item.file.getParentDirectory().getFullPathName();
@@ -261,6 +266,45 @@ juce::String PrintJob::summary() const
     if (ok > 0 && request_.play_audio) s << " - now playing the printed audio";
     if (!problems.isEmpty()) s << " (" << problems.joinIntoString("; ") << ")";
     return s;
+}
+
+std::vector<PrintItem> place_live_prints(AppContext& context, const std::vector<PlaybackEngine::LivePrintResult>& results,
+                                         Ticks start, bool include_fx, bool play_audio)
+{
+    std::vector<PrintItem> items;
+    std::vector<std::pair<std::string, project::AudioClip>> prints;
+    std::vector<std::size_t> which;
+    const auto folder = context.session.audio_folder();
+    const double at = context.session.data().tempo.seconds_at(start);
+    for (const auto& r : results) {
+        PrintItem item;
+        item.track_id = r.track_id;
+        if (const auto* t = context.session.data().find_track(r.track_id)) item.track_name = juce::String(t->name);
+        item.file = r.file;
+        item.ok = r.ok;
+        item.peak = r.peak;
+        item.seconds = r.length;
+        item.message = r.message;
+        if (r.ok) {
+            project::AudioClip c;
+            const bool inside = !folder.empty() && r.file.isAChildOf(juce::File(juce::String(folder)));
+            c.file = inside ? ("Audio Files/" + r.file.getFileName()).toStdString() : r.file.getFullPathName().toStdString();
+            c.name = r.file.getFileNameWithoutExtension().toStdString();
+            c.start_seconds = at;
+            c.source_offset = r.source_offset;
+            c.length = r.length;
+            c.channels = 2;
+            c.file_sample_rate = r.sample_rate;
+            prints.emplace_back(r.track_id, c);
+            which.push_back(items.size());
+        }
+        items.push_back(item);
+    }
+    if (!prints.empty()) {
+        const auto ids = context.session.place_prints(prints, include_fx, play_audio);
+        for (std::size_t k = 0; k < ids.size() && k < which.size(); ++k) items[which[k]].clip_id = ids[k];
+    }
+    return items;
 }
 
 std::vector<PrintItem> print_to_audio(AppContext& context, const PrintRequest& request)
