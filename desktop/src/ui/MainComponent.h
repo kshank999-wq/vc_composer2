@@ -12,6 +12,7 @@
 #include "ui/TrackPanel.h"
 #include "ui/composer/Inspector.h"
 #include "ui/shell/KeyboardDeck.h"
+#include "ui/shell/MasterPanel.h"
 #include "ui/shell/MixerDeck.h"
 #include "ui/shell/PrintPanel.h"
 #include "ui/shell/ShellPanels.h"
@@ -79,6 +80,7 @@ public:
     bool bottom_mixer() const noexcept { return bottom_mixer_; }
     shell::ClipsPanel& clips_panel() noexcept { return clips_; }
     shell::PrintPanel& print_panel() noexcept { return print_; }
+    shell::MasterPanel& master_panel() noexcept { return master_; }
     shell::ChannelPanel& channel_panel() noexcept { return channel_; }
     shell::StatusStrip& status_strip() noexcept { return status_strip_; }
     /// The stage bar: 0 Compose, 1 Score, 2 Mix, 3 Master.
@@ -130,6 +132,8 @@ private:
     composer_ui::Inspector inspector_;
     shell::ChannelPanel channel_;
     shell::PrintPanel print_;
+    shell::MasterPanel master_;
+    bool master_stage_ = false;  ///< The Master stage: the right column is the Master panel.
     shell::StatusStrip status_strip_;
     shell::KeyboardDeck keyboard_;
     shell::MixerDeck mixer_deck_;

@@ -27,6 +27,7 @@
 #include "ui/composer/LaneParts.h"
 #include "ui/VideoWindow.h"
 #include "vcc/media/VideoDecoder.h"
+#include "vcc/audio/Loudness.h"
 #include "vcc/project/Automation.h"
 #include "vcc/notation/ScoreFile.h"
 #include "vcc/project/Performance.h"
@@ -2316,6 +2317,147 @@ void mix_checks(MainWindow& window, const juce::File& dir)
     shoot(main, dir, "34-mixer-deck");
 }
 
+/// Master (step 9): loudness, the target and Match, the master chain, and
+/// Export master to WAV and FLAC.
+void master_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.horror.psychological");
+    const auto project_dir = dir.getChildFile("master-check");
+    project_dir.deleteRecursively();
+    project_dir.createDirectory();
+    std::string error;
+    session.save_as(project_dir.getChildFile("master.vcc2").getFullPathName().toStdString(), &error);
+    std::vector<std::string> inst;
+    for (const auto* t : session.music_tracks())
+        if (t->kind == project::TrackKind::Instrument) inst.push_back(t->id);
+    main.show_workspace(MainComponent::Workspace::Composer);
+    auto& composer = main.composer();
+    for (const auto& [track, keys] : std::vector<std::pair<std::string, std::string>>{{inst[0], "6cdefgab"}, {inst[3], "7ce"}}) {
+        session.select_track(track);
+        pump(80);
+        composer.grabKeyboardFocus();
+        for (const char ch : keys) composer.keyPressed(juce::KeyPress(ch));
+        pump(50);
+    }
+    main.go_to_stage(3);
+    pump(150);
+    auto& panel = main.master_panel();
+    check(panel.isVisible() && !main.channel_panel().isVisible() && main.edit_frame().stage_key(3).getToggleState(),
+          "the Master stage shows the Master panel in the right column");
+
+    // Live loudness: the engine measures its master output as it plays.
+    {
+        PlaybackEngine e(session, ctx.plugins);
+        e.prepare_offline(48000.0, 512);
+        e.locate(0);
+        e.play();
+        juce::AudioBuffer<float> out(2, 512);
+        for (int b = 0; b < 48000 * 6 / 512; ++b) e.render_offline(out, 512);
+        const auto blocks = e.take_loudness_blocks();
+        panel.reset_meter();
+        panel.add_blocks(blocks);
+        check(blocks.size() >= 55 && blocks.size() <= 62 && panel.meter().integrated() > -70.0,
+              "the engine measures the master as it plays, 100 ms at a time (" + juce::String(static_cast<int>(blocks.size())) +
+                  " blocks, " + panel.integrated_lcd().text() + " LUFS, TP " + panel.true_peak_lcd().text() + ")");
+    }
+
+    // The target: -14 by default; the key steps through the standards.
+    check(std::abs(session.data().loudness_target + 14.0) < 1e-9, "the loudness target is -14 LUFS by default");
+    panel.target_key().triggerClick();
+    pump(50);
+    check(std::abs(session.data().loudness_target + 16.0) < 1e-9 && panel.target_key().getButtonText().contains("-16"),
+          "the Target key steps to -16 LUFS (then -23, -24)");
+    session.set_loudness_target(-23.0);
+    pump(50);
+
+    // Analyse the song, then Match: the master fader meets the target.
+    panel.analyse();
+    panel.finish_now();
+    const auto before = panel.last_analysis();
+    check(before.ok && before.integrated > -70.0, "Analyse renders the song and measures it (" +
+                                                       juce::String(before.integrated, 2) + " LUFS, " +
+                                                       juce::String(before.true_peak, 2) + " dBTP)");
+    panel.match_target();
+    pump(50);
+    panel.analyse();
+    panel.finish_now();
+    const auto after = panel.last_analysis();
+    check(std::abs(after.integrated + 23.0) < 0.2, "Match sets the master so the song meets -23 LUFS (" +
+                                                        juce::String(after.integrated, 2) + " LUFS)");
+
+    // The master chain, in order: EQ, glue compressor, limiter.
+    for (int i : {2, 0, 1}) panel.chain_key(i).triggerClick();
+    pump(80);
+    const auto* master = session.data().find_bus("bus-master");
+    std::vector<std::string> kinds;
+    for (const auto& s : master->inserts)
+        if (s.kind == "eq" || s.kind == "compressor" || s.kind == "limiter") kinds.push_back(s.kind);
+    check(kinds == std::vector<std::string>{"eq", "compressor", "limiter"} && panel.chain_index(2) >= 0,
+          "the master chain keys add EQ, glue compressor and limiter in chain order");
+    panel.chain_key(0).triggerClick();
+    pump(50);
+    check(session.data().find_bus("bus-master")->inserts[static_cast<std::size_t>(panel.chain_index(0))].bypass,
+          "pressing a chain key again bypasses that processor");
+    session.undo();
+    session.undo();
+    session.undo();
+    session.undo();
+    pump(50);
+
+    // Export master: WAV 24-bit 48 kHz, then FLAC 16-bit 44.1 kHz with dither.
+    auto read = [](const juce::File& f) {
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        return std::unique_ptr<juce::AudioFormatReader>(formats.createReaderFor(f));
+    };
+    auto measure_file = [&](const juce::File& f) {
+        auto r = read(f);
+        audio::LoudnessAnalyser a;
+        audio::LoudnessMeter m;
+        if (!r) return m;
+        a.prepare(r->sampleRate, 2);
+        juce::AudioBuffer<float> buf(2, 4096);
+        for (juce::int64 pos = 0; pos < r->lengthInSamples; pos += 4096) {
+            const int n = static_cast<int>(std::min<juce::int64>(4096, r->lengthInSamples - pos));
+            r->read(&buf, 0, n, pos, true, true);
+            const float* ch[] = {buf.getReadPointer(0), buf.getReadPointer(1)};
+            a.process(ch, n, [&](const audio::LoudnessBlock& b) { m.add(b); });
+        }
+        return m;
+    };
+    const auto wav = project_dir.getChildFile("Bounces").getChildFile("master.wav");
+    panel.format_key(0).setToggleState(true, juce::sendNotificationSync);
+    panel.bits_key(1).setToggleState(true, juce::sendNotificationSync);
+    panel.rate_key(1).setToggleState(true, juce::sendNotificationSync);
+    panel.export_to(wav);
+    panel.finish_now();
+    const auto wav_result = panel.last_export();
+    auto wr = read(wav);
+    check(wav_result.ok && wr && std::abs(wr->sampleRate - 48000.0) < 0.5 && wr->bitsPerSample == 24 && wr->numChannels == 2,
+          "Export master writes a 24-bit / 48 kHz stereo WAV (" + wav_result.message + ")");
+    const auto wav_measured = measure_file(wav);
+    check(std::abs(wav_measured.integrated() - wav_result.integrated) < 0.05 && std::abs(wav_result.integrated + 23.0) < 0.2,
+          "the exported file measures as the export reported, at the target (" + juce::String(wav_measured.integrated(), 2) +
+              " LUFS)");
+    const auto flac = project_dir.getChildFile("Bounces").getChildFile("master.flac");
+    panel.format_key(1).setToggleState(true, juce::sendNotificationSync);
+    panel.bits_key(0).setToggleState(true, juce::sendNotificationSync);
+    panel.rate_key(0).setToggleState(true, juce::sendNotificationSync);
+    check(panel.dither_key().isEnabled() && panel.dither_key().getToggleState(), "16-bit turns dither on");
+    panel.export_to(flac);
+    panel.finish_now();
+    auto fr = read(flac);
+    check(panel.last_export().ok && fr && std::abs(fr->sampleRate - 44100.0) < 0.5 && fr->bitsPerSample == 16 &&
+              std::abs(measure_file(flac).integrated() + 23.0) < 0.3,
+          "Export master writes a dithered 16-bit / 44.1 kHz FLAC at the same loudness");
+    check(!panel.format_key(2).isEnabled(), "MP3 is shown but waits for the encoder decision");
+    shoot(main, dir, "35-master");
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -3137,6 +3279,7 @@ int main(int argc, char** argv)
         producer_track_checks(window, dir);
         print_checks(window, dir);
         mix_checks(window, dir);
+        master_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

@@ -463,6 +463,9 @@ struct ProjectData {
     /// The keyboard deck's key zoom (1-3), remembered with the project
     /// (docs/spec/ui, "Behavior rules" 3). A view setting: no undo step.
     double key_zoom = 1.0;
+    /// The master's loudness target, LUFS (docs/spec/ui, "Master panel"):
+    /// -14 for streaming by default; -16, -23 (EBU R 128) and -24 (ATSC A/85).
+    double loudness_target = -14.0;
     std::vector<Track> tracks;
     std::vector<Bus> buses;
     Production production;

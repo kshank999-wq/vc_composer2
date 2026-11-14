@@ -211,6 +211,7 @@ MainComponent::MainComponent(AppContext& context)
       inspector_(context),
       channel_(context),
       print_(context),
+      master_(context),
       status_strip_(context),
       keyboard_(context),
       mixer_deck_(context),
@@ -229,6 +230,7 @@ MainComponent::MainComponent(AppContext& context)
     addChildComponent(clips_);
     addChildComponent(channel_);
     addChildComponent(print_);
+    addChildComponent(master_);
     addChildComponent(mixer_deck_);
     keyboard_.on_mixer = [this] { show_bottom_mixer(true); };
     mixer_deck_.on_keyboard = [this] { show_bottom_mixer(false); };
@@ -411,7 +413,13 @@ void MainComponent::resized()
         edit.removeFromBottom(kGap);
         edit_.setBounds(edit);
     }
-    if (producer) {
+    master_.setVisible(producer && master_stage_);
+    channel_.setVisible(producer && !master_stage_);
+    print_.setVisible(producer && !master_stage_);
+    if (producer && master_stage_) {
+        // The Master stage: the Master panel fills the column.
+        master_.setBounds(narrow ? right_area.withWidth(std::min(right_area.getWidth(), 2 * kRight)) : right_area);
+    } else if (producer) {
         // The channel strip, then Print to audio under it.
         if (narrow) {
             channel_.setBounds(right_area.removeFromLeft(kRight));
@@ -473,12 +481,15 @@ void MainComponent::go_to_stage(int stage)
         case 2:
             // Mix: the Producer view with the mixer in the bottom deck.
             show_workspace(Workspace::Producer);
+            master_stage_ = false;
             show_bottom_mixer(true);
             break;
         case 3:
+            // Master: the Master panel (loudness, chain, export) in the right column.
             show_workspace(Workspace::Producer);
+            master_stage_ = true;
             edit_.set_stage(3);
-            context_.commands.invokeDirectly(cmd::exportStems, true);
+            resized();
             break;
         default: break;
     }
@@ -497,8 +508,7 @@ void MainComponent::show_workspace(Workspace w)
     inspector_.setVisible(!producer);
     new_track_.setVisible(producer);
     clips_.setVisible(producer);
-    channel_.setVisible(producer);
-    print_.setVisible(producer);
+    master_stage_ = false;  // a view switch leaves the Master stage
     deck_.set_producer(producer);
     toolbar_.set_producer(producer);
     edit_.set_stage(producer ? 2 : 0);

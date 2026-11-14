@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <set>
 
@@ -488,6 +489,18 @@ void Session::store_plugin_state(const std::string& id, const std::string& state
         dirty_ = true;
         notify(Change::File);
     }
+}
+
+bool Session::set_loudness_target(double lufs)
+{
+    lufs = std::clamp(lufs, -36.0, -6.0);
+    char label[48];
+    std::snprintf(label, sizeof label, "Loudness target %.0f LUFS", lufs);
+    return edit(label, [&](project::ProjectData& d) {
+        if (std::abs(d.loudness_target - lufs) < 1e-9) return false;
+        d.loudness_target = lufs;
+        return true;
+    });
 }
 
 void Session::set_key_zoom(double zoom)

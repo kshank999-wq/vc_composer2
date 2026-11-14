@@ -740,6 +740,7 @@ json::Value Project::to_json() const
     root.set("sample_rate", d.sample_rate);
     root.set("delay_compensation", d.delay_compensation);
     root.set("key_zoom", d.key_zoom);
+    root.set("loudness_target", d.loudness_target);
 
     json::Array tracks;
     for (const auto& t : d.tracks) {
@@ -947,6 +948,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
     d.key = doc.get_string("key", "C major");
     d.delay_compensation = doc.get_bool("delay_compensation", true);
     d.key_zoom = std::clamp(doc.get_double("key_zoom", 1.0), 1.0, 3.0);
+    d.loudness_target = std::clamp(doc.get_double("loudness_target", -14.0), -36.0, -6.0);
     bool first = true;
     for (const auto& m : doc.get("meter") ? doc.get("meter")->as_array() : json::Array{}) {
         auto sig = TimeSignature::parse(m.get_string("signature"));

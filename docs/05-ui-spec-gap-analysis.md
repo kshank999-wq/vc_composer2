@@ -480,6 +480,51 @@ and the document model. The work is mostly presentation.
      channel strip, and the mixer deck, so no display takes another's
      peaks.
    - **Checks.** The desktop check's mix section; screenshot 34.
-9. **Master:** live integrated LUFS and true peak, the master chain slots,
-   a loudness target, and Export master to WAV and FLAC. MP3 waits for
-   the encoder decision.
+9. **Master. Done.**
+   - **Loudness library** (`vcc/audio/Loudness`, no JUCE). It follows
+     ITU-R BS.1770-4 / EBU R 128.
+     - K-weighting, re-derived for any sample rate.
+     - True peak by 4× polyphase oversampling.
+     - 100 ms blocks from a real-time-safe analyser.
+     - Momentary (400 ms), short-term (3 s) and integrated loudness, gated
+       at −70 LUFS absolute and −10 LU relative.
+     - `tests/unit/test_loudness` runs the EBU Tech 3341 cases: −23 and −33
+       at 44.1, 48 and 96 kHz, the relative and absolute gates, and the
+       inter-sample peak (−3 dBFS samples read 0 dBTP).
+   - **Engine.** It measures its master output while it plays (never a
+     print's tap) and hands the blocks over a lock-free queue
+     (`take_loudness_blocks`, `reset_loudness`).
+   - **Master panel.** It fills the Producer right column at the Master
+     stage.
+     - Readouts: integrated LUFS (large), momentary, short-term, and true
+       peak (red edge and OVER above −1 dBTP). They restart with each play,
+       or with Reset.
+     - The loudness target is saved with the project
+       (`ProjectData::loudness_target`, `Session::set_loudness_target`).
+       The key steps −14 (streaming, the default), −16 (Apple), −23 (EBU
+       R 128), −24 (ATSC). A readout shows the LU to target.
+     - **Analyse** renders the song offline and measures it. **Match** sets
+       the master fader to meet the target, as one undo step, and warns
+       when peaks would then pass −1 dBTP.
+     - Master chain keys add the EQ, glue compressor and limiter to the
+       master bus in chain order. Pressed again, they bypass; right-click
+       opens the processor.
+   - **Export master** (`audio/MasterExport`).
+     - The whole mix (tracks, buses, master chain) renders offline, song or
+       selection plus a 3 s tail.
+     - Output is WAV or FLAC, 16- or 24-bit, at 44.1, 48 or 96 kHz, with
+       TPDF dither at 16-bit.
+     - It is measured as it is written and reports LUFS and dBTP. It
+       renders in timer slices with a progress LCD and Cancel.
+     - The default file is `Bounces/<title>_master.wav` beside the project.
+     - MP3 is shown but disabled until the encoder decision.
+   - **Stems.** The Master stage no longer opens the stem dialog; stem
+     export stays in the File menu.
+   - **Checks.** The desktop check's master section:
+     - the live engine path;
+     - target stepping;
+     - Analyse then Match landing on −23.00 LUFS;
+     - chain order and bypass;
+     - a 24-bit/48 kHz WAV and a dithered 16-bit/44.1 kHz FLAC, each read
+       back and re-measured.
+     Screenshot 35.

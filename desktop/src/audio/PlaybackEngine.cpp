@@ -815,6 +815,7 @@ void PlaybackEngine::prepare_all(double sr, int bs)
     sample_rate_ = sr;
     block_size_ = std::max(bs, 64);
     live_input_.reset(sr);
+    loudness_.prepare(sr, 2);
     // Processors are re-prepared here (state is kept when the rate is
     // unchanged); the snapshot that refers to them is replaced immediately
     // after, and the audio thread ignores a snapshot whose block size it
@@ -1474,6 +1475,14 @@ juce::AudioPluginInstance* PlaybackEngine::insert_plugin(const std::string& stri
     return it == inserts_.end() ? nullptr : it->second->plugin();
 }
 
+std::vector<audio::LoudnessBlock> PlaybackEngine::take_loudness_blocks()
+{
+    std::vector<audio::LoudnessBlock> out;
+    audio::LoudnessBlock b;
+    while (loudness_blocks_.pop(b)) out.push_back(b);
+    return out;
+}
+
 void PlaybackEngine::set_print_tap(std::optional<PrintTap> tap)
 {
     print_tap_ = std::move(tap);
@@ -1974,6 +1983,12 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
         }
         for (int ch = 0; ch < num_outputs && ch < 2; ++ch)
             if (outputs[ch]) juce::FloatVectorOperations::add(outputs[ch] + offset, s->out.getReadPointer(ch), n);
+        // The master's loudness while it plays (never a print's tap).
+        if (loudness_reset_.exchange(false)) loudness_.reset();
+        if (playing && s->tap_track < 0) {
+            const float* master[] = {s->out.getReadPointer(0), s->out.getReadPointer(1)};
+            loudness_.process(master, n, [this](const audio::LoudnessBlock& b) { loudness_blocks_.push(b); });
+        }
     }
 
     if (PreviewClip* c = preview_; c && n <= c->buffer.getNumSamples()) {

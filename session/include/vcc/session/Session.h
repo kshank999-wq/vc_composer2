@@ -138,6 +138,8 @@ public:
     bool set_delay_compensation(bool on);
     /// The keyboard deck's key zoom, saved with the project without an undo step.
     void set_key_zoom(double zoom);
+    /// The master's loudness target (LUFS, -36..-6). One undo step.
+    bool set_loudness_target(double lufs);
 
     /// Replaces the active version's score with an edited copy (the Composer
     /// view edits a working copy and commits each change here).

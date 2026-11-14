@@ -74,6 +74,7 @@
 #include "audio/Instrument.h"
 #include "audio/PluginHost.h"
 #include "vcc/project/RenderCache.h"
+#include "vcc/audio/Loudness.h"
 #include "vcc/audio/SpscRingBuffer.h"
 #include "vcc/core/Midi.h"
 #include "vcc/session/Session.h"
@@ -147,6 +148,12 @@ public:
     /// reader 0 the top deck and track headers, 1 the channel strip, 2 the
     /// mixer deck.
     static constexpr int kMeterReaders = 3;
+    /// The master output's loudness, 100 ms at a time while the transport
+    /// plays (BS.1770 K-weighted mean square and true peak), for the Master
+    /// panel's LUFS and dBTP readings. Drained by the message thread.
+    std::vector<audio::LoudnessBlock> take_loudness_blocks();
+    /// Starts the analysis afresh (with the meter's reset).
+    void reset_loudness() noexcept { loudness_reset_ = true; }
     StripMeter take_deck_meter(const std::string& strip_id, int reader = 0);
     /// Device inputs (for input selectors and meters).
     int num_inputs() const;
@@ -368,6 +375,9 @@ private:
     bool export_mode_ = false;
     std::optional<RenderOverride> render_override_;
     std::optional<PrintTap> print_tap_;
+    audio::LoudnessAnalyser loudness_;                    // audio thread, once prepared
+    audio::SpscQueue<audio::LoudnessBlock> loudness_blocks_{512};
+    std::atomic<bool> loudness_reset_{false};
     int print_tap_latency_ = 0;
     std::array<std::atomic<float>, 64> input_meters_{};
     std::atomic<int> num_inputs_{0};
