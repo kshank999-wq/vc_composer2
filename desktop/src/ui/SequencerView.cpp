@@ -92,6 +92,7 @@ struct LaneView {
     bool mute = false, solo = false, monitor_input = false;
     double gain_db = 0.0;
     std::string playback = "both";
+    bool printed_fx = false;
     std::vector<int> inserts;  ///< Per insert slot: 0 empty, 1 active, 2 bypassed.
     juce::String route;        ///< "IN 1 > MASTER".
     // Automation (Main Spec §12).
@@ -266,6 +267,8 @@ struct Model final : AutomationTimeline {
     /// Rows the user resized: track id, or id + "#x" for its expanded height.
     std::map<std::string, int> heights;
     std::function<void()> expanded_changed;
+    /// The header's Print (false) and Freeze (true) keys.
+    std::function<void(const std::string& track, bool freeze)> print_track;
 
     bool has_audio_lane(const LaneView& l) const { return !l.audio && !l.bus && !l.reference; }
     bool is_expanded(const LaneView& l) const { return has_audio_lane(l) && expanded == l.id; }
@@ -421,6 +424,7 @@ struct Model final : AutomationTimeline {
             l.monitor_input = t->monitor == "input";
             l.gain_db = t->gain_db;
             l.playback = t->playback;
+            l.printed_fx = t->printed_fx;
             for (const auto& slot : t->inserts)
                 l.inserts.push_back(slot.kind.empty() ? 0 : (slot.bypass || slot.suggestion) ? 2 : 1);
             {
@@ -1383,8 +1387,14 @@ private:
             m_.ctx.commands.invokeDirectly(cmd::showComposer, true);
             return true;
         }
-        if (p.print.contains(pt) || p.freeze.contains(pt)) {
-            m_.ctx.status("Print to audio and Freeze come with the next step (print score to audio)");
+        if (p.print.contains(pt)) {
+            if (m_.print_track) m_.print_track(id, false);
+            return true;
+        }
+        if (p.freeze.contains(pt)) {
+            // Frozen: printed with its effects and playing the print. Again: back to MIDI.
+            if (l.printed_fx && l.playback == "audio") session.set_playback(id, "both");
+            else if (m_.print_track) m_.print_track(id, true);
             return true;
         }
         return false;
@@ -1738,8 +1748,8 @@ private:
                 hw::paint::silk(g, juce::String::charToString(static_cast<juce::juce_wchar>('A' + i)),
                                 cell.withTrimmedLeft(10).toFloat(), 8.5f);
             }
-            key(g, p.print, "Print", false, {}, false);
-            key(g, p.freeze, "Freeze", false, {}, false);
+            key(g, p.print, "Print", false, hw::tok::rec);
+            key(g, p.freeze, "Freeze", l.printed_fx && l.playback == "audio", hw::tok::mute);
             key(g, p.roll, "Piano roll", true);
             key(g, p.score, "Score", false);
         }
@@ -3713,6 +3723,9 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
         hscroll.addListener(this);
         toolbar.roll_button().onClick = [this] { set_roll_visible(toolbar.roll_button().getToggleState()); };
         model.view_changed = [this] { view_changed(); };
+        model.print_track = [this](const std::string& track, bool freeze) {
+            if (owner.on_print_track) owner.on_print_track(track, freeze);
+        };
         model.open_piano_roll = [this] { set_roll_visible(true); };
         model.range_changed = [this] {
             if (owner.on_range_changed) owner.on_range_changed();

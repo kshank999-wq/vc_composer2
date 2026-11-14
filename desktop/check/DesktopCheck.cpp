@@ -2082,6 +2082,154 @@ void producer_track_checks(MainWindow& window, const juce::File& dir)
     shoot(main, dir, "31-producer-tracks");
 }
 
+/// Print to audio (step 7): instrument tracks rendered offline onto their own
+/// audio lanes, as 48 kHz / 24-bit WAVs, sounding as their MIDI did.
+void print_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.horror.psychological");
+    std::string error;
+    const auto project_dir = dir.getChildFile("print-check");
+    project_dir.deleteRecursively();
+    project_dir.createDirectory();
+    session.save_as(project_dir.getChildFile("print.vcc2").getFullPathName().toStdString(), &error);
+    std::vector<std::string> inst;
+    for (const auto* t : session.music_tracks())
+        if (t->kind == project::TrackKind::Instrument) inst.push_back(t->id);
+    if (inst.size() < 3) {
+        check(false, "the template has instrument tracks to print");
+        return;
+    }
+    const std::string a = inst[0], b = inst[1], silent = inst[2];
+    // A line on each of the first two tracks.
+    main.show_workspace(MainComponent::Workspace::Composer);
+    auto& composer = main.composer();
+    for (const auto& [track, keys] : std::vector<std::pair<std::string, std::string>>{{a, "5cdefg"}, {b, "6ec"}}) {
+        session.select_track(track);
+        pump(80);
+        composer.grabKeyboardFocus();
+        for (const char ch : keys) composer.keyPressed(juce::KeyPress(ch));
+        pump(50);
+    }
+    const Ticks bar = 4 * kTicksPerQuarter;
+    const double tone_end = session.data().tempo.seconds_at(2 * bar);
+    auto level = [&](const std::string& track, const std::string& playback) {
+        session.set_playback(track, playback);
+        PlaybackEngine e(session, ctx.plugins);
+        e.prepare_offline(48000.0, 512);
+        PlaybackEngine::RenderOverride solo;
+        solo.solo = {track};
+        e.set_render_override(solo);
+        e.locate(0);
+        e.play();
+        juce::AudioBuffer<float> out(2, 512);
+        double sum = 0.0;
+        std::int64_t count = 0;
+        for (std::int64_t pos = 0; pos < static_cast<std::int64_t>(tone_end * 48000.0); pos += 512) {
+            e.render_offline(out, 512);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < 512; ++i) sum += static_cast<double>(out.getSample(ch, i)) * out.getSample(ch, i);
+            count += 1024;
+        }
+        return 10.0 * std::log10(std::max(1e-20, sum / static_cast<double>(std::max<std::int64_t>(1, count))));
+    };
+    const double midi_db = level(a, "midi");
+    session.set_playback(a, "both");
+
+    // Print both from the panel: song range, no effects, play the audio.
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(150);
+    auto& panel = main.print_panel();
+    panel.set_ticked(a, true);
+    panel.set_ticked(b, true);
+    panel.set_ticked(silent, false);
+    panel.song_key().setToggleState(true, juce::sendNotificationSync);
+    panel.fx_key().setToggleState(false, juce::dontSendNotification);
+    panel.play_audio_key().setToggleState(true, juce::dontSendNotification);
+    panel.record_key().triggerClick();
+    pump(120);
+    check(panel.printing() && panel.progress_lcd().text().contains("/ 2"),
+          "Record score to audio starts the print; the LCD follows it (" + panel.progress_lcd().text().replace("\n", " | ") + ")");
+    shoot(main, dir, "32-print-progress");
+    panel.finish_now();
+    pump(80);
+    auto print_of = [&](const std::string& track) -> const project::AudioClip* {
+        const auto* t = session.data().find_track(track);
+        for (const auto& c : t->active_version()->audio_clips)
+            if (c.lane == 0 && juce::String(c.name).contains("_PRINT_")) return &c;
+        return nullptr;
+    };
+    const auto* pa = print_of(a);
+    const auto* pb = print_of(b);
+    bool format_ok = false;
+    if (pa) {
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> r(
+            formats.createReaderFor(juce::File(juce::String(session.resolve_audio_path(pa->file)))));
+        format_ok = r && std::abs(r->sampleRate - 48000.0) < 0.5 && r->bitsPerSample == 24 && r->numChannels == 2;
+    }
+    check(pa && pb && juce::String(pa->file).startsWith("Audio Files/") && juce::String(pa->name).endsWith("_PRINT_01"),
+          "each ticked track has its print on its own audio lane (Audio Files/<Track>_PRINT_01.wav)");
+    check(format_ok, "the prints are 48 kHz / 24-bit stereo WAV files");
+    check(pa && pa->length < tone_end + 3.0, "a song print ends where the sound does, not at the end of the song (" +
+                                                 juce::String(pa ? pa->length : 0.0, 2) + " s)");
+    check(session.data().find_track(a)->playback == "audio" && session.data().find_track(b)->playback == "audio",
+          "the printed tracks switch to playing their printed audio");
+    check(session.undo_label() == "Print 2 tracks to audio", "the whole print is one undo step (" + juce::String(session.undo_label()) + ")");
+    const double audio_db = level(a, "audio");
+    check(std::abs(audio_db - midi_db) < 0.5,
+          "the print sounds as the MIDI did, through the same channel strip (" + juce::String(midi_db, 2) + " vs " +
+              juce::String(audio_db, 2) + " dB)");
+    session.undo();
+    pump(50);
+    check(!print_of(a) && !print_of(b) && session.data().find_track(a)->playback == "both",
+          "one undo takes the prints away and the tracks play their MIDI again");
+    session.redo();
+    pump(50);
+
+    // The selection only: the earlier print moves to a take lane.
+    session.set_selection_range(bar, 2 * bar);
+    pump(50);
+    panel.selection_key().setToggleState(true, juce::sendNotificationSync);
+    panel.print_tracks({a}, false);
+    panel.finish_now();
+    pump(50);
+    const auto* sel_print = print_of(a);
+    int takes = 0;
+    for (const auto& c : session.data().find_track(a)->active_version()->audio_clips) takes += c.lane > 0 ? 1 : 0;
+    check(sel_print && std::abs(sel_print->start_seconds - session.data().tempo.seconds_at(bar)) < 1e-6 && takes == 1,
+          "printing the selection places the print at the range; the earlier print moves to a take lane");
+    panel.song_key().setToggleState(true, juce::sendNotificationSync);
+
+    // Freeze: printed with the strip's processing, which is then bypassed
+    // while the print plays, so it is not heard twice.
+    session.update_track_mix(b, "Trim", [](project::Track& t) { t.strip.trim_db = 12.0; });
+    const double strip_db = level(b, "midi");
+    if (main.sequencer().on_print_track) main.sequencer().on_print_track(b, true);
+    panel.finish_now();
+    pump(50);
+    const auto* tb = session.data().find_track(b);
+    const double frozen_db = level(b, "audio");
+    check(tb->printed_fx && std::abs(frozen_db - strip_db) < 0.5,
+          "Freeze prints with the channel strip and inserts, and bypasses them while the print plays (" +
+              juce::String(strip_db, 2) + " vs " + juce::String(frozen_db, 2) + " dB)");
+
+    // A track with nothing to play is not printed.
+    panel.print_tracks({silent}, false);
+    panel.finish_now();
+    pump(50);
+    check(!print_of(silent) && !panel.last_items().empty() && !panel.last_items().front().ok,
+          "a track with nothing in the range places no print (" +
+              (panel.last_items().empty() ? juce::String() : panel.last_items().front().message) + ")");
+    session.select_track(a);
+    pump(100);
+    shoot(main, dir, "33-print-done");
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -2901,6 +3049,7 @@ int main(int argc, char** argv)
         composer_lane_checks(window, dir);
         loop_and_keyboard_checks(window, dir);
         producer_track_checks(window, dir);
+        print_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

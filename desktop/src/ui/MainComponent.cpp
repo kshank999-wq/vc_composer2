@@ -210,6 +210,7 @@ MainComponent::MainComponent(AppContext& context)
       selection_(context),
       inspector_(context),
       channel_(context),
+      print_(context),
       status_strip_(context),
       keyboard_(context),
       tracks_(context),
@@ -226,6 +227,7 @@ MainComponent::MainComponent(AppContext& context)
     addChildComponent(new_track_);
     addChildComponent(clips_);
     addChildComponent(channel_);
+    addChildComponent(print_);
     addAndMakeVisible(tracks_);
     addAndMakeVisible(composer_);
     addChildComponent(sequencer_);
@@ -255,6 +257,10 @@ MainComponent::MainComponent(AppContext& context)
         return ok;
     };
     keyboard_.on_height_changed = [this] { resized(); };
+    // A header's Print key prints that track; Freeze prints it with effects.
+    sequencer_.on_print_track = [this](const std::string& track, bool freeze) {
+        print_.print_tracks({track}, freeze);
+    };
 
     layout_.setItemLayout(0, 220, 520, 300);
     layout_.setItemLayout(1, 5, 5, 5);
@@ -396,7 +402,17 @@ void MainComponent::resized()
         edit_.setBounds(edit);
     }
     if (producer) {
-        channel_.setBounds(narrow ? right_area : right_area.withHeight(std::min(right_area.getHeight(), 420)));
+        // The channel strip, then Print to audio under it.
+        if (narrow) {
+            channel_.setBounds(right_area.removeFromLeft(kRight));
+            right_area.removeFromLeft(kGap);
+            print_.setBounds(right_area.withWidth(std::min(right_area.getWidth(), kRight)));
+        } else {
+            const int print_h = juce::jlimit(230, 330, right_area.getHeight() - kGap - 420);
+            print_.setBounds(right_area.removeFromBottom(print_h));
+            right_area.removeFromBottom(kGap);
+            channel_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), 420)));
+        }
     } else if (narrow) {
         // Selection, then the inspector in columns beside it.
         selection_.setBounds(right_area.removeFromLeft(kRight));
@@ -463,6 +479,7 @@ void MainComponent::show_workspace(Workspace w)
     new_track_.setVisible(producer);
     clips_.setVisible(producer);
     channel_.setVisible(producer);
+    print_.setVisible(producer);
     deck_.set_producer(producer);
     toolbar_.set_producer(producer);
     edit_.set_stage(producer ? 2 : 0);

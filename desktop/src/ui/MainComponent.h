@@ -12,6 +12,7 @@
 #include "ui/TrackPanel.h"
 #include "ui/composer/Inspector.h"
 #include "ui/shell/KeyboardDeck.h"
+#include "ui/shell/PrintPanel.h"
 #include "ui/shell/ShellPanels.h"
 #include "ui/shell/TopDeck.h"
 
@@ -72,6 +73,7 @@ public:
     composer_ui::Inspector& inspector() noexcept { return inspector_; }
     shell::KeyboardDeck& keyboard() noexcept { return keyboard_; }
     shell::ClipsPanel& clips_panel() noexcept { return clips_; }
+    shell::PrintPanel& print_panel() noexcept { return print_; }
     shell::ChannelPanel& channel_panel() noexcept { return channel_; }
     shell::StatusStrip& status_strip() noexcept { return status_strip_; }
     /// The stage bar: 0 Compose, 1 Score, 2 Mix, 3 Master.
@@ -122,6 +124,7 @@ private:
     shell::SelectionPanel selection_;
     composer_ui::Inspector inspector_;
     shell::ChannelPanel channel_;
+    shell::PrintPanel print_;
     shell::StatusStrip status_strip_;
     shell::KeyboardDeck keyboard_;
     TrackPanel tracks_;

@@ -228,6 +228,13 @@ public:
     /// assigned here and returned in order.
     std::vector<std::string> add_audio_clips(const std::vector<std::pair<std::string, project::AudioClip>>& clips,
                                              const std::string& label, bool as_takes = true);
+    /// Print to audio's result, as one undo step: each clip on its track's
+    /// own audio lane (an earlier print it overlaps moves to a take lane);
+    /// with `play_audio` each track then plays its audio lane, and
+    /// `printed_fx` says whether the prints carry the strip and inserts.
+    /// Ids are returned in order; empty when nothing could be placed.
+    std::vector<std::string> place_prints(const std::vector<std::pair<std::string, project::AudioClip>>& prints,
+                                          bool printed_fx, bool play_audio);
     bool update_audio_clip(const std::string& track_id, const std::string& clip_id, const std::string& label,
                            const std::function<void(project::AudioClip&)>& change);
     bool remove_audio_clip(const std::string& track_id, const std::string& clip_id);

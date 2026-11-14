@@ -1028,6 +1028,49 @@ void Session::set_record_armed(const std::string& id, bool armed)
     notify(Change::Document);
 }
 
+namespace {
+/// Puts a clip on lane 0; with `as_takes`, the lane-0 clips it overlaps move
+/// to the next free take lane.
+void place_clip(project::TrackVersion& v, project::AudioClip c, bool as_takes)
+{
+    c.lane = 0;
+    if (as_takes) {
+        int free_lane = 1;
+        for (const auto& x : v.audio_clips) free_lane = std::max(free_lane, x.lane + 1);
+        for (auto& x : v.audio_clips)
+            if (x.lane == 0 && x.start_seconds < c.end_seconds() && c.start_seconds < x.end_seconds()) x.lane = free_lane;
+    }
+    v.audio_clips.push_back(std::move(c));
+    std::stable_sort(v.audio_clips.begin(), v.audio_clips.end(), [](const project::AudioClip& a, const project::AudioClip& b) {
+        return a.lane != b.lane ? a.lane < b.lane : a.start_seconds < b.start_seconds;
+    });
+}
+}  // namespace
+
+std::vector<std::string> Session::place_prints(const std::vector<std::pair<std::string, project::AudioClip>>& prints,
+                                               bool printed_fx, bool play_audio)
+{
+    std::vector<std::string> ids;
+    for (std::size_t i = 0; i < prints.size(); ++i) ids.push_back(project_.ids().next("clip"));
+    const std::string label = prints.size() == 1 ? "Print to audio" : "Print " + std::to_string(prints.size()) + " tracks to audio";
+    const bool ok = !prints.empty() && edit(label, [&](project::ProjectData& d) {
+        for (std::size_t i = 0; i < prints.size(); ++i) {
+            project::Track* t = d.find_track(prints[i].first);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
+            if (!v || t->kind == project::TrackKind::Audio || t->kind == project::TrackKind::Aux) return false;
+            project::AudioClip c = prints[i].second;
+            if (c.length <= 0.0 || c.file.empty()) return false;
+            c.id = ids[i];
+            place_clip(*v, std::move(c), true);
+            t->printed_fx = printed_fx;
+            if (play_audio) t->playback = "audio";
+        }
+        return true;
+    });
+    if (!ok) ids.clear();
+    return ids;
+}
+
 std::vector<std::string> Session::add_audio_clips(
     const std::vector<std::pair<std::string, project::AudioClip>>& clips, const std::string& label, bool as_takes)
 {
@@ -1042,19 +1085,7 @@ std::vector<std::string> Session::add_audio_clips(
             project::AudioClip c = clips[i].second;
             if (c.length <= 0.0 || c.file.empty()) return false;
             c.id = ids[i];
-            c.lane = 0;
-            if (as_takes) {
-                int free_lane = 1;
-                for (const auto& x : v->audio_clips) free_lane = std::max(free_lane, x.lane + 1);
-                for (auto& x : v->audio_clips)
-                    if (x.lane == 0 && x.start_seconds < c.end_seconds() && c.start_seconds < x.end_seconds())
-                        x.lane = free_lane;
-            }
-            v->audio_clips.push_back(std::move(c));
-            std::stable_sort(v->audio_clips.begin(), v->audio_clips.end(),
-                             [](const project::AudioClip& a, const project::AudioClip& b) {
-                                 return a.lane != b.lane ? a.lane < b.lane : a.start_seconds < b.start_seconds;
-                             });
+            place_clip(*v, std::move(c), as_takes);
         }
         return true;
     });

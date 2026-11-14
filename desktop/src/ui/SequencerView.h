@@ -55,6 +55,9 @@ public:
     /// the clips it overlaps there move to the take's lane.
     static bool promote_take(session::Session& session, const std::string& track_id, const std::string& clip_id);
 
+    /// A track header's Print (freeze false) or Freeze (true) key.
+    std::function<void(const std::string& track_id, bool freeze)> on_print_track;
+
     void paint(juce::Graphics& g) override;
     void resized() override;
 

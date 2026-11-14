@@ -213,6 +213,19 @@ public:
         bool mute_effects = false;
     };
     void set_render_override(std::optional<RenderOverride> override_settings);
+    /// Print to audio (render-only, offline): only this track is rendered,
+    /// from its MIDI alone (its clips are left out), and the output is its
+    /// instrument's signal - before the channel strip, or after the strip's
+    /// processing and inserts with `post_inserts` - never its fader, pan,
+    /// sends or the buses.
+    struct PrintTap {
+        std::string track_id;
+        bool post_inserts = false;
+    };
+    void set_print_tap(std::optional<PrintTap> tap);
+    /// How late the tapped signal comes out: the instrument's latency, plus
+    /// the inserts' with `post_inserts`.
+    int print_tap_latency() const noexcept { return print_tap_latency_; }
 
     // --- Automation (Main Spec §12) ------------------------------------------------
     // `owner_id` is a track id or bus id ("bus-master"); `param` as in
@@ -351,6 +364,8 @@ private:
     std::map<std::string, juce::String> audio_status_;
     bool export_mode_ = false;
     std::optional<RenderOverride> render_override_;
+    std::optional<PrintTap> print_tap_;
+    int print_tap_latency_ = 0;
     std::array<std::atomic<float>, 64> input_meters_{};
     std::atomic<int> num_inputs_{0};
 

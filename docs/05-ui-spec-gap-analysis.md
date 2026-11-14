@@ -388,13 +388,61 @@ and the document model. The work is mostly presentation.
    - **Checks.** `tests/unit/test_producer_tracks` and the desktop check's
      Producer-track section (the audio lane is heard on Audio and Both
      and silent on MIDI); screenshot 31.
-7. **Print to audio**, onto the track's own audio lane:
-   - per track or for several at once;
-   - offline first, then real time;
-   - selection or song, with or without effects;
-   - 48 kHz / 24-bit WAV;
-   - a progress LCD;
-   - the instrument switched to its printed audio when done.
+7. **Print to audio. Done** (offline), onto each track's own audio lane
+   (`audio/PrintToAudio`, `ui/shell/PrintPanel`).
+   - **Choosing tracks.**
+     - Tick tracks in the Print panel (Producer right column, under the
+       channel strip) and press **Record score to audio**.
+     - Or press **Print** in a track's expanded header for that track
+       alone.
+     - Several tracks print in one go, and the whole print is one undo
+       step.
+   - **How each track renders.** Each track renders offline through its
+     own private engine with a print tap.
+     - Only that track renders, from its MIDI alone (never its existing
+       clips). The MIDI renders even while the track is playing earlier
+       printed audio.
+     - The tap takes the instrument's signal before the channel strip.
+       **Include FX** takes it after the strip's processing and inserts
+       instead.
+     - The fader, pan, sends and buses are never printed.
+     - The tap's latency (the instrument's, plus the inserts' when they
+       are included) is rendered and dropped, so the print lines up.
+   - **Placing the print.**
+     - The print plays back through the same strip as the MIDI did, so it
+       sounds the same. The check measures a null: −38.44 dB both ways.
+     - With Include FX, the track is marked `printed_fx`. While it plays
+       its print, the engine bypasses its channel processing and inserts,
+       so nothing is applied twice. Its settings are untouched and come
+       back on MIDI or Both.
+     - **Freeze** prints with FX and plays the print. Freeze again goes
+       back to the MIDI.
+     - Earlier prints that a new print overlaps move to a take lane
+       (`Session::place_prints`).
+   - **Range.**
+     - Song prints from the start and ends the clip where the sound ends.
+       Trailing silence is trimmed; 2 s of release tail is rendered.
+     - Selection prints at least the dragged range.
+   - **Files.**
+     - Prints are 48 kHz / 24-bit stereo WAV.
+     - They are named `<Track>_PRINT_NN.wav`, numbered past the files
+       already there, in the project's `Audio Files`. An untitled project
+       uses the same scratch folder as recording.
+   - **When it finishes.**
+     - **Play audio** (on by default) switches each printed track to play
+       its audio lane.
+     - A track with nothing to play in the range places nothing and says
+       so.
+   - **Progress.** The LCD reads, for example, "CELLI  2 / 3  BAR 14", with
+     a percentage and a red bar. The print renders in slices on a timer,
+     so the window stays live, and the red key becomes Cancel while it
+     runs.
+   - **Still to come: real-time printing.** It matters only for sound that
+     cannot be rendered offline: external MIDI hardware, which the app
+     does not send to yet. Offline renders every hosted instrument exactly.
+   - **Checks.** The `place_prints` unit test, and the desktop check's
+     print section covering format, placement, undo, the null, selection,
+     Freeze and a silent track. Screenshots 32 and 33.
 8. **Mix:** the channel strip in the right panel and the Mixer deck at the
    bottom, both on the existing console engine and its automation.
 9. **Master:** live integrated LUFS and true peak, the master chain slots,

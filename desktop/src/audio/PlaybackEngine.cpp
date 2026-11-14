@@ -153,6 +153,9 @@ struct PlaybackSnapshot {
         std::shared_ptr<DelayLine> out_line;
         std::array<int, kMaxSends> send_delay{};
         std::array<std::shared_ptr<DelayLine>, kMaxSends> send_lines;
+        /// Channel processing and inserts bypassed: the track plays audio
+        /// printed with them (Track::printed_fx).
+        bool fx_bypassed = false;
     };
     struct Clip {
         std::shared_ptr<ClipStream> stream;
@@ -185,6 +188,8 @@ struct PlaybackSnapshot {
     std::size_t click_cursor = 0;
     juce::AudioBuffer<float> out;  // the master bus's output: what the device plays
     int live_track = -1;
+    int tap_track = -1;        ///< Print to audio: the one track rendered, or -1.
+    bool tap_post_inserts = false;
 
     void seek(std::int64_t sample) noexcept
     {
@@ -585,10 +590,12 @@ void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::Au
     const StripParams& p = d.use_eff ? d.eff : d.params.latest();
     float* l = buf.getWritePointer(0);
     float* r = buf.getWritePointer(1);
-    d.channel.process(l, r, n, p.strip);
-    for (const auto& ins : strip.inserts) {
-        if (!ins->bypass.load(std::memory_order_relaxed)) ins->process(l, r, n);
-        else ins->process_bypassed(l, r, n);
+    if (!strip.fx_bypassed) {
+        d.channel.process(l, r, n, p.strip);
+        for (const auto& ins : strip.inserts) {
+            if (!ins->bypass.load(std::memory_order_relaxed)) ins->process(l, r, n);
+            else ins->process_bypassed(l, r, n);
+        }
     }
     // Automated mute: before the sends and the fader, like the static mute.
     if (d.mute_mode == 1 && d.mute_curve) {
@@ -979,6 +986,12 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         const project::Track* t = plan.tracks[k];
         PlaybackSnapshot::Track st;
         st.strip = make_strip(t->id, plan.track_sends[k], plan.track_output[k]);
+        st.strip.fx_bypassed = t->printed_fx && t->playback == "audio" && has_instrument(*t);
+        if (print_tap_ && print_tap_->track_id == t->id) {
+            snap->tap_track = static_cast<int>(k);
+            snap->tap_post_inserts = print_tap_->post_inserts;
+            st.strip.fx_bypassed = false;
+        }
         if (has_instrument(*t)) {
             instrument_ids.insert(t->id);
             auto& slot = instruments_[t->id];
@@ -989,7 +1002,8 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
                              instrument_watch_targets_, t->id, "plugin:");
             // A track set to play only its audio lane keeps its instrument
             // (for a MIDI keyboard) but sends it none of its notes.
-            if (t->playback != "audio") {
+            const bool printing_this = print_tap_ && print_tap_->track_id == t->id;
+            if (t->playback != "audio" || printing_this) {
                 project::RenderedTrack r = render_cache_.render(*t);
                 if (st.instrument->wants_keyswitches()) r.notes.insert(r.notes.end(), r.keyswitches.begin(), r.keyswitches.end());
                 st.events = to_events(r.notes, r.controllers, d.tempo, sample_rate_);
@@ -1066,6 +1080,8 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         const auto& st = snap->tracks[k];
         instrument_latency[k] = st.instrument ? std::max(0, st.instrument->latency_samples()) : 0;
         track_out[k] = instrument_latency[k] + inserts_latency(st.strip, st.strip.inserts.size());
+        if (static_cast<int>(k) == snap->tap_track)
+            print_tap_latency_ = instrument_latency[k] + (snap->tap_post_inserts ? inserts_latency(st.strip, st.strip.inserts.size()) : 0);
         strip_latency_[plan.tracks[k]->id] = track_out[k];
         auto arrive = [&](int dest) {
             if (dest >= 0 && dest < static_cast<int>(nb)) bus_in[static_cast<std::size_t>(dest)] = std::max(bus_in[static_cast<std::size_t>(dest)], track_out[k]);
@@ -1453,6 +1469,12 @@ juce::AudioPluginInstance* PlaybackEngine::insert_plugin(const std::string& stri
     if (keys == insert_keys_.end() || slot < 0 || slot >= static_cast<int>(keys->second.size())) return nullptr;
     auto it = inserts_.find(keys->second[static_cast<std::size_t>(slot)]);
     return it == inserts_.end() ? nullptr : it->second->plugin();
+}
+
+void PlaybackEngine::set_print_tap(std::optional<PrintTap> tap)
+{
+    print_tap_ = std::move(tap);
+    rebuild_now();
 }
 
 void PlaybackEngine::set_render_override(std::optional<RenderOverride> override_settings)
@@ -1872,6 +1894,8 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
         s->out.clear(0, n);
         for (auto& b : s->buses) b.buffer.clear(0, n);
         for (std::size_t i = 0; i < s->tracks.size(); ++i) {
+            const bool tapped = s->tap_track == static_cast<int>(i);
+            if (s->tap_track >= 0 && !tapped) continue;  // printing: only that track
             auto& t = s->tracks[i];
             juce::AudioBuffer<float> buf(t.buffer.getArrayOfWritePointers(), 2, n);
             buf.clear();
@@ -1879,8 +1903,24 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
             if (t.instrument) {
                 t.midi.clear();
                 if (playing) gather(t.events, t.cursor, pos, n, t.midi);
-                if (static_cast<int>(i) == s->live_track) live_input_.removeNextBlockOfMessages(t.midi, n);
+                if (static_cast<int>(i) == s->live_track && !tapped) live_input_.removeNextBlockOfMessages(t.midi, n);
                 t.instrument->process(buf, t.midi, n);
+            }
+            if (tapped) {
+                // The print: the instrument's signal, with the strip's
+                // processing and inserts when asked, never the fader.
+                if (s->tap_post_inserts) {
+                    StripDsp& dsp = *t.strip.dsp;
+                    const StripParams& p = dsp.use_eff ? dsp.eff : dsp.params.latest();
+                    dsp.channel.process(buf.getWritePointer(0), buf.getWritePointer(1), n, p.strip);
+                    for (const auto& ins : t.strip.inserts) {
+                        if (!ins->bypass.load(std::memory_order_relaxed)) ins->process(buf.getWritePointer(0), buf.getWritePointer(1), n);
+                        else ins->process_bypassed(buf.getWritePointer(0), buf.getWritePointer(1), n);
+                    }
+                }
+                s->out.addFrom(0, 0, buf, 0, 0, n);
+                s->out.addFrom(1, 0, buf, 1, 0, n);
+                continue;
             }
             // Tape-style auto input: an armed track hears its input while
             // stopped or recording, and its clips otherwise.
@@ -1903,12 +1943,13 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
             process_strip(*s, t.strip, buf, n, playing, low_latency);
         }
         for (int bi : s->bus_order) {
+            if (s->tap_track >= 0) break;  // a print is the track alone
             auto& b = s->buses[static_cast<std::size_t>(bi)];
             juce::AudioBuffer<float> buf(b.buffer.getArrayOfWritePointers(), 2, n);
             automate_strip(b.strip, pos, n, playing);
             process_strip(*s, b.strip, buf, n, playing, false);
         }
-        if (playing && metronome_.load()) {
+        if (playing && metronome_.load() && s->tap_track < 0) {
             // Scheduled on the heard timeline, so the click lines up with the
             // compensated mix.
             while (s->click_cursor < s->clicks.size() && s->clicks[s->click_cursor].first < heard_pos + n) {

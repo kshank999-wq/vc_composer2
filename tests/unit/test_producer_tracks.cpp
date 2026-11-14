@@ -49,3 +49,45 @@ TEST_CASE("an instrument track plays MIDI, its audio lane or both, saved and und
     CHECK(r.data().find_track(t)->playback == "midi");
     CHECK(r.data().find_track(t)->active_version()->audio_clips.size() == 1);
 }
+
+TEST_CASE("a print lands on the track's own audio lane as one undo step, the last print on a take lane")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Flute", "woodwinds.flute");
+    project::AudioClip clip;
+    clip.file = "Audio Files/Flute_PRINT_01.wav";
+    clip.name = "Flute_PRINT_01";
+    clip.length = 4.0;
+    clip.channels = 2;
+    clip.file_sample_rate = 48000.0;
+    const auto first = s.place_prints({{t, clip}}, false, true);
+    REQUIRE(first.size() == 1);
+    const auto* track = s.data().find_track(t);
+    CHECK(track->playback == "audio");
+    CHECK(!track->printed_fx);
+    CHECK(track->active_version()->audio_clips.size() == 1);
+
+    clip.file = "Audio Files/Flute_PRINT_02.wav";
+    const auto second = s.place_prints({{t, clip}}, true, true);
+    REQUIRE(second.size() == 1);
+    track = s.data().find_track(t);
+    CHECK(track->printed_fx);
+    int on_main = 0, on_take = 0;
+    for (const auto& c : track->active_version()->audio_clips) (c.lane == 0 ? on_main : on_take)++;
+    CHECK(on_main == 1);
+    CHECK(on_take == 1);
+
+    s.undo();  // the second print, its FX flag and the take lane together
+    track = s.data().find_track(t);
+    CHECK(!track->printed_fx);
+    CHECK(track->active_version()->audio_clips.size() == 1);
+    CHECK(track->active_version()->audio_clips[0].lane == 0);
+    s.undo();
+    CHECK(s.data().find_track(t)->playback == "both");
+    CHECK(s.data().find_track(t)->active_version()->audio_clips.empty());
+
+    // Not onto an audio track.
+    const auto a = s.add_audio_track("Vox", false);
+    CHECK(s.place_prints({{a, clip}}, false, true).empty());
+}

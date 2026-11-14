@@ -302,6 +302,10 @@ struct Track {
     /// "midi" (its notes through its instrument), "audio" (only its own
     /// audio lane - say, the score printed to audio) or "both".
     std::string playback = "both";
+    /// The audio lane was printed with the channel strip and inserts: while
+    /// the track plays its audio lane they are bypassed, so they are not
+    /// heard twice. Set by Print to audio with effects.
+    bool printed_fx = false;
     std::vector<AutomationLane> automation;
     std::string automation_mode = "read";
     bool include_in_export = true;  ///< False for Reference tracks unless the user opts in.
