@@ -975,6 +975,10 @@ juce::String PlaybackEngine::open_default_device()
 
 void PlaybackEngine::prepare_offline(double sample_rate, int block_size)
 {
+    // Offline, this thread renders: an open device must not also drive the
+    // engine (it would move the transport between offline blocks).
+    devices_.removeAudioCallback(this);
+    device_running_ = false;
     files_->set_synchronous(true);  // offline: reads fill their own buffers
     prepare_all(sample_rate, block_size);
     latency_samples_ = 0;

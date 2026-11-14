@@ -102,7 +102,8 @@ public:
     juce::String open_default_device();
     juce::AudioDeviceManager& devices() noexcept { return devices_; }
 
-    /// Prepares for offline rendering without a device.
+    /// Prepares for offline rendering without a device: an open device stops
+    /// driving this engine (the caller renders every block).
     void prepare_offline(double sample_rate, int block_size);
     /// Renders the next `num_samples` exactly as the device callback would.
     void render_offline(juce::AudioBuffer<float>& out, int num_samples);
