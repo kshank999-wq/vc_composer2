@@ -196,7 +196,7 @@ private:
     // Dynamics
     Knob comp_threshold_, comp_ratio_, comp_makeup_, comp_attack_, comp_release_;
     Knob gate_threshold_, gate_range_, gate_release_;
-    LedButton dyn_in_, dyn_pre_, gate_in_;
+    LedButton dyn_in_, dyn_pre_, gate_in_, key_;  ///< key_: sidechain source for the compressor and gate
     GrMeter gr_;
     // Inserts, sends, output
     InsertRack inserts_;

@@ -86,7 +86,7 @@ void Biquad::set_high_shelf(double sr, double f, double q, double gain_db) noexc
 // --- Compressor -------------------------------------------------------------------------
 
 float Compressor::process(float* l, float* r, int n, float threshold_db, float ratio, float attack_ms,
-                          float release_ms, float makeup_db) noexcept
+                          float release_ms, float makeup_db, const float* key_l, const float* key_r) noexcept
 {
     const float slope = 1.0f / std::max(1.0f, ratio) - 1.0f;  // <= 0
     const float knee = 6.0f;
@@ -97,7 +97,7 @@ float Compressor::process(float* l, float* r, int n, float threshold_db, float r
     float deepest = 0.0f;
     float env = env_db_;
     for (int i = 0; i < n; ++i) {
-        const float x = std::max(std::abs(l[i]), std::abs(r[i]));
+        const float x = key_l ? std::max(std::abs(key_l[i]), std::abs(key_r[i])) : std::max(std::abs(l[i]), std::abs(r[i]));
         const float xdb = x > 1.0e-6f ? 20.0f * std::log10(x) : -120.0f;
         const float over = xdb - threshold_db;
         float target = 0.0f;
@@ -116,7 +116,8 @@ float Compressor::process(float* l, float* r, int n, float threshold_db, float r
 
 // --- Gate -------------------------------------------------------------------------------------
 
-bool Gate::process(float* l, float* r, int n, float threshold_db, float range_db, float release_ms) noexcept
+bool Gate::process(float* l, float* r, int n, float threshold_db, float range_db, float release_ms, const float* key_l,
+                   const float* key_r) noexcept
 {
     const float threshold = db_to_lin(threshold_db);
     const float floor_gain = db_to_lin(-std::abs(range_db));
@@ -126,7 +127,7 @@ bool Gate::process(float* l, float* r, int n, float threshold_db, float range_db
     const int hold_samples = static_cast<int>(0.010 * sr_);
     float target = 1.0f;
     for (int i = 0; i < n; ++i) {
-        const float x = std::max(std::abs(l[i]), std::abs(r[i]));
+        const float x = key_l ? std::max(std::abs(key_l[i]), std::abs(key_r[i])) : std::max(std::abs(l[i]), std::abs(r[i]));
         env_ = x > env_ ? x : env_ * env_release;
         if (env_ >= threshold) hold_ = hold_samples;
         else if (hold_ > 0) --hold_;
@@ -201,21 +202,24 @@ void ChannelProcessor::eq(float* l, float* r, int n, const project::ChannelStrip
         }
 }
 
-void ChannelProcessor::dynamics(float* l, float* r, int n, const project::ChannelStrip& s) noexcept
+void ChannelProcessor::dynamics(float* l, float* r, int n, const project::ChannelStrip& s, const float* key_l,
+                                const float* key_r) noexcept
 {
     gate_closed_ = false;
     if (s.gate_on)
         gate_closed_ = gate_.process(l, r, n, static_cast<float>(s.gate_threshold_db), static_cast<float>(s.gate_range_db),
-                                     static_cast<float>(s.gate_release_ms));
+                                     static_cast<float>(s.gate_release_ms), key_l, key_r);
     gr_db_ = 0.0f;
     if (s.comp_on)
         gr_db_ = comp_.process(l, r, n, static_cast<float>(s.comp_threshold_db), static_cast<float>(s.comp_ratio),
                                static_cast<float>(s.comp_attack_ms), static_cast<float>(s.comp_release_ms),
-                               static_cast<float>(s.comp_makeup_db));
+                               static_cast<float>(s.comp_makeup_db), key_l, key_r);
 }
 
-void ChannelProcessor::process(float* l, float* r, int n, const project::ChannelStrip& s) noexcept
+void ChannelProcessor::process(float* l, float* r, int n, const project::ChannelStrip& s, const float* key_l,
+                               const float* key_r) noexcept
 {
+    if (key_l && !key_r) key_r = key_l;
     if (sr_ <= 0.0) return;
     juce::ScopedNoDenormals no_denormals;
     update(s);
@@ -225,11 +229,11 @@ void ChannelProcessor::process(float* l, float* r, int n, const project::Channel
     trim_ = trim_target_;
     filters(l, r, n, s);
     if (s.dynamics_pre_eq) {
-        dynamics(l, r, n, s);
+        dynamics(l, r, n, s, key_l, key_r);
         eq(l, r, n, s);
     } else {
         eq(l, r, n, s);
-        dynamics(l, r, n, s);
+        dynamics(l, r, n, s, key_l, key_r);
     }
 }
 
@@ -312,7 +316,7 @@ public:
     void process(float* l, float* r, int n) noexcept override
     {
         if (automated_mask_ == 0) {
-            channel_.process(l, r, n, box_.latest());
+            channel_.process(l, r, n, box_.latest(), key_l_, key_r_);
             return;
         }
         project::ChannelStrip s = box_.latest();
@@ -331,7 +335,7 @@ public:
         } else {
             a(0, s.gate_threshold_db), a(1, s.gate_range_db), a(2, s.gate_release_ms);
         }
-        channel_.process(l, r, n, s);
+        channel_.process(l, r, n, s, key_l_, key_r_);
     }
 
 private:

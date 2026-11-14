@@ -159,6 +159,14 @@ struct PlaybackSnapshot {
         /// Channel processing and inserts bypassed: the track plays audio
         /// printed with them (Track::printed_fx).
         bool fx_bypassed = false;
+        /// Sidechain. `tap`: where this strip leaves its signal (after the
+        /// inserts, before the fader) for strips keyed from it. `key`: the
+        /// tap keying this strip's compressor and gate; `insert_keys`: per
+        /// insert processor. Buffers live in the snapshot's `taps`.
+        juce::AudioBuffer<float>* tap = nullptr;
+        const juce::AudioBuffer<float>* key = nullptr;
+        std::vector<const juce::AudioBuffer<float>*> insert_keys;
+        std::vector<int> insert_slots;  ///< The slot of each insert processor.
     };
     struct Clip {
         std::shared_ptr<ClipStream> stream;
@@ -198,6 +206,10 @@ struct PlaybackSnapshot {
     std::size_t click_cursor = 0;
     juce::AudioBuffer<float> out;  // the master bus's output: what the device plays
     int live_track = -1;
+    /// Sidechain taps (one per track, then per bus; sized only for sources)
+    /// and the order tracks are processed in (key sources first).
+    std::vector<juce::AudioBuffer<float>> taps;
+    std::vector<std::size_t> track_order;
     int tap_track = -1;        ///< Print to audio: the one track rendered, or -1.
     bool tap_post_inserts = false;
 
@@ -601,11 +613,21 @@ void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::Au
     float* l = buf.getWritePointer(0);
     float* r = buf.getWritePointer(1);
     if (!strip.fx_bypassed) {
-        d.channel.process(l, r, n, p.strip);
-        for (const auto& ins : strip.inserts) {
+        const float* key_l = strip.key ? strip.key->getReadPointer(0) : nullptr;
+        const float* key_r = strip.key ? strip.key->getReadPointer(1) : nullptr;
+        d.channel.process(l, r, n, p.strip, key_l, key_r);
+        for (std::size_t j = 0; j < strip.inserts.size(); ++j) {
+            const auto& ins = strip.inserts[j];
+            const auto* kb = j < strip.insert_keys.size() ? strip.insert_keys[j] : nullptr;
+            ins->set_key(kb ? kb->getReadPointer(0) : nullptr, kb ? kb->getReadPointer(1) : nullptr);
             if (!ins->bypass.load(std::memory_order_relaxed)) ins->process(l, r, n);
             else ins->process_bypassed(l, r, n);
         }
+    }
+    // Sidechain: what strips keyed from this one hear.
+    if (strip.tap && n <= strip.tap->getNumSamples()) {
+        strip.tap->copyFrom(0, 0, l, n);
+        strip.tap->copyFrom(1, 0, r, n);
     }
     // A real-time print with effects takes the signal here, before the fader.
     if (after_inserts) {
@@ -1183,9 +1205,13 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
     auto make_strip = [&](const std::string& id, std::vector<int> sends, int output) {
         PlaybackSnapshot::Strip st;
         st.dsp = strips_[id];
-        for (const auto& key : insert_keys_[id])
-            if (!key.empty())
-                if (auto it = inserts_.find(key); it != inserts_.end() && it->second) st.inserts.push_back(it->second);
+        const auto& keys = insert_keys_[id];
+        for (std::size_t slot = 0; slot < keys.size(); ++slot)
+            if (!keys[slot].empty())
+                if (auto it = inserts_.find(keys[slot]); it != inserts_.end() && it->second) {
+                    st.inserts.push_back(it->second);
+                    st.insert_slots.push_back(static_cast<int>(slot));
+                }
         st.sends = std::move(sends);
         st.output = output;
         return st;
@@ -1472,6 +1498,70 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         const int pre = pdc_on ? bus_in[b] : 0;
         automate(snap->buses[b].strip, plan.bus_ids[b], bus->automation_mode, bus->automation, bus->sends, bus->inserts,
                  nullptr, pre, pre + bus_own[b]);
+    }
+
+    // Sidechain keys: each source strip leaves its signal in a tap; keyed
+    // strips (and compressor/gate inserts) read it. Tracks are processed
+    // with their key sources first, so a key from a track arrives in the
+    // same block; a key from a bus reaches a track one block later.
+    {
+        const std::size_t nt = snap->tracks.size(), nb = snap->buses.size();
+        std::map<std::string, std::size_t> index;
+        for (std::size_t k = 0; k < nt; ++k) index[plan.tracks[k]->id] = k;
+        for (std::size_t b = 0; b < nb; ++b) index[plan.bus_ids[b]] = nt + b;
+        snap->taps.resize(nt + nb);
+        auto strip_at = [&](std::size_t i) -> PlaybackSnapshot::Strip& {
+            return i < nt ? snap->tracks[i].strip : snap->buses[i - nt].strip;
+        };
+        auto key_for = [&](const std::string& source, std::size_t self) -> const juce::AudioBuffer<float>* {
+            const auto it = source.empty() ? index.end() : index.find(source);
+            if (it == index.end() || it->second == self) return nullptr;
+            auto& tap = snap->taps[it->second];
+            if (tap.getNumSamples() == 0) {
+                tap.setSize(2, block_size_);
+                tap.clear();
+                strip_at(it->second).tap = &tap;
+            }
+            return &tap;
+        };
+        std::vector<std::vector<std::size_t>> depends(nt);  // track -> the tracks keying it
+        for (std::size_t i = 0; i < nt + nb; ++i) {
+            const std::string* sidechain = nullptr;
+            const std::vector<project::InsertSlot>* slots = nullptr;
+            if (i < nt) {
+                sidechain = &plan.tracks[i]->sidechain;
+                slots = &plan.tracks[i]->inserts;
+            } else if (const project::Bus* bus = plan.buses[i - nt]) {
+                sidechain = &bus->sidechain;
+                slots = &bus->inserts;
+            }
+            if (!sidechain) continue;
+            auto& st = strip_at(i);
+            std::vector<std::string> sources;
+            st.key = key_for(*sidechain, i);
+            if (st.key) sources.push_back(*sidechain);
+            st.insert_keys.assign(st.inserts.size(), nullptr);
+            for (std::size_t j = 0; j < st.inserts.size() && j < st.insert_slots.size(); ++j) {
+                const auto slot = static_cast<std::size_t>(st.insert_slots[j]);
+                if (slot < slots->size()) {
+                    st.insert_keys[j] = key_for((*slots)[slot].sidechain, i);
+                    if (st.insert_keys[j]) sources.push_back((*slots)[slot].sidechain);
+                }
+            }
+            if (i < nt)
+                for (const auto& s : sources)
+                    if (auto it = index.find(s); it != index.end() && it->second < nt) depends[i].push_back(it->second);
+        }
+        // Sources before the tracks they key (a cycle keeps the plan's order).
+        std::vector<int> state(nt, 0);
+        std::function<void(std::size_t)> visit = [&](std::size_t k) {
+            if (state[k] != 0) return;
+            state[k] = 1;
+            for (auto dep : depends[k]) visit(dep);
+            state[k] = 2;
+            snap->track_order.push_back(k);
+        };
+        for (std::size_t k = 0; k < nt; ++k) visit(k);
     }
 
     // Click: every felt beat to the end of the content.
@@ -2403,7 +2493,9 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
     if (s && n <= s->max_block) {
         s->out.clear(0, n);
         for (auto& b : s->buses) b.buffer.clear(0, n);
-        for (std::size_t i = 0; i < s->tracks.size(); ++i) {
+        for (std::size_t oi = 0; oi < s->tracks.size(); ++oi) {
+            // Key sources first (sidechain), else the plan's order.
+            const std::size_t i = oi < s->track_order.size() ? s->track_order[oi] : oi;
             const bool tapped = s->tap_track == static_cast<int>(i);
             if (s->tap_track >= 0 && !tapped) continue;  // printing: only that track
             auto& t = s->tracks[i];

@@ -1454,6 +1454,35 @@ bool Session::promote_region_take(const std::string& track_id, const std::string
     });
 }
 
+bool Session::set_sidechain(const std::string& owner_id, int slot, const std::string& source_id)
+{
+    if (source_id == owner_id && !source_id.empty()) return false;
+    return edit("Sidechain", [&](project::ProjectData& d) {
+        if (!source_id.empty() && !d.find_track(source_id) && !d.find_bus(source_id)) return false;
+        std::string* strip_key = nullptr;
+        std::vector<project::InsertSlot>* inserts = nullptr;
+        if (project::Track* t = d.find_track(owner_id)) {
+            strip_key = &t->sidechain;
+            inserts = &t->inserts;
+        } else if (project::Bus* b = d.find_bus(owner_id)) {
+            strip_key = &b->sidechain;
+            inserts = &b->inserts;
+        } else {
+            return false;
+        }
+        std::string* target = strip_key;
+        if (slot >= 0) {
+            if (slot >= static_cast<int>(inserts->size())) return false;
+            auto& ins = (*inserts)[static_cast<std::size_t>(slot)];
+            if (ins.kind != "compressor" && ins.kind != "gate") return false;
+            target = &ins.sidechain;
+        }
+        if (*target == source_id) return false;
+        *target = source_id;
+        return true;
+    });
+}
+
 bool Session::set_input_quantize(const std::string& track_id, Ticks grid)
 {
     return edit("Input quantize", on_track(track_id, [&](project::Track& t) {

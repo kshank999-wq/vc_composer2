@@ -284,6 +284,11 @@ public:
     /// Swaps a MIDI take onto the main lane; main-lane regions it overlaps
     /// go to its lane ("Promote take").
     bool promote_region_take(const std::string& track_id, const std::string& take_region_id);
+    /// Sidechain: keys a track's or bus's strip compressor and gate (slot
+    /// -1) or a built-in compressor/gate insert (slot >= 0) from another
+    /// track or bus (`source` empty: its own signal again). One undo step
+    /// ("Sidechain"); false for an unknown owner or source, or the owner itself.
+    bool set_sidechain(const std::string& owner_id, int slot, const std::string& source_id);
     /// Input quantize for MIDI recorded onto the track (0: off). One undo step.
     bool set_input_quantize(const std::string& track_id, Ticks grid);
 

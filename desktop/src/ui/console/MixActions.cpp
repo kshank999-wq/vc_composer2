@@ -109,6 +109,10 @@ void show_insert_menu(AppContext& context, const std::string& owner_id, int inde
         m.addItem(5, "Open window...");
         if (s.suggestion && s.kind != "plugin") m.addItem(3, "Use the built-in " + insert_name(s));
         m.addItem(1, "Bypass", true, s.bypass);
+        if (s.kind == "compressor" || s.kind == "gate") {
+            const auto key = sidechain_text(context, owner_id, static_cast<int>(at));
+            m.addItem(6, key.isEmpty() ? juce::String("Sidechain...") : "Sidechain: " + key + "...");
+        }
         m.addSubMenu("Replace with", add);
         if (at > 0) m.addItem(4, "Move up");
         m.addSeparator();
@@ -124,6 +128,15 @@ void show_insert_menu(AppContext& context, const std::string& owner_id, int inde
         if (r <= 0) return;
         if (r == 5) {
             if (ctx.show_insert_window) ctx.show_insert_window(owner, static_cast<int>(at));
+            return;
+        }
+        if (r == 6) {
+            // Opened from the menu's result, so it comes up where the pointer is.
+            juce::MessageManager::callAsync([&ctx, owner, at] {
+                juce::PopupMenu::dismissAllActiveMenus();
+                if (auto* c = juce::Desktop::getInstance().getMainMouseSource().getComponentUnderMouse())
+                    show_sidechain_menu(ctx, owner, static_cast<int>(at), *c);
+            });
             return;
         }
         begin_gesture();
@@ -253,6 +266,54 @@ void show_input_menu(AppContext& context, const std::string& track_id, juce::Com
                 x.input_stereo = false;
             }
         });
+    }));
+}
+
+juce::String sidechain_text(const AppContext& context, const std::string& owner_id, int slot)
+{
+    const auto& d = context.session.data();
+    std::string source;
+    const std::vector<project::InsertSlot>* inserts = nullptr;
+    if (const auto* t = d.find_track(owner_id)) {
+        source = t->sidechain;
+        inserts = &t->inserts;
+    } else if (const auto* b = d.find_bus(owner_id)) {
+        source = b->sidechain;
+        inserts = &b->inserts;
+    }
+    if (slot >= 0) source = inserts && slot < static_cast<int>(inserts->size()) ? (*inserts)[static_cast<std::size_t>(slot)].sidechain : "";
+    if (source.empty()) return {};
+    if (const auto* t = d.find_track(source)) return juce::String(t->name);
+    if (const auto* b = d.find_bus(source)) return juce::String(b->name);
+    return "(missing)";
+}
+
+void show_sidechain_menu(AppContext& context, const std::string& owner_id, int slot, juce::Component& target)
+{
+    const auto& d = context.session.data();
+    std::vector<std::string> ids;
+    juce::PopupMenu m, tracks, buses;
+    m.addSectionHeader(slot < 0 ? "Key the compressor and gate from" : "Key this insert from");
+    const juce::String current = sidechain_text(context, owner_id, slot);
+    m.addItem(1, "Its own signal", true, current.isEmpty());
+    for (const auto& t : d.tracks) {
+        if (t.id == owner_id || t.kind == project::TrackKind::Folder || t.kind == project::TrackKind::Video) continue;
+        ids.push_back(t.id);
+        tracks.addItem(100 + static_cast<int>(ids.size()) - 1, juce::String(t.name), true, current == juce::String(t.name));
+    }
+    for (const auto& b : d.buses) {
+        if (b.id == owner_id || b.kind == "master") continue;
+        ids.push_back(b.id);
+        buses.addItem(100 + static_cast<int>(ids.size()) - 1, juce::String(b.name), true, current == juce::String(b.name));
+    }
+    m.addSubMenu("Track", tracks, tracks.getNumItems() > 0);
+    m.addSubMenu("Bus", buses, buses.getNumItems() > 0);
+    auto& ctx = context;
+    const std::string owner = owner_id;
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&target), guarded(target, [&ctx, owner, slot, ids](int r) {
+        if (r == 1) ctx.session.set_sidechain(owner, slot, {});
+        else if (r >= 100 && r - 100 < static_cast<int>(ids.size()))
+            ctx.session.set_sidechain(owner, slot, ids[static_cast<std::size_t>(r - 100)]);
     }));
 }
 

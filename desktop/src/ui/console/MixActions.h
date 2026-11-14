@@ -35,6 +35,12 @@ void toggle_insert_bypass(AppContext& context, const std::string& owner_id, int 
 void show_output_menu(AppContext& context, const std::string& owner_id, juce::Component& target);
 /// A track's input: none, a mono input, or a stereo pair.
 void show_input_menu(AppContext& context, const std::string& track_id, juce::Component& target);
+/// Sidechain: what keys a strip's compressor and gate (slot -1) or a
+/// built-in compressor/gate insert (slot >= 0): its own signal, or another
+/// track or bus.
+void show_sidechain_menu(AppContext& context, const std::string& owner_id, int slot, juce::Component& target);
+/// The key source's name ("" when the strip or insert hears itself).
+juce::String sidechain_text(const AppContext& context, const std::string& owner_id, int slot);
 /// "IN 1-2 › STRINGS" style names for the readouts.
 juce::String input_text(const AppContext& context, const std::string& track_id);
 juce::String output_text(const AppContext& context, const std::string& owner_id);

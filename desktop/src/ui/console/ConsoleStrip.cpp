@@ -275,6 +275,7 @@ Strip::Strip(AppContext& context, Kind kind, std::string id, const ConsoleLayout
       dyn_in_("DYN", paint::led_yellow, "Compressor in"),
       dyn_pre_("PRE", paint::led_white, "Dynamics before the EQ"),
       gate_in_("GATE IN", paint::led_amber, "Gate / expander in"),
+      key_("KEY", paint::led_green, "Sidechain: key the compressor and gate from another track or bus"),
       pan_(pan_knob()),
       auto_mode_("Automation mode: Off / Read / Touch / Latch / Write - click to choose; alt-click sets every strip"),
       rec_("REC", paint::led_red, "Record arm"),
@@ -396,7 +397,7 @@ void Strip::setup_controls()
              &input_, &trim_, &phase_, &hpf_, &lpf_, &hpf_in_, &lpf_in_, &curve_, &hf_gain_, &hf_freq_, &hmf_gain_,
              &hmf_freq_, &hmf_q_, &lmf_gain_, &lmf_freq_, &lmf_q_, &lf_gain_, &lf_freq_, &hf_bell_, &lf_bell_, &eq_in_,
              &comp_threshold_, &comp_ratio_, &comp_makeup_, &comp_attack_, &comp_release_, &gate_threshold_,
-             &gate_range_, &gate_release_, &dyn_in_, &dyn_pre_, &gate_in_, &gr_, &inserts_, &output_, &delay_})
+             &gate_range_, &gate_release_, &dyn_in_, &dyn_pre_, &gate_in_, &key_, &gr_, &inserts_, &output_, &delay_})
         T.addChildComponent(c);
     for (auto& row : sends_) {
         T.addChildComponent(row->knob);
@@ -441,6 +442,11 @@ void Strip::setup_controls()
     bind_strip_button(dyn_pre_, "Dynamics pre EQ", &CS::dynamics_pre_eq, {});  // not automatable
     bind_strip_button(gate_in_, "Gate in", &CS::gate_on, "strip.gate_on");
 
+    key_.setComponentID("strip_key");
+    key_.onClick = [this] {
+        key_.set_lit(console::sidechain_text(context_, id_, -1).isNotEmpty());  // the menu decides
+        console::show_sidechain_menu(context_, id_, -1, key_);
+    };
     input_.on_click = nullptr;
     output_.on_click = [this] { show_output_menu(); };
     output_.setTooltip("Output routing");
@@ -690,6 +696,12 @@ void Strip::refresh()
     dyn_in_.set_lit(cs->comp_on);
     dyn_pre_.set_lit(cs->dynamics_pre_eq);
     gate_in_.set_lit(cs->gate_on);
+    {
+        const auto key = console::sidechain_text(context_, id_, -1);
+        key_.set_lit(key.isNotEmpty());
+        key_.setTooltip(key.isEmpty() ? juce::String("Sidechain: key the compressor and gate from another track or bus")
+                                      : "Sidechain: keyed from " + key + " (click to change)");
+    }
     // Inserts
     std::vector<InsertRack::Slot> slots;
     for (std::size_t i = 0; i < inserts->size() && i < static_cast<std::size_t>(InsertRack::kSlots); ++i) {
@@ -1054,7 +1066,8 @@ void Strip::layout_top()
                 knob_at(gate_range_, 1, y, "RANGE", gate);
                 knob_at(gate_release_, 2, y, "REL", gate);
                 y += kRow;
-                button_at(gate_in_, wide(y + 2.0f, 16.0f));
+                button_at(gate_in_, col(0, y + 2.0f, 16.0f).getUnion(col(1, y + 2.0f, 16.0f)).reduced(narrow ? 0.0f : 2.0f, 0.0f));
+                button_at(key_, col(2, y + 2.0f, 16.0f).reduced(narrow ? 0.0f : 2.0f, 0.0f));
                 break;
             case Section::Inserts:
                 inserts_.setBounds(juce::Rectangle<float>(pad, y, w - 2.0f * pad,

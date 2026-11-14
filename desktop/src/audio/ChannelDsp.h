@@ -101,9 +101,10 @@ class Compressor {
 public:
     void prepare(double sr) noexcept { sr_ = sr; }
     void reset() noexcept { env_db_ = 0.0f; }
-    /// Returns the deepest gain reduction in this block (dB, <= 0).
+    /// Returns the deepest gain reduction in this block (dB, <= 0). With a
+    /// key (sidechain), the level is read from it instead of the signal.
     float process(float* l, float* r, int n, float threshold_db, float ratio, float attack_ms, float release_ms,
-                  float makeup_db) noexcept;
+                  float makeup_db, const float* key_l = nullptr, const float* key_r = nullptr) noexcept;
 
 private:
     double sr_ = 48000.0;
@@ -116,7 +117,9 @@ public:
     void prepare(double sr) noexcept { sr_ = sr; }
     void reset() noexcept { env_ = 0.0f; gain_ = 1.0f; hold_ = 0; }
     /// Returns true when the gate is closed (or closing) at the end of the block.
-    bool process(float* l, float* r, int n, float threshold_db, float range_db, float release_ms) noexcept;
+    /// With a key (sidechain), it opens on the key's level instead of the signal's.
+    bool process(float* l, float* r, int n, float threshold_db, float range_db, float release_ms,
+                 const float* key_l = nullptr, const float* key_r = nullptr) noexcept;
 
 private:
     double sr_ = 48000.0;
@@ -130,8 +133,10 @@ private:
 class ChannelProcessor {
 public:
     void prepare(double sr);  ///< Message thread; keeps state when the rate is unchanged.
-    /// Audio thread: stereo in place.
-    void process(float* l, float* r, int n, const project::ChannelStrip& s) noexcept;
+    /// Audio thread: stereo in place. A key (sidechain) drives the compressor
+    /// and gate instead of the channel's own signal.
+    void process(float* l, float* r, int n, const project::ChannelStrip& s, const float* key_l = nullptr,
+                 const float* key_r = nullptr) noexcept;
     float gain_reduction_db() const noexcept { return gr_db_; }
     bool gate_closed() const noexcept { return gate_closed_; }
 
@@ -139,7 +144,7 @@ private:
     void update(const project::ChannelStrip& s) noexcept;
     void filters(float* l, float* r, int n, const project::ChannelStrip& s) noexcept;
     void eq(float* l, float* r, int n, const project::ChannelStrip& s) noexcept;
-    void dynamics(float* l, float* r, int n, const project::ChannelStrip& s) noexcept;
+    void dynamics(float* l, float* r, int n, const project::ChannelStrip& s, const float* key_l, const float* key_r) noexcept;
 
     double sr_ = 0.0;
     project::ChannelStrip applied_{};
@@ -189,10 +194,19 @@ public:
         automated_mask_ |= 1u << index;
     }
     void clear_automation() noexcept { automated_mask_ = 0; }
+    /// Audio thread, before process(): this block's sidechain key (null:
+    /// none). Only the built-in compressor and gate listen to it.
+    void set_key(const float* l, const float* r) noexcept
+    {
+        key_l_ = l;
+        key_r_ = r;
+    }
 
     std::atomic<bool> bypass{false};
 
 protected:
+    const float* key_l_ = nullptr;
+    const float* key_r_ = nullptr;
     float automated(int index, float fallback) const noexcept
     {
         return (automated_mask_ & (1u << index)) ? automated_[static_cast<std::size_t>(index)] : fallback;

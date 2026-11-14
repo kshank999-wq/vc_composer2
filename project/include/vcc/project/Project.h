@@ -268,6 +268,9 @@ struct InsertSlot {
     bool bypass = false;
     PluginRef plugin;        ///< kind == "plugin": the hosted effect and its state.
     std::map<std::string, double> params;  ///< Built-in processor settings by name.
+    /// A built-in compressor or gate keyed from another track or bus (its
+    /// id; empty: the signal it processes).
+    std::string sidechain;
 };
 
 struct Track {
@@ -317,6 +320,9 @@ struct Track {
     /// What an armed instrument or MIDI track records: "midi" (the MIDI
     /// keyboard, as a region) or "audio" (its input, onto its audio lane).
     std::string record_source = "midi";
+    /// The strip's compressor and gate keyed from another track or bus (its
+    /// id; empty: the track's own signal). Ducking, de-essing from a feed...
+    std::string sidechain;
     /// Input quantize: MIDI recorded onto this track lands on this grid
     /// (0: as played).
     Ticks input_quantize = 0;
@@ -344,6 +350,8 @@ struct Bus {
     bool mute = false;
     bool solo = false;
     ChannelStrip strip;
+    /// The strip's compressor and gate keyed from a track or bus (empty: its own signal).
+    std::string sidechain;
     std::string color;  ///< Empty: the console's colour for the bus kind.
     std::vector<AutomationLane> automation;
     std::string automation_mode = "read";

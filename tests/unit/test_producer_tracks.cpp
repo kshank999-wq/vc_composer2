@@ -1,5 +1,7 @@
 // Producer view tracks (docs/spec/ui, "Producer view"): an instrument track
 // carries its own audio lane, and plays its MIDI, that lane, or both.
+#include <filesystem>
+
 #include "vcc/session/Session.h"
 #include "vcc_test.h"
 
@@ -248,4 +250,50 @@ TEST_CASE("clip editing: split, crossfade, nudge and replace, each one undo step
     CHECK(v[0].id == merged);
     s.undo();
     CHECK(clips().size() == 2);
+}
+
+TEST_CASE("sidechain: strips and compressor/gate inserts keyed from another track or bus, saved and undoable")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto kick = s.add_audio_track("Kick", false);
+    const auto bass = s.add_audio_track("Bass", false);
+    const auto fx = s.add_bus("Verb", "fx");
+    CHECK(s.set_sidechain(bass, -1, kick));
+    CHECK(s.undo_label() == "Sidechain");
+    CHECK(s.data().find_track(bass)->sidechain == kick);
+    CHECK(!s.set_sidechain(bass, -1, kick));        // no change: no step
+    CHECK(!s.set_sidechain(bass, -1, bass));        // not itself
+    CHECK(!s.set_sidechain(bass, -1, "nope"));      // unknown source
+    CHECK(s.set_sidechain(fx, -1, kick));           // a bus keyed from a track
+    CHECK(s.data().find_bus(fx)->sidechain == kick);
+
+    // A compressor insert keyed; other kinds cannot be.
+    s.update_track_mix(bass, "inserts", [](project::Track& t) {
+        project::InsertSlot comp;
+        comp.kind = "compressor";
+        comp.suggestion = false;
+        project::InsertSlot verb;
+        verb.kind = "reverb";
+        verb.suggestion = false;
+        t.inserts = {comp, verb};
+    });
+    CHECK(s.set_sidechain(bass, 0, fx));
+    CHECK(!s.set_sidechain(bass, 1, kick));
+    CHECK(s.data().find_track(bass)->inserts[0].sidechain == fx);
+
+    const auto file = std::filesystem::temp_directory_path() / "vcc_sidechain_test.vcc2";
+    std::string error;
+    REQUIRE(s.save_as(file.string(), &error));
+    session::Session back(catalogs());
+    REQUIRE(back.open(file.string(), &error));
+    CHECK(back.data().find_track(bass)->sidechain == kick);
+    CHECK(back.data().find_track(bass)->inserts[0].sidechain == fx);
+    CHECK(back.data().find_bus(fx)->sidechain == kick);
+    std::filesystem::remove(file);
+
+    CHECK(s.set_sidechain(bass, -1, ""));  // back to its own signal
+    CHECK(s.data().find_track(bass)->sidechain.empty());
+    s.undo();
+    CHECK(s.data().find_track(bass)->sidechain == kick);
 }

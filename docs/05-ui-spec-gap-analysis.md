@@ -768,3 +768,28 @@ macOS, Linux and Windows. What it took:
       part of the take comps those notes in and keeps the rest; a
       double-click promotes it; only the main lane renders. Screenshot
       `midi-comp`.
+
+15. **Sidechain. Done.**
+    - A track's or bus's channel compressor and gate can be keyed from
+      another track or bus: the console strip's **KEY** button (beside GATE
+      IN in the dynamics section; lit when keyed, its tooltip names the
+      source) offers "Its own signal" or any track or bus. A built-in
+      compressor or gate insert is keyed the same way, from its slot's menu
+      ("Sidechain..."). Saved (`Track::sidechain`, `Bus::sidechain`,
+      `InsertSlot::sidechain`); each change is one undo step.
+    - The key is the source's signal after its inserts and before its
+      fader, so a muted source (a kick that should only duck) still keys.
+      The detector reads the key; the gain is applied to the keyed strip.
+    - The engine taps each source into a buffer made when the snapshot is
+      built (nothing allocates on the audio thread) and processes tracks
+      with their key sources first, so a key from a track arrives in the
+      same block. A key from a bus reaches a track one block late (buses
+      run after the tracks). Delay compensation does not shift the key.
+    - Hosted effect plug-ins with their own sidechain inputs are not fed
+      yet (the out-of-process host carries one stereo bus).
+    - **Checks.** A quiet bass keyed from a muted 1 kHz kick added after it:
+      unkeyed it ignores the kick (-38.1 / -38.1 dB); keyed it ducks only
+      while the kick sounds (-38.1 to -63.0 dB, 25 dB of gain reduction on
+      its meter); unkeyed again it ignores the kick; a keyed compressor
+      insert ducks the same; keyed processing allocates nothing.
+      `test_producer_tracks` covers the session side and saving.

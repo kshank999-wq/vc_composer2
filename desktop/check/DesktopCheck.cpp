@@ -3346,6 +3346,93 @@ void midi_comp_checks(MainWindow& window, const juce::File& dir)
     check(played60 == 8 && played72 == 0, "only the main lane's MIDI plays");
 }
 
+/// Sidechain: a bass on input 1 keyed from a (muted) kick on input 2 ducks
+/// only while the kick sounds; without the key it does not; a keyed
+/// compressor insert does the same.
+void sidechain_checks(MainWindow& window, const juce::File& dir)
+{
+    juce::ignoreUnused(dir);
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& engine = ctx.engine;
+    engine.stop();
+    session.new_empty();
+    engine.prepare_offline(48000.0, 512);
+    Rig rig(engine);
+    // Added kick last, so the key comes from a track processed after the bass in the plan's order.
+    const auto bass = session.add_audio_track("Bass", false);
+    const auto kick = session.add_audio_track("Kick", false);
+    session.update_track_mix(bass, "setup", [](project::Track& t) {
+        t.input = 0;
+        t.monitor = "input";
+        t.strip.comp_on = true;
+        t.strip.comp_threshold_db = -30.0;
+        t.strip.comp_ratio = 20.0;
+        t.strip.comp_attack_ms = 1.0;
+        t.strip.comp_release_ms = 50.0;
+    });
+    session.update_track_mix(kick, "setup", [](project::Track& t) {
+        t.input = 1;
+        t.monitor = "input";
+        t.mute = true;  // heard only as the key
+    });
+    // The bass: a quiet 100 Hz tone, below the threshold on its own (-32 dB peak).
+    auto signal = [](bool kick_on) {
+        return [kick_on](int ch, std::int64_t i) {
+            const double t = static_cast<double>(i) / 48000.0;
+            if (ch == 0) return 0.025f * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * 100.0 * t));
+            return kick_on ? 0.7f * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * 1000.0 * t)) : 0.0f;
+        };
+    };
+    auto level = [&](bool kick_on) {
+        rig.run(0.3, signal(kick_on));
+        return juce::Decibels::gainToDecibels(rig.run(0.3, signal(kick_on)).rms, -120.0);
+    };
+    const double own = level(false), own_with_kick = level(true);
+    check(std::abs(own - own_with_kick) < 0.5, "without a key the bass ignores the kick (" + juce::String(own, 1) + " / " +
+                                                   juce::String(own_with_kick, 1) + " dB)");
+    check(session.set_sidechain(bass, -1, kick) && console::sidechain_text(ctx, bass, -1) == "Kick",
+          "the bass strip's dynamics are keyed from the kick");
+    const double quiet = level(false), ducked = level(true);
+    engine.take_meter(bass);
+    rig.run(0.1, signal(true));
+    const auto meter = engine.take_meter(bass);
+    check(std::abs(quiet - own) < 0.5 && ducked < quiet - 12.0 && meter.gain_reduction_db < -12.0f,
+          "keyed, the bass ducks only while the kick sounds (" + juce::String(quiet, 1) + " -> " + juce::String(ducked, 1) +
+              " dB, GR " + juce::String(meter.gain_reduction_db, 1) + " dB)");
+    session.set_sidechain(bass, -1, {});
+    const double back = level(true);
+    check(std::abs(back - own_with_kick) < 0.5, "back on its own signal, it ignores the kick again");
+
+    // A compressor insert keyed from the kick.
+    session.update_track_mix(bass, "insert", [](project::Track& t) {
+        t.strip.comp_on = false;
+        project::InsertSlot comp;
+        comp.kind = "compressor";
+        comp.suggestion = false;
+        comp.params = {{"threshold_db", -30.0}, {"ratio", 20.0}, {"attack_ms", 1.0}, {"release_ms", 50.0}};
+        t.inserts = {comp};
+    });
+    session.set_sidechain(bass, 0, kick);
+    const double insert_quiet = level(false), insert_ducked = level(true);
+    check(insert_ducked < insert_quiet - 12.0, "a compressor insert keyed from the kick ducks the bass (" +
+                                                   juce::String(insert_quiet, 1) + " -> " + juce::String(insert_ducked, 1) + " dB)");
+    // Keyed processing stays allocation-free.
+    engine.locate(0);
+    engine.play();
+    const long before = allocations.load();
+    for (int i = 0; i < 50; ++i) {
+        for (int ch = 0; ch < 2; ++ch)
+            for (int k = 0; k < 512; ++k) rig.input.setSample(ch, k, signal(true)(ch, rig.clock + k));
+        counting = true;
+        engine.render_offline_with_input(rig.input, rig.out, 512);
+        counting = false;
+        rig.clock += 512;
+    }
+    engine.stop();
+    check(allocations.load() == before, "keyed dynamics allocate nothing on the audio thread");
+}
+
 void realtime_print_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -4375,6 +4462,7 @@ int main(int argc, char** argv)
         midi_tools_checks(window, dir);
         drag_drop_checks(window, dir);
         midi_comp_checks(window, dir);
+        sidechain_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

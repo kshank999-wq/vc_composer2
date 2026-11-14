@@ -632,6 +632,7 @@ json::Value inserts_to_json(const std::vector<InsertSlot>& inserts)
         json::Object o{{"kind", i.kind}, {"plugin_ref", i.plugin_ref}, {"suggestion", i.suggestion},
                        {"bypass", i.bypass}};
         if (!i.plugin.empty()) o.set("plugin", plugin_to_json(i.plugin));
+        if (!i.sidechain.empty()) o.set("sidechain", i.sidechain);
         if (!i.params.empty()) {
             json::Object params;
             for (const auto& [k, val] : i.params) params.set(k, val);
@@ -652,6 +653,7 @@ std::vector<InsertSlot> inserts_from_json(const json::Value* v)
         i.plugin_ref = j.get_string("plugin_ref");
         i.suggestion = j.get_bool("suggestion", true);
         i.bypass = j.get_bool("bypass");
+        i.sidechain = j.get_string("sidechain", "");
         if (const auto* pj = j.get("plugin")) i.plugin = plugin_from_json(*pj);
         if (const auto* pj = j.get("params"))
             for (const auto& [k, val] : pj->as_object()) i.params[k] = val.as_double();
@@ -780,6 +782,7 @@ json::Value Project::to_json() const
         if (t.printed_fx) o.set("printed_fx", true);
         if (!t.midi_output.empty()) o.set("midi_output", t.midi_output);
         if (t.record_source != "midi") o.set("record_source", t.record_source);
+        if (!t.sidechain.empty()) o.set("sidechain", t.sidechain);
         if (t.input_quantize > 0) o.set("input_quantize", t.input_quantize);
         if (!t.automation.empty()) o.set("automation", automation_to_json(t.automation));
         o.set("automation_mode", t.automation_mode);
@@ -867,7 +870,8 @@ json::Value Project::to_json() const
                                         {"strip", strip_to_json(b.strip)},
                                         {"color", b.color},
                                         {"automation", automation_to_json(b.automation)},
-                                        {"automation_mode", b.automation_mode}});
+                                        {"automation_mode", b.automation_mode},
+                                        {"sidechain", b.sidechain}});
     }
     root.set("buses", buses);
 
@@ -1030,6 +1034,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.printed_fx = j.get_bool("printed_fx", false);
         t.midi_output = j.get_string("midi_output", "");
         t.record_source = j.get_string("record_source", "midi") == "audio" ? "audio" : "midi";
+        t.sidechain = j.get_string("sidechain", "");
         t.input_quantize = std::max<Ticks>(0, j.get_int("input_quantize", 0));
         if (t.playback != "midi" && t.playback != "audio") t.playback = "both";
         if (t.monitor != "auto" && t.monitor != "input" && t.monitor != "off")
@@ -1148,6 +1153,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         if (auto e = automation_from_json(j.get("automation"), b.automation, unique); !e.empty())
             return fail("bus " + b.id + ": " + e);
         b.automation_mode = j.get_string("automation_mode", "read");
+        b.sidechain = j.get_string("sidechain", "");
         if (!valid_automation_mode(b.automation_mode))
             return fail("bus " + b.id + ": unknown automation mode '" + b.automation_mode + "'");
         d.buses.push_back(std::move(b));
