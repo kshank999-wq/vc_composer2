@@ -16,6 +16,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <map>
 
@@ -330,7 +331,11 @@ public:
     void handleMessageFromCoordinator(const juce::MemoryBlock& block) override
     {
         Message m;
-        if (!Message::decode(block, m)) return;
+        if (!Message::decode(block, m)) {
+            host_log("undecodable message (" + juce::String(static_cast<int>(block.getSize())) + " bytes)");
+            return;
+        }
+        if (++received_ <= 3) host_log("received " + m.command);
         // Plug-ins expect the message thread for everything but audio.
         juce::MessageManager::callAsync([this, m] { handle(m); });
     }
@@ -372,6 +377,7 @@ private:
 
     juce::AudioPluginFormatManager formats_;
     std::map<int, std::unique_ptr<Instance>> instances_;
+    std::atomic<int> received_{0};
 };
 
 }  // namespace
@@ -390,6 +396,8 @@ int main(int argc, char* argv[])
         return 1;
     }
     host_log("connected");
+    // Proof that this process's message loop runs (logged once).
+    juce::MessageManager::callAsync([] { host_log("message loop running"); });
     juce::MessageManager::getInstance()->runDispatchLoop();
     server.shut_down();
     return 0;

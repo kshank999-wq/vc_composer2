@@ -1062,15 +1062,17 @@ void ipc_wait_checks(const juce::File& dir)
               juce::String(std::max(0.0, worst), 3) + " ms)");
     // And the other way, as the plug-in side signals a finished block.
     const std::uint32_t done = plugin.get()->done.load();
+    std::chrono::steady_clock::time_point sent;
     std::thread signaller([&] {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        sent = std::chrono::steady_clock::now();
         plugin.get()->done.store(done + 1, std::memory_order_release);
         plugin.wake(ipc::Word::done);
     });
-    const auto t0 = std::chrono::steady_clock::now();
     const bool changed = host.wait(ipc::Word::done, done, 1000.0);
-    const double back = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    const auto woke = std::chrono::steady_clock::now();
     signaller.join();
+    const double back = std::chrono::duration<double, std::milli>(woke - sent).count();
     check(changed && back < 25.0, "the finished-block signal wakes the host side too (" + juce::String(back, 2) + " ms)");
     file.deleteFile();
 }

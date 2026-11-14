@@ -1,6 +1,7 @@
 #include "audio/RemotePlugin.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 namespace vcc::desktop {
@@ -76,6 +77,10 @@ void HostProcess::received(const juce::MemoryBlock& block)
 void HostProcess::lost()
 {
     crashed_ = true;
+    if (const char* path = std::getenv("VCC_PLUGIN_HOST_LOG"); path != nullptr && *path != 0)
+        juce::File(juce::String::fromUTF8(path))
+            .appendText(juce::Time::getCurrentTime().toString(false, true, true, true) + " [app] lost the host for " + label_ +
+                        "\n");
     std::lock_guard<std::mutex> lock(pending_lock_);
     if (reason_.isEmpty()) reason_ = "its process exited or lost the connection";
     for (auto& [id, p] : pending_) p->done.signal();
