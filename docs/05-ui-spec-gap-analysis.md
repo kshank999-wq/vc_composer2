@@ -748,3 +748,23 @@ macOS, Linux and Windows. What it took:
       the playhead). Screenshot `drag-drop`.
     - Not yet: dropping a MusicXML file into the score, or a project file
       to open it; dragging clips out to the desktop.
+
+14. **MIDI take comping. Done.**
+    - MIDI takes now show as take lanes under their instrument track (a
+      region with a mini roll of its notes), opened and closed with the
+      **TAKES** key beside MIDI / AUDIO / BOTH in the track header (lit
+      while open). The main row and the piano roll show only the
+      main-lane regions: what plays.
+    - **Swipe comping:** dragging across part of a MIDI take (the I-beam
+      pointer; snapped to the grid, Cmd/Ctrl for free) makes the notes that
+      start in that range, and its controllers there, the main lane's: the
+      main lane's own notes starting there go ("Comp take"). They join the
+      main-lane region the range starts in, or a new region of whole bars.
+    - **Double-click** a MIDI take, or **Promote take** in its right-click
+      menu, swaps it onto the main lane whole; **Comp all of it** keeps the
+      main lane's regions and replaces only what the take covers.
+    - Session: `comp_region_take`, `promote_region_take` (unit-tested).
+    - **Checks.** Two recorded takes; the TAKES key; a mouse drag across
+      part of the take comps those notes in and keeps the rest; a
+      double-click promotes it; only the main lane renders. Screenshot
+      `midi-comp`.

@@ -1712,6 +1712,10 @@ private:
             session.update_track_mix(id, "Monitor " + id, [mode](project::Track& t) { t.monitor = mode; });
             return true;
         }
+        if (p.takes.contains(pt)) {
+            toggle_takes(id);
+            return true;
+        }
         const char* values[] = {"midi", "audio", "both"};
         for (std::size_t i = 0; i < 3; ++i)
             if (p.source[i].contains(pt)) {
@@ -1979,6 +1983,7 @@ private:
     /// for a track's base row.
     struct HeaderParts {
         juce::Rectangle<int> chevron, tag, number, name, rec, solo, mute, input, volume, resize;
+        juce::Rectangle<int> takes;  ///< An instrument track with MIDI or audio takes: show or hide them.
         std::array<juce::Rectangle<int>, 3> source;  ///< MIDI, Audio, Both.
         // Expanded only.
         juce::Rectangle<int> route, inserts, print, freeze, roll, score;
@@ -1999,8 +2004,10 @@ private:
             p.input = {101, y + 30, 22, 18};
             p.volume = {kHeader - 66, y + 30, 56, 18};
         }
-        if (m_.has_audio_lane(l))
+        if (m_.has_audio_lane(l)) {
             for (int i = 0; i < 3; ++i) p.source[static_cast<std::size_t>(i)] = {26 + i * 40, y + kHeaderTop, 38, 16};
+            if (!l.takes.empty()) p.takes = {148, y + kHeaderTop, kHeader - 156, 16};
+        }
         if (m_.is_expanded(l) && row.getHeight() >= kHeaderTop + 120) {
             p.route = {10, y + 76, kRollInset - 16, 18};
             p.inserts = {10, y + 100, kRollInset - 16, 14};
@@ -2093,6 +2100,9 @@ private:
             const char* names[] = {"MIDI", "Audio", "Both"};
             const char* values[] = {"midi", "audio", "both"};
             for (std::size_t i = 0; i < 3; ++i) key(g, p.source[i], names[i], l.playback == values[i]);
+            if (!p.takes.isEmpty())
+                key(g, p.takes, juce::String(static_cast<int>(l.takes.size())) + (l.takes.size() == 1 ? " take" : " takes"),
+                    m_.show_takes.count(l.id) > 0);
         } else if (!l.takes.empty()) {
             const bool open = m_.show_takes.count(l.id) > 0;
             auto d = disclosure_rect(row);

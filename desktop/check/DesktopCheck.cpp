@@ -3267,6 +3267,85 @@ void drag_drop_checks(MainWindow& window, const juce::File& dir)
           "audio dropped on the window lands on a new audio track at the playhead");
 }
 
+/// MIDI take comping in the sequencer: the TAKES key in an instrument
+/// track's header opens its take lanes; a drag across part of a MIDI take
+/// comps those notes onto the main lane; a double-click promotes the take.
+void midi_comp_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto& d = session.data();
+    const Ticks Q = kTicksPerQuarter;
+    const auto keys = session.add_track("Keys", "keys.piano");
+    project::MidiRegion take1, take2;
+    take1.start = take2.start = 0;
+    take1.end = take2.end = d.meter.bar_start(3);
+    for (int i = 0; i < 8; ++i) {
+        take1.notes.push_back({i * Q, Q / 2, 60, 80, 0, {}});
+        take2.notes.push_back({i * Q, Q / 2, 72, 90, 0, {}});
+    }
+    take1.source = take2.source = "recorded";
+    session.add_recorded_regions({{keys, take1}}, "Record MIDI");
+    session.add_recorded_regions({{keys, take2}}, "Record MIDI");  // take 1 now on lane 1
+    main.show_workspace(MainComponent::Workspace::Producer);
+    auto& seq = main.sequencer();
+    seq.set_expanded_track({});  // a plain row: header at the top
+    session.select_track(keys);
+    seq.set_expanded_track({});
+    pump(150);
+    auto* lanes = find_by_id(main, "sequencer_lanes");
+    if (!lanes) {
+        check(false, "the sequencer's lanes are there");
+        return;
+    }
+    // The TAKES key, in the header's third row (beside MIDI / AUDIO / BOTH).
+    const juce::Point<float> takes_key(180.0f, 60.0f);
+    lanes->mouseDown(mouse_event(*lanes, takes_key, takes_key, false));
+    lanes->mouseUp(mouse_event(*lanes, takes_key, takes_key, false));
+    pump(100);
+    juce::Rectangle<int> take_area;
+    for (int y = 0; y < lanes->getHeight(); y += 3)
+        for (int x = 230; x < lanes->getWidth() - 20; x += 3) {
+            const juce::Point<float> p(static_cast<float>(x), static_cast<float>(y));
+            lanes->mouseMove(mouse_event(*lanes, p, p, false));
+            if (lanes->getMouseCursor() == juce::MouseCursor::IBeamCursor)
+                take_area = take_area.isEmpty() ? juce::Rectangle<int>(x, y, 1, 1) : take_area.getUnion({x, y, 1, 1});
+        }
+    check(!take_area.isEmpty(), "the TAKES key opens the instrument track's take lanes, showing the MIDI take");
+    if (take_area.isEmpty()) return;
+
+    // Drag across the take's second quarter (of its width): those notes are comped in.
+    const float y = static_cast<float>(take_area.getCentreY());
+    const float x0 = static_cast<float>(take_area.getX() + take_area.getWidth() / 4);
+    const float x1 = static_cast<float>(take_area.getX() + take_area.getWidth() / 2);
+    drag(*lanes, {x0, y}, {x1, y});
+    int from_take = 0, kept = 0;
+    for (const auto& r : d.find_track(keys)->active_version()->regions)
+        if (r.lane == 0)
+            for (const auto& n : r.notes) (n.pitch == 60 ? from_take : kept)++;
+    check(session.undo_label() == "Comp take" && from_take >= 1 && from_take < 8 && from_take + kept == 8,
+          "a drag across part of a MIDI take comps those notes onto the main lane (" + juce::String(from_take) +
+              " from the take, " + juce::String(kept) + " kept)");
+    shoot(main, dir, "midi-comp");
+
+    // Double-click: the whole take onto the main lane.
+    const juce::Point<float> p(x0, y);
+    lanes->mouseDoubleClick(mouse_event(*lanes, p, p, false));
+    pump(50);
+    int sixties = 0;
+    for (const auto& r : d.find_track(keys)->active_version()->regions)
+        if (r.lane == 0)
+            for (const auto& n : r.notes) sixties += n.pitch == 60 ? 1 : 0;
+    check(session.undo_label() == "Promote take" && sixties == 8, "double-clicking a MIDI take promotes it whole");
+    // Only the main lane plays.
+    int played60 = 0, played72 = 0;
+    for (const auto& n : project::render_track(*d.find_track(keys)).notes) (n.pitch == 60 ? played60 : played72)++;
+    check(played60 == 8 && played72 == 0, "only the main lane's MIDI plays");
+}
+
 void realtime_print_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -4295,6 +4374,7 @@ int main(int argc, char** argv)
         clip_editing_checks(window, dir);
         midi_tools_checks(window, dir);
         drag_drop_checks(window, dir);
+        midi_comp_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);
