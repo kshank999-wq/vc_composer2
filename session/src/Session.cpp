@@ -1258,6 +1258,126 @@ bool Session::remove_audio_clip(const std::string& track_id, const std::string& 
     }));
 }
 
+std::vector<std::string> Session::split_audio_clips(const std::vector<std::string>& track_ids, double at)
+{
+    std::vector<std::string> ids;
+    const bool ok = edit("Split clip", [&](project::ProjectData& d) {
+        bool any = false;
+        for (const auto& id : track_ids) {
+            project::Track* t = d.find_track(id);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
+            if (!v) continue;
+            std::vector<project::AudioClip> rights;
+            for (auto& c : v->audio_clips) {
+                // Never a sliver: at least 5 ms each side.
+                if (at <= c.start_seconds + 0.005 || at >= c.end_seconds() - 0.005) continue;
+                project::AudioClip right = c;
+                right.id = project_.ids().next("clip");
+                right.start_seconds = at;
+                right.source_offset = c.source_offset + (at - c.start_seconds);
+                right.length = c.end_seconds() - at;
+                right.fade_in = 0.0;
+                right.fade_out = std::min(c.fade_out, right.length);
+                c.length = at - c.start_seconds;
+                c.fade_out = 0.0;
+                c.fade_in = std::min(c.fade_in, c.length);
+                ids.push_back(right.id);
+                rights.push_back(std::move(right));
+            }
+            for (auto& r : rights) v->audio_clips.push_back(std::move(r));
+            std::stable_sort(v->audio_clips.begin(), v->audio_clips.end(),
+                             [](const project::AudioClip& a, const project::AudioClip& b) {
+                                 return a.lane != b.lane ? a.lane < b.lane : a.start_seconds < b.start_seconds;
+                             });
+            any = any || !rights.empty();
+        }
+        return any;
+    });
+    if (!ok) ids.clear();
+    return ids;
+}
+
+bool Session::crossfade_audio_clips(const std::string& track_id, const std::string& first_id,
+                                    const std::string& second_id, double seconds)
+{
+    if (seconds <= 0.0) return false;
+    return edit("Crossfade", on_track(track_id, [&](project::Track& t) {
+        project::TrackVersion* v = t.active_version();
+        if (!v) return false;
+        project::AudioClip *a = nullptr, *b = nullptr;
+        for (auto& c : v->audio_clips) {
+            if (c.id == first_id) a = &c;
+            if (c.id == second_id) b = &c;
+        }
+        if (!a || !b || a == b || a->lane != b->lane) return false;
+        if (b->start_seconds < a->start_seconds) std::swap(a, b);
+        const double overlap = a->end_seconds() - b->start_seconds;
+        if (overlap < -1e-6 || b->end_seconds() <= a->end_seconds()) return false;  // apart, or b inside a
+        double fade = overlap;
+        if (overlap < seconds) {
+            // Only meeting (or barely overlapping): the second starts earlier,
+            // into the audio its file has before the clip.
+            const double extra = std::min(seconds - overlap, b->source_offset);
+            b->start_seconds -= extra;
+            b->source_offset -= extra;
+            b->length += extra;
+            fade = overlap + extra;
+        }
+        fade = std::min({fade, a->length, b->length});
+        if (fade < 0.001) return false;
+        a->fade_out = fade;
+        b->fade_in = fade;
+        a->fade_in = std::min(a->fade_in, a->length - fade);
+        b->fade_out = std::min(b->fade_out, b->length - fade);
+        return true;
+    }));
+}
+
+bool Session::nudge_audio_clips(const std::string& track_id, const std::vector<std::string>& clip_ids, double seconds)
+{
+    if (clip_ids.empty() || seconds == 0.0) return false;
+    return project_.edit_coalescing("Nudge clip", on_track(track_id, [&](project::Track& t) {
+        project::TrackVersion* v = t.active_version();
+        if (!v) return false;
+        // The group moves together; it stops at zero.
+        double earliest = 1e300;
+        for (const auto& c : v->audio_clips)
+            if (std::find(clip_ids.begin(), clip_ids.end(), c.id) != clip_ids.end()) earliest = std::min(earliest, c.start_seconds);
+        if (earliest == 1e300) return false;
+        const double by = std::max(seconds, -earliest);
+        if (std::abs(by) < 1e-9) return false;
+        for (auto& c : v->audio_clips)
+            if (std::find(clip_ids.begin(), clip_ids.end(), c.id) != clip_ids.end()) c.start_seconds += by;
+        return true;
+    })) && (document_changed(), true);
+}
+
+std::string Session::replace_audio_clips(const std::string& track_id, const std::vector<std::string>& clip_ids,
+                                         project::AudioClip replacement, const std::string& label)
+{
+    if (clip_ids.empty() || replacement.file.empty() || replacement.length <= 0.0) return {};
+    const std::string id = project_.ids().next("clip");
+    const bool ok = edit(label, on_track(track_id, [&](project::Track& t) {
+        project::TrackVersion* v = t.active_version();
+        if (!v) return false;
+        const auto before = v->audio_clips.size();
+        v->audio_clips.erase(std::remove_if(v->audio_clips.begin(), v->audio_clips.end(),
+                                            [&](const project::AudioClip& c) {
+                                                return std::find(clip_ids.begin(), clip_ids.end(), c.id) != clip_ids.end();
+                                            }),
+                             v->audio_clips.end());
+        if (v->audio_clips.size() == before) return false;
+        replacement.id = id;
+        v->audio_clips.push_back(replacement);
+        std::stable_sort(v->audio_clips.begin(), v->audio_clips.end(),
+                         [](const project::AudioClip& a, const project::AudioClip& b) {
+                             return a.lane != b.lane ? a.lane < b.lane : a.start_seconds < b.start_seconds;
+                         });
+        return true;
+    }));
+    return ok ? id : std::string();
+}
+
 std::string Session::audio_folder() const
 {
     if (path_.empty()) return {};

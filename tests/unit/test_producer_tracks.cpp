@@ -179,3 +179,73 @@ TEST_CASE("recorded MIDI lands as a region, earlier takes moving to take lanes; 
     const auto a = s.add_audio_track("Vox", false);
     CHECK(!s.set_record_source(a, "midi"));
 }
+
+TEST_CASE("clip editing: split, crossfade, nudge and replace, each one undo step")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto a = s.add_audio_track("Gtr", false);
+    project::AudioClip c;
+    c.file = "Audio Files/gtr.wav";
+    c.length = 8.0;
+    c.fade_in = 0.5;
+    c.fade_out = 1.0;
+    c.channels = 1;
+    c.file_sample_rate = 48000.0;
+    const auto ids = s.add_audio_clips({{a, c}}, "Record");
+    REQUIRE(ids.size() == 1);
+    auto clips = [&] { return s.data().find_track(a)->active_version()->audio_clips; };
+
+    // Split at 3 s: [0,3) keeps the fade in, [3,8) the fade out, reading on from 3 s.
+    const auto right = s.split_audio_clips({a}, 3.0);
+    REQUIRE(right.size() == 1);
+    CHECK(s.undo_label() == "Split clip");
+    auto v = clips();
+    REQUIRE(v.size() == 2);
+    CHECK(v[0].id == ids[0]);
+    CHECK(std::abs(v[0].length - 3.0) < 1e-9);
+    CHECK(std::abs(v[0].fade_in - 0.5) < 1e-9);
+    CHECK(v[0].fade_out == 0.0);
+    CHECK(v[1].id == right[0]);
+    CHECK(std::abs(v[1].start_seconds - 3.0) < 1e-9);
+    CHECK(std::abs(v[1].source_offset - 3.0) < 1e-9);
+    CHECK(std::abs(v[1].length - 5.0) < 1e-9);
+    CHECK(v[1].fade_in == 0.0);
+    CHECK(std::abs(v[1].fade_out - 1.0) < 1e-9);
+    CHECK(s.split_audio_clips({a}, 3.002).empty());  // never a sliver
+
+    // Crossfade where they meet: the right one starts 20 ms earlier into its file.
+    CHECK(s.crossfade_audio_clips(a, ids[0], right[0], 0.02));
+    CHECK(s.undo_label() == "Crossfade");
+    v = clips();
+    CHECK(std::abs(v[1].start_seconds - 2.98) < 1e-9);
+    CHECK(std::abs(v[1].source_offset - 2.98) < 1e-9);
+    CHECK(std::abs(v[0].fade_out - 0.02) < 1e-9);
+    CHECK(std::abs(v[1].fade_in - 0.02) < 1e-9);
+    // A clip with no audio before it cannot reach back.
+    s.undo();
+    s.update_audio_clip(a, right[0], "t", [](project::AudioClip& x) { x.source_offset = 0.0; });
+    CHECK(!s.crossfade_audio_clips(a, ids[0], right[0], 0.02));
+
+    // Nudge: both move; never before zero.
+    CHECK(s.nudge_audio_clips(a, {ids[0], right[0]}, 0.25));
+    CHECK(s.undo_label() == "Nudge clip");
+    v = clips();
+    CHECK(std::abs(v[0].start_seconds - 0.25) < 1e-9);
+    CHECK(std::abs(v[1].start_seconds - 3.25) < 1e-9);
+    CHECK(s.nudge_audio_clips(a, {ids[0]}, -1.0));
+    CHECK(clips()[0].start_seconds == 0.0);
+
+    // Replace (consolidate): two clips become one.
+    project::AudioClip whole = c;
+    whole.file = "Audio Files/gtr_CONSOL_01.wav";
+    whole.fade_in = whole.fade_out = 0.0;
+    const auto merged = s.replace_audio_clips(a, {ids[0], right[0]}, whole, "Consolidate");
+    CHECK(!merged.empty());
+    CHECK(s.undo_label() == "Consolidate");
+    v = clips();
+    REQUIRE(v.size() == 1);
+    CHECK(v[0].id == merged);
+    s.undo();
+    CHECK(clips().size() == 2);
+}

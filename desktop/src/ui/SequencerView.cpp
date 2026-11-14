@@ -7,6 +7,7 @@
 #include <optional>
 #include <set>
 
+#include "audio/Consolidate.h"
 #include "ui/AudioTrackStyle.h"
 #include "ui/AutomationLaneView.h"
 #include "ui/Theme.h"
@@ -1323,7 +1324,96 @@ public:
             select_clip({}, {});
             return true;
         }
+        const auto mods = key.getModifiers();
+        // Cmd/Ctrl+T: split at the playhead.
+        if (mods.isCommandDown() && (key.getKeyCode() == 'T' || key.getKeyCode() == 't')) {
+            split_at_playhead();
+            return true;
+        }
+        // Alt+Left/Right: nudge 10 ms; with Shift, a grid step.
+        if (mods.isAltDown() && (key.getKeyCode() == juce::KeyPress::leftKey || key.getKeyCode() == juce::KeyPress::rightKey)) {
+            const double sign = key.getKeyCode() == juce::KeyPress::leftKey ? -1.0 : 1.0;
+            nudge_selected(sign * (mods.isShiftDown() ? grid_seconds() : kNudge));
+            return true;
+        }
         return false;
+    }
+
+    // --- Clip editing (the clip menu, keys, and SequencerView's entry points) -------------
+
+    static constexpr double kNudge = 0.010;  ///< Alt+arrow: 10 ms.
+
+    /// The selected clip's track, split where the playhead is (every lane).
+    bool split_at_playhead()
+    {
+        if (m_.clip_track.empty()) return false;
+        const double at = m_.tempo.seconds_at(m_.playhead);
+        const auto ids = m_.ctx.session.split_audio_clips({m_.clip_track}, at);
+        if (ids.empty()) {
+            m_.ctx.status("The playhead is not inside a clip on this track");
+            return false;
+        }
+        m_.ctx.status("Split " + juce::String(static_cast<int>(ids.size())) + (ids.size() == 1 ? " clip" : " clips") +
+                      " at the playhead");
+        return true;
+    }
+
+    /// The clip after the selected one on its lane that touches or overlaps it.
+    std::string next_clip() const
+    {
+        const auto* sel = m_.clip(m_.clip_track, m_.clip_id);
+        const auto* t = m_.ctx.session.data().find_track(m_.clip_track);
+        if (!sel || !t || !t->active_version()) return {};
+        std::string best;
+        double best_start = 1e300;
+        for (const auto& c : t->active_version()->audio_clips)
+            if (c.id != sel->id && c.lane == sel->lane && c.start_seconds > sel->start_seconds &&
+                c.start_seconds <= sel->end_seconds() + 0.001 && c.start_seconds < best_start) {
+                best = c.id;
+                best_start = c.start_seconds;
+            }
+        return best;
+    }
+
+    bool crossfade_selected(double seconds)
+    {
+        const std::string next = next_clip();
+        if (next.empty()) {
+            m_.ctx.status("Crossfade: no clip meets this one's end on its lane");
+            return false;
+        }
+        if (!m_.ctx.session.crossfade_audio_clips(m_.clip_track, m_.clip_id, next, seconds)) {
+            m_.ctx.status("Crossfade: the next clip has no audio before its start to fade in from");
+            return false;
+        }
+        m_.ctx.status("Crossfade " + juce::String(juce::roundToInt(seconds * 1000.0)) + " ms");
+        return true;
+    }
+
+    bool consolidate_selected()
+    {
+        if (m_.clip_track.empty()) return false;
+        const auto ids = touching_clips(m_.ctx, m_.clip_track, m_.clip_id);
+        const auto r = consolidate_clips(m_.ctx, m_.clip_track, ids);
+        m_.ctx.status(r.message);
+        if (r.ok) select_clip(m_.clip_track, r.clip_id);
+        return r.ok;
+    }
+
+    bool nudge_selected(double seconds)
+    {
+        if (m_.clip_track.empty()) return false;
+        const bool ok = m_.ctx.session.nudge_audio_clips(m_.clip_track, {m_.clip_id}, seconds);
+        if (ok) m_.ctx.status("Nudge " + juce::String(seconds * 1000.0, 1) + " ms");
+        return ok;
+    }
+
+    /// One step of the clip grid, in seconds at the selected clip.
+    double grid_seconds() const
+    {
+        const auto* sel = m_.clip(m_.clip_track, m_.clip_id);
+        const Ticks at = sel ? m_.tempo.tick_at_seconds(sel->start_seconds) : m_.playhead;
+        return m_.tempo.seconds_at(at + m_.clip_grid()) - m_.tempo.seconds_at(at);
     }
 
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
@@ -1626,6 +1716,29 @@ private:
         gain.addSeparator();
         gain.addItem("Drag the dB box on the clip to fine-tune", false, false, [] {});
         menu.addSubMenu("Clip gain (" + db_text(c.gain_db) + ")", gain);
+        menu.addSeparator();
+        const double playhead = m_.tempo.seconds_at(m_.playhead);
+        {
+            juce::PopupMenu::Item split("Split at playhead");
+            split.setEnabled(playhead > c.start_seconds + 0.005 && playhead < c.end_seconds() - 0.005)
+                .setAction([this] { split_at_playhead(); });
+            split.shortcutKeyDescription = juce::KeyPress('t', juce::ModifierKeys::commandModifier, 0).getTextDescriptionWithIcons();
+            menu.addItem(std::move(split));
+        }
+        juce::PopupMenu fades;
+        for (int ms : {10, 20, 50, 100, 250})
+            fades.addItem(juce::String(ms) + " ms", [this, ms] { crossfade_selected(ms / 1000.0); });
+        menu.addSubMenu("Crossfade with the next clip", fades, !next_clip().empty());
+        const auto chain = touching_clips(m_.ctx, track, id);
+        menu.addItem("Consolidate " + juce::String(static_cast<int>(chain.size())) + " touching clips", chain.size() > 1, false,
+                     [this] { consolidate_selected(); });
+        juce::PopupMenu nudge;
+        nudge.addItem("Earlier 10 ms (Alt+Left)", [this] { nudge_selected(-kNudge); });
+        nudge.addItem("Later 10 ms (Alt+Right)", [this] { nudge_selected(kNudge); });
+        nudge.addItem("Earlier one grid step (Alt+Shift+Left)", [this] { nudge_selected(-grid_seconds()); });
+        nudge.addItem("Later one grid step (Alt+Shift+Right)", [this] { nudge_selected(grid_seconds()); });
+        menu.addSubMenu("Nudge", nudge);
+        menu.addSeparator();
         menu.addItem("Remove fades", c.fade_in > 0.0 || c.fade_out > 0.0, false, [this, track, id] {
             m_.ctx.session.update_audio_clip(track, id, unique_label("Remove fades"), [](project::AudioClip& x) {
                 x.fade_in = 0.0;
@@ -3993,6 +4106,11 @@ bool SequencerView::promote_take(session::Session& session, const std::string& t
 {
     return LaneArea::promote_take(session, track_id, clip_id);
 }
+
+bool SequencerView::split_at_playhead() { return impl_->lanes.split_at_playhead(); }
+bool SequencerView::crossfade_selected(double seconds) { return impl_->lanes.crossfade_selected(seconds); }
+bool SequencerView::consolidate_selected() { return impl_->lanes.consolidate_selected(); }
+bool SequencerView::nudge_selected(double seconds) { return impl_->lanes.nudge_selected(seconds); }
 
 void SequencerView::show_take_lanes(const std::string& track_id, bool show)
 {

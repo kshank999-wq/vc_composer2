@@ -2858,6 +2858,115 @@ void recording_workflow_checks(MainWindow& window, const juce::File& dir)
     engine.on_recording_finished = previous;
 }
 
+/// Clip editing in the sequencer: split at the playhead (Cmd/Ctrl+T),
+/// crossfade, nudge (Alt+arrows), consolidate into one file, undo.
+void clip_editing_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto project_dir = dir.getChildFile("clip-edit-check");
+    project_dir.deleteRecursively();
+    project_dir.getChildFile("Audio Files").createDirectory();
+    std::string error;
+    session.save_as(project_dir.getChildFile("clips.vcc2").getFullPathName().toStdString(), &error);
+    // A 4 s, 440 Hz mono tone at 48 kHz.
+    const auto tone = project_dir.getChildFile("Audio Files").getChildFile("tone.wav");
+    auto sine = [](std::int64_t i) { return 0.5f * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * 440.0 * i / 48000.0)); };
+    {
+        juce::AudioBuffer<float> b(1, 4 * 48000);
+        for (int i = 0; i < b.getNumSamples(); ++i) b.setSample(0, i, sine(i));
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(tone);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(24));
+        if (writer) writer->writeFromAudioSampleBuffer(b, 0, b.getNumSamples());
+    }
+    const auto track = session.add_audio_track("Gtr", false);
+    project::AudioClip clip;
+    clip.name = "tone";
+    clip.file = "Audio Files/tone.wav";
+    clip.length = 4.0;
+    clip.channels = 1;
+    clip.file_sample_rate = 48000.0;
+    const auto first = session.add_audio_clips({{track, clip}}, "Import");
+    if (first.size() != 1) {
+        check(false, "the clip-editing check's clip is placed");
+        return;
+    }
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(100);
+    auto& seq = main.sequencer();
+    auto clips = [&] {
+        std::vector<project::AudioClip> out = session.data().find_track(track)->active_version()->audio_clips;
+        std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.start_seconds < b.start_seconds; });
+        return out;
+    };
+    const auto& tempo = session.data().tempo;
+
+    // Split at the playhead (1.5 s), then Cmd/Ctrl+T at 3 s.
+    seq.select_clip(track, first[0]);
+    seq.set_playhead(tempo.tick_at_seconds(1.5), false);
+    const bool split = seq.split_at_playhead();
+    auto v = clips();
+    check(split && v.size() == 2 && session.undo_label() == "Split clip" && std::abs(v[1].start_seconds - 1.5) < 0.001 &&
+              std::abs(v[1].source_offset - 1.5) < 0.001,
+          "Split at playhead cuts the clip in two, the right part reading on from the cut");
+    seq.set_playhead(tempo.tick_at_seconds(3.0), false);
+    seq.select_clip(track, v[1].id);
+    auto* lanes = find_by_id(main, "sequencer_lanes");
+    if (lanes) lanes->keyPressed(juce::KeyPress('t', juce::ModifierKeys::commandModifier, 't'));
+    v = clips();
+    check(v.size() == 3, "Cmd/Ctrl+T splits at the playhead");
+
+    // Crossfade the first two: the second reaches 20 ms back into its file.
+    seq.select_clip(track, v[0].id);
+    const bool faded = seq.crossfade_selected(0.02);
+    v = clips();
+    check(faded && session.undo_label() == "Crossfade" && std::abs(v[1].start_seconds - 1.48) < 0.001 &&
+              std::abs(v[0].fade_out - 0.02) < 0.001 && std::abs(v[1].fade_in - 0.02) < 0.001,
+          "a crossfade overlaps the two clips by 20 ms, fading across");
+
+    // Nudge: Alt+Right moves the selected clip 10 ms later; undo puts it back.
+    seq.select_clip(track, v[2].id);
+    if (lanes) lanes->keyPressed(juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::altModifier, 0));
+    const double nudged = clips()[2].start_seconds;
+    check(std::abs(nudged - 3.01) < 0.0005 && session.undo_label() == "Nudge clip",
+          "Alt+Right nudges the clip 10 ms (" + juce::String(nudged, 4) + " s)");
+    session.undo();
+    shoot(main, dir, "clip-editing");
+
+    // Consolidate: the three become one file that sounds the same.
+    seq.select_clip(track, clips()[0].id);
+    const bool merged = seq.consolidate_selected();
+    v = clips();
+    check(merged && v.size() == 1 && session.undo_label() == "Consolidate" && std::abs(v[0].length - 4.0) < 0.001 &&
+              juce::String(v[0].file).startsWith("Audio Files/Gtr_CONSOL_"),
+          "Consolidate renders the touching clips into one new file (" + juce::String(v.empty() ? "" : v[0].file) + ")");
+    if (merged && v.size() == 1) {
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader(
+            formats.createReaderFor(juce::File(juce::String(session.resolve_audio_path(v[0].file)))));
+        float worst = 1.0f;
+        if (reader) {
+            juce::AudioBuffer<float> b(1, static_cast<int>(reader->lengthInSamples));
+            reader->read(&b, 0, b.getNumSamples(), 0, true, false);
+            worst = 0.0f;
+            // Away from the crossfade, sample for sample the original tone.
+            for (int i = 0; i < b.getNumSamples(); ++i) {
+                if (i > static_cast<int>(1.47 * 48000) && i < static_cast<int>(1.51 * 48000)) continue;
+                worst = std::max(worst, std::abs(b.getSample(0, i) - sine(i)));
+            }
+        }
+        check(reader && reader->bitsPerSample == 24 && worst < 1.0e-4f,
+              "the consolidated file is the clips' audio, sample for sample (worst error " + juce::String(worst, 6) + ")");
+    }
+    session.undo();
+    check(clips().size() == 3, "undo brings the clips back");
+}
+
 void realtime_print_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -3883,6 +3992,7 @@ int main(int argc, char** argv)
         follow_checks(window, dir);
         realtime_print_checks(window, dir);
         recording_workflow_checks(window, dir);
+        clip_editing_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

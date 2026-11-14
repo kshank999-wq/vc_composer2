@@ -256,6 +256,26 @@ public:
     bool update_audio_clip(const std::string& track_id, const std::string& clip_id, const std::string& label,
                            const std::function<void(project::AudioClip&)>& change);
     bool remove_audio_clip(const std::string& track_id, const std::string& clip_id);
+
+    // --- Clip editing (one undo step each) ---------------------------------------------
+    /// Splits the clips of these tracks that `at` (project seconds) falls
+    /// inside, every lane. Each left part keeps its id and fade in, each
+    /// right part its fade out. Returns the right parts' ids ("Split clip").
+    std::vector<std::string> split_audio_clips(const std::vector<std::string>& track_ids, double at);
+    /// A crossfade of `seconds` between two clips on one lane where the first
+    /// ends at or after the second starts: an overlap is faded across;
+    /// clips that only meet have the second one's start pulled earlier into
+    /// its file (as far as it has audio before its start, up to `seconds`)
+    /// so the two fade across each other ("Crossfade"). False when neither
+    /// is possible.
+    bool crossfade_audio_clips(const std::string& track_id, const std::string& first_id, const std::string& second_id,
+                               double seconds);
+    /// Moves clips by `seconds` (negative: earlier, never before 0) ("Nudge clip").
+    bool nudge_audio_clips(const std::string& track_id, const std::vector<std::string>& clip_ids, double seconds);
+    /// Replaces clips with one (a consolidated file, made by the caller) as
+    /// one step ("Consolidate"). Returns the new clip's id, empty on failure.
+    std::string replace_audio_clips(const std::string& track_id, const std::vector<std::string>& clip_ids,
+                                    project::AudioClip replacement, const std::string& label);
     /// Where recordings go: "<project folder>/Audio Files", or empty while the
     /// project is untitled (the app then uses a scratch folder).
     std::string audio_folder() const;

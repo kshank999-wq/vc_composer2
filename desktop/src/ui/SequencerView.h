@@ -60,6 +60,16 @@ public:
     /// take comps it onto the main lane, and a double-click promotes it).
     void show_take_lanes(const std::string& track_id, bool show);
 
+    // --- Clip editing on the selected clip (also its menu and keys) ----------------------
+    /// Splits the selected clip's track at the playhead (Cmd/Ctrl+T).
+    bool split_at_playhead();
+    /// Crossfades the selected clip into the clip that meets its end.
+    bool crossfade_selected(double seconds);
+    /// Renders the selected clip and the clips touching it into one file.
+    bool consolidate_selected();
+    /// Moves the selected clip (Alt+Left/Right: 10 ms; with Shift a grid step).
+    bool nudge_selected(double seconds);
+
     /// A track header's Print (freeze false) or Freeze (true) key.
     std::function<void(const std::string& track_id, bool freeze)> on_print_track;
 

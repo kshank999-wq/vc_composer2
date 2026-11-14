@@ -634,3 +634,32 @@ and the document model. The work is mostly presentation.
       - wait note;
       - a mouse-driven swipe comp and a double-click promote.
       Screenshots `recording-takes` and `recording-comp`.
+
+11. **Clip editing. Done** (audio clips in the Producer view's lanes).
+    - **Split at playhead** (Cmd/Ctrl+T, or the clip menu): cuts every
+      clip on the selected clip's track that the playhead is inside, all
+      lanes. The left part keeps the clip's id and fade in; the right part
+      reads on from the cut and keeps the fade out. No part under 5 ms.
+    - **Crossfade with the next clip** (clip menu: 10, 20, 50, 100 or
+      250 ms): where clips overlap, the fade covers the overlap; where they
+      only meet (after a split or a comp), the second clip starts earlier
+      into its own file, as far as its file has audio before it, and the
+      two fade across each other with the equal-power fades playback uses.
+    - **Nudge**: Alt+Left/Right moves the selected clip 10 ms, with Shift
+      one step of the grid; repeated nudges are one undo step. Never before
+      zero.
+    - **Consolidate** (clip menu): the selected clip and every clip on its
+      lane chained to it by touching or overlapping are rendered, with
+      their gain, fades and mutes and at the highest rate among them, into
+      a new 24-bit WAV "<Track>_CONSOL_NN.wav" in Audio Files, which
+      replaces them as one undo step. Source files are never changed.
+    - Session: `split_audio_clips`, `crossfade_audio_clips`,
+      `nudge_audio_clips`, `replace_audio_clips` (unit-tested);
+      `audio/Consolidate` renders.
+    - **Checks.** The desktop check splits a 440 Hz tone twice (the call
+      and Cmd+T), crossfades, nudges with Alt+Right, consolidates and reads
+      the new file back sample for sample against the tone, then undoes.
+      Screenshot `clip-editing`.
+    - Not yet: splitting MIDI regions, multi-clip selection (a range
+      selection that consolidates or nudges several clips at once), and
+      drawing crossfade curves across the overlap.
