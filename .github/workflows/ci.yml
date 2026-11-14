@@ -29,7 +29,7 @@ jobs:
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DVCC_WARNINGS_AS_ERRORS=${{ matrix.os == 'windows-latest' && 'OFF' || 'ON' }}
       - name: Build
-        run: cmake --build build --config RelWithDebInfo --parallel
+        run: cmake --build build --config RelWithDebInfo --parallel 4
       - name: Test
         run: ctest --test-dir build -C RelWithDebInfo --output-on-failure
 
@@ -40,7 +40,7 @@ jobs:
       - name: Configure (ASan + UBSan)
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DVCC_SANITIZE=address,undefined -DVCC_WARNINGS_AS_ERRORS=ON
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel 4
       - name: Test
         env:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
@@ -67,7 +67,9 @@ jobs:
       - name: Configure (fetches the pinned JUCE release)
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DVCC_BUILD_DESKTOP=ON
       - name: Build
-        run: cmake --build build --config Release --parallel
+        # A job count: a bare --parallel lets make start every JUCE unit at
+        # once, which ran the Linux runner out of memory and stalled macOS.
+        run: cmake --build build --config Release --parallel 3
       - name: Headless app check (Linux, virtual display)
         if: runner.os == 'Linux'
         run: xvfb-run -a -s "-screen 0 1600x1000x24" ctest --test-dir build -C Release -R desktop_check --output-on-failure
