@@ -29,6 +29,10 @@ struct AppContext {
     /// Opens an insert's window: a hosted effect's own editor, or the editor
     /// for a built-in processor. `owner_id` is a track or bus id.
     std::function<void(const std::string& owner_id, int slot)> show_insert_window;
+    /// Follow (docs/spec/ui, the edit window's title bar): while playing, the
+    /// views scroll with the playhead and the keyboard brings lit notes
+    /// into view. Remembered between sessions.
+    bool follow = true;
 };
 
 /// Application commands (menus, toolbar buttons and key bindings).
@@ -71,6 +75,7 @@ enum : juce::CommandID {
     reloadCrashedPlugins,
     showControlGallery = 0x1320,
     toggleView,
+    toggleFollow = 0x1330,
     zoomIn,
     zoomOut,
     showVideo = 0x1310,

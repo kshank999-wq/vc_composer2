@@ -437,7 +437,7 @@ void KeyboardDeck::refresh()
         if (context_.engine.live_held(n)) lit.set(static_cast<std::size_t>(n));
     keys_.set_lit(lit);
     // Follow: a newly lit note off-screen is eased into view.
-    if (lit != last_lit_ && lit.any()) {
+    if (context_.follow && lit != last_lit_ && lit.any()) {
         int lo = 128, hi = -1;
         for (int n = 0; n < 128; ++n)
             if (lit[static_cast<std::size_t>(n)]) {

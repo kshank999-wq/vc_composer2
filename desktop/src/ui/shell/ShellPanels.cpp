@@ -287,7 +287,16 @@ EditFrame::EditFrame(AppContext& context) : context_(context)
     stages_[0]->setTooltip("Compose: the Composer view");
     stages_[1]->setTooltip("Score: parts and full score (PDF, MusicXML)");
     stages_[2]->setTooltip("Mix: the Producer view and the mixer");
-    stages_[3]->setTooltip("Master: bounce the mix and stems");
+    stages_[3]->setTooltip("Master: loudness, the master chain and Export master");
+    // Follow: the views scroll with the playhead while it plays.
+    follow_.set_led_dot(true);
+    follow_.set_legend_size(11.0f);
+    follow_.setComponentID("edit_follow");
+    follow_.setTooltip("Follow (Cmd/Ctrl+Shift+F): the edit window scrolls with the playhead, and the keyboard with the notes "
+                       "that light up");
+    follow_.onClick = [this] { context_.commands.invokeDirectly(cmd::toggleFollow, true); };
+    follow_.setToggleState(context_.follow, juce::dontSendNotification);
+    addAndMakeVisible(follow_);
     listener_ = context_.session.add_listener([this](session::Change c) {
         if (c == session::Change::Document || c == session::Change::File) repaint();
     });
@@ -312,6 +321,8 @@ void EditFrame::set_stage(int stage)
         }
     }
 }
+
+void EditFrame::refresh_follow() { follow_.setToggleState(context_.follow, juce::dontSendNotification); }
 
 juce::Rectangle<int> EditFrame::content_area() const { return getLocalBounds().reduced(8, 6).withTrimmedTop(36); }
 
@@ -339,6 +350,8 @@ void EditFrame::resized()
         stages_[static_cast<std::size_t>(i)]->setBounds(x, 6, widths[i], 24);
         x += widths[i] + 14;
     }
+    // Follow sits at the right of the title bar.
+    follow_.setBounds(std::max(x, getWidth() - 14 - 86), 6, 86, 24);
 }
 
 // --- Markers -----------------------------------------------------------------------------------

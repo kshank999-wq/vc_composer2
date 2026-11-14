@@ -340,6 +340,9 @@ MainComponent::MainComponent(AppContext& context)
         context_.session.set_selection_range(r.first, r.second);
         if (punch_) set_punch(true);  // follow the new range, or turn off when it was cleared
     };
+    // Follow, as it was left.
+    context_.follow = hw::ui_settings().getBoolValue("follow", true);
+    edit_.refresh_follow();
     // The keyboard profile chosen last time.
     if (const auto saved = hw::ui_settings().getValue("shortcut_profile"); saved.isNotEmpty())
         use_shortcut_profile(saved.toStdString());
@@ -455,6 +458,16 @@ void MainComponent::resized()
     const auto content = edit_.getBounds().getIntersection(edit_.content_area() + edit_.getPosition());
     composer_.setBounds(content);
     sequencer_.setBounds(content);
+}
+
+void MainComponent::set_follow(bool on)
+{
+    context_.follow = on;
+    hw::ui_settings().setValue("follow", on);
+    hw::ui_settings().saveIfNeeded();
+    edit_.refresh_follow();
+    context_.commands.commandStatusChanged();
+    context_.status(on ? "Follow on: the edit window scrolls with the playhead" : "Follow off: the edit window stays where you put it");
 }
 
 void MainComponent::show_bottom_mixer(bool mixer)
@@ -1315,7 +1328,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportFullScorePdf, cmd::exportStems, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
                 cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::toggleLoop, cmd::addAudioTrack, cmd::importAudio,
                 cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
-                cmd::showControlGallery, cmd::toggleView, cmd::zoomIn, cmd::zoomOut,
+                cmd::showControlGallery, cmd::toggleView, cmd::toggleFollow, cmd::zoomIn, cmd::zoomOut,
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
@@ -1407,6 +1420,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.addDefaultKeypress(juce::KeyPress::tabKey, juce::ModifierKeys::ctrlModifier);
             info.addDefaultKeypress('`', juce::ModifierKeys::commandModifier);
             break;
+        case cmd::toggleFollow:
+            info.setInfo("Follow Playhead", "The edit window scrolls with the playhead while it plays", "View",
+                         context_.follow ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.addDefaultKeypress('f', cmdKey | shift);
+            break;
         case cmd::showVideo: info.setInfo("Picture", "", "View", 0); info.addDefaultKeypress('p', cmdKey | juce::ModifierKeys::altModifier); break;
         case cmd::showCueManager: info.setInfo("Cue Manager", "", "View", 0); info.addDefaultKeypress('u', cmdKey | juce::ModifierKeys::altModifier); break;
         case cmd::importPicture: info.setInfo("Import Picture...", "", "File", 0); info.addDefaultKeypress('i', cmdKey | shift); break;
@@ -1482,6 +1500,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::toggleView:
             show_workspace(workspace_ == Workspace::Composer ? Workspace::Producer : Workspace::Composer);
             break;
+        case cmd::toggleFollow: set_follow(!context_.follow); break;
         case cmd::zoomIn:
         case cmd::zoomOut:
             if (workspace_ == Workspace::Composer) composer_.zoom(info.commandID == cmd::zoomIn);
@@ -1568,6 +1587,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             for (auto id : {cmd::showComposer, cmd::showSequencer, cmd::toggleView, cmd::showMixer, cmd::showVideo,
                             cmd::showCueManager})
                 m.addCommandItem(c, id);
+            m.addSeparator();
+            m.addCommandItem(c, cmd::toggleFollow);
             m.addSeparator();
             m.addCommandItem(c, cmd::zoomIn);
             m.addCommandItem(c, cmd::zoomOut);

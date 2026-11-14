@@ -33,6 +33,8 @@ public:
     /// Pencil: dragging in an automation lane draws freehand (key P).
     bool pencil_mode() const;
     void set_pencil_mode(bool on);
+    /// The tick at the left edge of the timeline (the horizontal scroll).
+    double view_start() const;
     /// Zooms the timeline in or out about its middle (the toolbar's Zoom keys).
     void zoom(bool in);
     /// Opens Notate Region for a MIDI region of the selected track.

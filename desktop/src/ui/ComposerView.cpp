@@ -399,7 +399,7 @@ void ComposerView::set_playhead(Ticks tick, bool playing)
 {
     for (auto& s : strips_) s->view().set_playhead(tick, playing || tick > 0);
     ruler_->set_playhead(tick);
-    if (playing) {
+    if (playing && context_.follow) {
         const Ticks visible = visible_ticks();
         if (tick < origin_ || tick > origin_ + visible * 9 / 10) set_origin(tick - visible / 10);
     }

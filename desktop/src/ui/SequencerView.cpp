@@ -3839,7 +3839,7 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
         model.playing = playing;
         if (recording) lanes.repaint();
         lanes.automation_playhead();
-        if (playing) {
+        if (playing && model.ctx.follow) {
             const double x = model.x_of(static_cast<double>(tick));
             const double right = kHeader + model.timeline_width;
             if (x > right - 24 || x < kHeader) {
@@ -3961,6 +3961,8 @@ void SequencerView::select_clip(const std::string& track_id, const std::string& 
 }
 
 std::string SequencerView::expanded_track() const { return impl_->model.expanded; }
+
+double SequencerView::view_start() const { return impl_->model.view_start; }
 
 void SequencerView::set_expanded_track(const std::string& track_id)
 {

@@ -2458,6 +2458,63 @@ void master_checks(MainWindow& window, const juce::File& dir)
     shoot(main, dir, "35-master");
 }
 
+/// Follow (the edit window's title bar): views scroll with the playhead only while it is on.
+void follow_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.horror.psychological");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(150);
+    auto& composer = main.composer();
+    auto& key = main.edit_frame().follow_key();
+    const Ticks far = 24 * 4 * kTicksPerQuarter;  // bar 25
+    check(ctx.follow && key.getToggleState() && key.isShowing(), "Follow is on by default, lit in the title bar");
+
+    // Off: playing past the edge leaves the view where it is.
+    key.setToggleState(false, juce::dontSendNotification);
+    ctx.commands.invokeDirectly(cmd::toggleFollow, false);
+    pump(50);
+    composer.set_origin(0);
+    composer.set_playhead(far, true);
+    pump(30);
+    check(!ctx.follow && !key.getToggleState() && composer.origin() == 0 && !hw::ui_settings().getBoolValue("follow", true),
+          "with Follow off the Composer view stays put as the playhead runs on (and it is remembered)");
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(100);
+    auto& seq = main.sequencer();
+    seq.set_playhead(0, false);
+    const double start = seq.view_start();
+    seq.set_playhead(far, true);
+    pump(30);
+    shoot(main, dir, "36-follow-off");
+    check(std::abs(seq.view_start() - start) < 1e-6, "with Follow off the Producer view stays put too");
+
+    // On: both views keep the playhead in sight.
+    ctx.commands.invokeDirectly(cmd::toggleFollow, false);
+    pump(50);
+    check(ctx.follow && key.getToggleState() && hw::ui_settings().getBoolValue("follow", false),
+          "View > Follow Playhead (Cmd/Ctrl+Shift+F) turns it back on and lights the key");
+    seq.set_playhead(far + kTicksPerQuarter, true);
+    pump(30);
+    check(seq.view_start() > start + 1.0 && seq.view_start() <= static_cast<double>(far + kTicksPerQuarter),
+          "with Follow on the Producer view scrolls to the playhead");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(100);
+    composer.set_origin(0);
+    composer.set_playhead(far, true);
+    pump(30);
+    check(composer.origin() > 0 && composer.origin() <= far, "with Follow on the Composer view scrolls to the playhead");
+    auto* keys = ctx.commands.getKeyMappings();
+    check(keys->containsMapping(cmd::toggleFollow, juce::KeyPress('f', juce::ModifierKeys::commandModifier |
+                                                                            juce::ModifierKeys::shiftModifier, 0)),
+          "Cmd/Ctrl+Shift+F toggles Follow");
+    ctx.engine.stop();
+    ctx.engine.locate(0);
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -3280,6 +3337,7 @@ int main(int argc, char** argv)
         print_checks(window, dir);
         mix_checks(window, dir);
         master_checks(window, dir);
+        follow_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

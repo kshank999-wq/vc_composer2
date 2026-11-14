@@ -77,6 +77,8 @@ public:
     shell::MixerDeck& mixer_deck() noexcept { return mixer_deck_; }
     /// The Producer view's bottom deck: the mixer (default) or the keyboard.
     void show_bottom_mixer(bool mixer);
+    /// Follow on or off (the title bar's key, View > Follow Playhead, Cmd/Ctrl+Shift+F); remembered.
+    void set_follow(bool on);
     bool bottom_mixer() const noexcept { return bottom_mixer_; }
     shell::ClipsPanel& clips_panel() noexcept { return clips_; }
     shell::PrintPanel& print_panel() noexcept { return print_; }

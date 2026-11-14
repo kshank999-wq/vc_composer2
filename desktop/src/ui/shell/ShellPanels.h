@@ -79,11 +79,15 @@ public:
     void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
     hw::Keycap& stage_key(int i) { return *stages_[static_cast<std::size_t>(i)]; }
+    hw::Keycap& follow_key() { return follow_; }
+    /// Re-reads the Follow setting (after the menu or a shortcut changed it).
+    void refresh_follow();
 
 private:
     AppContext& context_;
     int listener_ = 0;
     std::vector<std::unique_ptr<hw::Keycap>> stages_;
+    hw::Keycap follow_{"Follow", true};
     int stage_ = 0;
 };
 

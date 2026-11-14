@@ -344,8 +344,16 @@ and the document model. The work is mostly presentation.
        does not move the on-screen keyboard.
    - **Short windows.** When the deck makes the right column short, the
      inspector goes compact and the selection readout gives up height.
-   - **Still to come:** the Follow toggle in the edit window's title bar.
-     Following is always on for now.
+   - **Follow.** The **Follow** key in the edit window's title bar (also
+     View › Follow Playhead, Cmd/Ctrl+Shift+F) controls three things while
+     playing:
+     - the Composer view scrolling with the playhead;
+     - the Producer view scrolling with it;
+     - the keyboard bringing off-screen lit notes into view.
+     It is on by default, lit when on, and remembered between sessions
+     (`AppContext::follow`, UI setting "follow"). Off, the views stay
+     where you put them. The desktop check's Follow section covers both
+     views.
 6. **Producer view tracks. Done.**
    - **Rows.** One row per track:
      - Instrument and MIDI tracks are 72 px: the MIDI lane above, and the
