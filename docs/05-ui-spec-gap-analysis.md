@@ -525,7 +525,19 @@ and the document model. The work is mostly presentation.
      - It is measured as it is written and reports LUFS and dBTP. It
        renders in timer slices with a progress LCD and Cancel.
      - The default file is `Bounces/<title>_master.wav` beside the project.
-     - MP3 is shown but disabled until the encoder decision.
+     - **MP3** (decision D18):
+       - Encoded with LAME, loaded at run time and never linked: free, since
+         the MP3 patents expired in 2017.
+       - 320, 256 or 192 kbps CBR, or VBR V0, at 44.1 or 48 kHz, joint
+         stereo, LAME quality 2.
+       - An ID3v2 title, and the LAME/Xing header frame for exact length
+         and gapless playback.
+       - Without LAME, the MP3 key is off and its tooltip says how to get
+         it.
+       - JUCE's MP3 decoder is now enabled, so MP3s import and play as
+         clips. The check uses it to read masters back.
+       - CI installs LAME (`libmp3lame0`, `brew install lame`).
+       - Disabled keys now dim.
    - **Stems.** The Master stage no longer opens the stem dialog; stem
      export stays in the File menu.
    - **Checks.** The desktop check's master section:

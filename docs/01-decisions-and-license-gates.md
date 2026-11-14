@@ -28,6 +28,7 @@ before it ships. Nothing here is legal advice.
 | D15 | The audio thread receives immutable playback snapshots through an atomic hand-off and returns them through the ported lock-free queue. It never allocates, locks or destroys an instrument. | The original VC Composer's real-time discipline, applied to a whole mixer. |
 | D16 | Picture is decoded with FFmpeg (`vcc_media`), not the platform players. When FFmpeg is absent the build has a stub decoder and picture import says why. | Frame-accurate stepping and seeking on every platform, which JUCE's `VideoComponent` does not offer (and it has no Linux backend). Licence gate below. |
 | D17 | Picture events (hits, sync points, streamers, punches) are stored in seconds of project time. Cues keep both a music range (ticks) and the spotted timecodes, and the cue manager shows the drift between them. | A tempo change moves the music to the picture, never the picture to the music (Main Spec §13). The composer decides when to move a cue's music to its spotting. |
+| D18 | MP3 masters are encoded with LAME, loaded at run time (`audio/Mp3Encoder`): the app is not linked against it, declares the dozen functions it calls, and opens `libmp3lame` beside the app or from the system when an MP3 is exported. Without it the MP3 key is off and says how to get it. MP3 decoding (import, checking a master) is JUCE's own decoder. | The MP3 patents expired in 2017 and LAME is free (LGPL), so it meets the "nothing that costs money" rule. Loading it dynamically keeps it a separately replaceable library, as the LGPL asks, and the build needs no LAME headers. |
 
 ## Open: needs a decision from the product owner
 
@@ -70,6 +71,7 @@ Approved by the product owner and done. See `02-original-vc-composer-reuse-audit
 | Time-stretch | Warp/stretch | Rubber Band (GPL/commercial), Signalsmith Stretch (MIT). **Verify** | Before Main Phase 3 warp |
 | MusicXML | Notation interchange | W3C Community Group specification | Implement natively |
 | Loudness (BS.1770 / EBU R128) | Mastering meters | Public standards | Implement natively |
+| LAME (libmp3lame) | MP3 master export (D18) | LGPL 2.0+; MP3 patents expired 2017. Loaded dynamically, never linked; a shipped copy beside the app needs the LGPL notice and source offer | Before shipping a bundled copy |
 | AAF/OMF | DAW handoff | Conditional (Main Spec §16) | Later; BWF stems are the baseline |
 | Sample libraries / player APIs | Library integration | Per vendor; no universal introspection API exists | Adapter per provider, with capability flags (Main Spec §10) |
 

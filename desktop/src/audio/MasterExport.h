@@ -22,14 +22,16 @@ namespace vcc::desktop {
 
 struct AppContext;
 class PlaybackEngine;
+class Mp3Encoder;
 
 struct MasterExportRequest {
-    enum class Format { Wav, Flac };
+    enum class Format { Wav, Flac, Mp3 };
     juce::File file;  ///< Empty: analyse only.
     Format format = Format::Wav;
     int sample_rate = 48000;
     int bit_depth = 24;  ///< 16 or 24.
     bool dither = true;  ///< TPDF dither, applied at 16-bit only.
+    int mp3_kbps = 320;  ///< MP3: a constant bit rate, or 0 for VBR V0. 44.1 or 48 kHz.
     Ticks start = 0, end = 0;
     double tail_seconds = 3.0;
 };
@@ -67,6 +69,7 @@ private:
     MasterExportResult result_;
     std::unique_ptr<PlaybackEngine> engine_;
     std::unique_ptr<juce::AudioFormatWriter> writer_;
+    std::unique_ptr<Mp3Encoder> mp3_;
     juce::File temp_;
     audio::LoudnessAnalyser analyser_;
     audio::LoudnessMeter meter_;

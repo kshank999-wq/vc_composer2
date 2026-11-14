@@ -33,6 +33,8 @@ target_compile_definitions(vcc_juce PUBLIC
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_REPORT_APP_USAGE=0
     JUCE_MODAL_LOOPS_PERMITTED=1
+    # MP3 decoding (importing MP3s, checking MP3 masters): the patents have expired.
+    JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_APPLICATION_NAME_STRING="VC Composer 2"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
 target_compile_definitions(vcc_juce INTERFACE $<TARGET_PROPERTY:vcc_juce,COMPILE_DEFINITIONS>)

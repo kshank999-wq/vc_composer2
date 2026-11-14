@@ -60,10 +60,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
             libxcomposite-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev xvfb \
-            libavformat-dev libavcodec-dev libswscale-dev libavutil-dev ffmpeg
+            libavformat-dev libavcodec-dev libswscale-dev libavutil-dev ffmpeg libmp3lame0
       - name: macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install ffmpeg pkg-config
+        run: brew install ffmpeg pkg-config lame
       - name: Configure (fetches the pinned JUCE release)
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DVCC_BUILD_DESKTOP=ON
       - name: Build

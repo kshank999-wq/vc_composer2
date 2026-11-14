@@ -99,6 +99,12 @@ public:
 
 protected:
     void paintButton(juce::Graphics& g, bool highlighted, bool down) override;
+    /// A key that cannot be pressed now is dimmed.
+    void enablementChanged() override
+    {
+        setAlpha(isEnabled() ? 1.0f : 0.42f);
+        juce::Button::enablementChanged();
+    }
 
 private:
     bool led_dot_ = false;

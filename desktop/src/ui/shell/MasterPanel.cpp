@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "audio/Mp3Encoder.h"
 #include "ui/console/ConsoleStyle.h"
 #include "ui/console/MixActions.h"
 
@@ -12,6 +13,7 @@ constexpr double kTargets[] = {-14.0, -16.0, -23.0, -24.0};
 const char* kTargetNames[] = {"Streaming", "Apple", "EBU R 128", "ATSC A/85"};
 const char* kChainKinds[] = {"eq", "compressor", "limiter"};
 const char* kChainNames[] = {"EQ", "Glue comp", "Limiter"};
+constexpr int kBitrates[] = {320, 256, 192, 0};  // 0: VBR V0
 
 juce::String lufs_text(double v)
 {
@@ -97,11 +99,25 @@ MasterPanel::MasterPanel(AppContext& context) : hw::Panel("Master"), context_(co
     group(bits_, {"16-bit", "24-bit"}, 0x5102);
     group(rates_, {"44.1k", "48k", "96k"}, 0x5103);
     formats_[0]->setToggleState(true, juce::dontSendNotification);
-    formats_[2]->setEnabled(false);
-    formats_[2]->setTooltip("MP3 export comes later, once the encoder is chosen");
+    // MP3 through LAME, when it can be loaded.
+    {
+        juce::String why;
+        const bool mp3 = Mp3Encoder::available(&why);
+        formats_[2]->setEnabled(mp3);
+        formats_[2]->setTooltip(mp3 ? "MP3 master (LAME " + Mp3Encoder::version() + "): 320, 256 or 192 kbps, or VBR V0" : why);
+    }
+    for (auto& k : formats_) k->onStateChange = [this] { update_format(); };
+    addChildComponent(bitrate_);
+    bitrate_.set_legend_size(10.0f);
+    bitrate_.setWantsKeyboardFocus(false);
+    bitrate_.setTooltip("MP3 bit rate: click to step through 320, 256 and 192 kbps and VBR V0");
+    bitrate_.onClick = [this] {
+        bitrate_index_ = (bitrate_index_ + 1) % 4;
+        bitrate_.setButtonText(kBitrates[bitrate_index_] > 0 ? juce::String(kBitrates[bitrate_index_]) + " kbps" : juce::String("VBR V0"));
+    };
     bits_[1]->setToggleState(true, juce::dontSendNotification);
     rates_[1]->setToggleState(true, juce::dontSendNotification);
-    for (auto& k : bits_) k->onStateChange = [this] { dither_.setEnabled(bits_[0]->getToggleState()); };
+    for (auto& k : bits_) k->onStateChange = [this] { update_format(); };
     dither_.set_led_dot(true);
     dither_.setToggleState(true, juce::dontSendNotification);
     dither_.setEnabled(false);
@@ -119,9 +135,9 @@ MasterPanel::MasterPanel(AppContext& context) : hw::Panel("Master"), context_(co
         const auto& path = context_.session.path();
         juce::File folder = path.empty() ? juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("VC Composer 2")
                                          : juce::File(juce::String(path)).getParentDirectory().getChildFile("Bounces");
-        const bool flac = formats_[1]->getToggleState();
-        const auto name = juce::File::createLegalFileName(juce::String(context_.session.title())) + "_master" + (flac ? ".flac" : ".wav");
-        chooser_ = std::make_unique<juce::FileChooser>("Export master", folder.getChildFile(name), flac ? "*.flac" : "*.wav");
+        const juce::String ext = formats_[1]->getToggleState() ? ".flac" : formats_[2]->getToggleState() ? ".mp3" : ".wav";
+        const auto name = juce::File::createLegalFileName(juce::String(context_.session.title())) + "_master" + ext;
+        chooser_ = std::make_unique<juce::FileChooser>("Export master", folder.getChildFile(name), "*" + ext);
         chooser_->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
                               [this](const juce::FileChooser& fc) {
                                   const auto f = fc.getResult();
@@ -139,6 +155,21 @@ MasterPanel::~MasterPanel()
 {
     stopTimer();
     context_.session.remove_listener(listener_);
+}
+
+int MasterPanel::mp3_kbps() const noexcept { return kBitrates[bitrate_index_]; }
+
+void MasterPanel::update_format()
+{
+    // MP3: a bit rate instead of a bit depth, 44.1 or 48 kHz, no dither
+    // (LAME takes the float mix as it is).
+    const bool mp3 = formats_[2]->getToggleState();
+    for (auto& k : bits_) k->setVisible(!mp3);
+    bitrate_.setVisible(mp3);
+    rates_[2]->setEnabled(!mp3);
+    if (mp3 && rates_[2]->getToggleState()) rates_[1]->setToggleState(true, juce::sendNotificationSync);
+    dither_.setEnabled(!mp3 && bits_[0]->getToggleState());
+    resized();
 }
 
 std::string MasterPanel::master_id() const
@@ -230,7 +261,10 @@ MasterExportRequest MasterPanel::request_for(const juce::File& file) const
 {
     MasterExportRequest rq;
     rq.file = file;
-    rq.format = formats_[1]->getToggleState() ? MasterExportRequest::Format::Flac : MasterExportRequest::Format::Wav;
+    rq.format = formats_[1]->getToggleState()   ? MasterExportRequest::Format::Flac
+                : formats_[2]->getToggleState() ? MasterExportRequest::Format::Mp3
+                                                : MasterExportRequest::Format::Wav;
+    rq.mp3_kbps = mp3_kbps();
     rq.bit_depth = bits_[0]->getToggleState() ? 16 : 24;
     rq.sample_rate = rates_[0]->getToggleState() ? 44100 : rates_[2]->getToggleState() ? 96000 : 48000;
     rq.dither = dither_.getToggleState();
@@ -285,8 +319,12 @@ void MasterPanel::job_done()
         progress_.set_text(r.ok ? "SONG  " + lufs_text(r.integrated) + " LUFS  " + lufs_text(r.true_peak) + " dBTP" : juce::String("ANALYSIS FAILED"));
     } else {
         exported_ = r;
-        progress_.set_text(r.ok ? juce::String(fmt.format == MasterExportRequest::Format::Flac ? "FLAC  " : "WAV  ") + juce::String(fmt.bit_depth) +
-                                      "-BIT  " + juce::String(fmt.sample_rate / 1000.0, fmt.sample_rate % 1000 ? 1 : 0) + "K\n" +
+        const juce::String rate = juce::String(fmt.sample_rate / 1000.0, fmt.sample_rate % 1000 ? 1 : 0) + "K";
+        const juce::String what = fmt.format == MasterExportRequest::Format::Mp3
+                                      ? "MP3  " + (fmt.mp3_kbps > 0 ? juce::String(fmt.mp3_kbps) + " KBPS  " : juce::String("V0  ")) + rate
+                                      : juce::String(fmt.format == MasterExportRequest::Format::Flac ? "FLAC  " : "WAV  ") +
+                                            juce::String(fmt.bit_depth) + "-BIT  " + rate;
+        progress_.set_text(r.ok ? what + "\n" +
                                       lufs_text(r.integrated) + " LUFS  " + lufs_text(r.true_peak) + " dBTP"
                                 : juce::String("EXPORT FAILED"));
         if (context_.status)
@@ -356,6 +394,7 @@ void MasterPanel::resized()
     c.removeFromTop(4);
     row = c.removeFromTop(24);
     const int fifth = (row.getWidth() - 16) / 5;
+    bitrate_.setBounds(row.withWidth(2 * fifth + 4));
     for (auto& k : bits_) {
         k->setBounds(row.removeFromLeft(fifth));
         row.removeFromLeft(4);

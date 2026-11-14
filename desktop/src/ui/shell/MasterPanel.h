@@ -49,6 +49,9 @@ public:
     hw::Keycap& bits_key(int i) { return *bits_[static_cast<std::size_t>(i)]; }      ///< 16, 24.
     hw::Keycap& rate_key(int i) { return *rates_[static_cast<std::size_t>(i)]; }     ///< 44.1, 48, 96.
     hw::Keycap& dither_key() { return dither_; }
+    /// MP3's bit rate: 320, 256, 192 kbps or VBR V0 (click to step).
+    hw::Keycap& bitrate_key() { return bitrate_; }
+    int mp3_kbps() const noexcept;
     hw::Keycap& selection_key() { return selection_; }
     hw::Keycap& export_key() { return export_; }
     /// Exports to `file` with the panel's settings (Export master asks for the file).
@@ -79,6 +82,9 @@ private:
         deviation_{"-", 11.0f}, progress_{"READY", 10.5f};
     hw::Keycap target_{"Target"}, reset_{"Reset"}, analyse_{"Analyse"}, match_{"Match"};
     std::vector<std::unique_ptr<hw::Keycap>> chain_, formats_, bits_, rates_;
+    hw::Keycap bitrate_{"320 kbps"};
+    int bitrate_index_ = 0;
+    void update_format();
     hw::Keycap dither_{"Dither", true}, song_{"Song", true}, selection_{"Selection", true}, export_{"Export master"};
     std::unique_ptr<MasterExportJob> job_;
     bool job_is_analysis_ = false;

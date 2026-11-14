@@ -12,6 +12,7 @@
 #include "MainWindow.h"
 #include "PlatformFixes.h"
 #include "audio/CueRenderer.h"
+#include "audio/Mp3Encoder.h"
 #include "ui/CueManager.h"
 #include "ui/ScoreExchange.h"
 #include "audio/StemRenderer.h"
@@ -2454,7 +2455,73 @@ void master_checks(MainWindow& window, const juce::File& dir)
     check(panel.last_export().ok && fr && std::abs(fr->sampleRate - 44100.0) < 0.5 && fr->bitsPerSample == 16 &&
               std::abs(measure_file(flac).integrated() + 23.0) < 0.3,
           "Export master writes a dithered 16-bit / 44.1 kHz FLAC at the same loudness");
-    check(!panel.format_key(2).isEnabled(), "MP3 is shown but waits for the encoder decision");
+    // MP3 through LAME (loaded at run time): 320 kbps CBR, then VBR V0.
+    if (juce::String why; !Mp3Encoder::available(&why)) {
+        check(!panel.format_key(2).isEnabled() && panel.format_key(2).getTooltip() == why,
+              "without LAME the MP3 key is off and says how to get it (" + why + ")");
+        shoot(main, dir, "35-master");
+        return;
+    }
+    check(panel.format_key(2).isEnabled(), "the MP3 key is live when LAME can be loaded (" + Mp3Encoder::version() + ")");
+    panel.format_key(2).setToggleState(true, juce::sendNotificationSync);
+    panel.rate_key(0).setToggleState(true, juce::sendNotificationSync);
+    check(panel.bitrate_key().isVisible() && !panel.bits_key(0).isVisible() && !panel.rate_key(2).isEnabled() &&
+              !panel.dither_key().isEnabled() && panel.mp3_kbps() == 320,
+          "MP3 shows a bit rate (320 kbps) in place of the bit depth, and no 96 kHz or dither");
+    const auto mp3 = project_dir.getChildFile("Bounces").getChildFile("master.mp3");
+    panel.export_to(mp3);
+    panel.finish_now();
+    const auto mp3_result = panel.last_export();
+    auto mr = read(mp3);
+    const double wav_seconds = wr ? static_cast<double>(wr->lengthInSamples) / wr->sampleRate : 0.0;
+    const double mp3_seconds = mr ? static_cast<double>(mr->lengthInSamples) / mr->sampleRate : 0.0;
+    const double kbps = mp3_seconds > 0.0 ? static_cast<double>(mp3.getSize()) * 8.0 / 1000.0 / mp3_seconds : 0.0;
+    check(mp3_result.ok && mr && std::abs(mr->sampleRate - 44100.0) < 0.5 && mr->numChannels == 2 &&
+              std::abs(mp3_seconds - wav_seconds) < 0.1 && kbps > 300.0 && kbps < 340.0,
+          "Export master writes a 320 kbps / 44.1 kHz MP3 of the whole song (" + juce::String(mp3_seconds, 2) + " s, " +
+              juce::String(kbps, 0) + " kbps)");
+    const auto mp3_measured = measure_file(mp3);
+    check(std::abs(mp3_measured.integrated() + 23.0) < 0.3, "the MP3 decodes at the same loudness (" +
+                                                                  juce::String(mp3_measured.integrated(), 2) + " LUFS, " +
+                                                                  juce::String(mp3_measured.true_peak_db(), 2) + " dBTP)");
+    panel.bitrate_key().triggerClick();
+    pump(30);
+    panel.bitrate_key().triggerClick();
+    pump(30);
+    panel.bitrate_key().triggerClick();
+    pump(30);
+    const auto v0 = project_dir.getChildFile("Bounces").getChildFile("master-v0.mp3");
+    panel.export_to(v0);
+    panel.finish_now();
+    check(panel.mp3_kbps() == 0 && panel.last_export().ok && read(v0) != nullptr && v0.getSize() < mp3.getSize(),
+          "VBR V0 exports too, smaller than 320 kbps (" + juce::String(v0.getSize() / 1024) + " KB vs " +
+              juce::String(mp3.getSize() / 1024) + " KB)");
+    // MP3 in: an MP3 on an audio track plays (the import's "*.mp3" now decodes).
+    {
+        const auto vox = session.add_audio_track("MP3 in", false);
+        project::AudioClip clip;
+        clip.file = mp3.getFullPathName().toStdString();
+        clip.length = 4.0;
+        clip.channels = 2;
+        clip.file_sample_rate = 44100.0;
+        session.add_audio_clips({{vox, clip}}, "Import");
+        PlaybackEngine e(session, ctx.plugins);
+        e.prepare_offline(48000.0, 512);
+        PlaybackEngine::RenderOverride solo;
+        solo.solo = {vox};
+        e.set_render_override(solo);
+        e.locate(0);
+        e.play();
+        juce::AudioBuffer<float> out(2, 512);
+        double energy = 0.0;
+        for (int b = 0; b < 300; ++b) {
+            e.render_offline(out, 512);
+            energy += out.getRMSLevel(0, 0, 512);
+        }
+        check(energy > 0.01, "an MP3 imported onto an audio track plays");
+        session.undo();
+        session.undo();
+    }
     shoot(main, dir, "35-master");
 }
 

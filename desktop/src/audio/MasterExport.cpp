@@ -5,6 +5,7 @@
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
+#include "audio/Mp3Encoder.h"
 #include "audio/PlaybackEngine.h"
 #include "ui/AppContext.h"
 
@@ -23,8 +24,9 @@ MasterExportJob::MasterExportJob(AppContext& context, MasterExportRequest reques
 
 MasterExportJob::~MasterExportJob()
 {
-    if (writer_) {
+    if (writer_ || mp3_) {
         writer_.reset();
+        mp3_.reset();
         temp_.deleteFile();
     }
 }
@@ -53,6 +55,19 @@ bool MasterExportJob::begin()
         }
         temp_ = request_.file.getSiblingFile(request_.file.getFileName() + ".partial");
         temp_.deleteFile();
+        if (request_.format == MasterExportRequest::Format::Mp3) {
+            mp3_ = std::make_unique<Mp3Encoder>();
+            juce::String why;
+            if (!mp3_->open(temp_, request_.sample_rate, request_.mp3_kbps, juce::String(context_.session.title()), why)) {
+                result_.message = why;
+                mp3_.reset();
+                temp_.deleteFile();
+                return false;
+            }
+            engine_->locate(request_.start);
+            engine_->play();
+            return true;
+        }
         std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(temp_);
         if (!static_cast<juce::FileOutputStream*>(stream.get())->openedOk()) {
             result_.message = "cannot write to " + request_.file.getParentDirectory().getFullPathName();
@@ -86,7 +101,9 @@ bool MasterExportJob::step(double budget_ms)
     const double until = juce::Time::getMillisecondCounterHiRes() + budget_ms;
     // TPDF dither: two uniform sources of one LSB each, before the writer
     // rounds to 16 bits.
-    const float lsb = request_.dither && request_.bit_depth == 16 ? 1.0f / 32768.0f : 0.0f;
+    const float lsb = request_.dither && request_.bit_depth == 16 && request_.format != MasterExportRequest::Format::Mp3
+                          ? 1.0f / 32768.0f
+                          : 0.0f;
     while (juce::Time::getMillisecondCounterHiRes() < until) {
         if (cancelled_) {
             result_.cancelled = true;
@@ -101,6 +118,11 @@ bool MasterExportJob::step(double budget_ms)
         engine_->render_offline(block, n);
         const float* ch[] = {block.getReadPointer(0), block.getReadPointer(1)};
         analyser_.process(ch, n, [this](const audio::LoudnessBlock& b) { meter_.add(b); });
+        if (mp3_ && !mp3_->write(block.getReadPointer(0), block.getReadPointer(1), n)) {
+            result_.message = "writing " + request_.file.getFileName() + " failed (disk full?)";
+            finish();
+            return false;
+        }
         if (writer_) {
             if (lsb > 0.0f)
                 for (int c = 0; c < 2; ++c) {
@@ -128,9 +150,11 @@ void MasterExportJob::finish()
     result_.max_momentary = meter_.max_momentary();
     result_.seconds = static_cast<double>(written_) / request_.sample_rate;
     const bool complete = written_ >= samples_ && samples_ > 0 && !result_.cancelled && result_.message.isEmpty();
-    if (writer_) {
+    if (writer_ || mp3_) {
         writer_.reset();
-        if (complete && temp_.moveFileTo(request_.file)) {
+        const bool encoded = !mp3_ || mp3_->close();
+        mp3_.reset();
+        if (complete && encoded && temp_.moveFileTo(request_.file)) {
             result_.ok = true;
         } else {
             temp_.deleteFile();
