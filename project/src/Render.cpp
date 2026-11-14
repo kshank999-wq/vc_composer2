@@ -174,11 +174,22 @@ RenderedTrack finish_render(const Track& track, const notation::ExpressionMap& m
                          [](const ControllerEvent& a, const ControllerEvent& b) { return a.tick < b.tick; });
     }
 
-    for (const auto& region : version->regions)
-        for (auto n : region.lane == 0 ? region.notes : std::vector<NoteEvent>{}) {  // take lanes are silent
+    bool region_cc = false;
+    for (const auto& region : version->regions) {
+        if (region.lane != 0) continue;  // take lanes are silent
+        for (auto n : region.notes) {
             n.channel = channel;
             notes.emplace_back(n, notation::kInvalidEventId);
         }
+        for (auto c : region.controllers) {
+            c.channel = channel;
+            out.controllers.push_back(c);
+            region_cc = true;
+        }
+    }
+    if (region_cc)
+        std::stable_sort(out.controllers.begin(), out.controllers.end(),
+                         [](const ControllerEvent& a, const ControllerEvent& b) { return a.tick < b.tick; });
     std::stable_sort(notes.begin(), notes.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     out.notes.reserve(notes.size());
     out.note_ids.reserve(notes.size());

@@ -4,6 +4,8 @@
 // piano roll for editing the selected track's MIDI regions.
 #pragma once
 
+#include "vcc/project/MidiTools.h"
+
 #include "ui/AppContext.h"
 
 namespace vcc::desktop {
@@ -69,6 +71,17 @@ public:
     bool consolidate_selected();
     /// Moves the selected clip (Alt+Left/Right: 10 ms; with Shift a grid step).
     bool nudge_selected(double seconds);
+
+    // --- MIDI tools on the selected track's played-in notes --------------------------------
+    /// Quantizes the piano roll's selected notes, or all of the track's (Q).
+    int quantize_notes(const project::QuantizeSettings& q);
+    /// Changes the velocity of the selected notes, or all of the track's.
+    int change_velocities(const project::VelocityChange& v);
+    /// What the piano roll's bottom lane shows: -1 velocity, else a CC number.
+    void set_cc_lane(int cc);
+    int cc_lane() const;
+    /// Draws a straight ramp of controller `cc` from `v0` to `v1` over [from, to).
+    bool draw_cc(int cc, Ticks from, Ticks to, int v0, int v1);
 
     /// A track header's Print (freeze false) or Freeze (true) key.
     std::function<void(const std::string& track_id, bool freeze)> on_print_track;

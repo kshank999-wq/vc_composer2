@@ -351,7 +351,7 @@ InsertResult Project::insert_notes(const std::string& track_id, Ticks start, Tic
     std::sort(notes.begin(), notes.end());
     bool ok = edit("Insert " + (source.empty() ? std::string("notes") : source) + " on " + t->name, [&](ProjectData& d) {
         TrackVersion* ver = d.find_track(track_id)->active_version();
-        MidiRegion region{region_id, start, end, 0, notes, source};
+        MidiRegion region{region_id, start, end, 0, notes, source, {}};
         if (occupied && policy == CollisionPolicy::Replace) {
             for (auto& reg : ver->regions) {
                 if (reg.lane != 0 || !(reg.start < end && reg.end > start)) continue;
@@ -780,6 +780,7 @@ json::Value Project::to_json() const
         if (t.printed_fx) o.set("printed_fx", true);
         if (!t.midi_output.empty()) o.set("midi_output", t.midi_output);
         if (t.record_source != "midi") o.set("record_source", t.record_source);
+        if (t.input_quantize > 0) o.set("input_quantize", t.input_quantize);
         if (!t.automation.empty()) o.set("automation", automation_to_json(t.automation));
         o.set("automation_mode", t.automation_mode);
         o.set("include_in_export", t.include_in_export);
@@ -788,10 +789,19 @@ json::Value Project::to_json() const
         json::Array versions;
         for (const auto& v : t.versions) {
             json::Array regions;
-            for (const auto& r : v.regions)
-                regions.emplace_back(json::Object{{"id", r.id}, {"start", r.start}, {"end", r.end},
-                                                  {"lane", r.lane}, {"source", r.source},
-                                                  {"notes", notes_to_json(r.notes)}});
+            for (const auto& r : v.regions) {
+                json::Object ro{{"id", r.id}, {"start", r.start}, {"end", r.end},
+                                {"lane", r.lane}, {"source", r.source},
+                                {"notes", notes_to_json(r.notes)}};
+                if (!r.controllers.empty()) {
+                    json::Array cc;
+                    for (const auto& e : r.controllers)
+                        cc.emplace_back(json::Array{json::Value(e.tick), json::Value(e.channel), json::Value(e.controller),
+                                                    json::Value(e.value)});
+                    ro.set("controllers", cc);
+                }
+                regions.emplace_back(std::move(ro));
+            }
             json::Object vo{{"id", v.id}, {"name", v.name}, {"notes", v.notes},
                             {"score", notation::score_to_json(v.score)}, {"regions", regions},
                             {"articulation_overrides", string_array(v.articulation_overrides)}};
@@ -1020,6 +1030,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.printed_fx = j.get_bool("printed_fx", false);
         t.midi_output = j.get_string("midi_output", "");
         t.record_source = j.get_string("record_source", "midi") == "audio" ? "audio" : "midi";
+        t.input_quantize = std::max<Ticks>(0, j.get_int("input_quantize", 0));
         if (t.playback != "midi" && t.playback != "audio") t.playback = "both";
         if (t.monitor != "auto" && t.monitor != "input" && t.monitor != "off")
             return fail("track " + t.id + ": unknown monitor mode '" + t.monitor + "'");
@@ -1065,6 +1076,16 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
                 if (const auto* nj = rj.get("notes"); nj && !notes_from_json(*nj, r.notes, err))
                     return fail("region " + r.id + ": " + err);
                 if (r.end <= r.start) return fail("region " + r.id + ": empty range");
+                for (const auto& cj : rj.get("controllers") ? rj.get("controllers")->as_array() : json::Array{}) {
+                    const auto& a = cj.as_array();
+                    if (a.size() < 4) return fail("region " + r.id + ": a controller needs tick, channel, number, value");
+                    ControllerEvent e;
+                    e.tick = a[0].as_int();
+                    e.channel = std::clamp(static_cast<int>(a[1].as_int()), 0, 15);
+                    e.controller = std::clamp(static_cast<int>(a[2].as_int()), 0, 127);
+                    e.value = std::clamp(static_cast<int>(a[3].as_int()), 0, 127);
+                    r.controllers.push_back(e);
+                }
                 v.regions.push_back(std::move(r));
             }
             for (const auto& pj : vj.get("phrases") ? vj.get("phrases")->as_array() : json::Array{}) {

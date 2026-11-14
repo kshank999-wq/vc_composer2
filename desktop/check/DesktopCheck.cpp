@@ -2967,6 +2967,149 @@ void clip_editing_checks(MainWindow& window, const juce::File& dir)
     check(clips().size() == 3, "undo brings the clips back");
 }
 
+/// MIDI tools: input quantize and controllers while recording, Quantize and
+/// Velocity on played-in notes, the Q key, the CC lane (drawn by call and
+/// by mouse), and drawn CCs reaching playback.
+void midi_tools_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& engine = ctx.engine;
+    engine.stop();
+    session.new_empty();
+    const auto project_dir = dir.getChildFile("midi-tools-check");
+    project_dir.deleteRecursively();
+    project_dir.createDirectory();
+    std::string error;
+    session.save_as(project_dir.getChildFile("midi.vcc2").getFullPathName().toStdString(), &error);
+    engine.prepare_offline(48000.0, 512);
+    Rig rig(engine);
+    const auto& d = session.data();
+    const Ticks Q = kTicksPerQuarter, S = Q / 4;
+    const std::string keys = session.add_track("Keys", "keys.piano");
+    auto regions = [&] {
+        std::vector<project::MidiRegion> out;
+        if (const auto* t = d.find_track(keys); t && t->active_version()) out = t->active_version()->regions;
+        return out;
+    };
+
+    // Recording with input quantize at 1/16 and the sustain pedal.
+    check(session.set_input_quantize(keys, S), "input quantize is set per track");
+    session.select_track(keys);
+    engine.set_live_track(keys);
+    session.set_record_armed(keys, true);
+    engine.set_record_enabled(true);
+    engine.locate(0);
+    engine.play();
+    rig.run(0.3);
+    engine.send_live(juce::MidiMessage::controllerEvent(1, 64, 127));
+    rig.run(0.23);  // 0.53 s: just after the second beat's sixteenth at 0.5 s
+    engine.send_live(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(96)));
+    rig.run(0.4);
+    engine.send_live(juce::MidiMessage::noteOff(1, 60));
+    rig.run(0.3);
+    engine.send_live(juce::MidiMessage::controllerEvent(1, 64, 0));
+    rig.run(0.3);
+    engine.stop();
+    engine.set_record_enabled(false);
+    session.set_record_armed(keys, false);
+    auto r = regions();
+    bool pedal_down = false, pedal_up = false;
+    if (!r.empty())
+        for (const auto& e : r[0].controllers) {
+            pedal_down = pedal_down || (e.controller == 64 && e.value == 127);
+            pedal_up = pedal_up || (e.controller == 64 && e.value == 0);
+        }
+    check(r.size() == 1 && r[0].notes.size() == 1 && r[0].notes[0].start == Q,
+          "input quantize puts a recorded note on the 1/16 grid (" +
+              juce::String(r.empty() || r[0].notes.empty() ? -1 : static_cast<int>(r[0].notes[0].start)) + ")");
+    check(pedal_down && pedal_up, "the sustain pedal is recorded into the region");
+    session.set_input_quantize(keys, 0);
+
+    // Off-grid notes, as played without input quantize.
+    project::MidiRegion played;
+    played.start = 0;
+    played.end = 4 * Q;
+    played.notes = {{S + 30, S, 64, 40, 0, {}}, {2 * S - 25, S, 65, 110, 0, {}}, {3 * Q + 50, Q, 67, 70, 0, {}}};
+    session.add_recorded_regions({{keys, played}}, "Record MIDI");
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(100);
+    auto& seq = main.sequencer();
+    seq.set_expanded_track(keys);
+    pump(100);
+    project::QuantizeSettings q;
+    q.grid = S;
+    const int moved = seq.quantize_notes(q);
+    r = regions();
+    const project::MidiRegion* main_lane = nullptr;
+    for (const auto& x : r)
+        if (x.lane == 0) main_lane = &x;
+    bool on_grid = main_lane && main_lane->notes.size() == 3;
+    if (main_lane)
+        for (const auto& n : main_lane->notes) on_grid = on_grid && n.start % S == 0;
+    check(moved == 3 && on_grid && session.undo_label() == "Quantize",
+          "Quantize puts the played-in notes on the grid (" + juce::String(moved) + " moved)");
+
+    // The Q key quantizes too, with the last settings: undo, then press Q.
+    session.undo();
+    if (auto* roll = find_named(main, "vcc-piano-roll")) {
+        roll->grabKeyboardFocus();
+        roll->keyPressed(juce::KeyPress('q'));
+    }
+    check(session.undo_label() == "Quantize", "Q in the piano roll quantizes");
+
+    // Velocity: set all to 100.
+    project::VelocityChange v;
+    v.set = 100;
+    const int changed = seq.change_velocities(v);
+    bool all100 = true;
+    for (const auto& x : regions())
+        if (x.lane == 0)
+            for (const auto& n : x.notes) all100 = all100 && n.velocity == 100;
+    check(changed > 0 && all100 && session.undo_label() == "Velocity", "Velocity sets the notes' velocities");
+
+    // The CC lane: modulation drawn as a ramp across the region, by call...
+    seq.set_cc_lane(1);
+    check(seq.cc_lane() == 1, "the piano roll's bottom lane shows CC1");
+    const bool drawn = seq.draw_cc(1, 0, 2 * Q, 0, 127);
+    int cc1 = 0, first = -1, last = -1;
+    for (const auto& x : regions())
+        if (x.lane == 0)
+            for (const auto& e : x.controllers)
+                if (e.controller == 1) {
+                    ++cc1;
+                    if (first < 0) first = e.value;
+                    last = e.value;
+                }
+    check(drawn && cc1 > 4 && first < 10 && last > 110 && session.undo_label() == "Draw CC",
+          "a modulation ramp is drawn in the CC lane (" + juce::String(cc1) + " points)");
+    // ...and by dragging across the lane.
+    if (auto* roll = find_named(main, "vcc-piano-roll")) {
+        const float y_top = static_cast<float>(roll->getHeight() - 48 + 8), y_bottom = static_cast<float>(roll->getHeight() - 6);
+        seq.set_cc_lane(11);
+        // From the left of the timeline (inside the region, which starts at bar 1) to the right.
+        const float x0 = static_cast<float>(220 + 4), x1 = static_cast<float>(220 + 120);
+        roll->mouseDown(mouse_event(*roll, {x0, y_bottom}, {x0, y_bottom}, false));
+        roll->mouseDrag(mouse_event(*roll, {(x0 + x1) / 2, (y_top + y_bottom) / 2}, {x0, y_bottom}, true));
+        roll->mouseDrag(mouse_event(*roll, {x1, y_top}, {x0, y_bottom}, true));
+        roll->mouseUp(mouse_event(*roll, {x1, y_top}, {x0, y_bottom}, true));
+        pump(50);
+        int cc11 = 0;
+        for (const auto& x : regions())
+            for (const auto& e : x.controllers) cc11 += e.controller == 11 ? 1 : 0;
+        check(cc11 > 1, "dragging in the CC lane draws expression (" + juce::String(cc11) + " points)");
+        seq.set_cc_lane(1);
+        pump(50);
+        shoot(main, dir, "midi-tools");
+    }
+    // Drawn controllers reach playback: the track renders them.
+    int rendered = 0;
+    for (const auto& e : project::render_track(*d.find_track(keys)).controllers) rendered += e.controller == 1 ? 1 : 0;
+    check(rendered == cc1, "drawn controllers play with the track (" + juce::String(rendered) + " CC1 events)");
+    seq.set_cc_lane(-1);
+}
+
 void realtime_print_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -3993,6 +4136,7 @@ int main(int argc, char** argv)
         realtime_print_checks(window, dir);
         recording_workflow_checks(window, dir);
         clip_editing_checks(window, dir);
+        midi_tools_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

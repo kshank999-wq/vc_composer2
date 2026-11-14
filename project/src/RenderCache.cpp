@@ -40,9 +40,16 @@ bool same_regions(const std::vector<MidiRegion>& a, const std::vector<MidiRegion
 {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i) {
-        if (a[i].id != b[i].id || a[i].notes.size() != b[i].notes.size()) return false;
+        // The lane matters too: only the main lane plays.
+        if (a[i].id != b[i].id || a[i].lane != b[i].lane || a[i].notes.size() != b[i].notes.size() ||
+            a[i].controllers.size() != b[i].controllers.size())
+            return false;
         for (std::size_t k = 0; k < a[i].notes.size(); ++k)
             if (!same(a[i].notes[k], b[i].notes[k])) return false;
+        for (std::size_t k = 0; k < a[i].controllers.size(); ++k) {
+            const auto &x = a[i].controllers[k], &y = b[i].controllers[k];
+            if (x.tick != y.tick || x.channel != y.channel || x.controller != y.controller || x.value != y.value) return false;
+        }
     }
     return true;
 }

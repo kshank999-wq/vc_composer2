@@ -16,6 +16,7 @@
 #include "ui/hw/HwControls.h"
 #include "ui/hw/HwTheme.h"
 #include "vcc/project/Automation.h"
+#include "vcc/project/MidiTools.h"
 #include "vcc/project/Performance.h"
 #include "vcc/project/Render.h"
 #include "vcc/project/RenderCache.h"
@@ -58,6 +59,7 @@ struct RegionView {
     Ticks end = 0;
     int lane = 0;
     std::vector<NoteEvent> notes;
+    std::vector<ControllerEvent> controllers;
 };
 
 struct LaneView {
@@ -248,6 +250,13 @@ struct Model final : AutomationTimeline {
     std::set<std::string> show_automation;
     std::map<std::string, int> lane_heights;  ///< "owner/lane id" -> row height
     bool pencil = false;
+    /// MIDI tools: the quantize settings last used, and what the piano
+    /// roll's bottom lane shows (-1 velocity, else a controller number).
+    project::QuantizeSettings quantize{kTicksPerQuarter / 4, 1.0, 0.0, false};
+    int cc_lane = -1;
+    /// The piano roll's tools (set by the view): on its selected notes, or all.
+    std::function<int(const project::QuantizeSettings&)> quantize_action;
+    std::function<int(const project::VelocityChange&)> velocity_action;
     std::function<void()> automation_layout_changed;
     std::function<void()> pencil_changed;
 
@@ -489,7 +498,7 @@ struct Model final : AutomationTimeline {
                     l.score_written.clear();
                 }
                 for (const auto& r : v->regions)
-                    l.regions.push_back(RegionView{r.id, r.source, r.start, r.end, r.lane, r.notes});
+                    l.regions.push_back(RegionView{r.id, r.source, r.start, r.end, r.lane, r.notes, r.controllers});
             }
             int lo = 128, hi = -1;
             auto take = [&](const NoteEvent& n) {
@@ -640,7 +649,13 @@ class Toolbar final : public juce::Component {
 public:
     explicit Toolbar(Model& m) : m_(m)
     {
-        for (auto* b : {&zoom_out_, &zoom_in_, &fit_, &roll_, &pencil_}) addAndMakeVisible(*b);
+        for (auto* b : {&zoom_out_, &zoom_in_, &fit_, &roll_, &pencil_, &quantize_, &velocity_}) addAndMakeVisible(*b);
+        quantize_.setTooltip("Quantize the selected notes, or all played-in notes of the track (Q in the piano roll)");
+        quantize_.setComponentID("sequencer_quantize");
+        quantize_.onClick = [this] { show_quantize_menu(); };
+        velocity_.setTooltip("Change the velocity of the selected notes, or all played-in notes of the track");
+        velocity_.setComponentID("sequencer_velocity");
+        velocity_.onClick = [this] { show_velocity_menu(); };
         pencil_.setTooltip("Pencil: draw automation freehand in a lane (P)");
         pencil_.setClickingTogglesState(true);
         pencil_.setComponentID("sequencer_pencil");
@@ -677,7 +692,7 @@ public:
         int lanes = m_.track_count();
         juce::String info = juce::String(lanes) + (lanes == 1 ? " track" : " tracks") + juce::String::fromUTF8("  \xc2\xb7  ") +
                             juce::String(m_.meter.bar_at(std::max<Ticks>(0, m_.end - 1))) + " bars";
-        g.drawText(info, getLocalBounds().withTrimmedLeft(pencil_.getRight() + 16).withTrimmedRight(12),
+        g.drawText(info, getLocalBounds().withTrimmedLeft(velocity_.getRight() + 16).withTrimmedRight(12),
                    juce::Justification::centredRight);
     }
 
@@ -693,11 +708,79 @@ public:
         roll_.setBounds(r.removeFromLeft(92));
         r.removeFromLeft(6);
         pencil_.setBounds(r.removeFromLeft(64));
+        r.removeFromLeft(12);
+        quantize_.setBounds(r.removeFromLeft(74));
+        r.removeFromLeft(6);
+        velocity_.setBounds(r.removeFromLeft(70));
+    }
+
+    /// The grids the MIDI tools offer.
+    static std::vector<std::pair<Ticks, juce::String>> quantize_grids()
+    {
+        const Ticks q = kTicksPerQuarter;
+        return {{q, "1/4"}, {q / 2, "1/8"}, {q / 3, "1/8 triplet"}, {q / 4, "1/16"}, {q / 6, "1/16 triplet"}, {q / 8, "1/32"}};
+    }
+
+    void show_quantize_menu()
+    {
+        auto& q = m_.quantize;
+        juce::PopupMenu menu;
+        menu.addSectionHeader("Quantize to");
+        for (const auto& [ticks, name] : quantize_grids())
+            menu.addItem(name, true, q.grid == ticks, [this, t = ticks] {
+                m_.quantize.grid = t;
+                if (m_.quantize_action) m_.quantize_action(m_.quantize);
+            });
+        menu.addSeparator();
+        juce::PopupMenu strength, swing;
+        for (int s : {100, 90, 75, 50, 25})
+            strength.addItem(juce::String(s) + "%", true, std::abs(q.strength * 100.0 - s) < 0.5,
+                             [this, s] { m_.quantize.strength = s / 100.0; });
+        for (int s : {0, 16, 33, 50})
+            swing.addItem(s == 0 ? juce::String("Straight") : juce::String(s) + "% of a step late", true,
+                          std::abs(q.swing * 100.0 - s) < 1.0, [this, s] { m_.quantize.swing = s / 100.0; });
+        menu.addSubMenu("Strength (" + juce::String(juce::roundToInt(q.strength * 100.0)) + "%)", strength);
+        menu.addSubMenu("Swing", swing);
+        menu.addItem("Quantize note ends too", true, q.ends, [this] { m_.quantize.ends = !m_.quantize.ends; });
+        menu.addItem("Quantize now (Q)", [this] {
+            if (m_.quantize_action) m_.quantize_action(m_.quantize);
+        });
+        // Input quantize: the selected track's recordings land on a grid.
+        if (const auto* t = m_.ctx.session.data().find_track(m_.ctx.session.selected_track());
+            t && (t->kind == project::TrackKind::Instrument || t->kind == project::TrackKind::MidiOnly)) {
+            juce::PopupMenu input;
+            const std::string id = t->id;
+            input.addItem("Off (as played)", true, t->input_quantize == 0, [this, id] { m_.ctx.session.set_input_quantize(id, 0); });
+            for (const auto& [ticks, name] : quantize_grids())
+                input.addItem(name, true, t->input_quantize == ticks,
+                              [this, id, t2 = ticks] { m_.ctx.session.set_input_quantize(id, t2); });
+            menu.addSeparator();
+            menu.addSubMenu("Input quantize while recording " + juce::String(t->name), input);
+        }
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&quantize_));
+    }
+
+    void show_velocity_menu()
+    {
+        auto apply = [this](project::VelocityChange v) {
+            if (m_.velocity_action) m_.velocity_action(v);
+        };
+        juce::PopupMenu menu;
+        menu.addItem("Louder (+10)", [apply] { project::VelocityChange v; v.offset = 10; apply(v); });
+        menu.addItem("Softer (-10)", [apply] { project::VelocityChange v; v.offset = -10; apply(v); });
+        menu.addItem("Scale up 120%", [apply] { project::VelocityChange v; v.scale = 1.2; apply(v); });
+        menu.addItem("Scale down 80%", [apply] { project::VelocityChange v; v.scale = 0.8; apply(v); });
+        menu.addItem("Even out (halfway to the average)", [apply] { project::VelocityChange v; v.compress = 0.5; apply(v); });
+        menu.addSeparator();
+        for (int s : {64, 90, 100, 127})
+            menu.addItem("Set all to " + juce::String(s), [apply, s] { project::VelocityChange v; v.set = s; apply(v); });
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&velocity_));
     }
 
 private:
     Model& m_;
-    juce::TextButton zoom_out_{"-"}, zoom_in_{"+"}, fit_{"Fit"}, roll_{"Piano Roll"}, pencil_{"Pencil"};
+    juce::TextButton zoom_out_{"-"}, zoom_in_{"+"}, fit_{"Fit"}, roll_{"Piano Roll"}, pencil_{"Pencil"},
+        quantize_{"Quantize"}, velocity_{"Velocity"};
 };
 
 // --- Ruler -----------------------------------------------------------------------------------------
@@ -2638,6 +2721,18 @@ public:
             return;
         }
 
+        if (lane_label_area().contains(e.getPosition())) {
+            show_lane_menu();
+            return;
+        }
+        if (velocity_area().contains(e.getPosition()) && m_.cc_lane >= 0) {
+            // Drawing a controller: points along the drag, committed on release.
+            cc_points_.clear();
+            add_cc_point(pos);
+            drag_ = Drag::Cc;
+            repaint();
+            return;
+        }
         if (velocity_area().contains(e.getPosition())) {
             if (auto sid = score_velocity_hit(*l, pos.x); sid && !velocity_hit(*l, pos.x)) {
                 if (!is_perf_selected(*sid)) perf_sel_ = {*sid};
@@ -2762,6 +2857,7 @@ public:
             }
             case Drag::Velocity:
             case Drag::PerfVelocity: vel_value_ = velocity_at(pos.y); break;
+            case Drag::Cc: add_cc_point(pos); break;
             case Drag::PerfMove:
             case Drag::PerfLength: {
                 // Snapped, the written note moves on the grid and the score
@@ -2812,6 +2908,7 @@ public:
                 if (dt_ != 0) commit_score_edit(Drag::PerfLength);
                 break;
             case Drag::PerfVelocity: commit_performance(Drag::PerfVelocity); break;
+            case Drag::Cc: commit_cc(); break;
             case Drag::None: break;
         }
         publish_selection();
@@ -2852,6 +2949,10 @@ public:
             repaint();
             return true;
         }
+        if (!key.getModifiers().isAnyModifierKeyDown() && (key.getKeyCode() == 'Q' || key.getKeyCode() == 'q')) {
+            quantize(m_.quantize);
+            return true;
+        }
         if (key.getModifiers().isCommandDown() && (key.getKeyCode() == 'A' || key.getKeyCode() == 'a')) {
             selection_.clear();
             if (const auto* l = m_.selected_lane())
@@ -2863,8 +2964,198 @@ public:
         return false;
     }
 
+    // --- MIDI tools (the toolbar's Quantize and Velocity, Q, the CC lane) ---------------
+
+    /// The selected played-in notes, for the session's MIDI tools (empty: all).
+    std::vector<session::Session::RegionNote> chosen_notes() const
+    {
+        std::vector<session::Session::RegionNote> out;
+        for (const auto& k : selection_) out.push_back({k.region, k.start, k.pitch});
+        return out;
+    }
+
+    int quantize(const project::QuantizeSettings& q)
+    {
+        const auto* l = m_.selected_lane();
+        if (!l || l->audio || l->reference) return 0;
+        const bool some = !selection_.empty();
+        const int moved = m_.ctx.session.quantize_regions(l->id, chosen_notes(), q);
+        selection_.clear();  // the notes moved: their keys are stale
+        publish_selection();
+        status(moved > 0 ? "Quantized " + juce::String(moved) + (moved == 1 ? " note" : " notes")
+                         : juce::String(some ? "The selected notes are already on the grid"
+                                             : "No played-in notes to quantize (score notes follow the score)"));
+        repaint();
+        return moved;
+    }
+
+    int change_velocity(const project::VelocityChange& v)
+    {
+        const auto* l = m_.selected_lane();
+        if (!l || l->audio || l->reference) return 0;
+        const int changed = m_.ctx.session.change_region_velocities(l->id, chosen_notes(), v);
+        status(changed > 0 ? "Velocity of " + juce::String(changed) + (changed == 1 ? " note" : " notes") + " changed"
+                           : juce::String("No velocities changed"));
+        repaint();
+        return changed;
+    }
+
+    /// Draws controller `cc` from `from` to `to` with a straight ramp of
+    /// values (the check, and a click-drag in the CC lane, come here).
+    bool draw_cc(int cc, Ticks from, Ticks to, int v0, int v1)
+    {
+        const auto* l = m_.selected_lane();
+        if (!l || to <= from) return false;
+        const RegionView* region = nullptr;
+        for (const auto& r : l->regions)
+            if (r.lane == 0 && r.start <= from && from < r.end) region = &r;
+        if (!region) {
+            status("Draw controllers inside a MIDI region (record or draw notes first)");
+            return false;
+        }
+        const Ticks step = std::max<Ticks>(1, grid() / 2);
+        std::vector<ControllerEvent> pts;
+        int last = -1;
+        for (Ticks t = from; t < to; t += step) {
+            const double f = static_cast<double>(t - from) / static_cast<double>(std::max<Ticks>(1, to - from - 1));
+            int v = juce::roundToInt(v0 + (v1 - v0) * std::min(1.0, f));
+            if (cc == 64) v = v >= 64 ? 127 : 0;  // the sustain pedal is on or off
+            if (v == last) continue;
+            pts.push_back(ControllerEvent{t, 0, cc, v});
+            last = v;
+        }
+        const bool ok = m_.ctx.session.draw_region_controller(l->id, region->id, cc, from, to, pts);
+        if (ok) status("Drew " + lane_name(cc));
+        return ok;
+    }
+
+    void set_cc_lane(int cc)
+    {
+        m_.cc_lane = cc;
+        repaint();
+    }
+
+    static juce::String lane_name(int cc)
+    {
+        switch (cc) {
+            case -1: return "Velocity";
+            case 1: return "CC1 Modulation";
+            case 7: return "CC7 Volume";
+            case 10: return "CC10 Pan";
+            case 11: return "CC11 Expression";
+            case 64: return "CC64 Sustain";
+            default: return "CC" + juce::String(cc);
+        }
+    }
+
 private:
-    enum class Drag { None, Create, Move, Resize, Velocity, PerfMove, PerfLength, PerfVelocity };
+    void show_lane_menu()
+    {
+        juce::PopupMenu menu;
+        for (int cc : {-1, 1, 11, 7, 10, 64})
+            menu.addItem(lane_name(cc), true, m_.cc_lane == cc, [this, cc] { set_cc_lane(cc); });
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition());
+    }
+
+    int cc_value_at(float y) const
+    {
+        const auto v = velocity_area();
+        const float frac = (static_cast<float>(v.getBottom()) - 4.0f - y) / static_cast<float>(v.getHeight() - 10);
+        return juce::jlimit(0, 127, juce::roundToInt(frac * 127.0f));
+    }
+
+    void add_cc_point(juce::Point<float> p)
+    {
+        const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(std::llround(m_.tick_of(p.x))));
+        cc_points_.push_back({t, cc_value_at(p.y)});
+    }
+
+    /// A drag in the CC lane: its points, one per half grid step, replace
+    /// the controller across the dragged span.
+    void commit_cc()
+    {
+        const auto* l = m_.selected_lane();
+        if (!l || cc_points_.empty()) return;
+        auto pts = cc_points_;
+        cc_points_.clear();
+        std::sort(pts.begin(), pts.end());
+        const Ticks step = std::max<Ticks>(1, grid() / 2);
+        const Ticks from = (pts.front().first / step) * step;
+        const Ticks to = std::max(from + step, (pts.back().first / step + 1) * step);
+        const RegionView* region = nullptr;
+        for (const auto& r : l->regions)
+            if (r.lane == 0 && r.start <= from && from < r.end) region = &r;
+        if (!region) {
+            status("Draw controllers inside a MIDI region (record or draw notes first)");
+            return;
+        }
+        std::vector<ControllerEvent> events;
+        int last = -1;
+        std::size_t k = 0;
+        for (Ticks t = from; t < to; t += step) {
+            while (k + 1 < pts.size() && pts[k + 1].first <= t) ++k;
+            int v = pts[k].second;
+            if (m_.cc_lane == 64) v = v >= 64 ? 127 : 0;
+            if (v == last) continue;
+            events.push_back(ControllerEvent{t, 0, m_.cc_lane, v});
+            last = v;
+        }
+        if (m_.ctx.session.draw_region_controller(l->id, region->id, m_.cc_lane, from, to, events)) status("Drew " + lane_name(m_.cc_lane));
+    }
+
+    /// The CC lane: each main-lane region's values as steps.
+    void paint_cc(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> vel)
+    {
+        juce::Graphics::ScopedSaveState state(g);
+        g.reduceClipRegion(vel);
+        g.setColour(colours::background.darker(0.15f));
+        g.fillRect(vel);
+        paint_grid(g, m_, vel, 0, false);
+        g.setColour(colours::outline);
+        g.drawHorizontalLine(vel.getY(), static_cast<float>(vel.getX()), static_cast<float>(vel.getRight()));
+        const float bottom = static_cast<float>(vel.getBottom()) - 4.0f;
+        const float span = static_cast<float>(vel.getHeight() - 10);
+        auto y_of_value = [&](int v) { return bottom - span * static_cast<float>(v) / 127.0f; };
+        for (const auto& r : l.regions) {
+            if (r.lane != 0) continue;
+            std::vector<ControllerEvent> ev;
+            for (const auto& e : r.controllers)
+                if (e.controller == m_.cc_lane) ev.push_back(e);
+            if (ev.empty()) continue;
+            juce::Path p;
+            const float x_end = static_cast<float>(m_.x_of(static_cast<double>(r.end)));
+            for (std::size_t i = 0; i < ev.size(); ++i) {
+                const float x0 = static_cast<float>(m_.x_of(static_cast<double>(ev[i].tick)));
+                const float x1 = i + 1 < ev.size() ? static_cast<float>(m_.x_of(static_cast<double>(ev[i + 1].tick))) : x_end;
+                const float y = y_of_value(ev[i].value);
+                if (i == 0) p.startNewSubPath(x0, bottom);
+                p.lineTo(x0, y);
+                p.lineTo(x1, y);
+            }
+            p.lineTo(x_end, bottom);
+            p.closeSubPath();
+            g.setColour(colours::accent.withAlpha(0.25f));
+            g.fillPath(p);
+            g.setColour(colours::accent);
+            g.strokePath(p, juce::PathStrokeType(1.4f));
+        }
+        // The stroke being drawn.
+        if (drag_ == Drag::Cc && cc_points_.size() > 1) {
+            juce::Path p;
+            for (std::size_t i = 0; i < cc_points_.size(); ++i) {
+                const float x = static_cast<float>(m_.x_of(static_cast<double>(cc_points_[i].first)));
+                const float y = y_of_value(cc_points_[i].second);
+                if (i == 0) p.startNewSubPath(x, y);
+                else p.lineTo(x, y);
+            }
+            g.setColour(colours::playhead);
+            g.strokePath(p, juce::PathStrokeType(1.5f));
+        }
+    }
+
+    std::vector<std::pair<Ticks, int>> cc_points_;
+
+    enum class Drag { None, Create, Move, Resize, Velocity, PerfMove, PerfLength, PerfVelocity, Cc };
 
     juce::Rectangle<int> grid_area() const
     {
@@ -2876,6 +3167,8 @@ private:
         const auto g = grid_area();
         return {0, g.getY(), kHeader, g.getHeight()};
     }
+    /// The lane's name, a menu (inline, the roll's left part is under the track header).
+    juce::Rectangle<int> lane_label_area() const { return {inset_, getHeight() - kVelocity, kHeader - inset_, 20}; }
     juce::Rectangle<int> velocity_area() const
     {
         return {kHeader, getHeight() - kVelocity, std::max(0, getWidth() - kHeader - kScroll), kVelocity};
@@ -3788,9 +4081,14 @@ private:
         g.fillRect(0, vel.getY(), kHeader, vel.getHeight());
         g.setColour(colours::text_dim);
         g.setFont(juce::FontOptions(11.0f));
-        g.drawText("Velocity", juce::Rectangle<int>(10, vel.getY() + 6, kHeader - 20, 14), juce::Justification::centredLeft);
+        g.drawFittedText(lane_name(m_.cc_lane) + juce::String::fromUTF8(" \xe2\x96\xbe"),
+                         lane_label_area().reduced(4, 0).withTrimmedTop(4), juce::Justification::topLeft, 2);
+        if (m_.cc_lane >= 0) {
+            paint_cc(g, l, vel);
+            return;
+        }
         g.setFont(juce::FontOptions(9.5f));
-        g.drawText("127", juce::Rectangle<int>(10, vel.getY() + 2, kHeader - 18, 12), juce::Justification::centredRight);
+        g.drawText("127", juce::Rectangle<int>(10, vel.getY() + 18, kHeader - 18, 12), juce::Justification::centredRight);  // under the name
         g.drawText("1", juce::Rectangle<int>(10, vel.getBottom() - 14, kHeader - 18, 12), juce::Justification::centredRight);
 
         juce::Graphics::ScopedSaveState state(g);
@@ -3879,6 +4177,8 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
             owner.addAndMakeVisible(comp);
         // The piano roll opens inline, in the expanded track's row (docs/spec/ui).
         lanes.set_roll(&roll, [this](int inset) { roll.set_inset(inset); });
+        model.quantize_action = [this](const project::QuantizeSettings& q) { return roll.quantize(q); };
+        model.velocity_action = [this](const project::VelocityChange& v) { return roll.change_velocity(v); };
         model.expanded_changed = [this] {
             toolbar.roll_button().setToggleState(!model.expanded.empty(), juce::dontSendNotification);
             lanes.update_scroll();
@@ -4108,6 +4408,11 @@ bool SequencerView::promote_take(session::Session& session, const std::string& t
 }
 
 bool SequencerView::split_at_playhead() { return impl_->lanes.split_at_playhead(); }
+int SequencerView::quantize_notes(const project::QuantizeSettings& q) { return impl_->roll.quantize(q); }
+int SequencerView::change_velocities(const project::VelocityChange& v) { return impl_->roll.change_velocity(v); }
+void SequencerView::set_cc_lane(int cc) { impl_->roll.set_cc_lane(cc); }
+int SequencerView::cc_lane() const { return impl_->model.cc_lane; }
+bool SequencerView::draw_cc(int cc, Ticks from, Ticks to, int v0, int v1) { return impl_->roll.draw_cc(cc, from, to, v0, v1); }
 bool SequencerView::crossfade_selected(double seconds) { return impl_->lanes.crossfade_selected(seconds); }
 bool SequencerView::consolidate_selected() { return impl_->lanes.consolidate_selected(); }
 bool SequencerView::nudge_selected(double seconds) { return impl_->lanes.nudge_selected(seconds); }

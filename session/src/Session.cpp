@@ -1094,7 +1094,7 @@ std::vector<std::string> Session::add_recorded_regions(const std::vector<std::pa
             project::TrackVersion* v = t ? t->active_version() : nullptr;
             if (!v || t->kind == project::TrackKind::Audio || t->kind == project::TrackKind::Aux) return false;
             project::MidiRegion r = regions[i].second;
-            if (r.end <= r.start || r.notes.empty()) return false;
+            if (r.end <= r.start || (r.notes.empty() && r.controllers.empty())) return false;
             r.id = ids[i];
             r.lane = 0;
             if (as_takes) {
@@ -1255,6 +1255,134 @@ bool Session::remove_audio_clip(const std::string& track_id, const std::string& 
                                             [&](const project::AudioClip& c) { return c.id == clip_id; }),
                              v->audio_clips.end());
         return v->audio_clips.size() != before;
+    }));
+}
+
+namespace {
+/// Grows a region to whole bars around what it holds.
+void fit_region(project::MidiRegion& r, const MeterMap& meter)
+{
+    Ticks lo = r.start, hi = r.end;
+    for (const auto& n : r.notes) {
+        lo = std::min(lo, n.start);
+        hi = std::max(hi, n.end());
+    }
+    for (const auto& c : r.controllers) {
+        lo = std::min(lo, c.tick);
+        hi = std::max(hi, c.tick + 1);
+    }
+    if (lo < r.start) r.start = meter.bar_start(meter.bar_at(std::max<Ticks>(0, lo)));
+    if (hi > r.end) r.end = meter.bar_start(meter.bar_at(hi - 1) + 1);
+    std::stable_sort(r.controllers.begin(), r.controllers.end(),
+                     [](const ControllerEvent& a, const ControllerEvent& b) { return a.tick < b.tick; });
+}
+
+/// The notes a MIDI tool works on: the chosen ones, or every note of the
+/// main-lane regions.
+template <class F>
+bool for_region_notes(project::TrackVersion& v, const std::vector<Session::RegionNote>& chosen, F&& f)
+{
+    bool any = false;
+    for (auto& r : v.regions) {
+        std::vector<std::size_t> idx;
+        for (std::size_t i = 0; i < r.notes.size(); ++i) {
+            if (chosen.empty()) {
+                if (r.lane == 0) idx.push_back(i);
+                continue;
+            }
+            for (const auto& c : chosen)
+                if (c.region == r.id && c.start == r.notes[i].start && c.pitch == r.notes[i].pitch) {
+                    idx.push_back(i);
+                    break;
+                }
+        }
+        if (!idx.empty()) any = f(r, idx) || any;
+    }
+    return any;
+}
+}  // namespace
+
+int Session::quantize_regions(const std::string& track_id, const std::vector<RegionNote>& notes,
+                              const project::QuantizeSettings& q)
+{
+    if (q.grid <= 0) return 0;
+    int moved = 0;
+    const bool ok = edit("Quantize", [&](project::ProjectData& d) {
+        project::Track* t = d.find_track(track_id);
+        project::TrackVersion* v = t ? t->active_version() : nullptr;
+        if (!v) return false;
+        return for_region_notes(*v, notes, [&](project::MidiRegion& r, const std::vector<std::size_t>& idx) {
+            std::vector<NoteEvent> picked, rest;
+            for (std::size_t i = 0; i < r.notes.size(); ++i)
+                (std::find(idx.begin(), idx.end(), i) != idx.end() ? picked : rest).push_back(r.notes[i]);
+            const int n = project::quantize_notes(picked, q);
+            if (n == 0) return false;
+            moved += n;
+            rest.insert(rest.end(), picked.begin(), picked.end());
+            project::remove_overlaps(rest);
+            r.notes = std::move(rest);
+            fit_region(r, d.meter);
+            return true;
+        });
+    });
+    return ok ? moved : 0;
+}
+
+int Session::change_region_velocities(const std::string& track_id, const std::vector<RegionNote>& notes,
+                                      const project::VelocityChange& change)
+{
+    int changed = 0;
+    const bool ok = edit("Velocity", [&](project::ProjectData& d) {
+        project::Track* t = d.find_track(track_id);
+        project::TrackVersion* v = t ? t->active_version() : nullptr;
+        if (!v) return false;
+        // One pass over every chosen note, so "compress" sees them all together.
+        std::vector<NoteEvent*> all;
+        for_region_notes(*v, notes, [&](project::MidiRegion& r, const std::vector<std::size_t>& idx) {
+            for (auto i : idx) all.push_back(&r.notes[i]);
+            return true;
+        });
+        changed = project::change_velocities(all, change);
+        return changed > 0;
+    });
+    return ok ? changed : 0;
+}
+
+bool Session::draw_region_controller(const std::string& track_id, const std::string& region_id, int cc, Ticks from,
+                                     Ticks to, std::vector<ControllerEvent> points)
+{
+    if (to <= from || cc < 0 || cc > 127) return false;
+    return edit("Draw CC", [&](project::ProjectData& d) {
+        project::Track* t = d.find_track(track_id);
+        project::TrackVersion* v = t ? t->active_version() : nullptr;
+        if (!v) return false;
+        for (auto& r : v->regions) {
+            if (r.id != region_id) continue;
+            r.controllers.erase(std::remove_if(r.controllers.begin(), r.controllers.end(),
+                                               [&](const ControllerEvent& e) {
+                                                   return e.controller == cc && e.tick >= from && e.tick < to;
+                                               }),
+                                r.controllers.end());
+            for (auto p : points) {
+                if (p.tick < from || p.tick >= to) continue;
+                p.controller = cc;
+                p.channel = t->midi_channel;
+                p.value = std::clamp(p.value, 0, 127);
+                r.controllers.push_back(p);
+            }
+            fit_region(r, d.meter);
+            return true;
+        }
+        return false;
+    });
+}
+
+bool Session::set_input_quantize(const std::string& track_id, Ticks grid)
+{
+    return edit("Input quantize", on_track(track_id, [&](project::Track& t) {
+        if (t.input_quantize == std::max<Ticks>(0, grid)) return false;
+        t.input_quantize = std::max<Ticks>(0, grid);
+        return true;
     }));
 }
 

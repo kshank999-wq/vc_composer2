@@ -80,6 +80,9 @@ struct MidiRegion {
     int lane = 0;  ///< Take lane; 0 is the main lane.
     std::vector<NoteEvent> notes;
     std::string source;  ///< "chord_explorer:pop_uplift", "ostinato:urgent_string_spiccato/B", "manual"...
+    /// Controllers played in or drawn (sustain, modulation...), absolute
+    /// ticks; they play on the track's channel, like the notes.
+    std::vector<ControllerEvent> controllers;
 };
 
 /// A piece of an audio file placed on the timeline (Main Spec §11). Audio is
@@ -314,6 +317,9 @@ struct Track {
     /// What an armed instrument or MIDI track records: "midi" (the MIDI
     /// keyboard, as a region) or "audio" (its input, onto its audio lane).
     std::string record_source = "midi";
+    /// Input quantize: MIDI recorded onto this track lands on this grid
+    /// (0: as played).
+    Ticks input_quantize = 0;
     std::vector<AutomationLane> automation;
     std::string automation_mode = "read";
     bool include_in_export = true;  ///< False for Reference tracks unless the user opts in.

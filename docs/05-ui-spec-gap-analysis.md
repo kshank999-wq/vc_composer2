@@ -663,3 +663,35 @@ and the document model. The work is mostly presentation.
     - Not yet: splitting MIDI regions, multi-clip selection (a range
       selection that consolidates or nudges several clips at once), and
       drawing crossfade curves across the overlap.
+
+12. **MIDI tools. Done** (on played-in MIDI: regions; score notes follow the
+    score and are shaped through their performance instead).
+    - **Quantize** (sequencer toolbar, or Q in the piano roll): the
+      selected notes, or with none every note of the track's main-lane
+      regions. Grid 1/4, 1/8, 1/8 triplet, 1/16, 1/16 triplet or 1/32,
+      strength 25-100%, swing (every second step late by up to half a
+      step) and, optionally, note ends (never shorter than half a step).
+      Lengths are kept; regions grow to whole bars to keep notes that move
+      past their edges; no two notes of one pitch are left overlapping.
+    - **Input quantize** (Quantize menu, per track, saved): MIDI recorded
+      onto the track lands on the grid as the take is placed.
+    - **Velocity** (toolbar): louder or softer by 10, scale to 120% or 80%,
+      even out halfway to the average, or set all to 64, 90, 100 or 127.
+    - **Controllers.** Regions now hold CCs (saved; they play on the
+      track's channel like its notes). MIDI recording keeps them: the
+      sustain pedal, the mod wheel and any other controller played.
+      The piano roll's bottom lane chooses (click its name) Velocity or
+      CC1 Modulation, CC11 Expression, CC7 Volume, CC10 Pan or CC64
+      Sustain; dragging in a CC lane draws the controller across the
+      dragged span, half a grid step a point (sustain is on or off).
+    - The render cache now notices a region's lane and its controllers
+      changing (a promoted take used to keep sounding as before).
+    - `project/MidiTools` (quantize, velocity, overlaps) and the session's
+      `quantize_regions`, `change_region_velocities`,
+      `draw_region_controller`, `set_input_quantize` are unit-tested
+      (`test_midi_tools`).
+    - **Checks.** Recording with input quantize and the pedal; toolbar
+      quantize; the Q key; velocity; a CC1 ramp by call and CC11 by mouse;
+      the drawn CC1 in the track's render. Screenshot `midi-tools`.
+    - Not yet: pitch bend and aftertouch, a CC lane in the Composer view,
+      transform tools (legato, humanize for regions, transpose).

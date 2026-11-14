@@ -18,6 +18,7 @@
 #include "vcc/ostinato/Ostinato.h"
 #include "vcc/project/Performance.h"
 #include "vcc/session/Notate.h"
+#include "vcc/project/MidiTools.h"
 #include "vcc/project/Project.h"
 #include "vcc/project/Stems.h"
 #include "vcc/templates/Templates.h"
@@ -253,6 +254,30 @@ public:
     bool comp_take(const std::string& track_id, const std::string& take_clip_id, double from, double to);
     /// What an armed instrument or MIDI track records: "midi" or "audio". One undo step.
     bool set_record_source(const std::string& track_id, const std::string& source);
+
+    // --- MIDI tools on regions (one undo step each) ---------------------------------------
+    /// A note in a region, as the piano roll selects it.
+    struct RegionNote {
+        std::string region;
+        Ticks start = 0;
+        int pitch = 0;
+    };
+    /// Quantizes `notes`, or with none every note of the track's main-lane
+    /// regions ("Quantize"). Regions grow, to whole bars, to keep what moves
+    /// past their edges. Returns how many notes moved (0: nothing changed).
+    int quantize_regions(const std::string& track_id, const std::vector<RegionNote>& notes,
+                         const project::QuantizeSettings& q);
+    /// Changes velocities of `notes`, or with none of every note in the
+    /// track's main-lane regions ("Velocity"). Returns how many changed.
+    int change_region_velocities(const std::string& track_id, const std::vector<RegionNote>& notes,
+                                 const project::VelocityChange& change);
+    /// Replaces controller `cc`'s events in [from, to) of a region with
+    /// `points` (their controller number and channel are set here) ("Draw
+    /// CC"). The region grows, to whole bars, to hold them.
+    bool draw_region_controller(const std::string& track_id, const std::string& region_id, int cc, Ticks from, Ticks to,
+                                std::vector<ControllerEvent> points);
+    /// Input quantize for MIDI recorded onto the track (0: off). One undo step.
+    bool set_input_quantize(const std::string& track_id, Ticks grid);
     bool update_audio_clip(const std::string& track_id, const std::string& clip_id, const std::string& label,
                            const std::function<void(project::AudioClip&)>& change);
     bool remove_audio_clip(const std::string& track_id, const std::string& clip_id);

@@ -1,5 +1,7 @@
 #include "audio/PlaybackEngine.h"
 
+#include "vcc/project/MidiTools.h"
+
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -2158,10 +2160,15 @@ int PlaybackEngine::place_midi(const RecordPass& pass)
     const Ticks span_start = tick_at(std::max<std::int64_t>(pass.span_start, 0));
     const Ticks span_end = tick_at(pass.span_end);
     std::vector<NoteEvent> notes;
+    std::vector<ControllerEvent> controllers;
     std::map<int, std::vector<std::pair<Ticks, int>>> open;  // channel*128+pitch -> starts, velocities
     for (const auto& x : mine) {
         const int status = x.bytes[0] & 0xF0, channel = x.bytes[0] & 0x0F, pitch = x.bytes[1] & 127, velocity = x.bytes[2] & 127;
         const Ticks at = std::max(span_start, tick_at(x.sample));  // a note just early starts the take
+        if (status == 0xB0) {
+            controllers.push_back(ControllerEvent{at, channel, pitch, velocity});
+            continue;
+        }
         if (status == 0x90 && velocity > 0) {
             open[channel * 128 + pitch].emplace_back(at, velocity);
         } else if (status == 0x80 || status == 0x90) {
@@ -2175,19 +2182,30 @@ int PlaybackEngine::place_midi(const RecordPass& pass)
     for (auto& [key, starts] : open)  // still held when the pass ended
         for (const auto& [from, vel] : starts)
             notes.push_back(NoteEvent{from, std::max<Ticks>(1, std::max(span_end, from + 1) - from), key % 128, std::max(1, vel), key / 128, {}});
-    if (notes.empty()) return 0;
+    if (notes.empty() && controllers.empty()) return 0;
+    // Input quantize: the track's grid, applied as the take is placed.
+    if (const auto* track = d.find_track(pass.midi_track); track && track->input_quantize > 0) {
+        project::QuantizeSettings q;
+        q.grid = track->input_quantize;
+        project::quantize_notes(notes, q);
+    }
     std::sort(notes.begin(), notes.end(), [](const NoteEvent& a, const NoteEvent& b) {
         return a.start != b.start ? a.start < b.start : a.pitch < b.pitch;
     });
     project::MidiRegion region;
     Ticks last = span_end;
-    for (const auto& n : notes) last = std::max(last, n.end());
+    Ticks first = span_start;
+    for (const auto& n : notes) {
+        last = std::max(last, n.end());
+        first = std::min(first, n.start);
+    }
     // Whole bars, so takes line up.
-    region.start = d.meter.bar_start(d.meter.bar_at(std::min(span_start, notes.front().start)));
+    region.start = d.meter.bar_start(d.meter.bar_at(first));
     const int last_bar = d.meter.bar_at(std::max<Ticks>(last - 1, region.start));
     region.end = d.meter.bar_start(last_bar + 1);
     region.source = "recorded";
     region.notes = std::move(notes);
+    region.controllers = std::move(controllers);
     const int count = static_cast<int>(region.notes.size());
     if (session_.add_recorded_regions({{pass.midi_track, std::move(region)}}, "Record MIDI", true).empty()) return 0;
     return count;
@@ -2408,9 +2426,11 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
                         for (const auto meta : live_block_) {
                             if (meta.numBytes > 3 || meta.numBytes < 2) continue;
                             const int status = meta.data[0] & 0xF0;
-                            if (status != 0x80 && status != 0x90) continue;
+                            // Notes and controllers (sustain pedal, mod wheel...).
+                            if (status != 0x80 && status != 0x90 && status != 0xB0) continue;
+                            if (status == 0xB0 && meta.numBytes < 3) continue;
                             const std::int64_t at = at0 + meta.samplePosition;
-                            const bool on = status == 0x90 && meta.data[2] > 0;
+                            const bool on = (status == 0x90 && meta.data[2] > 0) || status == 0xB0;
                             if (on && (at < from || (pass->punch && (at < pass->punch_in || at >= pass->punch_out)))) continue;
                             CapturedMidi e;
                             e.pass = pass->id;
