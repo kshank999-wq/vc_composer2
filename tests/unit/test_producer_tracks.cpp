@@ -114,3 +114,68 @@ TEST_CASE("a MIDI track sends to an external device, saved and undoable")
     const auto f = s.add_track("Flute", "woodwinds.flute");
     CHECK(!s.set_midi_output(f, "Hardware Synth Port 1"));
 }
+
+TEST_CASE("comping: part of a take replaces the main lane there, splitting what it covers")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto a = s.add_audio_track("Vox", false);
+    project::AudioClip c;
+    c.file = "Audio Files/take1.wav";
+    c.length = 8.0;
+    c.channels = 1;
+    c.file_sample_rate = 48000.0;
+    s.add_audio_clips({{a, c}}, "Record");  // take 1
+    c.file = "Audio Files/take2.wav";
+    const auto take2 = s.add_audio_clips({{a, c}}, "Record");  // take 2 on lane 0, take 1 to lane 1
+    const auto& clips = s.data().find_track(a)->active_version()->audio_clips;
+    std::string take1;
+    for (const auto& x : clips)
+        if (x.lane == 1) take1 = x.id;
+    REQUIRE(!take1.empty());
+    CHECK(s.comp_take(a, take1, 2.0, 5.0));
+    std::vector<project::AudioClip> main;
+    for (const auto& x : s.data().find_track(a)->active_version()->audio_clips)
+        if (x.lane == 0) main.push_back(x);
+    REQUIRE(main.size() == 3);
+    // take 2 [0,2), take 1 [2,5) read from 2 s into its file, take 2 [5,8) from 5 s in.
+    CHECK(main[0].file == "Audio Files/take2.wav");
+    CHECK(std::abs(main[0].length - 2.0) < 1e-9);
+    CHECK(main[1].file == "Audio Files/take1.wav");
+    CHECK(std::abs(main[1].start_seconds - 2.0) < 1e-9);
+    CHECK(std::abs(main[1].source_offset - 2.0) < 1e-9);
+    CHECK(std::abs(main[1].length - 3.0) < 1e-9);
+    CHECK(main[2].file == "Audio Files/take2.wav");
+    CHECK(std::abs(main[2].start_seconds - 5.0) < 1e-9);
+    CHECK(std::abs(main[2].source_offset - 5.0) < 1e-9);
+    CHECK(main[0].id != main[2].id);
+    // The takes stay on their lanes; one undo puts the main lane back.
+    s.undo();
+    int on_main = 0;
+    for (const auto& x : s.data().find_track(a)->active_version()->audio_clips) on_main += x.lane == 0 ? 1 : 0;
+    CHECK(on_main == 1);
+    CHECK(!s.comp_take(a, take2.front(), 1.0, 2.0));  // a main-lane clip is not a take
+}
+
+TEST_CASE("recorded MIDI lands as a region, earlier takes moving to take lanes; record source")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Flute", "woodwinds.flute");
+    project::MidiRegion r;
+    r.start = 0;
+    r.end = 4 * kTicksPerQuarter;
+    r.source = "recorded";
+    r.notes.push_back(NoteEvent{0, kTicksPerQuarter, 60, 90, 0, {}});
+    REQUIRE(s.add_recorded_regions({{t, r}}, "Record MIDI").size() == 1);
+    REQUIRE(s.add_recorded_regions({{t, r}}, "Record MIDI").size() == 1);
+    int lane0 = 0, lane1 = 0;
+    for (const auto& x : s.data().find_track(t)->active_version()->regions) (x.lane == 0 ? lane0 : lane1)++;
+    CHECK(lane0 == 1);
+    CHECK(lane1 == 1);
+    CHECK(s.data().find_track(t)->record_source == "midi");
+    CHECK(s.set_record_source(t, "audio"));
+    CHECK(s.data().find_track(t)->record_source == "audio");
+    const auto a = s.add_audio_track("Vox", false);
+    CHECK(!s.set_record_source(a, "midi"));
+}

@@ -210,6 +210,15 @@ void show_input_menu(AppContext& context, const std::string& track_id, juce::Com
     if (!t) return;
     juce::PopupMenu m;
     const int n = context.engine.num_inputs();
+    // An instrument or MIDI track records what is played on the keyboard,
+    // or the sound at an input (a hardware synth, say).
+    const bool plays_midi = t->kind == project::TrackKind::Instrument || t->kind == project::TrackKind::MidiOnly;
+    if (plays_midi) {
+        m.addSectionHeader("Records");
+        m.addItem(2, "MIDI from the keyboard", true, t->record_source != "audio");
+        m.addItem(3, "Audio from the input", true, t->record_source == "audio");
+        m.addSeparator();
+    }
     m.addItem(1, "No input", true, t->input < 0);
     if (n == 0) m.addSectionHeader("No audio input device is open");
     const int count = n > 0 ? n : 2;
@@ -228,6 +237,10 @@ void show_input_menu(AppContext& context, const std::string& track_id, juce::Com
     const std::string name = t->name;
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&target), guarded(target, [&ctx, id, name](int r) {
         if (r <= 0) return;
+        if (r == 2 || r == 3) {
+            ctx.session.set_record_source(id, r == 2 ? "midi" : "audio");
+            return;
+        }
         begin_gesture();
         ctx.session.update_track_mix(id, "Input " + name + gesture_suffix(), [&](project::Track& x) {
             if (r == 1) {

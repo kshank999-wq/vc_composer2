@@ -1083,6 +1083,100 @@ void place_clip(project::TrackVersion& v, project::AudioClip c, bool as_takes)
 }
 }  // namespace
 
+std::vector<std::string> Session::add_recorded_regions(const std::vector<std::pair<std::string, project::MidiRegion>>& regions,
+                                                      const std::string& label, bool as_takes)
+{
+    std::vector<std::string> ids;
+    for (std::size_t i = 0; i < regions.size(); ++i) ids.push_back(project_.ids().next("rgn"));
+    const bool ok = !regions.empty() && edit(label, [&](project::ProjectData& d) {
+        for (std::size_t i = 0; i < regions.size(); ++i) {
+            project::Track* t = d.find_track(regions[i].first);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
+            if (!v || t->kind == project::TrackKind::Audio || t->kind == project::TrackKind::Aux) return false;
+            project::MidiRegion r = regions[i].second;
+            if (r.end <= r.start || r.notes.empty()) return false;
+            r.id = ids[i];
+            r.lane = 0;
+            if (as_takes) {
+                int free_lane = 1;
+                for (const auto& x : v->regions) free_lane = std::max(free_lane, x.lane + 1);
+                for (auto& x : v->regions)
+                    if (x.lane == 0 && x.start < r.end && r.start < x.end) x.lane = free_lane;
+            }
+            v->regions.push_back(std::move(r));
+        }
+        return true;
+    });
+    if (!ok) ids.clear();
+    return ids;
+}
+
+bool Session::comp_take(const std::string& track_id, const std::string& take_clip_id, double from, double to)
+{
+    if (to <= from) return false;
+    std::vector<std::string> new_ids{project_.ids().next("clip"), project_.ids().next("clip")};
+    return edit("Comp take", on_track(track_id, [&](project::Track& t) {
+        project::TrackVersion* v = t.active_version();
+        if (!v) return false;
+        const project::AudioClip* take = nullptr;
+        for (const auto& c : v->audio_clips)
+            if (c.id == take_clip_id && c.lane > 0) take = &c;
+        if (!take) return false;
+        // The take's part, kept inside the take.
+        from = std::max(from, take->start_seconds);
+        to = std::min(to, take->end_seconds());
+        if (to - from < 0.005) return false;
+        project::AudioClip part = *take;
+        part.id = new_ids[0];
+        part.lane = 0;
+        part.source_offset = take->source_offset + (from - take->start_seconds);
+        part.start_seconds = from;
+        part.length = to - from;
+        part.fade_in = std::min(part.fade_in, 0.005);
+        part.fade_out = std::min(part.fade_out, 0.005);
+        // The main lane makes room: clips the part covers are trimmed, split
+        // when it falls inside one, or removed when it covers them.
+        std::vector<project::AudioClip> kept;
+        for (const auto& c : v->audio_clips) {
+            if (c.lane != 0 || c.end_seconds() <= from || c.start_seconds >= to) {
+                kept.push_back(c);
+                continue;
+            }
+            if (c.start_seconds < from) {
+                project::AudioClip left = c;
+                left.length = from - c.start_seconds;
+                left.fade_out = std::min(left.fade_out, left.length);
+                kept.push_back(left);
+            }
+            if (c.end_seconds() > to) {
+                project::AudioClip right = c;
+                right.id = c.start_seconds < from ? new_ids[1] : c.id;
+                right.source_offset = c.source_offset + (to - c.start_seconds);
+                right.start_seconds = to;
+                right.length = c.end_seconds() - to;
+                right.fade_in = std::min(right.fade_in, right.length);
+                kept.push_back(right);
+            }
+        }
+        kept.push_back(part);
+        std::stable_sort(kept.begin(), kept.end(), [](const project::AudioClip& a, const project::AudioClip& b) {
+            return a.lane != b.lane ? a.lane < b.lane : a.start_seconds < b.start_seconds;
+        });
+        v->audio_clips = std::move(kept);
+        return true;
+    }));
+}
+
+bool Session::set_record_source(const std::string& id, const std::string& source)
+{
+    if (source != "midi" && source != "audio") return false;
+    return edit(source == "midi" ? "Record MIDI" : "Record audio", on_track(id, [&](project::Track& t) {
+        if (t.kind == project::TrackKind::Audio || t.kind == project::TrackKind::Aux || t.record_source == source) return false;
+        t.record_source = source;
+        return true;
+    }));
+}
+
 std::vector<std::string> Session::place_prints(const std::vector<std::pair<std::string, project::AudioClip>>& prints,
                                                bool printed_fx, bool play_audio)
 {

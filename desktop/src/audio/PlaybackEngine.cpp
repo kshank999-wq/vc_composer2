@@ -165,6 +165,7 @@ struct PlaybackSnapshot {
         float gain = 1.0f;
     };
     struct Track {
+        std::string id;
         Strip strip;
         std::shared_ptr<Instrument> instrument;  // null for audio tracks
         std::vector<Event> events;
@@ -885,6 +886,11 @@ private:
 void PlaybackEngine::note_live(const juce::MidiMessage& m) noexcept
 {
     if (!(m.isNoteOn() || m.isNoteOff())) return;
+    if (m.isNoteOn() && waiting_for_note_.load(std::memory_order_acquire) && !wait_triggered_.load(std::memory_order_acquire)) {
+        const auto* raw = m.getRawData();
+        for (int k = 0; k < 3; ++k) wait_note_bytes_[k] = raw[k];
+        wait_triggered_.store(true, std::memory_order_release);
+    }
     auto& held = live_held_[static_cast<std::size_t>(m.getNoteNumber() & 127)];
     if (m.isNoteOn()) held.fetch_add(1, std::memory_order_relaxed);
     else if (held.load(std::memory_order_relaxed) > 0) held.fetch_sub(1, std::memory_order_relaxed);
@@ -910,6 +916,8 @@ PlaybackEngine::PlaybackEngine(session::Session& session, PluginHost& plugins)
     });
     midi_router_ = std::make_unique<MidiOutRouter>();
     for (auto& h : live_held_) h.store(0);
+    live_block_.ensureSize(8192);
+    midi_backlog_.reserve(1024);
     midi_callback_ = std::make_unique<LiveMidiCallback>(live_input_, *this);
     live_input_.reset(sample_rate_);
     rebuild_now();
@@ -926,6 +934,7 @@ PlaybackEngine::~PlaybackEngine()
     // Unfinished recordings: close the files (they stay on disk), place nothing.
     delete pending_pass_.exchange(nullptr);
     delete finished_pass_.exchange(nullptr);
+    delete standby_pass_.exchange(nullptr);
     delete active_pass_;
     active_pass_ = nullptr;
     delete pending_.exchange(nullptr);
@@ -1034,7 +1043,7 @@ void PlaybackEngine::timerCallback()
     // A plug-in that changed its latency (setLatencySamples) re-aligns the mix.
     if (rebuild_pending_ || current_latencies() != latencies_seen_) rebuild_now();
     retire_garbage();
-    collect_finished_passes();
+    service_recording();
     service_live_print();
 }
 
@@ -1189,6 +1198,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
     for (std::size_t k = 0; k < plan.tracks.size(); ++k) {
         const project::Track* t = plan.tracks[k];
         PlaybackSnapshot::Track st;
+        st.id = t->id;
         st.strip = make_strip(t->id, plan.track_sends[k], plan.track_output[k]);
         st.strip.fx_bypassed = t->printed_fx && t->playback == "audio" && has_instrument(*t);
         // A real-time print of this track: its MIDI always, its own clips never.
@@ -1487,12 +1497,90 @@ void PlaybackEngine::rebuild_now()
 
 void PlaybackEngine::play()
 {
+    // Wait for note: armed and stopped, Play waits for the first note played.
+    if (!playing_.load() && record_enabled_.load() && wait_note_.load()) {
+        if (waiting_for_note_.load()) return;
+        wait_triggered_ = false;
+        waiting_for_note_.store(true, std::memory_order_release);
+        if (on_transport_changed) on_transport_changed();
+        return;
+    }
+    start_play(false);
+}
+
+void PlaybackEngine::set_count_in(int bars, bool pre_roll) noexcept
+{
+    count_in_bars_ = std::clamp(bars, 0, 4);
+    pre_roll_ = pre_roll;
+}
+
+void PlaybackEngine::poll_wait_note()
+{
+    if (!waiting_for_note_.load() || !wait_triggered_.exchange(false, std::memory_order_acquire)) return;
+    waiting_for_note_ = false;
+    for (int k = 0; k < 3; ++k) pending_first_note_[k] = wait_note_bytes_[k];
+    start_play(true);
+}
+
+void PlaybackEngine::service_recording()
+{
+    collect_finished_passes();
+    poll_wait_note();
+    // Loop recording: the next cycle's take is opened ahead of the wrap.
+    if (loop_.load() && playing_.load() && record_enabled_.load() && pass_active_.load() &&
+        standby_pass_.load() == nullptr && pending_pass_.load() == nullptr) {
+        juce::String error;
+        if (auto pass = make_pass(error)) standby_pass_.store(pass.release());
+    }
+}
+
+void PlaybackEngine::start_play(bool from_wait)
+{
     const bool was = playing_.load();
     // The loop's samples follow tempo and sample-rate changes made since it was set.
     if (loop_.load()) {
         const auto& tempo = session_.data().tempo;
         loop_in_ = static_cast<std::int64_t>(std::llround(tempo.seconds_at(loop_in_ticks_) * sample_rate_));
         loop_out_ = static_cast<std::int64_t>(std::llround(tempo.seconds_at(loop_out_ticks_) * sample_rate_));
+    }
+    // Count-in or pre-roll: the transport starts bars earlier (before bar 1
+    // too) and the take records from where it was.
+    if (!was) {
+        record_from_ = std::numeric_limits<std::int64_t>::min();
+        roll_origin_ = std::numeric_limits<std::int64_t>::min();
+        count_in_until_ = std::numeric_limits<std::int64_t>::min();
+        count_in_click_count_ = 0;
+    }
+    if (!was && record_enabled_.load()) {
+        const std::int64_t start = position_samples_.load();
+        record_from_ = start;
+        const int bars = from_wait ? 0 : count_in_bars_.load();
+        if (bars > 0) {
+            const auto& d = session_.data();
+            const double start_seconds = static_cast<double>(start) / sample_rate_;
+            const Ticks start_tick = d.tempo.tick_at_seconds(start_seconds);
+            const TimeSignature sig = d.meter.at_tick(start_tick);
+            const Ticks bar_ticks = sig.ticks_per_bar();
+            const Ticks beat = sig.is_compound() ? sig.beat_ticks() * 3 : sig.beat_ticks();
+            // At the tempo where the recording starts.
+            const double sec_per_tick = (d.tempo.seconds_at(start_tick + bar_ticks) - d.tempo.seconds_at(start_tick)) /
+                                        static_cast<double>(bar_ticks);
+            const auto roll = static_cast<std::int64_t>(std::llround(sec_per_tick * static_cast<double>(bar_ticks * bars) * sample_rate_));
+            const std::int64_t from = start - roll;
+            int count = 0;
+            for (int b = 0; b < bars; ++b)
+                for (Ticks t = 0, i = 0; t < bar_ticks && count < static_cast<int>(count_in_clicks_.size()); t += beat, ++i)
+                    count_in_clicks_[static_cast<std::size_t>(count++)] = {
+                        from + static_cast<std::int64_t>(std::llround(sec_per_tick * static_cast<double>(b * bar_ticks + t) * sample_rate_)),
+                        i == 0};
+            count_in_click_count_.store(pre_roll_.load() ? 0 : count);
+            if (!pre_roll_.load()) count_in_until_ = start;
+            roll_origin_ = start;
+            locate_request_ = from;  // over a locate still pending
+            position_samples_ = from;
+            heard_samples_ = from;
+            gestures_->heard.store(from);
+        }
     }
     play_request_ = true;
     playing_ = true;
@@ -1503,14 +1591,27 @@ void PlaybackEngine::play()
 
 void PlaybackEngine::stop()
 {
+    if (waiting_for_note_.exchange(false)) {
+        if (on_transport_changed) on_transport_changed();
+        return;
+    }
     if (playing_.load()) finish_automation_pass();  // at the heard position, before it rewinds
     stop_request_ = true;
     playing_ = false;
+    // Stopped during a count-in: back to where the recording would have started.
+    if (roll_origin_ != std::numeric_limits<std::int64_t>::min() && heard_samples_.load() < roll_origin_) {
+        locate_request_ = roll_origin_;
+        position_samples_ = roll_origin_;
+        heard_samples_ = roll_origin_;
+        gestures_->heard.store(roll_origin_);
+    }
+    roll_origin_ = std::numeric_limits<std::int64_t>::min();
+    count_in_until_ = std::numeric_limits<std::int64_t>::min();
     end_passes();
     if (on_transport_changed) on_transport_changed();
 }
 
-void PlaybackEngine::toggle_play() { playing() ? stop() : play(); }
+void PlaybackEngine::toggle_play() { playing() || waiting_for_note_.load() ? stop() : play(); }
 
 void PlaybackEngine::locate(Ticks tick)
 {
@@ -1527,7 +1628,7 @@ void PlaybackEngine::locate(Ticks tick)
 
 double PlaybackEngine::position_seconds() const { return static_cast<double>(heard_samples_.load()) / sample_rate_; }
 
-Ticks PlaybackEngine::position() const { return session_.data().tempo.tick_at_seconds(position_seconds()); }
+Ticks PlaybackEngine::position() const { return session_.data().tempo.tick_at_seconds(std::max(0.0, position_seconds())); }
 
 void PlaybackEngine::preview(const std::vector<NoteEvent>& notes, const std::string& family, int gm_program, double bpm,
                              bool loop, Ticks loop_length)
@@ -1827,32 +1928,41 @@ void PlaybackEngine::begin_pass()
     if (!record_enabled_.load() || !playing_.load()) return;
     if (pass_active_.load() || pending_pass_.load() != nullptr) return;  // one pass at a time
     collect_finished_passes();
+    juce::String error;
+    auto pass = make_pass(error);
+    if (!pass) {
+        report_recording(error, false);
+        return;
+    }
+    if (error.isNotEmpty()) report_recording(error, false);
+    recorded_samples_ = 0;
+    pending_pass_.store(pass.release());
+    // Loop recording: the second cycle's take is ready before the first wrap.
+    if (loop_.load() && standby_pass_.load() == nullptr) {
+        juce::String ignored;
+        if (auto next = make_pass(ignored)) standby_pass_.store(next.release());
+    }
+}
 
+std::unique_ptr<RecordPass> PlaybackEngine::make_pass(juce::String& error)
+{
+    // Audio from the inputs: audio tracks, and instrument or MIDI tracks set
+    // to record audio. MIDI from the keyboard: the track it plays, when armed.
     std::vector<const project::Track*> armed;
-    for (const project::Track* t : session_.music_tracks())
-        if (t->record_armed && t->input >= 0) armed.push_back(t);
-    if (armed.empty()) {
-        report_recording("No track is record-armed", false);
-        return;
+    std::string midi_track;
+    for (const project::Track* t : session_.music_tracks()) {
+        if (!t->record_armed) continue;
+        const bool plays_midi = t->kind == project::TrackKind::Instrument || t->kind == project::TrackKind::MidiOnly;
+        if (plays_midi && t->record_source != "audio") {
+            if (t->id == live_track_) midi_track = t->id;
+        } else if (t->input >= 0) {
+            armed.push_back(t);
+        }
     }
-    if (device_running_.load() && num_inputs_.load() == 0) {
-        report_recording("No audio input device: choose one in Audio Settings to record", false);
-        return;
+    if (armed.empty() && midi_track.empty()) {
+        error = "No track is record-armed";
+        return nullptr;
     }
-    juce::File folder{juce::String(session_.audio_folder())};
-    if (session_.audio_folder().empty())
-        folder = juce::File::getSpecialLocation(juce::File::userMusicDirectory)
-                     .getChildFile("VC Composer 2")
-                     .getChildFile("Untitled Audio Files");
-    if (!folder.createDirectory()) {
-        report_recording("Cannot create the recording folder " + folder.getFullPathName(), false);
-        return;
-    }
-    if (!writer_thread_) {
-        writer_thread_ = std::make_unique<juce::TimeSliceThread>("VCC recording writer");
-        writer_thread_->startThread(juce::Thread::Priority::high);
-    }
-
     auto pass = std::make_unique<RecordPass>();
     pass->id = next_pass_id_++;
     pass->sample_rate = sample_rate_;
@@ -1861,33 +1971,67 @@ void PlaybackEngine::begin_pass()
     const auto& tempo = session_.data().tempo;
     pass->punch_in = std::llround(tempo.seconds_at(punch_in_) * sample_rate_);
     pass->punch_out = std::llround(tempo.seconds_at(punch_out_) * sample_rate_);
+    pass->record_from = record_from_;
+    record_from_ = std::numeric_limits<std::int64_t>::min();  // later loop cycles record from the loop's start
+    pass->midi_track = midi_track;
+    for (int k = 0; k < 3; ++k) pass->first_note[k] = pending_first_note_[k];
+    pending_first_note_[0] = pending_first_note_[1] = pending_first_note_[2] = 0;
     pass->silence.setSize(1, std::max(block_size_, 8192));
     pass->silence.clear();
+    if (armed.empty()) return pass;  // MIDI only
+
+    juce::StringArray problems;
+    if (device_running_.load() && num_inputs_.load() == 0) {
+        problems.add("no audio input device: choose one in Audio Settings to record audio");
+        armed.clear();
+    }
+    juce::File folder{juce::String(session_.audio_folder())};
+    if (session_.audio_folder().empty())
+        folder = juce::File::getSpecialLocation(juce::File::userMusicDirectory)
+                     .getChildFile("VC Composer 2")
+                     .getChildFile("Untitled Audio Files");
+    if (!armed.empty() && !folder.createDirectory()) {
+        problems.add("cannot create the recording folder " + folder.getFullPathName());
+        armed.clear();
+    }
+    if (!armed.empty() && !writer_thread_) {
+        writer_thread_ = std::make_unique<juce::TimeSliceThread>("VCC recording writer");
+        writer_thread_->startThread(juce::Thread::Priority::high);
+    }
     // Ten seconds of buffering between the audio thread and the disk.
     const int fifo = static_cast<int>(sample_rate_ * 10.0);
-    juce::StringArray problems;
     for (const project::Track* t : armed) {
         RecordTake take;
         take.track_id = t->id;
         take.input = t->input;
         take.channels = t->input_stereo ? 2 : 1;
         take.file = unique_take_file(folder, t->name);
-        const juce::String error = open_take(take, sample_rate_, *writer_thread_, fifo);
-        if (error.isNotEmpty()) problems.add(juce::String(t->name) + ": " + error);
+        const juce::String e = open_take(take, sample_rate_, *writer_thread_, fifo);
+        if (e.isNotEmpty()) problems.add(juce::String(t->name) + ": " + e);
         else pass->takes.push_back(std::move(take));
     }
-    if (pass->takes.empty()) {
-        report_recording("Recording failed: " + problems.joinIntoString("; "), false);
-        return;
+    if (pass->takes.empty() && midi_track.empty()) {
+        error = "Recording failed: " + problems.joinIntoString("; ");
+        return nullptr;
     }
-    if (!problems.isEmpty()) report_recording("Not recording " + problems.joinIntoString("; "), false);
-    recorded_samples_ = 0;
-    pending_pass_.store(pass.release());
+    if (!problems.isEmpty()) error = "Not recording " + problems.joinIntoString("; ");
+    return pass;
+}
+
+void PlaybackEngine::discard_pass(RecordPass* pass)
+{
+    if (!pass) return;
+    for (auto& take : pass->takes) {
+        take.writer.reset();
+        take.file.deleteFile();
+    }
+    delete pass;
 }
 
 void PlaybackEngine::end_passes()
 {
     stop_passes_upto_.store(next_pass_id_ - 1);
+    waiting_for_note_ = false;
     if (RecordPass* p = pending_pass_.exchange(nullptr)) finalize_pass(std::unique_ptr<RecordPass>(p));
     if (!device_running_.load()) {
         service_passes();  // offline: this thread is the audio thread
@@ -1895,6 +2039,9 @@ void PlaybackEngine::end_passes()
         // The audio thread hands the pass back within a block or two.
         for (int i = 0; i < 100 && pass_active_.load(); ++i) juce::Thread::sleep(2);
     }
+    collect_finished_passes();
+    // The next loop cycle's take, opened but never reached.
+    discard_pass(standby_pass_.exchange(nullptr));
     collect_finished_passes();
 }
 
@@ -1954,8 +2101,12 @@ void PlaybackEngine::finalize_pass(std::unique_ptr<RecordPass> pass)
         clips.emplace_back(take.track_id, std::move(c));
     }
     recording_ = false;
+    const int midi_notes = place_midi(*pass);
     if (clips.empty()) {
-        if (!problems.isEmpty()) report_recording("Recording failed: " + problems.joinIntoString("; "), false);
+        if (midi_notes > 0)
+            report_recording("Recorded " + juce::String(midi_notes) + (midi_notes == 1 ? " note" : " notes"), problems.isEmpty());
+        else if (!problems.isEmpty())
+            report_recording("Recording failed: " + problems.joinIntoString("; "), false);
         return;
     }
     const auto ids = session_.add_audio_clips(clips, "Record", true);
@@ -1965,8 +2116,77 @@ void PlaybackEngine::finalize_pass(std::unique_ptr<RecordPass> pass)
     }
     juce::String message = "Recorded " + juce::String(clips.size()) + (clips.size() == 1 ? " track" : " tracks") + " (" +
                            juce::String(longest, 1) + " s)";
+    if (midi_notes > 0) message << " and " << midi_notes << (midi_notes == 1 ? " note" : " notes");
     if (!problems.isEmpty()) message << " - " << problems.joinIntoString("; ");
     report_recording(message, problems.isEmpty());
+}
+
+int PlaybackEngine::place_midi(const RecordPass& pass)
+{
+    // Everything captured so far; events of passes not finalized yet wait.
+    CapturedMidi e;
+    while (midi_capture_.pop(e)) midi_backlog_.push_back(e);
+    std::vector<CapturedMidi> mine;
+    std::vector<CapturedMidi> rest;
+    for (const auto& x : midi_backlog_) (x.pass == pass.id ? mine : rest).push_back(x);
+    midi_backlog_ = std::move(rest);
+    if (pass.midi_track.empty() || pass.span_end <= pass.span_start) return 0;
+    if (pass.first_note[0] != 0) {
+        // Wait for note: the note that started the pass, at its start.
+        CapturedMidi first;
+        first.pass = pass.id;
+        first.sample = pass.span_start;
+        first.size = 3;
+        for (int k = 0; k < 3; ++k) first.bytes[k] = pass.first_note[k];
+        // The same note-on may also have been captured as the pass began.
+        for (auto it = mine.begin(); it != mine.end(); ++it)
+            if ((it->bytes[0] & 0xF0) == 0x90 && it->bytes[2] > 0 && it->bytes[1] == first.bytes[1] &&
+                it->sample < pass.span_start + static_cast<std::int64_t>(0.25 * pass.sample_rate)) {
+                mine.erase(it);
+                break;
+            }
+        mine.insert(mine.begin(), first);
+    }
+    const auto& d = session_.data();
+    auto tick_at = [&](std::int64_t sample) {
+        return d.tempo.tick_at_seconds(std::max<double>(0.0, static_cast<double>(sample) / pass.sample_rate));
+    };
+    const Ticks span_start = tick_at(std::max<std::int64_t>(pass.span_start, 0));
+    const Ticks span_end = tick_at(pass.span_end);
+    std::vector<NoteEvent> notes;
+    std::map<int, std::vector<std::pair<Ticks, int>>> open;  // channel*128+pitch -> starts, velocities
+    for (const auto& x : mine) {
+        const int status = x.bytes[0] & 0xF0, channel = x.bytes[0] & 0x0F, pitch = x.bytes[1] & 127, velocity = x.bytes[2] & 127;
+        const Ticks at = std::max(span_start, tick_at(x.sample));  // a note just early starts the take
+        if (status == 0x90 && velocity > 0) {
+            open[channel * 128 + pitch].emplace_back(at, velocity);
+        } else if (status == 0x80 || status == 0x90) {
+            auto& starts = open[channel * 128 + pitch];
+            if (starts.empty()) continue;
+            const auto [from, vel] = starts.front();
+            starts.erase(starts.begin());
+            notes.push_back(NoteEvent{from, std::max<Ticks>(1, at - from), pitch, std::max(1, vel), channel, {}});
+        }
+    }
+    for (auto& [key, starts] : open)  // still held when the pass ended
+        for (const auto& [from, vel] : starts)
+            notes.push_back(NoteEvent{from, std::max<Ticks>(1, std::max(span_end, from + 1) - from), key % 128, std::max(1, vel), key / 128, {}});
+    if (notes.empty()) return 0;
+    std::sort(notes.begin(), notes.end(), [](const NoteEvent& a, const NoteEvent& b) {
+        return a.start != b.start ? a.start < b.start : a.pitch < b.pitch;
+    });
+    project::MidiRegion region;
+    Ticks last = span_end;
+    for (const auto& n : notes) last = std::max(last, n.end());
+    // Whole bars, so takes line up.
+    region.start = d.meter.bar_start(d.meter.bar_at(std::min(span_start, notes.front().start)));
+    const int last_bar = d.meter.bar_at(std::max<Ticks>(last - 1, region.start));
+    region.end = d.meter.bar_start(last_bar + 1);
+    region.source = "recorded";
+    region.notes = std::move(notes);
+    const int count = static_cast<int>(region.notes.size());
+    if (session_.add_recorded_regions({{pass.midi_track, std::move(region)}}, "Record MIDI", true).empty()) return 0;
+    return count;
 }
 
 // --- Recording (audio thread) ----------------------------------------------------------------
@@ -1997,6 +2217,21 @@ void PlaybackEngine::service_passes() noexcept
 }
 
 // --- Audio thread ---------------------------------------------------------------------------
+
+namespace {
+/// The metronome's tick at `at` in this block (a downbeat higher).
+void add_click(PlaybackSnapshot& s, int at, int n, bool downbeat) noexcept
+{
+    const double f = downbeat ? 1760.0 : 1320.0;
+    const int len = std::min(n - at, static_cast<int>(s.sample_rate * 0.03));
+    for (int k = 0; k < len; ++k) {
+        const float v = 0.25f * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * f * k / s.sample_rate) *
+                                                   (1.0 - static_cast<double>(k) / len));
+        s.out.addSample(0, at + k, v);
+        s.out.addSample(1, at + k, v);
+    }
+}
+}  // namespace
 
 void PlaybackEngine::audioDeviceIOCallbackWithContext(const float* const* inputs, int num_inputs, float* const* outputs,
                                                       int num_outputs, int num_samples,
@@ -2097,7 +2332,17 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
         play_start_ = position_samples_.load();
         if (s) s->seek(play_start_);
     }
-    if (locate >= 0 && active_pass_ && active_pass_->recorded > 0) retire_active_pass();  // a jump ends the take
+    // A jump (or the loop's wrap) ends the take; the next one starts at once.
+    if (locate >= 0 && active_pass_ && active_pass_->span_end > active_pass_->span_start) {
+        retire_active_pass();
+        if (!active_pass_) {
+            if (RecordPass* next = standby_pass_.exchange(nullptr)) {
+                active_pass_ = next;
+                pass_active_ = true;
+                if (next->id <= stop_passes_upto_.load()) retire_active_pass();
+            }
+        }
+    }
     const bool playing = playing_.load();
     rolling_ = playing;
     const std::int64_t pos = position_samples_.load();
@@ -2116,14 +2361,17 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
     // Takes are placed against what the performer heard (the heard
     // timeline); the device latency is taken off when the pass is placed.
     if (RecordPass* pass = active_pass_; pass && playing) {
-        std::int64_t a = std::max<std::int64_t>(heard_pos, 0), b = heard_pos + n;
+        std::int64_t a = std::max<std::int64_t>({heard_pos, 0, pass->record_from}), b = heard_pos + n;
         if (pass->punch) {
             a = std::max(a, pass->punch_in);
             b = std::min(b, pass->punch_out);
         }
         if (b > a) {
             record_range = true;
-            pass->write(inputs, num_inputs, offset + static_cast<int>(a - heard_pos), static_cast<int>(b - a), a);
+            if (pass->span_start < 0) pass->span_start = a;
+            pass->span_end = b;
+            if (!pass->takes.empty())
+                pass->write(inputs, num_inputs, offset + static_cast<int>(a - heard_pos), static_cast<int>(b - a), a);
             recorded_samples_.store(pass->recorded, std::memory_order_relaxed);
         }
         recording_.store(record_range, std::memory_order_relaxed);
@@ -2143,7 +2391,33 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
             if (t.instrument) {
                 t.midi.clear();
                 if (playing) gather(t.events, t.cursor, pos, n, t.midi);
-                if (static_cast<int>(i) == s->live_track && !tapped) live_input_.removeNextBlockOfMessages(t.midi, n);
+                if (static_cast<int>(i) == s->live_track && !tapped) {
+                    live_block_.clear();
+                    live_input_.removeNextBlockOfMessages(live_block_, n);
+                    // MIDI recording: what is played, on the heard timeline
+                    // (the performer played against what came out of the speakers).
+                    RecordPass* pass = active_pass_;
+                    if (pass && playing && !pass->midi_track.empty() && t.id == pass->midi_track) {
+                        const std::int64_t from = std::max<std::int64_t>(pass->record_from, 0) -
+                                                  static_cast<std::int64_t>(0.15 * s->sample_rate);  // a note pushed just early
+                        const std::int64_t at0 = heard_pos - output_latency_.load(std::memory_order_relaxed);
+                        for (const auto meta : live_block_) {
+                            if (meta.numBytes > 3 || meta.numBytes < 2) continue;
+                            const int status = meta.data[0] & 0xF0;
+                            if (status != 0x80 && status != 0x90) continue;
+                            const std::int64_t at = at0 + meta.samplePosition;
+                            const bool on = status == 0x90 && meta.data[2] > 0;
+                            if (on && (at < from || (pass->punch && (at < pass->punch_in || at >= pass->punch_out)))) continue;
+                            CapturedMidi e;
+                            e.pass = pass->id;
+                            e.sample = at;
+                            e.size = meta.numBytes;
+                            for (int k = 0; k < meta.numBytes; ++k) e.bytes[k] = meta.data[k];
+                            midi_capture_.push(e);
+                        }
+                    }
+                    t.midi.addEvents(live_block_, 0, n, 0);
+                }
                 if (!t.external) t.instrument->process(buf, t.midi, n);
                 // External MIDI: each message stamped with when it should sound,
                 // with the delay compensation and the output latency, so the
@@ -2225,21 +2499,24 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
             automate_strip(b.strip, pos, n, playing);
             process_strip(*s, b.strip, buf, n, playing, false);
         }
+        // Count-in: the music is silent until the recording starts; its own click.
+        if (playing && s->tap_track < 0) {
+            const std::int64_t until = count_in_until_.load(std::memory_order_relaxed);
+            if (heard_pos < until) s->out.clear(0, static_cast<int>(std::min<std::int64_t>(n, until - heard_pos)));
+            const int count = count_in_click_count_.load(std::memory_order_relaxed);
+            for (int k = 0; k < count; ++k) {
+                const auto click = count_in_clicks_[static_cast<std::size_t>(k)];
+                if (click.first < heard_pos || click.first >= heard_pos + n) continue;
+                add_click(*s, static_cast<int>(click.first - heard_pos), n, click.second);
+            }
+        }
         if (playing && metronome_.load() && s->tap_track < 0) {
             // Scheduled on the heard timeline, so the click lines up with the
             // compensated mix.
             while (s->click_cursor < s->clicks.size() && s->clicks[s->click_cursor].first < heard_pos + n) {
                 const auto click = s->clicks[s->click_cursor++];
                 if (click.first < heard_pos) continue;
-                const int at = static_cast<int>(click.first - heard_pos);
-                const double f = click.second ? 1760.0 : 1320.0;
-                const int len = std::min(n - at, static_cast<int>(s->sample_rate * 0.03));
-                for (int k = 0; k < len; ++k) {
-                    const float v = 0.25f * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * f * k / s->sample_rate) *
-                                                               (1.0 - static_cast<double>(k) / len));
-                    s->out.addSample(0, at + k, v);
-                    s->out.addSample(1, at + k, v);
-                }
+                add_click(*s, static_cast<int>(click.first - heard_pos), n, click.second);
             }
         } else if (s) {
             // Keep the click cursor in step while it is off.

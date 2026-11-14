@@ -1059,6 +1059,18 @@ public:
             g.setFont(juce::FontOptions(14.0f));
             g.drawText("No tracks yet - add a track or a template", timeline, juce::Justification::centred);
         }
+        // A comp swipe in progress, over its take.
+        if (drag_ == Drag::Comp) {
+            const float x0 = static_cast<float>(m_.x_of(static_cast<double>(m_.tempo.tick_at_seconds(std::min(comp_from_, comp_to_)))));
+            const float x1 = static_cast<float>(m_.x_of(static_cast<double>(m_.tempo.tick_at_seconds(std::max(comp_from_, comp_to_)))));
+            juce::Graphics::ScopedSaveState state(g);
+            g.reduceClipRegion(timeline);
+            const auto r = juce::Rectangle<float>(x0, comp_row_.getY(), std::max(1.0f, x1 - x0), comp_row_.getHeight());
+            g.setColour(colours::accent.withAlpha(0.28f));
+            g.fillRect(r);
+            g.setColour(colours::accent);
+            g.drawRect(r, 1.5f);
+        }
         // The ruler selection carried down through the lanes.
         if (m_.has_range()) {
             const float x0 = static_cast<float>(m_.x_of(static_cast<double>(m_.range_start)));
@@ -1130,7 +1142,16 @@ public:
             show_clip_menu(lane, c);
             return;
         }
-        drag_ = zone_for(c, clip_rect(c, clip_row_of(lane, hit)), e.position);
+        const auto rect = clip_rect(c, clip_row_of(lane, hit));
+        drag_ = zone_for(c, rect, e.position);
+        drag_clip_ = c;
+        // Swipe comping: dragging across a take picks that part of it for
+        // the main lane. Alt-drag moves the take instead.
+        if (hit.take > 0 && drag_ == Drag::Move && !e.mods.isAltDown()) {
+            drag_ = Drag::Comp;
+            comp_row_ = rect.withX(static_cast<float>(kHeader)).withWidth(static_cast<float>(getWidth() - kHeader));
+            comp_from_ = comp_to_ = comp_seconds(e.x, e.mods.isCommandDown());
+        }
         drag_track_ = track;
         drag_clip_ = c;
         drag_label_ = unique_label(drag_ == Drag::Move       ? "Move clip"
@@ -1153,6 +1174,13 @@ public:
             return;
         }
         if (drag_ == Drag::None) return;
+        if (drag_ == Drag::Comp) {
+            comp_to_ = comp_seconds(e.x, e.mods.isCommandDown());
+            const double a = std::min(comp_from_, comp_to_), b = std::max(comp_from_, comp_to_);
+            m_.ctx.status("Comp " + juce::String(std::max(0.0, b - a), 2) + " s from this take");
+            repaint();
+            return;
+        }
         const project::AudioClip o = drag_clip_;
         const bool free = e.mods.isCommandDown();  // Cmd/Ctrl: no snapping
         auto snapped = [&](double tick) {
@@ -1195,6 +1223,7 @@ public:
                 c.gain_db = std::round(c.gain_db * 10.0) / 10.0;
                 break;
             }
+            case Drag::Comp:
             case Drag::None: return;
         }
         const project::AudioClip* now = m_.clip(drag_track_, o.id);
@@ -1217,6 +1246,13 @@ public:
 
     void mouseUp(const juce::MouseEvent&) override
     {
+        if (drag_ == Drag::Comp) {
+            drag_ = Drag::None;
+            repaint();
+            const double a = std::min(comp_from_, comp_to_), b = std::max(comp_from_, comp_to_);
+            if (b - a > 0.01 && m_.ctx.session.comp_take(drag_track_, drag_clip_.id, a, b))
+                m_.ctx.status("Comped " + juce::String(b - a, 2) + " s onto the main lane");
+        }
         drag_ = Drag::None;
         resize_track_.clear();
     }
@@ -1240,6 +1276,9 @@ public:
                     case Drag::FadeOut: shape = juce::MouseCursor::PointingHandCursor; break;
                     case Drag::Gain: shape = juce::MouseCursor::UpDownResizeCursor; break;
                     case Drag::Move:
+                        shape = hit.take > 0 ? juce::MouseCursor::IBeamCursor : juce::MouseCursor::NormalCursor;
+                        break;
+                    case Drag::Comp:
                     case Drag::None: shape = juce::MouseCursor::NormalCursor; break;
                 }
             }
@@ -1254,6 +1293,12 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override
     {
         const Hit hit = hit_at(e.y);
+        if (hit.lane && hit.take > 0 && e.x >= kHeader) {
+            // Double-click a take: the whole take onto the main lane.
+            const int index = clip_at(*hit.lane, hit, e.position);
+            if (index >= 0) promote_take(m_.ctx.session, hit.lane->id, hit.lane->clips[static_cast<std::size_t>(index)].id);
+            return;
+        }
         if (hit.lane && m_.has_audio_lane(*hit.lane) && hit.take == 0) {
             // Double-click a track to open (or close) its piano roll inline.
             m_.ctx.session.select_track(hit.lane->id);
@@ -1329,7 +1374,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Move, TrimLeft, TrimRight, FadeIn, FadeOut, Gain };
+    enum class Drag { None, Move, TrimLeft, TrimRight, FadeIn, FadeOut, Gain, Comp };
 
     /// The track whose header's bottom edge is under `p`, or null.
     const LaneView* resize_edge_at(juce::Point<int> p) const
@@ -2018,6 +2063,15 @@ private:
     std::string drag_track_, drag_label_;
     project::AudioClip drag_clip_;
     double file_length_ = 0.0;  ///< Of the dragged clip's file, when known.
+    // Swipe comping: the range in project seconds, inside the take.
+    double comp_from_ = 0.0, comp_to_ = 0.0;
+    juce::Rectangle<float> comp_row_;
+    double comp_seconds(int x, bool free) const
+    {
+        const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(std::llround(m_.tick_of(x))));
+        const double s = m_.tempo.seconds_at(free ? t : m_.snap(t, m_.clip_grid(), false));
+        return juce::jlimit(drag_clip_.start_seconds, drag_clip_.end_seconds(), s);
+    }
     std::string resize_track_, resize_key_;
     int resize_start_ = 0, resize_min_ = kMinRow;
     juce::Component* roll_ = nullptr;
@@ -3938,6 +3992,15 @@ void SequencerView::set_punch_display(bool on)
 bool SequencerView::promote_take(session::Session& session, const std::string& track_id, const std::string& clip_id)
 {
     return LaneArea::promote_take(session, track_id, clip_id);
+}
+
+void SequencerView::show_take_lanes(const std::string& track_id, bool show)
+{
+    auto& m = impl_->model;
+    if (show) m.show_takes.insert(track_id);
+    else m.show_takes.erase(track_id);
+    impl_->lanes.update_scroll();
+    impl_->lanes.repaint();
 }
 
 std::pair<std::string, std::string> SequencerView::selected_clip() const

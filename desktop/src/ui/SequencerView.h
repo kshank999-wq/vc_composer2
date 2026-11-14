@@ -56,6 +56,9 @@ public:
     /// Swaps a take (a clip on a lane > 0) onto the main lane as one undo step;
     /// the clips it overlaps there move to the take's lane.
     static bool promote_take(session::Session& session, const std::string& track_id, const std::string& clip_id);
+    /// Opens or closes a track's take lanes under it (where a drag across a
+    /// take comps it onto the main lane, and a double-click promotes it).
+    void show_take_lanes(const std::string& track_id, bool show);
 
     /// A track header's Print (freeze false) or Freeze (true) key.
     std::function<void(const std::string& track_id, bool freeze)> on_print_track;

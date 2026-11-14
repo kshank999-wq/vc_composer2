@@ -60,6 +60,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <map>
 #include <memory>
@@ -204,6 +205,25 @@ public:
     bool record_enabled() const noexcept;
     bool recording() const noexcept;
     void set_punch(bool on, Ticks in, Ticks out);
+    /// Before a recording starts: `bars` of count-in (the click alone, the
+    /// music silent) or, with `pre_roll`, of the music playing; recording
+    /// begins where the transport was. 0 bars: straight in.
+    void set_count_in(int bars, bool pre_roll) noexcept;
+    int count_in_bars() const noexcept { return count_in_bars_.load(); }
+    bool pre_roll() const noexcept { return pre_roll_.load(); }
+    /// Wait for note: with record on, Play waits until the first note on the
+    /// MIDI keyboard (or the deck) and starts there.
+    void set_wait_note(bool on) noexcept { wait_note_ = on; }
+    bool wait_note() const noexcept { return wait_note_.load(); }
+    bool waiting_for_note() const noexcept { return waiting_for_note_.load(); }
+    /// Message thread: starts a pass a waited-for note triggered (the timer calls it).
+    void poll_wait_note();
+    /// Message thread: collects finished takes, starts a waited-for pass and
+    /// opens the next loop cycle's take ahead of the wrap (the timer calls it;
+    /// the checks call it between offline blocks).
+    void service_recording();
+    /// Heard sample where the current pass records from (count-in/pre-roll end).
+    std::int64_t record_from_sample() const noexcept { return record_from_; }
     bool punch() const noexcept;
     /// Loop playback: on reaching `out` while playing, the playhead jumps
     /// back to `in`, sample-accurately (notes off, delay lines cleared, as
@@ -427,6 +447,30 @@ private:
     audio::LoudnessAnalyser loudness_;                    // audio thread, once prepared
     audio::SpscQueue<audio::LoudnessBlock> loudness_blocks_{512};
     std::atomic<bool> loudness_reset_{false};
+    // Count-in, pre-roll, wait note, MIDI recording, loop takes.
+    std::atomic<int> count_in_bars_{0};
+    std::atomic<bool> pre_roll_{false}, wait_note_{false}, waiting_for_note_{false}, wait_triggered_{false};
+    std::uint8_t wait_note_bytes_[3] = {0, 0, 0};
+    std::int64_t record_from_ = std::numeric_limits<std::int64_t>::min();  // message thread, for the next pass
+    std::atomic<std::int64_t> count_in_until_{std::numeric_limits<std::int64_t>::min()};
+    std::array<std::pair<std::int64_t, bool>, 64> count_in_clicks_{};
+    std::int64_t roll_origin_ = std::numeric_limits<std::int64_t>::min();  // where a count-in returns to on stop
+    std::uint8_t pending_first_note_[3] = {0, 0, 0};
+    void start_play(bool from_wait);
+    void discard_pass(RecordPass* pass);
+    std::atomic<int> count_in_click_count_{0};
+    struct CapturedMidi {
+        std::uint64_t pass = 0;
+        std::int64_t sample = 0;  ///< Heard timeline.
+        std::uint8_t bytes[3] = {0, 0, 0};
+        int size = 0;
+    };
+    audio::SpscQueue<CapturedMidi> midi_capture_{8192};
+    std::vector<CapturedMidi> midi_backlog_;  // message thread: drained, for passes not finalized yet
+    juce::MidiBuffer live_block_;             // audio thread
+    std::atomic<RecordPass*> standby_pass_{nullptr};  // the next loop cycle's take, opened ahead
+    std::unique_ptr<RecordPass> make_pass(juce::String& error);
+    int place_midi(const RecordPass& pass);  // notes placed
     int print_tap_latency_ = 0;
     std::array<std::atomic<float>, 64> input_meters_{};
     std::atomic<int> num_inputs_{0};

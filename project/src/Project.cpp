@@ -779,6 +779,7 @@ json::Value Project::to_json() const
         o.set("playback", t.playback);
         if (t.printed_fx) o.set("printed_fx", true);
         if (!t.midi_output.empty()) o.set("midi_output", t.midi_output);
+        if (t.record_source != "midi") o.set("record_source", t.record_source);
         if (!t.automation.empty()) o.set("automation", automation_to_json(t.automation));
         o.set("automation_mode", t.automation_mode);
         o.set("include_in_export", t.include_in_export);
@@ -1018,6 +1019,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.playback = j.get_string("playback", "both");
         t.printed_fx = j.get_bool("printed_fx", false);
         t.midi_output = j.get_string("midi_output", "");
+        t.record_source = j.get_string("record_source", "midi") == "audio" ? "audio" : "midi";
         if (t.playback != "midi" && t.playback != "audio") t.playback = "both";
         if (t.monitor != "auto" && t.monitor != "input" && t.monitor != "off")
             return fail("track " + t.id + ": unknown monitor mode '" + t.monitor + "'");

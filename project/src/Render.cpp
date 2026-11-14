@@ -175,7 +175,7 @@ RenderedTrack finish_render(const Track& track, const notation::ExpressionMap& m
     }
 
     for (const auto& region : version->regions)
-        for (auto n : region.notes) {
+        for (auto n : region.lane == 0 ? region.notes : std::vector<NoteEvent>{}) {  // take lanes are silent
             n.channel = channel;
             notes.emplace_back(n, notation::kInvalidEventId);
         }

@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -38,6 +39,14 @@ struct RecordPass {
     bool punch = false;
     std::int64_t punch_in = 0, punch_out = 0;  ///< Timeline samples.
     int latency = 0;                           ///< Device input + output latency, samples.
+    /// Nothing is recorded before this heard sample (count-in, pre-roll).
+    std::int64_t record_from = std::numeric_limits<std::int64_t>::min();
+    /// MIDI recording: the track the keyboard plays into (empty: none), and
+    /// the note that started a wait-for-note pass (placed at its start).
+    std::string midi_track;
+    std::uint8_t first_note[3] = {0, 0, 0};
+    /// Audio thread: the heard samples the pass covered (MIDI-only passes too).
+    std::int64_t span_start = -1, span_end = -1;
     juce::AudioBuffer<float> silence;          ///< For inputs the device does not have.
     std::int64_t recorded = 0;                 ///< Audio thread.
 

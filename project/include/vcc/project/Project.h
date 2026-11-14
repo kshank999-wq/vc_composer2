@@ -311,6 +311,9 @@ struct Track {
     /// back on the track's audio input (`input`), which a real-time print
     /// records.
     std::string midi_output;
+    /// What an armed instrument or MIDI track records: "midi" (the MIDI
+    /// keyboard, as a region) or "audio" (its input, onto its audio lane).
+    std::string record_source = "midi";
     std::vector<AutomationLane> automation;
     std::string automation_mode = "read";
     bool include_in_export = true;  ///< False for Reference tracks unless the user opts in.

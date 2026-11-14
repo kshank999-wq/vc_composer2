@@ -242,6 +242,17 @@ public:
     /// Ids are returned in order; empty when nothing could be placed.
     std::vector<std::string> place_prints(const std::vector<std::pair<std::string, project::AudioClip>>& prints,
                                           bool printed_fx, bool play_audio);
+    /// MIDI played in (a recording pass), as one undo step: each region on
+    /// its track's main lane; with `as_takes` the main-lane regions it
+    /// overlaps move to the next free take lane. Ids are returned in order.
+    std::vector<std::string> add_recorded_regions(const std::vector<std::pair<std::string, project::MidiRegion>>& regions,
+                                                  const std::string& label, bool as_takes = true);
+    /// Comping: the part of a take (an audio clip on a take lane) between
+    /// `from` and `to` seconds becomes the main lane's audio there. Main-lane
+    /// clips it covers are trimmed or split around it. One undo step.
+    bool comp_take(const std::string& track_id, const std::string& take_clip_id, double from, double to);
+    /// What an armed instrument or MIDI track records: "midi" or "audio". One undo step.
+    bool set_record_source(const std::string& track_id, const std::string& source);
     bool update_audio_clip(const std::string& track_id, const std::string& clip_id, const std::string& label,
                            const std::function<void(project::AudioClip&)>& change);
     bool remove_audio_clip(const std::string& track_id, const std::string& clip_id);

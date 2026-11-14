@@ -103,7 +103,9 @@ and the document model. The work is mostly presentation.
   - the Smart tool;
   - nudge;
   - quantize, input quantize and merge.
-- MIDI CC lanes, consolidate, comping across MIDI takes.
+- MIDI CC lanes, consolidate, comping across MIDI takes (MIDI takes
+  land on take lanes and can be promoted; swiping parts of them is not
+  there yet).
 
 ## Decisions (November 13, 2026)
 
@@ -181,8 +183,9 @@ and the document model. The work is mostly presentation.
    - Ctrl+Tab (and Cmd+` on macOS) switches views.
    - The deck shrinks, then wraps to two rows; under 1280 px the right
      panel drops below the edit window.
-   - Not wired yet: Loop, Count-in, Wait note, pre-roll, MIDI tracks to
-     hardware and the Page view; they are shown disabled with a tooltip.
+   - Not wired yet: the Page view, shown disabled with a tooltip. (Loop,
+     MIDI tracks to hardware, Count-in, pre-roll and Wait note have since
+     been wired; see steps 3, 7 and 10.)
 
    The original step 2 description: Composer | Producer on the
    nameplate.
@@ -585,3 +588,49 @@ and the document model. The work is mostly presentation.
      - a 24-bit/48 kHz WAV and a dithered 16-bit/44.1 kHz FLAC, each read
        back and re-measured.
      Screenshot 35.
+
+10. **Recording workflow. Done.**
+    - **Count-in and pre-roll.** The deck's Count-in key opens a menu:
+      Off, Count-in 1 or 2 bars, Pre-roll 1 or 2 bars. Its sublegend shows
+      the choice, and it is kept for next time.
+      - With Record on, Play starts that many bars early (before bar 1
+        too: the engine runs at negative positions), at the tempo and
+        meter where the recording starts.
+      - A count-in plays its own click, metronome or not, with the music
+        silent; a pre-roll plays the music in.
+      - Nothing is recorded before the start position. Stopping during
+        the count-in goes back to it and records nothing.
+    - **Wait note.** With Record on, Play waits for the first note from
+      the MIDI keyboard or the keyboard deck, then starts there. The key
+      flashes while waiting, Stop cancels, and the note that started the
+      take is its first note, on the start position.
+    - **MIDI recording.** An armed instrument or MIDI track that the
+      keyboard plays records what is played.
+      - Notes are captured on the audio thread into a lock-free queue, on
+        the heard timeline less the output latency, as audio takes are.
+      - A note pushed up to 150 ms early starts on the take's start.
+      - The pass becomes a region of whole bars ("Record MIDI", one undo
+        step); a region it overlaps moves to a take lane.
+      - Take lanes are now silent for MIDI too: only the main lane plays.
+      - The channel's input menu chooses what an instrument or MIDI track
+        records: MIDI from the keyboard (the default) or audio from the
+        input (a hardware synth, say). `Track::record_source` is saved.
+    - **Loop recording.** Every cycle round the loop is its own take. The
+      next cycle's files are opened ahead of the wrap, and the audio
+      thread swaps takes at the loop's end to the sample. An unused one is
+      deleted on Stop.
+    - **Comping.** In an open take lane, a drag across a take selects a
+      range (snapped to the grid; Cmd/Ctrl for free). Releasing it makes
+      that part the main lane's ("Comp take"), trimming or splitting what
+      was there. Alt-drag still moves the take, and a double-click
+      promotes the whole take.
+    - **Checks.** The desktop check's recording workflow section covers:
+      - a 1-bar count-in (click only, take at the position);
+      - pre-roll;
+      - stopping during a count-in;
+      - three loop cycles as three takes;
+      - MIDI notes, velocities and bar-aligned regions;
+      - silent MIDI take lanes;
+      - wait note;
+      - a mouse-driven swipe comp and a double-click promote.
+      Screenshots `recording-takes` and `recording-comp`.

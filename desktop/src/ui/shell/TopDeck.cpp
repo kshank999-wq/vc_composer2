@@ -191,10 +191,17 @@ TopDeck::TopDeck(AppContext& context) : context_(context)
     }
     session_keys_[0]->setTooltip("Metronome");
     session_keys_[0]->onClick = [this] { context_.engine.set_metronome(session_keys_[0]->getToggleState()); };
-    session_keys_[1]->setTooltip("Count-in before recording (coming with recording in the Producer view)");
-    session_keys_[2]->setTooltip("Wait for the first note before recording (coming with MIDI recording)");
-    session_keys_[1]->setEnabled(false);
-    session_keys_[2]->setEnabled(false);
+    session_keys_[1]->setTooltip("Before recording: a count-in (the click alone) or a pre-roll (the music plays in)");
+    session_keys_[1]->setComponentID("count_in");
+    session_keys_[1]->onClick = [this] { choose_count_in(); };
+    session_keys_[2]->setTooltip("Wait note: with Record on, Play waits for the first note you play and starts there");
+    session_keys_[2]->setComponentID("wait_note");
+    session_keys_[2]->onClick = [this] { set_wait_note(session_keys_[2]->getToggleState()); };
+    {
+        auto& settings = hw::ui_settings();
+        set_count_in(settings.getIntValue("countInBars", 0), settings.getBoolValue("preRoll", false));
+        set_wait_note(settings.getBoolValue("waitNote", false));
+    }
 
     // Master meters.
     addAndMakeVisible(master_l_);
@@ -268,6 +275,11 @@ void TopDeck::update_position()
     blink_ = (blink_ + 1) % 30;
     transport_[5]->set_solid(recording && blink_ >= 15 ? hw::tok::rec.darker(0.5f) : hw::tok::rec);
     transport_[5]->setToggleState(armed || recording, juce::dontSendNotification);
+    // Waiting for the first note: the Wait note key flashes.
+    if (engine.waiting_for_note())
+        session_keys_[2]->set_solid(blink_ >= 15 ? hw::tok::rec.darker(0.5f) : hw::tok::rec);
+    else
+        session_keys_[2]->set_solid({});
 
     // Master meters and the held peak.
     const auto m = engine.take_deck_meter("bus-master");
@@ -363,6 +375,48 @@ void TopDeck::paintOverChildren(juce::Graphics& g)
         hw::paint::silk(g, room >= 150.0f ? "-60   -18   -6   0 dBFS" : "dBFS", {l.getX(), r.getBottom() + 8.0f, room, 14.0f},
                         9.0f);
     }
+}
+
+void TopDeck::set_count_in(int bars, bool pre_roll)
+{
+    bars = std::clamp(bars, 0, 2);
+    context_.engine.set_count_in(bars, pre_roll);
+    auto& settings = hw::ui_settings();
+    settings.setValue("countInBars", bars);
+    settings.setValue("preRoll", pre_roll);
+    auto& k = *session_keys_[1];
+    k.setToggleState(bars > 0, juce::dontSendNotification);
+    k.set_sublegend(bars == 0 ? juce::String() : (pre_roll ? "PRE-ROLL " : "") + juce::String(bars) + (bars == 1 ? " BAR" : " BARS"));
+}
+
+void TopDeck::set_wait_note(bool on)
+{
+    context_.engine.set_wait_note(on);
+    hw::ui_settings().setValue("waitNote", on);
+    session_keys_[2]->setToggleState(on, juce::dontSendNotification);
+}
+
+void TopDeck::choose_count_in()
+{
+    // The key shows the setting, not the click: the menu decides.
+    auto& engine = context_.engine;
+    const int bars = engine.count_in_bars();
+    const bool pre = engine.pre_roll();
+    session_keys_[1]->setToggleState(bars > 0, juce::dontSendNotification);
+    juce::PopupMenu m;
+    m.addItem(1, "Off", true, bars == 0);
+    m.addSeparator();
+    m.addItem(2, "Count-in 1 bar", true, bars == 1 && !pre);
+    m.addItem(3, "Count-in 2 bars", true, bars == 2 && !pre);
+    m.addSeparator();
+    m.addItem(4, "Pre-roll 1 bar", true, bars == 1 && pre);
+    m.addItem(5, "Pre-roll 2 bars", true, bars == 2 && pre);
+    juce::Component::SafePointer<TopDeck> self(this);
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(session_keys_[1].get()), [self](int r) {
+        if (!self || r == 0) return;
+        if (r == 1) self->set_count_in(0, false);
+        else self->set_count_in(r == 2 || r == 4 ? 1 : 2, r >= 4);
+    });
 }
 
 void TopDeck::resized()

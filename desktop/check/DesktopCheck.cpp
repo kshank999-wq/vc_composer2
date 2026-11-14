@@ -26,6 +26,7 @@
 #include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
 #include "ui/hw/HwGallery.h"
+#include "ui/console/MixActions.h"
 #include "ui/composer/ComposerRuler.h"
 #include "ui/composer/Inspector.h"
 #include "ui/composer/LaneParts.h"
@@ -1167,21 +1168,21 @@ juce::Component* find_named(juce::Component& root, const juce::String& name)
 }
 
 juce::MouseEvent mouse_event(juce::Component& c, juce::Point<float> p, juce::Point<float> down, bool dragged,
-                             bool alt = false)
+                             bool alt = false, int extra_mods = 0)
 {
     const auto now = juce::Time::getCurrentTime();
-    const int mods = juce::ModifierKeys::leftButtonModifier | (alt ? juce::ModifierKeys::altModifier : 0);
+    const int mods = juce::ModifierKeys::leftButtonModifier | (alt ? juce::ModifierKeys::altModifier : 0) | extra_mods;
     return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys(mods),
                             juce::MouseInputSource::defaultPressure, 0.0f, 0.0f, 0.0f, 0.0f, &c, &c, now, down, now, 1,
                             dragged);
 }
 
-void drag(juce::Component& c, juce::Point<float> from, juce::Point<float> to, bool alt = false)
+void drag(juce::Component& c, juce::Point<float> from, juce::Point<float> to, bool alt = false, int extra_mods = 0)
 {
-    c.mouseDown(mouse_event(c, from, from, false, alt));
-    c.mouseDrag(mouse_event(c, (from + to) / 2.0f, from, true, alt));
-    c.mouseDrag(mouse_event(c, to, from, true, alt));
-    c.mouseUp(mouse_event(c, to, from, true, alt));
+    c.mouseDown(mouse_event(c, from, from, false, alt, extra_mods));
+    c.mouseDrag(mouse_event(c, (from + to) / 2.0f, from, true, alt, extra_mods));
+    c.mouseDrag(mouse_event(c, to, from, true, alt, extra_mods));
+    c.mouseUp(mouse_event(c, to, from, true, alt, extra_mods));
     pump(100);
 }
 
@@ -2588,6 +2589,258 @@ void follow_checks(MainWindow& window, const juce::File& dir)
 /// Real-time print and external MIDI: a MIDI track plays a (virtual)
 /// hardware synth whose return comes back on its input, printed live
 /// together with an instrument track.
+
+/// The recording workflow: count-in and pre-roll, stopping in a count-in,
+/// loop recording into takes, MIDI recording, wait for note, and swipe
+/// comping in the take lanes.
+void recording_workflow_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& engine = ctx.engine;
+    engine.stop();
+    session.new_empty();
+    const auto project_dir = dir.getChildFile("recording-check");
+    project_dir.deleteRecursively();
+    project_dir.createDirectory();
+    std::string error;
+    session.save_as(project_dir.getChildFile("rec.vcc2").getFullPathName().toStdString(), &error);
+    engine.prepare_offline(48000.0, 512);
+    Rig rig(engine);
+    juce::String last_message;
+    int finished = 0;
+    auto previous = engine.on_recording_finished;
+    engine.on_recording_finished = [&](const juce::String& m, bool) {
+        last_message = m;
+        ++finished;
+    };
+    const auto& d = session.data();
+    const Ticks bar2 = d.meter.bar_start(2), bar3 = d.meter.bar_start(3);
+    const double bar2_s = d.tempo.seconds_at(bar2);
+    const double bar_s = d.tempo.seconds_at(bar3) - bar2_s;
+    auto clips_on = [&](const std::string& track) {
+        std::vector<project::AudioClip> out;
+        if (const auto* t = d.find_track(track); t && t->active_version()) out = t->active_version()->audio_clips;
+        return out;
+    };
+
+    // Count-in, 1 bar: the transport rolls back a bar, the click plays and
+    // the music (here the monitored input) is silent; the take starts where
+    // the transport was.
+    auto& deck = main.deck();
+    deck.set_count_in(1, false);
+    check(engine.count_in_bars() == 1 && !engine.pre_roll() && deck.count_in_key().getToggleState(),
+          "the Count-in key sets a 1-bar count-in");
+    const std::string vox = session.add_audio_track("Vox", false);
+    session.update_track_mix(vox, "monitor", [](project::Track& t) { t.monitor = "input"; });
+    session.set_record_armed(vox, true);
+    engine.set_record_enabled(true);
+    engine.locate(bar2);
+    engine.play();
+    const double rolled = engine.position_seconds();
+    const Measure counted = rig.run(bar_s * 0.9, Rig::sine(100.0, 0.5f));
+    const bool silent_record = !engine.recording();
+    check(std::abs(rolled - (bar2_s - bar_s)) < 0.01 && silent_record,
+          "Play with a count-in starts a bar early and records nothing yet (from " + juce::String(rolled, 3) + " s)");
+    check(counted.rms < 0.08 && counted.peak > 0.15,
+          "during the count-in only the click is heard (rms " + juce::String(counted.rms, 3) + ", peak " +
+              juce::String(counted.peak, 2) + ")");
+    rig.run(bar_s * 0.1, Rig::sine(100.0, 0.5f));
+    const Measure after = rig.run(1.0, Rig::sine(100.0, 0.5f));
+    check(engine.recording() && after.rms > 0.15, "after the count-in the music plays and the take records (rms " +
+                                                      juce::String(after.rms, 3) + ")");
+    engine.stop();
+    auto takes = clips_on(vox);
+    check(takes.size() == 1 && std::abs(takes[0].start_seconds - bar2_s) < 0.012 && std::abs(takes[0].length - 1.0) < 0.03,
+          "the counted-in take starts where the transport was (" +
+              juce::String(takes.empty() ? -1.0 : takes[0].start_seconds, 3) + " s)");
+    check(std::abs(engine.position_seconds() - (bar2_s + 1.0)) < 0.05, "stop leaves the transport where it stopped");
+
+    // Pre-roll: the music plays in; the take still starts at the position.
+    deck.set_count_in(1, true);
+    engine.locate(bar2);
+    engine.play();
+    const Measure pre = rig.run(bar_s * 0.5, Rig::sine(100.0, 0.5f));
+    const bool pre_recording = engine.recording();
+    rig.run(bar_s * 0.5 + 1.0, Rig::sine(220.0, 0.5f));
+    engine.stop();
+    takes = clips_on(vox);
+    const project::AudioClip* main_take = nullptr;
+    for (const auto& c : takes)
+        if (c.lane == 0) main_take = &c;
+    check(pre.rms > 0.15 && !pre_recording, "pre-roll plays the music in without recording (rms " + juce::String(pre.rms, 3) + ")");
+    check(takes.size() == 2 && main_take && std::abs(main_take->start_seconds - bar2_s) < 0.012,
+          "the pre-rolled take starts at the position; the first moved to a take lane");
+
+    // Stopping during a count-in goes back to where the recording would start.
+    deck.set_count_in(2, false);
+    const auto history = session.project().history_size();
+    engine.locate(bar3);
+    engine.play();
+    rig.run(0.5);
+    engine.stop();
+    rig.run(0.05);
+    check(engine.position() == bar3 && session.project().history_size() == history,
+          "stopping in the count-in returns to the start and records nothing");
+    deck.set_count_in(0, false);
+    check(!deck.count_in_key().getToggleState() && engine.count_in_bars() == 0, "Count-in off");
+    session.set_record_armed(vox, false);
+    session.update_track_mix(vox, "monitor", [](project::Track& t) { t.monitor = "auto"; });
+
+    // Loop recording: three passes round a one-bar loop make three takes.
+    const std::string loop = session.add_audio_track("Loop", false);
+    session.set_record_armed(loop, true);
+    engine.set_loop(true, 0, d.meter.bar_start(2));
+    engine.locate(0);
+    engine.play();
+    for (double t = 0.0; t < bar_s * 2.95; t += 0.25) {
+        rig.run(0.25, Rig::sine(330.0, 0.4f));
+        engine.service_recording();  // as the engine's timer does
+    }
+    engine.stop();
+    engine.set_loop(false, 0, 0);
+    takes = clips_on(loop);
+    std::set<int> lanes;
+    std::set<std::string> files;
+    int full = 0;
+    for (const auto& c : takes) {
+        lanes.insert(c.lane);
+        files.insert(c.file);
+        if (std::abs(c.length - bar_s) < 0.03 && c.start_seconds < 0.012) ++full;
+    }
+    check(takes.size() == 3 && lanes.size() == 3 && files.size() == 3 && full == 2,
+          "loop recording keeps every pass as a take (" + juce::String(static_cast<int>(takes.size())) + " takes, " +
+              juce::String(full) + " full cycles)");
+    session.set_record_armed(loop, false);
+
+    // MIDI: what is played on the keyboard into an armed instrument track.
+    const std::string keys = session.add_track("Keys", "woodwinds.flute");
+    check(d.find_track(keys)->record_source == "midi", "an instrument track records MIDI unless set to audio");
+    session.select_track(keys);
+    engine.set_live_track(keys);
+    session.set_record_armed(keys, true);
+    engine.locate(0);
+    engine.play();
+    rig.run(0.5);
+    engine.send_live(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100)));
+    rig.run(0.5);
+    engine.send_live(juce::MidiMessage::noteOff(1, 60));
+    rig.run(0.5);
+    engine.send_live(juce::MidiMessage::noteOn(1, 64, static_cast<juce::uint8>(80)));
+    rig.run(0.5);
+    engine.send_live(juce::MidiMessage::noteOff(1, 64));
+    rig.run(0.5);
+    engine.stop();
+    auto regions = [&] {
+        std::vector<project::MidiRegion> out;
+        if (const auto* t = d.find_track(keys); t && t->active_version()) out = t->active_version()->regions;
+        return out;
+    };
+    auto r = regions();
+    const Ticks tol = d.tempo.tick_at_seconds(0.025);
+    const bool notes_ok = r.size() == 1 && r[0].notes.size() == 2 && r[0].notes[0].pitch == 60 && r[0].notes[1].pitch == 64 &&
+                          std::abs(r[0].notes[0].start - d.tempo.tick_at_seconds(0.5)) <= tol &&
+                          std::abs(r[0].notes[0].duration - d.tempo.tick_at_seconds(0.5)) <= tol &&
+                          r[0].notes[0].velocity == 100 && r[0].notes[1].velocity == 80;
+    check(notes_ok && r[0].start == 0 && r[0].end == bar3 && session.undo_label() == "Record MIDI",
+          "MIDI recording places the notes played as a region of whole bars (" + last_message + ")");
+    // A second pass: the first region goes to a take lane, and is silent there.
+    engine.locate(0);
+    engine.play();
+    rig.run(0.25);
+    engine.send_live(juce::MidiMessage::noteOn(1, 72, static_cast<juce::uint8>(90)));
+    rig.run(0.5);
+    engine.send_live(juce::MidiMessage::noteOff(1, 72));
+    rig.run(0.25);
+    engine.stop();
+    r = regions();
+    int lane0 = 0, lane1 = 0;
+    for (const auto& x : r) (x.lane == 0 ? lane0 : lane1)++;
+    check(lane0 == 1 && lane1 == 1, "a second MIDI pass moves the first to a take lane");
+    const auto played = project::render_track(*d.find_track(keys));
+    bool only_new = !played.notes.empty();
+    for (const auto& n : played.notes) only_new = only_new && n.pitch == 72;
+    check(only_new, "MIDI take lanes are silent: only the main lane plays");
+
+    // Wait note: Play waits for the first note, which starts the take.
+    deck.set_wait_note(true);
+    check(engine.wait_note() && deck.wait_note_key().getToggleState(), "the Wait note key turns wait-for-note on");
+    engine.locate(bar2);
+    engine.play();
+    rig.run(0.5);
+    const bool waited = engine.waiting_for_note() && !engine.playing() && engine.position() == bar2;
+    engine.send_live(juce::MidiMessage::noteOn(1, 67, static_cast<juce::uint8>(110)));
+    engine.service_recording();
+    const bool started = engine.playing() && !engine.waiting_for_note();
+    rig.run(0.5);
+    engine.send_live(juce::MidiMessage::noteOff(1, 67));
+    rig.run(0.3);
+    engine.stop();
+    check(waited && started, "Play waits for a note, and the note starts the transport");
+    r = regions();
+    const project::MidiRegion* waited_region = nullptr;
+    for (const auto& x : r)
+        if (x.lane == 0) waited_region = &x;
+    check(waited_region && waited_region->notes.size() == 1 && waited_region->notes[0].pitch == 67 &&
+              waited_region->notes[0].start == bar2 && waited_region->start == bar2,
+          "the note that started the take is its first note, on the downbeat");
+    deck.set_wait_note(false);
+    session.set_record_armed(keys, false);
+    engine.set_record_enabled(false);
+
+    // Swipe comping: a drag across part of a take on its lane makes that
+    // part the main lane's; a double-click promotes a whole take.
+    main.show_workspace(MainComponent::Workspace::Producer);
+    session.select_track(vox);
+    pump(150);
+    auto& seq = main.sequencer();
+    seq.show_take_lanes(vox, true);
+    for (const auto& c : clips_on(vox))
+        if (c.lane > 0) seq.select_clip(vox, c.id);  // scrolls it into view
+    pump(100);
+    shoot(main, dir, "recording-takes");
+    auto* lanes_view = find_by_id(main, "sequencer_lanes");
+    juce::Rectangle<int> take_area;
+    if (lanes_view) {
+        // The take's body shows the comping (I-beam) pointer.
+        for (int y = 0; y < lanes_view->getHeight(); y += 3)
+            for (int x = 0; x < lanes_view->getWidth(); x += 3) {
+                const juce::Point<float> p(static_cast<float>(x), static_cast<float>(y));
+                lanes_view->mouseMove(mouse_event(*lanes_view, p, p, false));
+                if (lanes_view->getMouseCursor() == juce::MouseCursor::IBeamCursor) take_area = take_area.isEmpty() ? juce::Rectangle<int>(x, y, 1, 1)
+                                                                                          : take_area.getUnion({x, y, 1, 1});
+            }
+    }
+    check(!take_area.isEmpty(), "the open take lane shows its take");
+    if (lanes_view && !take_area.isEmpty()) {
+        const float y = static_cast<float>(take_area.getCentreY());
+        const float x0 = static_cast<float>(take_area.getX() + take_area.getWidth() / 4);
+        const float x1 = static_cast<float>(take_area.getX() + take_area.getWidth() * 3 / 4);
+        drag(*lanes_view, {x0, y}, {x1, y}, false, juce::ModifierKeys::commandModifier);
+        takes = clips_on(vox);
+        std::string take_file;
+        for (const auto& c : takes)
+            if (c.lane > 0) take_file = c.file;
+        int main_lane = 0, from_take = 0;
+        for (const auto& c : takes)
+            if (c.lane == 0) {
+                ++main_lane;
+                if (c.file == take_file) ++from_take;
+            }
+        check(session.undo_label() == "Comp take" && main_lane == 3 && from_take == 1,
+              "swiping across a take comps that part onto the main lane, splitting what was there (" +
+                  juce::String(main_lane) + " main-lane clips)");
+        shoot(main, dir, "recording-comp");
+        const juce::Point<float> p(x0, y);
+        lanes_view->mouseDoubleClick(mouse_event(*lanes_view, p, p, false));
+        pump(50);
+        check(session.undo_label() == "Promote take", "double-clicking a take promotes it whole");
+    }
+    seq.show_take_lanes(vox, false);
+    engine.on_recording_finished = previous;
+}
+
 void realtime_print_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -3598,6 +3851,7 @@ int main(int argc, char** argv)
         master_checks(window, dir);
         follow_checks(window, dir);
         realtime_print_checks(window, dir);
+        recording_workflow_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

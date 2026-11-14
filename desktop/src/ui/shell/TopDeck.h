@@ -46,6 +46,11 @@ public:
     hw::Keycap& producer_key() { return *view_[1]; }
     hw::Keycap& play_key() { return *transport_[4]; }
     hw::Keycap& record_key() { return *transport_[5]; }
+    hw::Keycap& count_in_key() { return *session_keys_[1]; }
+    hw::Keycap& wait_note_key() { return *session_keys_[2]; }
+    /// Count-in (0 bars: off) or, with `pre_roll`, pre-roll; kept for next time.
+    void set_count_in(int bars, bool pre_roll);
+    void set_wait_note(bool on);
     hw::Lcd& main_counter() { return main_; }
     hw::Lcd& range_lcd() { return range_; }
     hw::Lcd& tempo_lcd() { return tempo_; }
@@ -55,6 +60,7 @@ private:
     void edit_tempo();
     void choose_meter();
     void choose_key();
+    void choose_count_in();
 
     AppContext& context_;
     int listener_ = 0;
