@@ -33,6 +33,7 @@
 #include "ui/VideoWindow.h"
 #include "vcc/media/VideoDecoder.h"
 #include "vcc/audio/Loudness.h"
+#include "vcc/music/MidiFile.h"
 #include "vcc/project/Automation.h"
 #include "vcc/notation/ScoreFile.h"
 #include "vcc/project/Performance.h"
@@ -3110,6 +3111,162 @@ void midi_tools_checks(MainWindow& window, const juce::File& dir)
     seq.set_cc_lane(-1);
 }
 
+/// Drag and drop: audio and MIDI files dropped onto the sequencer's lanes
+/// (on a track, at the time under the pointer; below the tracks, new
+/// tracks) and onto the window.
+void drag_drop_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto project_dir = dir.getChildFile("drop-check");
+    project_dir.deleteRecursively();
+    project_dir.createDirectory();
+    std::string error;
+    session.save_as(project_dir.getChildFile("drop.vcc2").getFullPathName().toStdString(), &error);
+    // The files, somewhere outside the project.
+    const auto source = dir.getChildFile("drop-source");
+    source.deleteRecursively();
+    source.createDirectory();
+    const auto wav = source.getChildFile("Shaker.wav");
+    {
+        juce::AudioBuffer<float> b(2, 48000);
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            for (int ch = 0; ch < 2; ++ch) b.setSample(ch, i, 0.3f * static_cast<float>(std::sin(i * 0.05)));
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(wav);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(2).withBitsPerSample(24));
+        if (writer) writer->writeFromAudioSampleBuffer(b, 0, b.getNumSamples());
+    }
+    auto smf_note = [](std::int64_t tick, bool on, int ch, int pitch) {
+        music::SmfEvent e;
+        e.tick = tick;
+        e.event.type = on ? music::MidiEventType::NoteOn : music::MidiEventType::NoteOff;
+        e.event.channel = static_cast<std::uint8_t>(ch);
+        e.event.data1 = static_cast<std::uint8_t>(pitch);
+        e.event.data2 = static_cast<std::uint8_t>(on ? 100 : 0);
+        return e;
+    };
+    const auto song = source.getChildFile("Groove.mid");
+    {
+        music::SmfFile f;
+        music::SmfTrack conductor, bass, lead;
+        conductor.meta.push_back(music::smf_tempo(0, 96.0));
+        bass.name = "Bass";
+        lead.name = "Lead";
+        for (int i = 0; i < 4; ++i) {
+            bass.events.push_back(smf_note(i * 960, true, 0, 36 + i));
+            bass.events.push_back(smf_note(i * 960 + 900, false, 0, 36 + i));
+        }
+        lead.events.push_back(smf_note(0, true, 1, 72));
+        lead.events.push_back(smf_note(1920, false, 1, 72));
+        f.tracks = {conductor, bass, lead};
+        music::write_smf_file(f, song.getFullPathName().toStdString());
+    }
+    const auto riff = source.getChildFile("Riff.mid");
+    {
+        music::SmfFile f;
+        music::SmfTrack line;
+        line.events.push_back(smf_note(0, true, 0, 64));
+        line.events.push_back(smf_note(480, false, 0, 64));
+        f.tracks = {line};
+        music::write_smf_file(f, riff.getFullPathName().toStdString());
+    }
+    const auto text = source.getChildFile("notes.txt");
+    text.replaceWithText("not music");
+
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(150);
+    auto* lanes = find_by_id(main, "sequencer_lanes");
+    auto* target = dynamic_cast<juce::FileDragAndDropTarget*>(lanes);
+    check(target != nullptr, "the sequencer's lanes take dropped files");
+    if (!target) return;
+    check(target->isInterestedInFileDrag({wav.getFullPathName(), song.getFullPathName()}) &&
+              !target->isInterestedInFileDrag({text.getFullPathName()}),
+          "audio and MIDI files are accepted; other files are not");
+
+    // A MIDI file dropped below the tracks: a track per part, the file's tempo.
+    const auto tracks_before = session.data().tracks.size();
+    target->filesDropped({song.getFullPathName()}, 300, lanes->getHeight() - 10);
+    pump(100);
+    const auto& d = session.data();
+    std::vector<const project::Track*> made;
+    for (const auto& t : d.tracks)
+        if (t.name == "Bass" || t.name == "Lead") made.push_back(&t);
+    check(d.tracks.size() == tracks_before + 2 && made.size() == 2 && session.undo_label() == "Import Groove" &&
+              std::abs(d.tempo.bpm_at(0) - 96.0) < 0.01,
+          "a MIDI file dropped below the tracks makes a track per part, taking its tempo (" +
+              juce::String(static_cast<int>(d.tracks.size() - tracks_before)) + " tracks, " + juce::String(d.tempo.bpm_at(0), 1) +
+              " BPM)");
+    std::string bass_id;
+    for (const auto* t : made)
+        if (t->name == "Bass") bass_id = t->id;
+    const auto* bass = d.find_track(bass_id);
+    check(bass && bass->active_version()->regions.size() == 1 && bass->active_version()->regions[0].notes.size() == 4,
+          "the dropped part's notes are in a region on its track");
+
+    // The WAV dropped on the Bass track's row, to the right: onto its own
+    // audio lane, at a grid time, copied into the project.
+    session.select_track(bass_id);
+    pump(100);
+    // Rows run from the top in track order.
+    int bass_row = -1;
+    {
+        int top = 0;
+        for (const auto& t : d.tracks) {
+            const int h = main.sequencer().row_height(t.id);
+            if (t.id == bass_id) {
+                bass_row = top + std::min(20, h / 2);
+                break;
+            }
+            top += h;
+        }
+    }
+    target->filesDropped({wav.getFullPathName()}, 600, bass_row);
+    pump(100);
+    bass = d.find_track(bass_id);  // an edit replaces the document: look it up again
+    const project::AudioClip* dropped = nullptr;
+    if (bass)
+        for (const auto& c : bass->active_version()->audio_clips) dropped = &c;
+    const Ticks dropped_tick = dropped ? d.tempo.tick_at_seconds(dropped->start_seconds) : -1;
+    check(dropped && dropped->start_seconds > 0.0 && juce::String(dropped->file).startsWith("Audio Files/Shaker") &&
+              project_dir.getChildFile(juce::String(dropped->file)).existsAsFile(),
+          "audio dropped on a track lands on its audio lane where it was dropped, copied into the project (" +
+              juce::String(dropped ? dropped->start_seconds : -1.0, 3) + " s)");
+    target->fileDragMove({riff.getFullPathName()}, 800, bass_row);  // the drop hint, for the screenshot
+    shoot(main, dir, "drag-drop");
+    target->fileDragExit({});
+
+    // A one-part MIDI file on the Bass row: onto that track, from the bar under the pointer.
+    target->filesDropped({riff.getFullPathName()}, 600, bass_row);
+    pump(100);
+    bass = d.find_track(bass_id);
+    const project::MidiRegion* riff_region = nullptr;
+    if (bass)
+        for (const auto& r : bass->active_version()->regions)
+            if (r.source == "midi_file:Riff") riff_region = &r;
+    check(riff_region && riff_region->start == d.meter.bar_start(d.meter.bar_at(dropped_tick)) && riff_region->notes.size() == 1,
+          "a one-part MIDI file dropped on a track joins it, from the bar under the pointer");
+
+    // Nothing for files that are neither.
+    const auto history = session.project().history_size();
+    target->filesDropped({text.getFullPathName()}, 600, bass_row);
+    pump(50);
+    check(session.project().history_size() == history, "a dropped text file changes nothing");
+
+    // Dropped on the window elsewhere: at the playhead, on a new audio track.
+    ctx.engine.locate(0);
+    const auto tracks_now = d.tracks.size();
+    main.filesDropped({wav.getFullPathName()}, 10, 10);
+    pump(100);
+    check(d.tracks.size() == tracks_now + 1 && d.tracks.back().kind == project::TrackKind::Audio &&
+              !d.tracks.back().active_version()->audio_clips.empty() &&
+              d.tracks.back().active_version()->audio_clips[0].start_seconds < 0.001,
+          "audio dropped on the window lands on a new audio track at the playhead");
+}
+
 void realtime_print_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -4137,6 +4294,7 @@ int main(int argc, char** argv)
         recording_workflow_checks(window, dir);
         clip_editing_checks(window, dir);
         midi_tools_checks(window, dir);
+        drag_drop_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

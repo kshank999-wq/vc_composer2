@@ -712,3 +712,39 @@ macOS, Linux and Windows. What it took:
 - Check fixes: `pump()` waits for posted clicks to be handled; IPC wake
   times are measured from the signal; the allocation probe calls
   `operator new` directly; build parallelism is capped.
+
+13. **Drag-and-drop import. Done.**
+    - **Onto the sequencer's lanes:** audio (WAV, AIFF, FLAC, MP3) and
+      MIDI files dropped on a track land on it at the time under the
+      pointer, snapped to the grid; dropped below the tracks they make new
+      ones. While dragging, the row it would land on and the drop time are
+      highlighted ("Drop here for a new track" below the tracks).
+      - Audio dropped on an audio track lands on it; on an instrument or
+        MIDI track, on that track's own audio lane. Several files play one
+        after another. Inside a saved project they are copied into
+        "Audio Files".
+      - A MIDI file with one part dropped on an instrument or MIDI track
+        joins it as a region from the bar under the pointer (a region it
+        overlaps moves to a take lane). A file with several parts, or one
+        dropped below the tracks, gives each part a new instrument track
+        named after it, its sound from the part's program change
+        (channel 10: percussion).
+    - **Onto the window elsewhere** (the Composer view, the panels): audio
+      on the selected audio track or a new one, at the playhead; MIDI as
+      new tracks from the playhead's bar.
+    - **File > Import Audio or MIDI...** takes both kinds through the same
+      code.
+    - A MIDI import keeps notes, velocities and controllers (sustain,
+      modulation...), rescales the file's resolution, and is one undo step
+      ("Import <file>"). A project with nothing in it yet takes the file's
+      tempo and meter.
+    - `Session::import_midi_file` is unit-tested; `ui/Import` holds the
+      shared audio and MIDI import.
+    - **Checks.** A real WAV and two MIDI files are dropped on the lanes:
+      a two-part file below the tracks (two tracks, its 96 BPM), the WAV on
+      a track's row (its audio lane, copied into the project), a one-part
+      file on that row (from the bar under the pointer), a text file
+      (nothing changes), and the WAV on the window (a new audio track at
+      the playhead). Screenshot `drag-drop`.
+    - Not yet: dropping a MusicXML file into the score, or a project file
+      to open it; dragging clips out to the desktop.

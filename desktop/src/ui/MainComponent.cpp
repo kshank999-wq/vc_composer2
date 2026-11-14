@@ -7,6 +7,7 @@
 
 #include "ui/CueManager.h"
 #include "ui/Dialogs.h"
+#include "ui/Import.h"
 #include "ui/ScoreExchange.h"
 #include "ui/StemExport.h"
 #include "ui/VideoWindow.h"
@@ -1224,87 +1225,76 @@ void MainComponent::set_punch(bool on)
 
 void MainComponent::import_audio()
 {
-    chooser_ = std::make_unique<juce::FileChooser>("Import audio", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3");
+    chooser_ = std::make_unique<juce::FileChooser>("Import audio or MIDI", juce::File(),
+                                                   "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.mid;*.midi");
     chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles |
                               juce::FileBrowserComponent::canSelectMultipleItems,
                           [this](const juce::FileChooser& fc) {
                               const auto files = fc.getResults();
-                              if (!files.isEmpty()) import_audio_files(files);
+                              if (!files.isEmpty()) import_files(files, {}, context_.engine.position_seconds());
                           });
 }
 
 std::vector<std::string> MainComponent::import_audio_files(const juce::Array<juce::File>& files)
 {
-    auto& s = context_.session;
-    juce::AudioFormatManager formats;
-    formats.registerBasicFormats();
+    const auto r = import_files(files, {}, context_.engine.position_seconds());
+    return r.ids;
+}
 
-    struct Item {
-        juce::File file;
-        WaveformCache::FileInfo info;
-    };
-    std::vector<Item> items;
-    juce::StringArray unreadable;
+ImportResult MainComponent::import_files(const juce::Array<juce::File>& files, const std::string& track_id, double at_seconds)
+{
+    juce::Array<juce::File> audio, midi;
+    juce::StringArray skipped;
     for (const auto& f : files) {
-        Item item{f, {}};
-        if (WaveformCache::read_info(formats, f, item.info)) items.push_back(item);
-        else unreadable.add(f.getFileName());
+        if (is_midi_file(f)) midi.add(f);
+        else if (is_audio_file(f)) audio.add(f);
+        else skipped.add(f.getFileName());
     }
-    if (items.empty()) {
+    ImportResult all;
+    juce::StringArray messages;
+    if (!audio.isEmpty()) {
+        auto r = vcc::desktop::import_audio_files(context_, audio, track_id, at_seconds);
+        all.ids = r.ids;
+        all.tracks = r.tracks;
+        all.unreadable.addArray(r.unreadable);
+        if (r.message.isNotEmpty()) messages.add(r.message);
+    }
+    if (!midi.isEmpty()) {
+        const Ticks at = context_.session.data().tempo.tick_at_seconds(std::max(0.0, at_seconds));
+        auto r = import_midi_files(context_, midi, track_id, at);
+        all.tracks.insert(all.tracks.end(), r.tracks.begin(), r.tracks.end());
+        all.unreadable.addArray(r.unreadable);
+        if (r.message.isNotEmpty()) messages.add(r.message);
+    }
+    all.unreadable.addArray(skipped);
+    if (messages.isEmpty() && !all.unreadable.isEmpty()) {
         juce::AlertWindow::showAsync(juce::MessageBoxOptions::makeOptionsOk(
-                                         juce::MessageBoxIconType::WarningIcon, "Could not import audio",
-                                         "None of these files could be read as audio:\n" + unreadable.joinIntoString("\n"), {}, this),
+                                         juce::MessageBoxIconType::WarningIcon, "Could not import",
+                                         "These files could not be read as audio or MIDI:\n" + all.unreadable.joinIntoString("\n"), {},
+                                         this),
                                      [](int) {});
-        return {};
+        return all;
     }
+    all.message = messages.joinIntoString("; ");
+    if (!all.unreadable.isEmpty()) all.message << "; could not read " << all.unreadable.joinIntoString(", ");
+    if (all.message.isNotEmpty()) context_.status(all.message);
+    return all;
+}
 
-    // The selected audio (or reference) track, or a new audio track.
-    std::string track_id;
-    if (const auto* t = s.data().find_track(s.selected_track());
-        t && (t->kind == project::TrackKind::Audio || t->kind == project::TrackKind::Reference))
-        track_id = t->id;
-    if (track_id.empty())
-        track_id = s.add_audio_track(items.front().file.getFileNameWithoutExtension().toStdString(),
-                                     items.front().info.channels > 1);
-    if (track_id.empty()) return {};
+bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    for (const auto& f : files)
+        if (is_audio_file(juce::File(f)) || is_midi_file(juce::File(f))) return true;
+    return false;
+}
 
-    // Inside a saved project the files are copied into "Audio Files" and
-    // stored relative to the project; otherwise they are referenced where they are.
-    const std::string folder = s.audio_folder();
-    const juce::File audio_dir = folder.empty() ? juce::File() : juce::File(juce::String::fromUTF8(folder.c_str()));
-    if (audio_dir != juce::File()) audio_dir.createDirectory();
-    int copied = 0;
-    std::vector<std::pair<std::string, project::AudioClip>> clips;
-    double at = context_.engine.position_seconds();
-    for (const auto& item : items) {
-        std::string stored = item.file.getFullPathName().toStdString();
-        if (audio_dir.isDirectory()) {
-            juce::File dest = item.file.isAChildOf(audio_dir) ? item.file : audio_dir.getChildFile(item.file.getFileName());
-            if (dest != item.file && dest.exists())
-                dest = audio_dir.getNonexistentChildFile(item.file.getFileNameWithoutExtension(), item.file.getFileExtension(), false);
-            if (dest == item.file || item.file.copyFileTo(dest)) {
-                stored = (audio_dir.getFileName() + "/" + dest.getRelativePathFrom(audio_dir)).toStdString();
-                copied += dest == item.file ? 0 : 1;
-            }
-        }
-        project::AudioClip c;
-        c.name = item.file.getFileNameWithoutExtension().toStdString();
-        c.file = stored;
-        c.start_seconds = at;
-        c.length = item.info.length_seconds;
-        c.channels = item.info.channels;
-        c.file_sample_rate = item.info.sample_rate;
-        clips.emplace_back(track_id, c);
-        at += c.length;  // several files play one after another
-    }
-    const auto ids = s.add_audio_clips(clips, clips.size() == 1 ? "Import " + clips.front().second.name : "Import audio", false);
-    s.select_track(track_id);
-    juce::String msg = "Imported " + juce::String(static_cast<int>(ids.size())) + (ids.size() == 1 ? " audio file" : " audio files");
-    if (copied > 0) msg << " (copied into " << audio_dir.getFileName() << ")";
-    else if (folder.empty()) msg << " - referenced in place; save the project to keep copies with it";
-    if (!unreadable.isEmpty()) msg << "; could not read " << unreadable.joinIntoString(", ");
-    context_.status(msg);
-    return ids;
+void MainComponent::filesDropped(const juce::StringArray& files, int, int)
+{
+    // Dropped anywhere but on a track: audio on a new track (or the selected
+    // audio track) at the playhead; MIDI as new tracks at the playhead's bar.
+    juce::Array<juce::File> list;
+    for (const auto& f : files) list.add(juce::File(f));
+    import_files(list, {}, context_.engine.position_seconds());
 }
 
 void MainComponent::new_audio_track()
@@ -1433,7 +1423,7 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.addDefaultKeypress('p', cmdKey | shift);
             break;
         case cmd::addAudioTrack: info.setInfo("New Audio Track...", "", "Track", 0); info.addDefaultKeypress('t', cmdKey | shift); break;
-        case cmd::importAudio: info.setInfo("Import Audio...", "", "File", 0); info.addDefaultKeypress('i', cmdKey | juce::ModifierKeys::altModifier); break;
+        case cmd::importAudio: info.setInfo("Import Audio or MIDI...", "", "File", 0); info.addDefaultKeypress('i', cmdKey | juce::ModifierKeys::altModifier); break;
         case cmd::addAuxBus: info.setInfo("New Aux (FX) Bus...", "", "Track", 0); break;
         case cmd::addGroupBus: info.setInfo("New Group Bus...", "", "Track", 0); break;
         case cmd::showComposer:

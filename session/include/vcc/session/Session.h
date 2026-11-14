@@ -278,6 +278,25 @@ public:
                                 std::vector<ControllerEvent> points);
     /// Input quantize for MIDI recorded onto the track (0: off). One undo step.
     bool set_input_quantize(const std::string& track_id, Ticks grid);
+
+    // --- Importing a Standard MIDI File --------------------------------------------------
+    struct MidiImport {
+        std::vector<std::string> track_ids;  ///< Tracks that received a region (new or the target).
+        int parts = 0;                       ///< Regions placed.
+        int notes = 0;
+        bool new_tracks = false;
+        bool took_tempo = false;             ///< The empty project took the file's tempo and meter.
+        std::string error;                   ///< Why nothing was imported.
+    };
+    /// Imports a .mid file as one undo step ("Import <file>"). Each part (a
+    /// track of the file, or each channel of a single-track file) becomes a
+    /// region of whole bars, with its notes and controllers. With
+    /// `target_track` (an instrument or MIDI track) and a one-part file, it
+    /// lands there; otherwise each part gets a new instrument track named
+    /// after it, its sound chosen from the part's program change (channel 10:
+    /// percussion). Placed from the bar at `at`. A project with nothing in
+    /// it yet takes the file's tempo and meter.
+    MidiImport import_midi_file(const std::string& path, const std::string& target_track, Ticks at);
     bool update_audio_clip(const std::string& track_id, const std::string& clip_id, const std::string& label,
                            const std::function<void(project::AudioClip&)>& change);
     bool remove_audio_clip(const std::string& track_id, const std::string& clip_id);

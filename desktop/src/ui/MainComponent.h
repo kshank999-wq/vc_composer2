@@ -7,6 +7,7 @@
 
 #include "ui/AppContext.h"
 #include "ui/ComposerView.h"
+#include "ui/Import.h"
 #include "ui/MixerComponent.h"
 #include "ui/SequencerView.h"
 #include "ui/TrackPanel.h"
@@ -23,6 +24,7 @@ namespace vcc::desktop {
 class MainComponent final : public juce::Component,
                             public juce::ApplicationCommandTarget,
                             public juce::MenuBarModel,
+                            public juce::FileDragAndDropTarget,
                             private juce::Timer {
 public:
     explicit MainComponent(AppContext& context);
@@ -60,6 +62,11 @@ public:
     /// new one) as one undo step, copying them into the project's "Audio
     /// Files" folder when the project is saved. Returns the clip ids.
     std::vector<std::string> import_audio_files(const juce::Array<juce::File>& files);
+    /// Imports audio and MIDI files (drag and drop, menus): onto `track_id`
+    /// when it suits, else the selected or new tracks, from `at_seconds`.
+    ImportResult import_files(const juce::Array<juce::File>& files, const std::string& track_id, double at_seconds);
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
     /// Punch in/out on the sequencer's ruler range (off when there is none).
     void set_punch(bool on);
     /// Loop playback over the shared selection's range (one bar at the

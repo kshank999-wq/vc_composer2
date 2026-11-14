@@ -1,5 +1,8 @@
 #include <filesystem>
 
+#include <cstdio>
+
+#include "vcc/music/MidiFile.h"
 #include "vcc/project/MidiTools.h"
 #include "vcc/project/Render.h"
 #include "vcc/session/Session.h"
@@ -145,4 +148,109 @@ TEST_CASE("session: quantize, velocity, CC and input quantize on regions, undoab
     s.undo();
     s.undo();
     CHECK(region().controllers.size() == 2);
+}
+
+namespace {
+music::SmfEvent note(std::int64_t tick, bool on, int channel, int pitch, int velocity)
+{
+    music::SmfEvent e;
+    e.tick = tick;
+    e.event.type = on ? music::MidiEventType::NoteOn : music::MidiEventType::NoteOff;
+    e.event.channel = static_cast<std::uint8_t>(channel);
+    e.event.data1 = static_cast<std::uint8_t>(pitch);
+    e.event.data2 = static_cast<std::uint8_t>(velocity);
+    return e;
+}
+}  // namespace
+
+TEST_CASE("importing a MIDI file: parts become tracks with regions, tempo and meter taken, one undo step")
+{
+    // A 480-ppq file: a tempo/meter track, a piano part with a pedal, and a drum part.
+    music::SmfFile f;
+    f.ticks_per_quarter = 480;
+    music::SmfTrack conductor;
+    conductor.meta.push_back(music::smf_tempo(0, 100.0));
+    conductor.meta.push_back(music::smf_time_signature(0, music::TimeSignature{3, 4}));
+    music::SmfTrack piano;
+    piano.name = "Piano";
+    music::SmfEvent prog;
+    prog.event.type = music::MidiEventType::ProgramChange;
+    prog.event.data1 = 0;
+    piano.events.push_back(prog);
+    piano.events.push_back(note(0, true, 0, 60, 90));
+    piano.events.push_back(note(480, false, 0, 60, 0));
+    music::SmfEvent pedal;
+    pedal.tick = 0;
+    pedal.event.type = music::MidiEventType::ControlChange;
+    pedal.event.data1 = 64;
+    pedal.event.data2 = 127;
+    piano.events.push_back(pedal);
+    piano.events.push_back(note(960, true, 0, 64, 80));
+    piano.events.push_back(note(1200, false, 0, 64, 0));
+    music::SmfTrack drums;
+    drums.name = "Drums";
+    drums.events.push_back(note(0, true, 9, 36, 110));
+    drums.events.push_back(note(120, false, 9, 36, 0));
+    f.tracks = {conductor, piano, drums};
+    const auto path = (std::filesystem::temp_directory_path() / "vcc_import_test.mid").string();
+    REQUIRE(music::write_smf_file(f, path).ok);
+
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto tracks_before = s.data().tracks.size();
+    const auto r = s.import_midi_file(path, {}, 0);
+    REQUIRE(r.error.empty());
+    CHECK(r.parts == 2);
+    CHECK(r.notes == 3);
+    CHECK(r.new_tracks);
+    CHECK(r.took_tempo);
+    CHECK(s.undo_label() == "Import vcc_import_test");
+    CHECK(s.data().tracks.size() == tracks_before + 2);
+    CHECK(std::abs(s.data().tempo.bpm_at(0) - 100.0) < 0.01);
+    CHECK(s.data().meter.at_bar(1).numerator == 3);
+    const auto* pt = s.data().find_track(r.track_ids[0]);
+    REQUIRE(pt != nullptr);
+    CHECK(pt->name == "Piano");
+    const auto& reg = pt->active_version()->regions.at(0);
+    REQUIRE(reg.notes.size() == 2);
+    CHECK(reg.notes[0].start == 0);
+    CHECK(reg.notes[0].duration == Q);  // 480 file ticks = a quarter
+    CHECK(reg.notes[1].start == 2 * Q);
+    CHECK(reg.end == 3 * Q);  // one bar of 3/4
+    REQUIRE(reg.controllers.size() == 1);
+    CHECK(reg.controllers[0].controller == 64);
+    const auto* dt = s.data().find_track(r.track_ids[1]);
+    REQUIRE(dt != nullptr);
+    CHECK(dt->midi_channel == 9);  // percussion
+    s.undo();
+    CHECK(s.data().tracks.size() == tracks_before);
+
+    // A one-part file onto a chosen track, from bar 3: earlier regions there move to a take lane.
+    music::SmfFile one;
+    one.ticks_per_quarter = 960;
+    music::SmfTrack line;
+    line.events.push_back(note(0, true, 0, 67, 70));
+    line.events.push_back(note(960, false, 0, 67, 0));
+    one.tracks = {line};
+    REQUIRE(music::write_smf_file(one, path).ok);
+    const auto keys = s.add_track("Keys", "keys.piano");
+    const auto r2 = s.import_midi_file(path, keys, s.data().meter.bar_start(3) + 100);
+    REQUIRE(r2.parts == 1);
+    CHECK(!r2.new_tracks);
+    CHECK(r2.track_ids[0] == keys);
+    CHECK(s.data().find_track(keys)->active_version()->regions[0].notes[0].start == s.data().meter.bar_start(3));
+    const auto r3 = s.import_midi_file(path, keys, s.data().meter.bar_start(3));
+    REQUIRE(r3.parts == 1);
+    int lane0 = 0;
+    for (const auto& x : s.data().find_track(keys)->active_version()->regions) lane0 += x.lane == 0 ? 1 : 0;
+    CHECK(lane0 == 1);
+
+    // Not a MIDI file.
+    {
+        std::FILE* bad = std::fopen(path.c_str(), "wb");
+        std::fputs("not midi", bad);
+        std::fclose(bad);
+    }
+    CHECK(!s.import_midi_file(path, {}, 0).error.empty());
+    std::filesystem::remove(path);
 }

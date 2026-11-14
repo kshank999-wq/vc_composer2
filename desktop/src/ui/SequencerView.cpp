@@ -8,6 +8,7 @@
 #include <set>
 
 #include "audio/Consolidate.h"
+#include "ui/Import.h"
 #include "ui/AudioTrackStyle.h"
 #include "ui/AutomationLaneView.h"
 #include "ui/Theme.h"
@@ -1009,7 +1010,7 @@ private:
 
 // --- Track lanes -------------------------------------------------------------------------------------
 
-class LaneArea final : public juce::Component, private juce::ScrollBar::Listener {
+class LaneArea final : public juce::Component, public juce::FileDragAndDropTarget, private juce::ScrollBar::Listener {
 public:
     explicit LaneArea(Model& m) : m_(m)
     {
@@ -1142,6 +1143,27 @@ public:
             g.setColour(colours::text_dim);
             g.setFont(juce::FontOptions(14.0f));
             g.drawText("No tracks yet - add a track or a template", timeline, juce::Justification::centred);
+        }
+        // A file being dragged over: the track it lands on and where.
+        if (drop_x_ >= 0) {
+            juce::Graphics::ScopedSaveState state(g);
+            int top = -scroll_y_;
+            juce::Rectangle<int> row;
+            for (const auto& l : m_.lanes) {
+                const int rh = m_.row_height(l);
+                if (!l.bus && l.id == drop_track_) row = {0, top, w - kScroll, m_.base_height(l)};
+                top += rh;
+            }
+            if (row.isEmpty()) row = {0, top, w - kScroll, 40};  // below the tracks: a new one
+            g.setColour(colours::accent.withAlpha(0.14f));
+            g.fillRect(row);
+            const float x = static_cast<float>(m_.x_of(static_cast<double>(drop_tick(drop_x_))));
+            g.setColour(colours::accent);
+            g.fillRect(juce::Rectangle<float>(x - 1.0f, static_cast<float>(row.getY()), 2.0f, static_cast<float>(row.getHeight())));
+            if (drop_track_.empty()) {
+                g.setFont(juce::FontOptions(12.0f));
+                g.drawText("Drop here for a new track", row.withTrimmedLeft(kHeader + 8), juce::Justification::centredLeft);
+            }
         }
         // A comp swipe in progress, over its take.
         if (drag_ == Drag::Comp) {
@@ -1420,6 +1442,72 @@ public:
             return true;
         }
         return false;
+    }
+
+    // --- Dropping audio and MIDI files onto the lanes ----------------------------------------
+
+    bool isInterestedInFileDrag(const juce::StringArray& files) override
+    {
+        for (const auto& f : files)
+            if (is_audio_file(juce::File(f)) || is_midi_file(juce::File(f))) return true;
+        return false;
+    }
+    void fileDragEnter(const juce::StringArray&, int x, int y) override { set_drop_hint(x, y); }
+    void fileDragMove(const juce::StringArray&, int x, int y) override { set_drop_hint(x, y); }
+    void fileDragExit(const juce::StringArray&) override
+    {
+        drop_x_ = -1;
+        repaint();
+    }
+
+    /// The track under `y` that a drop lands on (empty: below the tracks, a new one).
+    std::string drop_track(int y) const
+    {
+        const Hit hit = hit_at(y);
+        return hit.lane && !hit.lane->bus ? hit.lane->id : std::string();
+    }
+    /// The tick under `x`, snapped to the clip grid.
+    Ticks drop_tick(int x) const
+    {
+        const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(std::llround(m_.tick_of(std::max(x, kHeader)))));
+        return m_.snap(t, m_.clip_grid(), false);
+    }
+
+    void filesDropped(const juce::StringArray& files, int x, int y) override
+    {
+        drop_x_ = -1;
+        repaint();
+        juce::Array<juce::File> audio, midi;
+        juce::StringArray skipped;
+        for (const auto& f : files) {
+            const juce::File file(f);
+            if (is_midi_file(file)) midi.add(file);
+            else if (is_audio_file(file)) audio.add(file);
+            else skipped.add(file.getFileName());
+        }
+        const std::string track = drop_track(y);
+        const Ticks tick = drop_tick(x);
+        juce::StringArray messages, unreadable = skipped;
+        if (!audio.isEmpty()) {
+            const auto r = import_audio_files(m_.ctx, audio, track, m_.tempo.seconds_at(tick), false);
+            if (r.message.isNotEmpty()) messages.add(r.message);
+            unreadable.addArray(r.unreadable);
+        }
+        if (!midi.isEmpty()) {
+            const auto r = import_midi_files(m_.ctx, midi, track, tick);
+            if (r.message.isNotEmpty()) messages.add(r.message);
+            unreadable.addArray(r.unreadable);
+        }
+        juce::String msg = messages.joinIntoString("; ");
+        if (!unreadable.isEmpty()) msg << (msg.isEmpty() ? "Could not import " : "; could not read ") << unreadable.joinIntoString(", ");
+        m_.ctx.status(msg);
+    }
+
+    void set_drop_hint(int x, int y)
+    {
+        drop_x_ = std::max(x, kHeader);
+        drop_track_ = drop_track(y);
+        repaint();
     }
 
     // --- Clip editing (the clip menu, keys, and SequencerView's entry points) -------------
@@ -2259,6 +2347,9 @@ private:
     std::string drag_track_, drag_label_;
     project::AudioClip drag_clip_;
     double file_length_ = 0.0;  ///< Of the dragged clip's file, when known.
+    // A file drag over the lanes: where it would land (-1: none).
+    int drop_x_ = -1;
+    std::string drop_track_;
     // Swipe comping: the range in project seconds, inside the take.
     double comp_from_ = 0.0, comp_to_ = 0.0;
     juce::Rectangle<float> comp_row_;
