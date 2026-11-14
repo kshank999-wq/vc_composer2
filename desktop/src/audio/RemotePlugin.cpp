@@ -77,11 +77,16 @@ void HostProcess::lost()
 {
     crashed_ = true;
     std::lock_guard<std::mutex> lock(pending_lock_);
+    if (reason_.isEmpty()) reason_ = "its process exited or lost the connection";
     for (auto& [id, p] : pending_) p->done.signal();
 }
 
 void HostProcess::mark_crashed()
 {
+    {
+        std::lock_guard<std::mutex> lock(pending_lock_);
+        if (reason_.isEmpty()) reason_ = "it stopped answering";
+    }
     lost();
     if (connection_) connection_->killWorkerProcess();
 }
@@ -186,7 +191,8 @@ std::unique_ptr<RemotePluginInstance> RemotePluginInstance::create(std::shared_p
     out.writeString(juce::String(state_base64));
     juce::MemoryBlock reply;
     if (!p->call("load", out.getMemoryBlock(), reply, 60000)) {
-        error = p->crashed() ? description.name + " crashed while loading outside VC Composer"
+        error = p->crashed() ? description.name + " crashed while loading outside VC Composer (" +
+                                   p->process_->crash_reason() + ")"
                              : description.name + " did not finish loading within 60 s";
         return nullptr;
     }

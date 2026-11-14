@@ -15,6 +15,7 @@
 #elif JUCE_MAC
 #include <cerrno>
 #if __has_include(<os/os_sync_wait_on_address.h>)
+#include <mach/mach_time.h>
 #include <os/clock.h>
 #include <os/os_sync_wait_on_address.h>
 #define VCC_HAVE_OS_SYNC 1
@@ -78,9 +79,16 @@ void block_on(std::atomic<std::uint32_t>& word, std::uint32_t seen, double ms, v
 #elif JUCE_MAC
 #if VCC_HAVE_OS_SYNC
     if (__builtin_available(macOS 14.4, *)) {
+        // The timeout is in mach absolute time units, not nanoseconds (on
+        // Apple silicon a unit is about 41.7 ns).
+        static const double ns_per_unit = [] {
+            mach_timebase_info_data_t tb{};
+            mach_timebase_info(&tb);
+            return tb.numer > 0 && tb.denom > 0 ? static_cast<double>(tb.numer) / tb.denom : 1.0;
+        }();
+        const auto units = static_cast<std::uint64_t>(std::max(1.0, ms * 1.0e6 / ns_per_unit));
         os_sync_wait_on_address_with_timeout(raw(word), seen, sizeof(std::uint32_t), OS_SYNC_WAIT_ON_ADDRESS_SHARED,
-                                             OS_CLOCK_MACH_ABSOLUTE_TIME,
-                                             static_cast<std::uint64_t>(ms * 1.0e6));
+                                             OS_CLOCK_MACH_ABSOLUTE_TIME, units);
         return;
     }
 #endif

@@ -42,6 +42,13 @@ public:
     ~HostProcess();
 
     bool crashed() const noexcept { return crashed_.load(); }
+    /// Why it is marked crashed: the connection dropped (the process exited
+    /// or died) or it stopped answering. Empty while it runs.
+    juce::String crash_reason() const
+    {
+        std::lock_guard<std::mutex> lock(pending_lock_);
+        return reason_;
+    }
     /// What the process is for ("VCC Test Effect", "Spitfire Audio", "all plug-ins").
     const juce::String& label() const noexcept { return label_; }
     int new_instance_id() noexcept { return next_instance_++; }
@@ -67,7 +74,8 @@ private:
     std::atomic<bool> crashed_{false};
     std::atomic<int> next_instance_{1};
     std::atomic<int> instances_{0};
-    std::mutex pending_lock_;
+    mutable std::mutex pending_lock_;
+    juce::String reason_;  // guarded by pending_lock_
     std::map<int, std::shared_ptr<Pending>> pending_;
     std::atomic<int> next_id_{1};
 };

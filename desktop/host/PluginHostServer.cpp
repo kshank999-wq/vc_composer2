@@ -21,6 +21,8 @@
 
 #if JUCE_LINUX || JUCE_MAC
 #include <unistd.h>
+#elif JUCE_WINDOWS
+#include <process.h>
 #endif
 
 #include "audio/PluginIpc.h"
@@ -28,6 +30,26 @@
 namespace {
 
 using vcc::ipc::Message;
+
+int process_id()
+{
+#if JUCE_WINDOWS
+    return static_cast<int>(_getpid());
+#else
+    return static_cast<int>(getpid());
+#endif
+}
+
+/// Diagnostics: with VCC_PLUGIN_HOST_LOG set to a file, each step is
+/// appended to it (the process's own output is not captured).
+void host_log(const juce::String& line)
+{
+    const char* path = std::getenv("VCC_PLUGIN_HOST_LOG");
+    if (path == nullptr || *path == 0) return;
+    juce::File(juce::String::fromUTF8(path))
+        .appendText(juce::Time::getCurrentTime().toString(false, true, true, true) + " [" +
+                    juce::String(process_id()) + "] " + line + "\n");
+}
 
 /// One hosted plug-in.
 class Instance final : private juce::AudioProcessorParameter::Listener, private juce::Thread, private juce::Timer {
@@ -177,9 +199,14 @@ void Instance::load(juce::AudioPluginFormatManager& formats, juce::MemoryInputSt
     juce::PluginDescription description;
     auto xml = juce::parseXML(description_xml);
     if (!xml || !description.loadFromXml(*xml)) return fail("bad plug-in description");
-    if (!shared_.open(juce::File(shm_path), false)) return fail("could not open the shared audio block");
+    host_log("load " + description.name + " (" + description.fileOrIdentifier + ") at " + juce::String(sr) + " Hz");
+    if (!shared_.open(juce::File(shm_path), false)) {
+        host_log("could not open the shared block " + shm_path);
+        return fail("could not open the shared audio block");
+    }
     juce::String error;
     plugin_ = formats.createPluginInstance(description, sr, block, error);
+    host_log(plugin_ ? juce::String("created") : "not created: " + error);
     if (!plugin_) return fail(error.isEmpty() ? juce::String("the plug-in could not be created") : error);
     plugin_->enableAllBuses();
     if (state.isNotEmpty()) {
@@ -195,6 +222,7 @@ void Instance::load(juce::AudioPluginFormatManager& formats, juce::MemoryInputSt
     shared_.get()->latency.store(plugin_->getLatencySamples());
     startThread(juce::Thread::Priority::highest);
     startTimerHz(30);
+    host_log("prepared and running");
 
     out.writeBool(true);
     out.writeString(plugin_->getName());
@@ -309,6 +337,7 @@ public:
 
     void handleConnectionLost() override
     {
+        host_log("connection lost: leaving");
         // The app quit or crashed: nothing to save, leave at once (some
         // plug-ins misbehave in their destructors; this process is spent).
         std::_Exit(0);
@@ -338,7 +367,7 @@ private:
         r.instance = m.instance;
         r.command = m.command;
         r.payload = out.getMemoryBlock();
-        sendMessageToCoordinator(r.encode());
+        if (!sendMessageToCoordinator(r.encode())) host_log("could not reply to " + m.command);
     }
 
     juce::AudioPluginFormatManager formats_;
@@ -352,10 +381,15 @@ int main(int argc, char* argv[])
     juce::StringArray args;
     for (int i = 1; i < argc; ++i) args.add(juce::String::fromUTF8(argv[i]));
     juce::ScopedJuceInitialiser_GUI juce_runtime;
+    host_log("started");
     Server server;
     // The app pings; without a ping for 8 s this process assumes the app has
     // gone and leaves.
-    if (!server.initialiseFromCommandLine(args.joinIntoString(" "), vcc::ipc::kProcessId, 8000)) return 1;
+    if (!server.initialiseFromCommandLine(args.joinIntoString(" "), vcc::ipc::kProcessId, 8000)) {
+        host_log("not started by VC Composer: " + args.joinIntoString(" "));
+        return 1;
+    }
+    host_log("connected");
     juce::MessageManager::getInstance()->runDispatchLoop();
     server.shut_down();
     return 0;

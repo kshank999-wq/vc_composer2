@@ -81,7 +81,18 @@ void check(bool ok, const juce::String& what)
     if (!ok) ++failures;
 }
 
-void pump(int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil(ms); }
+/// Runs the message loop for `ms`, and at least until everything already
+/// posted (a triggerClick, an async update) has been handled: a slow
+/// machine may not get to it within a fixed time. Posted messages are
+/// handled in order, so once a marker posted now arrives, they all have.
+void pump(int ms)
+{
+    auto* mm = juce::MessageManager::getInstance();
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    juce::MessageManager::callAsync([done] { done->store(true); });
+    mm->runDispatchLoopUntil(ms);
+    for (int waited = 0; !done->load() && waited < 5000; waited += 10) mm->runDispatchLoopUntil(10);
+}
 
 void shoot(juce::Component& c, const juce::File& dir, const juce::String& name)
 {
@@ -1028,19 +1039,20 @@ void ipc_wait_checks(const juce::File& dir)
     for (int round = 0; round < 20; ++round) {
         const std::uint32_t seen = host.get()->request.load();
         std::atomic<bool> ready{false};
-        double waited = -1.0;
+        std::chrono::steady_clock::time_point woke;
         std::thread waiter([&] {
             ready = true;
-            const auto t0 = std::chrono::steady_clock::now();
             plugin.wait(ipc::Word::request, seen, 1000.0);
-            waited = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            woke = std::chrono::steady_clock::now();
         });
         while (!ready) std::this_thread::yield();
         std::this_thread::sleep_for(std::chrono::milliseconds(5));  // the waiter is now blocked in the kernel
+        // Measured from the signal itself (a sleep can overshoot on a busy machine).
+        const auto signalled = std::chrono::steady_clock::now();
         host.get()->request.store(seen + 1, std::memory_order_release);
         host.wake(ipc::Word::request);
         waiter.join();
-        wake_ms.push_back(waited - 5.0);
+        wake_ms.push_back(std::chrono::duration<double, std::milli>(woke - signalled).count());
     }
     std::sort(wake_ms.begin(), wake_ms.end());
     const double median = wake_ms[wake_ms.size() / 2], worst = wake_ms.back();
@@ -2709,9 +2721,12 @@ void recording_workflow_checks(MainWindow& window, const juce::File& dir)
         files.insert(c.file);
         if (std::abs(c.length - bar_s) < 0.03 && c.start_seconds < 0.012) ++full;
     }
+    juce::String detail;
+    for (const auto& c : takes)
+        detail << " [lane " << c.lane << ": " << juce::String(c.start_seconds, 3) << " s + " << juce::String(c.length, 3) << " s]";
     check(takes.size() == 3 && lanes.size() == 3 && files.size() == 3 && full == 2,
           "loop recording keeps every pass as a take (" + juce::String(static_cast<int>(takes.size())) + " takes, " +
-              juce::String(full) + " full cycles)");
+              juce::String(full) + " full cycles;" + detail + "; " + last_message + ")");
     session.set_record_armed(loop, false);
 
     // MIDI: what is played on the keyboard into an armed instrument track.
@@ -3266,10 +3281,15 @@ int main(int argc, char** argv)
     const auto settings = dir.getChildFile("settings");
     settings.deleteRecursively();
     settings.createDirectory();
+    // The plug-in host processes log what they do here (they inherit it).
+    const auto host_log = dir.getChildFile("plugin-host.log");
+    host_log.deleteFile();
 #if JUCE_WINDOWS
     _putenv_s("VCC_SETTINGS_DIR", settings.getFullPathName().toRawUTF8());
+    _putenv_s("VCC_PLUGIN_HOST_LOG", host_log.getFullPathName().toRawUTF8());
 #else
     setenv("VCC_SETTINGS_DIR", settings.getFullPathName().toRawUTF8(), 1);
+    setenv("VCC_PLUGIN_HOST_LOG", host_log.getFullPathName().toRawUTF8(), 1);
 #endif
 
     {
@@ -3349,7 +3369,11 @@ int main(int argc, char** argv)
               "audio processing allocates nothing (" + juce::String(allocations.load()) + " allocations in 400 blocks)");
         // The counter itself must work, or "zero" proves nothing.
         counting = true;
-        { auto probe = std::make_unique<int>(1); (void)probe; }
+        {
+            // A direct call: a new-expression may legally be optimised away.
+            void* volatile probe = ::operator new(16);
+            ::operator delete(probe);
+        }
         counting = false;
         check(allocations.load() >= 1, "the allocation counter counts");
         ctx.engine.stop();
@@ -3467,6 +3491,11 @@ int main(int argc, char** argv)
                 ctx.engine.rebuild_now();
                 check(ctx.engine.instrument_status(plugin_track) == "VCC Test Instrument",
                       "the track is played by the hosted plug-in (" + ctx.engine.instrument_status(plugin_track) + ")");
+                if (ctx.engine.instrument_status(plugin_track) != "VCC Test Instrument") {
+                    const juce::File log(juce::SystemStats::getEnvironmentVariable("VCC_PLUGIN_HOST_LOG", {}));
+                    std::printf("--- plug-in host log (%s) ---\n%s\n---\n", log.getFullPathName().toRawUTF8(),
+                                log.loadFileAsString().toRawUTF8());
+                }
                 ctx.engine.locate(0);
                 ctx.engine.play();
                 double plugin_energy = 0.0;
