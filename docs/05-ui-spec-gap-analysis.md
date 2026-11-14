@@ -695,3 +695,20 @@ and the document model. The work is mostly presentation.
       the drawn CC1 in the track's render. Screenshot `midi-tools`.
     - Not yet: pitch bend and aftertouch, a CC lane in the Composer view,
       transform tools (legato, humanize for regions, transpose).
+
+**CI on macOS (November 14, 2026).** The desktop check now passes on
+macOS, Linux and Windows. What it took:
+- The out-of-process plug-in host ran its message loop through
+  `[NSApp run]`, which in this bundle-less helper never handled a message:
+  every host connected and then sat until the ping timeout. On macOS it
+  now runs the run loop in slices (`runDispatchLoopUntil`). The host logs
+  its steps to `VCC_PLUGIN_HOST_LOG`, and CI prints that log and any crash
+  reports when the macOS check fails.
+- `os_sync_wait_on_address_with_timeout` takes mach time units, not
+  nanoseconds; IPC waits on Apple silicon were about 40 times too long.
+- The macOS runner has an audio device, which kept driving the engine
+  while the check rendered offline. `prepare_offline` now detaches the
+  engine from the device.
+- Check fixes: `pump()` waits for posted clicks to be handled; IPC wake
+  times are measured from the signal; the allocation probe calls
+  `operator new` directly; build parallelism is capped.
