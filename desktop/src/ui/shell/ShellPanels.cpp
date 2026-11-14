@@ -713,32 +713,40 @@ void SelectionPanel::refresh()
 
 // --- Channel ------------------------------------------------------------------------------------
 
-ChannelPanel::ChannelPanel(AppContext& context) : hw::Panel("Channel"), context_(context)
+ChannelPanel::ChannelPanel(AppContext& context)
+    : hw::Panel("Channel"), context_(context), writer_(context, {}), slots_(std::make_unique<InsertSlots>(context, false))
 {
-    for (auto* c : std::initializer_list<juce::Component*>{&fader_, &pan_, &meter_l_, &meter_r_, &db_, &pan_lcd_, &out_,
-                                                           &inserts_, &mute_, &solo_})
+    for (auto* c : std::initializer_list<juce::Component*>{slots_.get(), &fader_, &pan_, &meter_l_, &meter_r_, &db_, &pan_lcd_,
+                                                           &in_, &out_, &mute_, &solo_})
         addAndMakeVisible(c);
     mute_.set_solid(hw::tok::mute);
     solo_.set_solid(hw::tok::solo);
-    db_.set_justification(juce::Justification::centred);
-    pan_lcd_.set_justification(juce::Justification::centred);
+    for (auto* l : {&db_, &pan_lcd_}) l->set_justification(juce::Justification::centred);
     pan_.setRange(-1.0, 1.0);
     pan_.setDoubleClickReturnValue(true, 0.0);
     pan_.setTitle("Pan");
     fader_.setTitle("Volume");
-    fader_.onDragStart = [] { console::begin_gesture(); };
-    pan_.onDragStart = [] { console::begin_gesture(); };
+    in_.set_on_click([this] {
+        if (!track_.empty()) console::show_input_menu(context_, track_, in_);
+    });
+    out_.set_on_click([this] {
+        if (!track_.empty()) console::show_output_menu(context_, track_, out_);
+    });
+    in_.setTooltip("Input: what this track records and monitors (an instrument track records onto its audio lane)");
+    out_.setTooltip("Output: the master, or a group or FX bus");
+    // Fader and pan: an edit per gesture, or automation while a pass writes them.
+    fader_.onDragStart = [this] { writer_.begin("volume"); };
+    fader_.onDragEnd = [this] { writer_.end("volume"); };
     fader_.onValueChange = [this] {
-        if (track_.empty()) return;
         const double db = std::isfinite(fader_.db()) ? std::max(-96.0, fader_.db()) : -96.0;
-        context_.session.update_track_mix(track_, "Volume " + track_ + console::gesture_suffix(),
-                                          [db](project::Track& t) { t.gain_db = db; });
+        writer_.write("volume", db, "Volume", [db](double& gain, double&, std::vector<project::Send>&) { gain = db; });
+        db_.set_text(juce::String(db, 1) + " dB");
     };
+    pan_.onDragStart = [this] { writer_.begin("pan"); };
+    pan_.onDragEnd = [this] { writer_.end("pan"); };
     pan_.onValueChange = [this] {
-        if (track_.empty()) return;
         const double p = pan_.getValue();
-        context_.session.update_track_mix(track_, "Pan " + track_ + console::gesture_suffix(),
-                                          [p](project::Track& t) { t.pan = p; });
+        writer_.write("pan", p, "Pan", [p](double&, double& pan, std::vector<project::Send>&) { pan = p; });
     };
     mute_.onClick = [this] {
         if (!track_.empty()) context_.session.set_mute(track_, mute_.getToggleState());
@@ -752,7 +760,7 @@ ChannelPanel::ChannelPanel(AppContext& context) : hw::Panel("Channel"), context_
         auto& k = *modes_.back();
         k.setRadioGroupId(41);
         k.set_led_dot(true);
-        k.set_legend_size(11.0f);
+        k.set_legend_size(10.5f);
         k.set_led_colour(console::automation_colour(juce::String(mode).toLowerCase().toStdString()));
         k.onClick = [this, i] {
             const char* names[] = {"read", "touch", "latch", "write"};
@@ -768,7 +776,11 @@ ChannelPanel::ChannelPanel(AppContext& context) : hw::Panel("Channel"), context_
     startTimerHz(30);
 }
 
-ChannelPanel::~ChannelPanel() { context_.session.remove_listener(listener_); }
+ChannelPanel::~ChannelPanel()
+{
+    stopTimer();
+    context_.session.remove_listener(listener_);
+}
 
 void ChannelPanel::refresh()
 {
@@ -776,14 +788,52 @@ void ChannelPanel::refresh()
     track_ = context_.session.selected_track();
     const auto* t = d.find_track(track_);
     if (!t) track_.clear();
+    writer_.set_owner(track_);
+    slots_->set_owner(track_);
     set_title(t ? "Channel  " + juce::String::fromUTF8("\xc2\xb7  ") + juce::String(t->name) : juce::String("Channel"));
-    for (auto* c : std::initializer_list<juce::Component*>{&fader_, &pan_, &mute_, &solo_})
-        c->setEnabled(t != nullptr);
+    // A send knob per FX bus (rebuilt when the buses change).
+    std::vector<std::string> fx;
+    std::vector<juce::String> fx_names;
+    for (const auto& b : d.buses)
+        if (b.kind == "fx") {
+            fx.push_back(b.id);
+            fx_names.push_back(juce::String(b.name));
+        }
+    if (fx != send_bus_) {
+        sends_.clear();
+        send_bus_ = fx;
+        send_names_ = fx_names;
+        for (const auto& id : fx) {
+            auto k = std::make_unique<hw::SmallKnob>();
+            k->setRange(-60.0, 6.0, 0.1);
+            k->setDoubleClickReturnValue(true, 0.0);
+            k->setWantsKeyboardFocus(false);
+            const std::string param = "send:" + id;
+            auto* knob = k.get();
+            k->onDragStart = [this, param] { writer_.begin(param); };
+            k->onDragEnd = [this, param] { writer_.end(param); };
+            k->onValueChange = [this, knob, id, param] {
+                const double v = knob->getValue();
+                writer_.write(param, v, "Send", [&](double&, double&, std::vector<project::Send>& sends) {
+                    auto it = std::find_if(sends.begin(), sends.end(), [&](const project::Send& s) { return s.bus_id == id; });
+                    if (it == sends.end()) sends.emplace_back(id, v);
+                    else it->level_db = v;
+                });
+                knob->setTooltip(juce::String(v, 1) + " dB");
+            };
+            addAndMakeVisible(*k);
+            sends_.push_back(std::move(k));
+        }
+        resized();
+    }
+    for (auto* c : std::initializer_list<juce::Component*>{&fader_, &pan_, &mute_, &solo_, slots_.get()}) c->setEnabled(t != nullptr);
     for (auto& k : modes_) k->setEnabled(t != nullptr);
+    for (auto& k : sends_) k->setEnabled(t != nullptr);
     if (!t) {
         db_.set_text("-");
+        in_.set_text({});
         out_.set_text("No track selected");
-        inserts_.set_text({});
+        repaint();
         return;
     }
     fader_.set_db(t->gain_db, juce::dontSendNotification);
@@ -791,62 +841,107 @@ void ChannelPanel::refresh()
     mute_.setToggleState(t->mute, juce::dontSendNotification);
     solo_.setToggleState(t->solo, juce::dontSendNotification);
     db_.set_text(juce::String(t->gain_db, 1) + " dB");
-    const int pv = juce::roundToInt(t->pan * 100.0);
-    pan_lcd_.set_text(pv == 0 ? juce::String("C") : (pv < 0 ? "L" : "R") + juce::String(std::abs(pv)));
+    pan_lcd_.set_text(console::pan_text(t->pan).toUpperCase());
     const char* names[] = {"read", "touch", "latch", "write"};
-    for (std::size_t i = 0; i < 4; ++i)
-        modes_[i]->setToggleState(t->automation_mode == names[i], juce::dontSendNotification);
-    const auto* bus = d.find_bus(t->output_bus_id);
-    out_.set_text("OUT  " + (bus ? juce::String(bus->name).toUpperCase() : juce::String("MASTER")));
-    juce::String ins;
-    for (std::size_t i = 0; i < 5; ++i) {
-        ins << juce::String::charToString(static_cast<juce::juce_wchar>('A' + i)) << "  ";
-        if (i < t->inserts.size()) {
-            const auto& s = t->inserts[i];
-            juce::String name = s.kind == "plugin" ? juce::String(s.plugin.name) : juce::String(s.kind);
-            if (s.suggestion) name = "(" + name + ")";
-            ins << name.toUpperCase() << (s.bypass ? "  OFF" : "");
-        } else {
-            ins << "-";
-        }
-        if (i < 4) ins << "\n";
+    for (std::size_t i = 0; i < 4; ++i) modes_[i]->setToggleState(t->automation_mode == names[i], juce::dontSendNotification);
+    for (std::size_t i = 0; i < sends_.size(); ++i) {
+        double level = -60.0;
+        for (const auto& s : t->sends)
+            if (s.bus_id == send_bus_[i]) level = s.level_db;
+        sends_[i]->setValue(level, juce::dontSendNotification);
+        sends_[i]->setTooltip(send_names_[i] + "  " + juce::String(level, 1) + " dB");
     }
-    inserts_.set_text(ins);
+    in_.set_text(console::input_text(context_, track_));
+    out_.set_text(console::output_text(context_, track_));
+    repaint();
 }
 
 void ChannelPanel::timerCallback()
 {
     if (track_.empty() || !isShowing()) return;
-    const auto m = context_.engine.take_deck_meter(track_);
+    const auto m = context_.engine.take_deck_meter(track_, 1);
     auto db = [](float lin) { return lin > 0.0f ? 20.0f * std::log10(lin) : -100.0f; };
     meter_l_.push(db(m.left));
     meter_r_.push(db(m.right));
+    // Fader and pan follow automation as it plays.
+    if (!fader_.isMouseButtonDown())
+        if (const auto v = context_.engine.automated_value(track_, "volume")) {
+            fader_.set_db(*v, juce::dontSendNotification);
+            db_.set_text(juce::String(*v, 1) + " dB");
+        }
+    if (!pan_.isMouseButtonDown())
+        if (const auto v = context_.engine.automated_value(track_, "pan")) pan_.setValue(*v, juce::dontSendNotification);
 }
 
 void ChannelPanel::resized()
 {
-    const auto c = content();
-    inserts_.setBounds(c.getX(), c.getY() + 18, c.getWidth(), 92);
-    const int top = c.getY() + 126;
+    auto c = content();
+    // Short (a tall keyboard deck, the print panel below): inserts as a row of lights, sends hidden.
+    compact_ = c.getHeight() < 330;
+    slots_->set_compact(compact_);
+    if (compact_) {
+        slots_->setBounds(c.removeFromTop(24).withTrimmedTop(2));
+        for (auto& k : sends_) k->setVisible(false);
+    } else {
+        c.removeFromTop(14);
+        slots_->setBounds(c.removeFromTop(80));
+        c.removeFromTop(16);
+        auto row = c.removeFromTop(30);
+        for (std::size_t i = 0; i < sends_.size(); ++i) {
+            const bool fits = static_cast<int>(i) < row.getWidth() / 44;
+            sends_[i]->setVisible(fits);
+            if (fits) sends_[i]->setBounds(row.getX() + static_cast<int>(i) * 44 + 7, row.getY(), 30, 30);
+        }
+        c.removeFromTop(sends_.empty() ? 0 : 12);
+    }
+    c.removeFromTop(6);
+    auto io = c.removeFromBottom(20);
+    in_.setBounds(io.removeFromLeft(io.getWidth() / 2 - 3));
+    io.removeFromLeft(6);
+    out_.setBounds(io);
+    c.removeFromBottom(6);
+    const int top = c.getY();
+    const int h = c.getHeight();
     pan_.setBounds(c.getX() + 4, top + 14, 30, 30);
     pan_lcd_.setBounds(c.getX(), top + 48, 40, 16);
-    fader_.setBounds(c.getX() + 44, top, 80, 210);
-    meter_l_.setBounds(c.getX() + 130, top + 10, 6, 190);
-    meter_r_.setBounds(c.getX() + 140, top + 10, 6, 190);
+    fader_.setBounds(c.getX() + 44, top, 80, h);
+    meter_l_.setBounds(c.getX() + 130, top + 8, 6, h - 16);
+    meter_r_.setBounds(c.getX() + 140, top + 8, 6, h - 16);
     const int rx = c.getX() + 156;
     const int rw = c.getRight() - rx;
-    db_.setBounds(rx, top + 6, rw, 24);
-    for (int i = 0; i < 4; ++i) modes_[static_cast<std::size_t>(i)]->setBounds(rx, top + 38 + i * 30, rw, 26);
-    mute_.setBounds(rx, top + 160, rw / 2 - 2, 24);
-    solo_.setBounds(rx + rw / 2 + 2, top + 160, rw / 2 - 2, 24);
-    out_.setBounds(c.getX(), top + 220, c.getWidth(), 22);
+    db_.setBounds(rx, top + 2, rw, 22);
+    // Read, Touch, Latch, Write: a column when there is room, else two by two.
+    const bool column = h >= 28 + 5 * 24;
+    const int key_h = column ? juce::jlimit(20, 26, (h - 28) / 5 - 3) : 20;
+    for (int i = 0; i < 4; ++i) {
+        auto& k = *modes_[static_cast<std::size_t>(i)];
+        k.set_legend_size(column ? 10.5f : 8.5f);
+        k.set_led_dot(column);  // two by two, the legend needs the room
+        if (column) k.setBounds(rx, top + 28 + i * (key_h + 3), rw, key_h);
+        else k.setBounds(rx + (i % 2) * (rw / 2 + 2), top + 28 + (i / 2) * (key_h + 3), rw / 2 - 2, key_h);
+    }
+    const int ms_y = top + 28 + (column ? 4 : 2) * (key_h + 3) + 2;
+    mute_.setBounds(rx, ms_y, rw / 2 - 2, key_h);
+    solo_.setBounds(rx + rw / 2 + 2, ms_y, rw / 2 - 2, key_h);
 }
 
 void ChannelPanel::paintOverChildren(juce::Graphics& g)
 {
-    hw::paint::silk(g, "Inserts", inserts_.getBounds().toFloat().withY(static_cast<float>(inserts_.getY() - 14)).withHeight(12.0f),
-                    9.5f);
-    hw::paint::silk(g, "Pan", pan_.getBounds().toFloat().withY(static_cast<float>(pan_.getY() - 14)).withHeight(12.0f), 9.5f,
+    if (!compact_) {
+        hw::paint::silk(g, "Inserts", slots_->getBounds().toFloat().withY(static_cast<float>(slots_->getY() - 13)).withHeight(12.0f), 9.5f);
+        if (!sends_.empty()) {
+            hw::paint::silk(g, "Sends", {static_cast<float>(slots_->getX()), static_cast<float>(sends_.front()->getY() - 14), 80.0f, 12.0f},
+                            9.5f);
+            for (std::size_t i = 0; i < sends_.size(); ++i)
+                if (sends_[i]->isVisible())
+                    hw::paint::silk(g, send_names_[i], sends_[i]->getBounds().toFloat().translated(0.0f, 31.0f).withHeight(10.0f).expanded(7.0f, 0.0f),
+                                    7.5f, juce::Justification::centred);
+        } else {
+            hw::paint::silk(g, "Sends  -  no FX buses", {static_cast<float>(slots_->getX()), static_cast<float>(slots_->getBottom() + 4), 200.0f, 12.0f},
+                            9.0f);
+        }
+    }
+    hw::paint::silk(g, "Pan", pan_.getBounds().toFloat().withY(static_cast<float>(pan_.getY() - 13)).withHeight(12.0f), 9.5f,
                     juce::Justification::centred);
 }
 

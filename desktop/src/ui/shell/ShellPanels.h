@@ -13,6 +13,8 @@
 #include "vcc/composer/ShortcutProfile.h"
 #include "vcc/notation/MusicalTime.h"
 #include "vcc/project/RenderCache.h"
+#include "ui/console/MixActions.h"
+#include "ui/shell/MixControls.h"
 
 namespace vcc::desktop::shell {
 
@@ -178,8 +180,11 @@ private:
     project::RenderCache render_;
 };
 
-/// Producer view: the selected track's channel: fader, meter, pan, mute,
-/// solo, automation mode, inserts and output.
+/// Producer view: the selected track's channel strip (docs/spec/ui, "Mix and
+/// master"): inserts A-E with bypass LEDs, a send knob per FX bus, pan, a
+/// long-throw fader with its dB scale, the stereo meter, the automation
+/// mode, and the input and output (click to change). Fader, pan and sends
+/// write automation while a pass is being written for them.
 class ChannelPanel final : public hw::Panel, private juce::Timer {
 public:
     explicit ChannelPanel(AppContext& context);
@@ -190,18 +195,30 @@ public:
     hw::Fader& fader() { return fader_; }
     hw::SmallKnob& pan() { return pan_; }
     hw::Keycap& mode_key(int i) { return *modes_[static_cast<std::size_t>(i)]; }
+    InsertSlots& inserts() { return *slots_; }
+    int send_count() const noexcept { return static_cast<int>(sends_.size()); }
+    hw::SmallKnob& send(int i) { return *sends_[static_cast<std::size_t>(i)]; }
+    const std::string& send_bus(int i) const { return send_bus_[static_cast<std::size_t>(i)]; }
+    hw::Lcd& input_lcd() { return in_; }
+    hw::Lcd& output_lcd() { return out_; }
 
 private:
     void timerCallback() override;
     AppContext& context_;
     int listener_ = 0;
     std::string track_;
+    console::MixWriter writer_;
+    std::unique_ptr<InsertSlots> slots_;
+    std::vector<std::unique_ptr<hw::SmallKnob>> sends_;
+    std::vector<std::string> send_bus_;
+    std::vector<juce::String> send_names_;
     hw::Fader fader_;
     hw::SmallKnob pan_;
     hw::Meter meter_l_{hw::Meter::Orientation::Vertical, 20}, meter_r_{hw::Meter::Orientation::Vertical, 20};
-    hw::Lcd db_{{}, 13.0f}, pan_lcd_{{}, 11.0f}, out_{{}, 11.0f}, inserts_{{}, 11.0f};
+    hw::Lcd db_{{}, 13.0f}, pan_lcd_{{}, 11.0f}, in_{{}, 10.5f}, out_{{}, 10.5f};
     hw::Keycap mute_{"M", true}, solo_{"S", true};
     std::vector<std::unique_ptr<hw::Keycap>> modes_;
+    bool compact_ = false;
 };
 
 // --- Status strip -------------------------------------------------------------------------------

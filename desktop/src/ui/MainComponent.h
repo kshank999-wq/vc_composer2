@@ -12,6 +12,7 @@
 #include "ui/TrackPanel.h"
 #include "ui/composer/Inspector.h"
 #include "ui/shell/KeyboardDeck.h"
+#include "ui/shell/MixerDeck.h"
 #include "ui/shell/PrintPanel.h"
 #include "ui/shell/ShellPanels.h"
 #include "ui/shell/TopDeck.h"
@@ -72,6 +73,10 @@ public:
     shell::SelectionPanel& selection_panel() noexcept { return selection_; }
     composer_ui::Inspector& inspector() noexcept { return inspector_; }
     shell::KeyboardDeck& keyboard() noexcept { return keyboard_; }
+    shell::MixerDeck& mixer_deck() noexcept { return mixer_deck_; }
+    /// The Producer view's bottom deck: the mixer (default) or the keyboard.
+    void show_bottom_mixer(bool mixer);
+    bool bottom_mixer() const noexcept { return bottom_mixer_; }
     shell::ClipsPanel& clips_panel() noexcept { return clips_; }
     shell::PrintPanel& print_panel() noexcept { return print_; }
     shell::ChannelPanel& channel_panel() noexcept { return channel_; }
@@ -127,6 +132,8 @@ private:
     shell::PrintPanel print_;
     shell::StatusStrip status_strip_;
     shell::KeyboardDeck keyboard_;
+    shell::MixerDeck mixer_deck_;
+    bool bottom_mixer_ = true;
     TrackPanel tracks_;
     juce::StretchableLayoutManager layout_;
     std::unique_ptr<juce::StretchableLayoutResizerBar> divider_;

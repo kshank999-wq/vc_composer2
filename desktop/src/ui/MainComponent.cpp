@@ -213,6 +213,7 @@ MainComponent::MainComponent(AppContext& context)
       print_(context),
       status_strip_(context),
       keyboard_(context),
+      mixer_deck_(context),
       tracks_(context),
       composer_(context),
       sequencer_(context)
@@ -228,6 +229,9 @@ MainComponent::MainComponent(AppContext& context)
     addChildComponent(clips_);
     addChildComponent(channel_);
     addChildComponent(print_);
+    addChildComponent(mixer_deck_);
+    keyboard_.on_mixer = [this] { show_bottom_mixer(true); };
+    mixer_deck_.on_keyboard = [this] { show_bottom_mixer(false); };
     addAndMakeVisible(tracks_);
     addAndMakeVisible(composer_);
     addChildComponent(sequencer_);
@@ -361,8 +365,14 @@ void MainComponent::resized()
     status_strip_.setBounds(r.removeFromBottom(18));
     r.reduce(kPad, kPad);
     deck_.setBounds(r.removeFromTop(shell::TopDeck::height_for(getWidth())));
-    // The keyboard deck across the bottom, as tall as its key zoom needs.
-    keyboard_.setBounds(r.removeFromBottom(keyboard_.preferred_height()));
+    // The bottom deck: the keyboard (as tall as its key zoom needs), or in
+    // the Producer view the mixer.
+    const bool mixer_deck = workspace_ == Workspace::Producer && bottom_mixer_;
+    keyboard_.setVisible(!mixer_deck);
+    mixer_deck_.setVisible(mixer_deck);
+    keyboard_.show_mixer_key(workspace_ == Workspace::Producer);
+    auto& deck = mixer_deck ? static_cast<juce::Component&>(mixer_deck_) : keyboard_;
+    deck.setBounds(r.removeFromBottom(mixer_deck ? shell::MixerDeck::kHeight : keyboard_.preferred_height()));
     r.removeFromBottom(kGap);
     r.removeFromTop(kGap);
     toolbar_.setBounds(r.removeFromTop(60));
@@ -408,7 +418,9 @@ void MainComponent::resized()
             right_area.removeFromLeft(kGap);
             print_.setBounds(right_area.withWidth(std::min(right_area.getWidth(), kRight)));
         } else {
-            const int print_h = juce::jlimit(230, 330, right_area.getHeight() - kGap - 420);
+            // A short column: the channel strip keeps at least 240 px.
+            const int print_h = juce::jlimit(222, 330, std::min(right_area.getHeight() - kGap - 420,
+                                                                 right_area.getHeight() - kGap - 240));
             print_.setBounds(right_area.removeFromBottom(print_h));
             right_area.removeFromBottom(kGap);
             channel_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), 420)));
@@ -437,6 +449,12 @@ void MainComponent::resized()
     sequencer_.setBounds(content);
 }
 
+void MainComponent::show_bottom_mixer(bool mixer)
+{
+    bottom_mixer_ = mixer;
+    resized();
+}
+
 void MainComponent::go_to_stage(int stage)
 {
     switch (stage) {
@@ -453,8 +471,9 @@ void MainComponent::go_to_stage(int stage)
             break;
         }
         case 2:
+            // Mix: the Producer view with the mixer in the bottom deck.
             show_workspace(Workspace::Producer);
-            show_mixer();
+            show_bottom_mixer(true);
             break;
         case 3:
             show_workspace(Workspace::Producer);

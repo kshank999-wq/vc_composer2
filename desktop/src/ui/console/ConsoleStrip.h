@@ -220,7 +220,6 @@ private:
     std::vector<PrintedLabel> top_labels_;
     std::vector<ConsoleLayout::Placed> placed_;
     juce::Rectangle<int> pan_text_area_, scale_area_, meter_scale_area_, auto_label_area_;
-    std::vector<std::string> output_ids_;
 };
 
 }  // namespace vcc::desktop::console

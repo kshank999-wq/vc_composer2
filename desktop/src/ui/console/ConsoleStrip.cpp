@@ -8,6 +8,7 @@
 #include "audio/PlaybackEngine.h"
 #include "ui/Theme.h"
 #include "ui/TrackPanel.h"
+#include "ui/console/MixActions.h"
 #include "vcc/project/Automation.h"
 
 namespace vcc::desktop::console {
@@ -135,25 +136,6 @@ Knob::Spec send_knob()
     s.cap = paint::cap_send;
     s.text = [](double v) { return "Send " + db_text(v); };
     return s;
-}
-
-juce::String insert_name(const project::InsertSlot& s)
-{
-    if (s.kind == "plugin") return s.plugin.name.empty() ? juce::String(s.plugin_ref) : juce::String(s.plugin.name);
-    static const std::vector<std::pair<std::string, const char*>> names{
-        {"eq", "EQ"}, {"compressor", "Compressor"}, {"gate", "Gate"}, {"reverb", "Reverb"},
-        {"delay", "Delay"}, {"limiter", "Limiter"}};
-    for (const auto& [k, n] : names)
-        if (k == s.kind) return n;
-    return juce::String(s.kind).toUpperCase();
-}
-
-const std::vector<std::pair<std::string, const char*>>& builtin_inserts()
-{
-    static const std::vector<std::pair<std::string, const char*>> list{{"eq", "EQ"},           {"compressor", "Compressor"},
-                                                                       {"gate", "Gate"},       {"limiter", "Limiter"},
-                                                                       {"reverb", "Reverb"},   {"delay", "Delay"}};
-    return list;
 }
 
 void screw(juce::Graphics& g, float cx, float cy)
@@ -1265,74 +1247,12 @@ template <typename F> std::function<void(int)> guarded(juce::Component* panel, F
 
 void Strip::show_input_menu()
 {
-    const auto* t = context_.session.data().find_track(id_);
-    if (!t) return;
-    juce::PopupMenu m;
-    const int n = context_.engine.num_inputs();
-    m.addItem(1, "No input", true, t->input < 0);
-    if (n == 0) m.addSectionHeader("No audio input device is open");
-    const int count = n > 0 ? n : 2;
-    juce::PopupMenu mono, stereo;
-    for (int ch = 0; ch < count; ++ch) {
-        juce::String label = "In " + juce::String(ch + 1);
-        if (n > 0 && context_.engine.input_name(ch).isNotEmpty()) label << "  (" << context_.engine.input_name(ch) << ")";
-        mono.addItem(100 + ch, label, true, t->input == ch && !t->input_stereo);
-    }
-    for (int ch = 0; ch + 1 < count; ch += 2)
-        stereo.addItem(200 + ch, "In " + juce::String(ch + 1) + "-" + juce::String(ch + 2), true, t->input == ch && t->input_stereo);
-    m.addSubMenu("Mono", mono);
-    m.addSubMenu("Stereo", stereo);
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&input_), guarded(top_.get(), [this](int r) {
-        if (r <= 0) return;
-        begin_gesture();
-        edit("Input", [&](auto& x) {
-            if constexpr (std::is_same_v<std::decay_t<decltype(x)>, project::Track>) {
-                if (r == 1) x.input = -1;
-                else if (r >= 200) {
-                    x.input = r - 200;
-                    x.input_stereo = true;
-                } else {
-                    x.input = r - 100;
-                    x.input_stereo = false;
-                }
-            }
-        });
-    }));
+    console::show_input_menu(context_, id_, input_);
 }
 
 void Strip::show_output_menu()
 {
-    const auto& d = context_.session.data();
-    std::string current;
-    if (is_track()) {
-        if (const auto* t = d.find_track(id_)) current = t->output_bus_id;
-    } else if (const auto* b = d.find_bus(id_)) {
-        current = b->output;
-    }
-    output_ids_.clear();
-    juce::PopupMenu m;
-    std::string master_id = "bus-master";
-    for (const auto& b : d.buses)
-        if (b.kind == "master") master_id = b.id;
-    output_ids_.push_back(master_id);
-    m.addItem(1, "Master", true, current == master_id || current.empty() || current == "master");
-    for (const char* kind : {"group", "fx"}) {
-        bool first = true;
-        for (const auto& b : d.buses) {
-            if (b.kind != kind || b.id == id_ || b.output == id_) continue;
-            if (first) m.addSectionHeader(std::string(kind) == "group" ? "Groups" : "FX buses");
-            first = false;
-            output_ids_.push_back(b.id);
-            m.addItem(static_cast<int>(output_ids_.size()), b.name, true, b.id == current);
-        }
-    }
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&output_), guarded(top_.get(), [this](int r) {
-        if (r <= 0 || r > static_cast<int>(output_ids_.size())) return;
-        const std::string target = output_ids_[static_cast<std::size_t>(r - 1)];
-        begin_gesture();
-        if (is_track()) context_.session.set_output_bus(id_, target);
-        else context_.session.update_bus(id_, "Output " + name_ + gesture_suffix(), [&](project::Bus& b) { b.output = target; });
-    }));
+    console::show_output_menu(context_, id_, output_);
 }
 
 void Strip::show_monitor_menu()
@@ -1363,98 +1283,10 @@ int Strip::insert_count() const
 
 void Strip::show_insert_menu(int index, bool lamp)
 {
-    const std::vector<project::InsertSlot>* list = nullptr;
-    if (is_track()) {
-        if (const auto* t = context_.session.data().find_track(id_)) list = &t->inserts;
-    } else if (const auto* b = context_.session.data().find_bus(id_)) {
-        list = &b->inserts;
-    }
+    const auto* list = console::inserts_of(context_, id_);
     if (!list) return;
-    const bool used = index < static_cast<int>(list->size());
-    const auto at = static_cast<std::size_t>(index);
-    if (used && lamp) {
-        begin_gesture();
-        const bool v = !(*list)[at].bypass;
-        edit(v ? "Bypass insert" : "Activate insert", [&](auto& x) {
-            if (at < x.inserts.size()) x.inserts[at].bypass = v;
-        });
-        return;
-    }
-    // Built-in processors (100+) and the scanned effect plug-ins (1000+),
-    // grouped by manufacturer.
-    juce::Array<juce::PluginDescription> effects;
-    for (const auto& d : context_.plugins.known().getTypes())
-        if (!d.isInstrument) effects.add(d);
-    std::sort(effects.begin(), effects.end(), [](const juce::PluginDescription& a, const juce::PluginDescription& b) {
-        return a.manufacturerName == b.manufacturerName ? a.name < b.name : a.manufacturerName < b.manufacturerName;
-    });
-    auto fill = [&](juce::PopupMenu& menu) {
-        for (std::size_t i = 0; i < builtin_inserts().size(); ++i)
-            menu.addItem(100 + static_cast<int>(i), builtin_inserts()[i].second);
-        juce::PopupMenu plugins;
-        std::map<juce::String, juce::PopupMenu> by_maker;
-        for (int i = 0; i < effects.size(); ++i)
-            by_maker[effects[i].manufacturerName.isEmpty() ? juce::String("Other") : effects[i].manufacturerName].addItem(
-                1000 + i, effects[i].name);
-        for (auto& [maker, sub] : by_maker) plugins.addSubMenu(maker, sub);
-        if (effects.isEmpty()) plugins.addItem(-1, "No effect plug-ins scanned yet (Tools > Plug-ins)", false);
-        menu.addSubMenu("Effect plug-ins", plugins);
-    };
-    juce::PopupMenu m, add;
-    fill(add);
-    if (used) {
-        const auto& s = (*list)[at];
-        m.addSectionHeader(insert_name(s) + (s.suggestion ? " (suggested)" : ""));
-        m.addItem(5, "Open window...");
-        if (s.suggestion && s.kind != "plugin") m.addItem(3, "Use the built-in " + insert_name(s));
-        m.addItem(1, "Bypass", true, s.bypass);
-        m.addSubMenu("Replace with", add);
-        if (at > 0) m.addItem(4, "Move up");
-        m.addSeparator();
-        m.addItem(2, "Remove");
-    } else {
-        m.addSectionHeader("Add insert");
-        fill(m);
-    }
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&inserts_), guarded(top_.get(), [this, at, used, effects](int r) {
-        if (r <= 0) return;
-        if (r == 5) {
-            if (context_.show_insert_window) context_.show_insert_window(id_, static_cast<int>(at));
-            return;
-        }
-        begin_gesture();
-        if (r >= 1000 && r - 1000 < effects.size()) {
-            const auto ref = context_.plugins.ref_for(effects[r - 1000]);
-            edit(used ? "Replace insert" : "Add insert", [&](auto& x) {
-                project::InsertSlot slot;
-                slot.kind = "plugin";
-                slot.plugin_ref = ref.identifier;
-                slot.plugin = ref;
-                slot.suggestion = false;
-                if (used && at < x.inserts.size()) x.inserts[at] = slot;
-                else x.inserts.push_back(slot);
-            });
-            return;
-        }
-        if (r >= 100 && r < 1000) {
-            const auto& kind = builtin_inserts()[static_cast<std::size_t>(r - 100)];
-            edit(used ? "Replace insert" : "Add insert", [&](auto& x) {
-                project::InsertSlot slot;
-                slot.kind = kind.first;
-                slot.suggestion = false;
-                if (used && at < x.inserts.size()) x.inserts[at] = slot;
-                else x.inserts.push_back(slot);
-            });
-            return;
-        }
-        edit(r == 2 ? "Remove insert" : (r == 4 ? "Move insert" : "Insert"), [&](auto& x) {
-            if (at >= x.inserts.size()) return;
-            if (r == 1) x.inserts[at].bypass = !x.inserts[at].bypass;
-            else if (r == 2) x.inserts.erase(x.inserts.begin() + static_cast<std::ptrdiff_t>(at));
-            else if (r == 3) x.inserts[at].suggestion = false;
-            else if (r == 4 && at > 0) std::swap(x.inserts[at], x.inserts[at - 1]);
-        });
-    }));
+    if (lamp && index < static_cast<int>(list->size())) console::toggle_insert_bypass(context_, id_, index);
+    else console::show_insert_menu(context_, id_, index, inserts_);
 }
 
 void Strip::show_send_menu(const std::string& bus_id)

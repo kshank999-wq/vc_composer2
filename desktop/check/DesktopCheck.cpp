@@ -2230,6 +2230,92 @@ void print_checks(MainWindow& window, const juce::File& dir)
     shoot(main, dir, "33-print-done");
 }
 
+/// Mix (step 8): the Producer view's channel strip and the mixer deck.
+void mix_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.horror.psychological");
+    main.show_workspace(MainComponent::Workspace::Producer);
+    main.show_bottom_mixer(true);
+    pump(200);
+    auto& deck = main.mixer_deck();
+    check(deck.isVisible() && !main.keyboard().isVisible(), "the Producer view's bottom deck is the mixer");
+    deck.keyboard_key().triggerClick();
+    pump(80);
+    check(main.keyboard().isVisible() && !deck.isVisible() && main.keyboard().mixer_key().isVisible(),
+          "the Keyboard key switches the deck to the keyboard, which has a Mixer key back");
+    main.keyboard().mixer_key().triggerClick();
+    pump(80);
+    check(deck.isVisible(), "the Mixer key switches back to the mixer");
+    main.show_bottom_mixer(false);
+    main.go_to_stage(2);
+    pump(80);
+    check(deck.isVisible() && main.edit_frame().stage_key(2).getToggleState(), "the Mix stage shows the mixer deck");
+
+    // One strip per track and group/FX bus, and the master pinned at the right.
+    std::size_t buses = 0;
+    for (const auto& b : session.data().buses) buses += b.kind != "master" ? 1u : 0u;
+    const auto tracks = session.music_tracks();
+    auto* master = deck.strip_for("bus-master");
+    check(deck.strip_count() == static_cast<int>(tracks.size() + buses) && master && master->master() &&
+              master->getParentComponent() == &deck && master->getWidth() > deck.strip(0).getWidth(),
+          "the mixer deck has a strip per track and bus, and a wider master strip that stays in view (" +
+              juce::String(deck.strip_count()) + " strips)");
+    const std::string first = tracks.front()->id;
+    auto* strip = deck.strip_for(first);
+    if (!strip) return;
+    strip->fader().set_db(-10.0, juce::sendNotificationSync);
+    pump(30);
+    check(std::abs(session.data().find_track(first)->gain_db + 10.0) < 0.05, "a deck strip's fader sets the track's volume");
+    strip->solo().triggerClick();
+    pump(30);
+    check(session.data().find_track(first)->solo, "a deck strip's S key solos the track");
+    session.set_solo(first, false);
+    master->fader().set_db(-3.0, juce::sendNotificationSync);
+    pump(30);
+    check(std::abs(session.data().find_bus("bus-master")->gain_db + 3.0) < 0.05, "the master strip's fader sets the master bus");
+
+    // The channel strip: inserts with bypass lights, sends, input and output.
+    session.select_track(first);
+    session.update_track_mix(first, "Add EQ", [](project::Track& t) {
+        project::InsertSlot slot;
+        slot.kind = "eq";
+        slot.suggestion = false;
+        t.inserts.insert(t.inserts.begin(), slot);
+    });
+    pump(80);
+    auto& channel = main.channel_panel();
+    auto& slots = channel.inserts();
+    const auto led = slots.led_rect(0).getCentre().toFloat();
+    slots.mouseDown(mouse_event(slots, led, led, false));
+    slots.mouseUp(mouse_event(slots, led, led, false));
+    pump(50);
+    check(session.data().find_track(first)->inserts.front().bypass, "clicking an insert's light on the channel strip bypasses it");
+    if (channel.send_count() > 0) {
+        const auto bus = channel.send_bus(0);
+        channel.send(0).setValue(-6.0, juce::sendNotificationSync);
+        pump(30);
+        double level = 99.0;
+        for (const auto& s : session.data().find_track(first)->sends)
+            if (s.bus_id == bus) level = s.level_db;
+        check(std::abs(level + 6.0) < 0.05, "a send knob on the channel strip sets the send to its FX bus");
+    } else {
+        check(false, "the template has an FX bus to send to");
+    }
+    check(channel.input_lcd().text().startsWith("IN") && channel.output_lcd().text().startsWith("OUT"),
+          "the channel strip shows the track's input and output (" + channel.input_lcd().text() + ", " +
+              channel.output_lcd().text() + ")");
+    session.set_mute(first, true);
+    pump(50);
+    check(deck.strip_for(first)->mute().getToggleState(), "the deck follows the document (a track muted elsewhere)");
+    session.set_mute(first, false);
+    pump(80);
+    shoot(main, dir, "34-mixer-deck");
+}
+
 /// Out-of-process hosting (Main Spec 20): plug-ins run in their own
 /// processes; one that crashes while playing leaves the session playing.
 void hosting_checks(AppContext& ctx, const juce::File& dir)
@@ -3050,6 +3136,7 @@ int main(int argc, char** argv)
         loop_and_keyboard_checks(window, dir);
         producer_track_checks(window, dir);
         print_checks(window, dir);
+        mix_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

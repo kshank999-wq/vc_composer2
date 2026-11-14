@@ -142,9 +142,12 @@ public:
     };
     /// For a track id, a bus id or "bus-master". Unknown ids read silent.
     StripMeter take_meter(const std::string& strip_id);
-    /// The same peaks (left and right only) for a second display, read
-    /// independently of `take_meter`.
-    StripMeter take_deck_meter(const std::string& strip_id);
+    /// The same peaks (left and right only) for the Edit window's own
+    /// displays, read independently of `take_meter` and of each other:
+    /// reader 0 the top deck and track headers, 1 the channel strip, 2 the
+    /// mixer deck.
+    static constexpr int kMeterReaders = 3;
+    StripMeter take_deck_meter(const std::string& strip_id, int reader = 0);
     /// Device inputs (for input selectors and meters).
     int num_inputs() const;
     juce::String input_name(int channel) const;

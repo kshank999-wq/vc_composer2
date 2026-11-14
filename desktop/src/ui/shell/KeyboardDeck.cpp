@@ -223,8 +223,14 @@ KeyboardDeck::KeyboardDeck(AppContext& context)
         addAndMakeVisible(c);
         c->setWantsKeyboardFocus(false);
     }
-    for (auto* k : {&minus_, &plus_, &fit_, &to_sel_, &middle_c_, &oct_down_, &oct_up_, &chord_, &tie_, &enter_})
+    for (auto* k : {&minus_, &plus_, &fit_, &to_sel_, &middle_c_, &oct_down_, &oct_up_, &chord_, &tie_, &enter_, &mixer_})
         k->set_legend_size(10.5f);
+    addChildComponent(mixer_);
+    mixer_.setWantsKeyboardFocus(false);
+    mixer_.setTooltip("Show the mixer in the bottom deck");
+    mixer_.onClick = [this] {
+        if (on_mixer) on_mixer();
+    };
     for (auto* l : {&zoom_lcd_, &octave_lcd_, &range_lcd_}) l->set_justification(juce::Justification::centred);
     chord_.set_led_dot(true);
     enter_.set_led_dot(true);
@@ -394,6 +400,8 @@ void KeyboardDeck::zoom_to_selection()
     else set_zoom(2.5);
 }
 
+void KeyboardDeck::show_mixer_key(bool show) { mixer_.setVisible(show); }
+
 void KeyboardDeck::set_octave(int octaves)
 {
     octave_ = std::clamp(octaves, -4, 4);
@@ -476,6 +484,8 @@ void KeyboardDeck::resized()
     range_lcd_.setBounds(header.removeFromLeft(132).reduced(0, 1));
     header.removeFromLeft(8);
     middle_c_.setBounds(header.removeFromLeft(78));
+    header.removeFromLeft(8);
+    mixer_.setBounds(header.removeFromLeft(70));
     to_sel_.setBounds(header.removeFromRight(124));
     header.removeFromRight(6);
     fit_.setBounds(header.removeFromRight(68));

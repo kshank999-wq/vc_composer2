@@ -63,6 +63,10 @@ public:
     /// The deck grows with the key zoom: 140 px at 1x, 236 px at 3x.
     int preferred_height() const;
     std::function<void()> on_height_changed;
+    /// The Mixer key (Producer view): swaps the deck for the mixer.
+    std::function<void()> on_mixer;
+    void show_mixer_key(bool show);
+    hw::Keycap& mixer_key() noexcept { return mixer_; }
 
     /// Step input: enter a note at the Composer view's cursor (false when it
     /// cannot), and the editor's state for the readout.
@@ -113,7 +117,7 @@ private:
     std::unique_ptr<ZoomSlider> slider_owner_;
     juce::Slider& slider_;
     hw::Keycap minus_{"-"}, plus_{"+"}, fit_{juce::String::fromUTF8("88 \xc2\xb7 Fit")}, to_sel_{"Zoom to selection"},
-        middle_c_{"Middle C"}, oct_down_{"-"}, oct_up_{"+"}, chord_{"Chord", true}, tie_{"Tie"}, enter_{"Enter", true};
+        middle_c_{"Middle C"}, mixer_{"Mixer"}, oct_down_{"-"}, oct_up_{"+"}, chord_{"Chord", true}, tie_{"Tie"}, enter_{"Enter", true};
     hw::Lcd range_lcd_{juce::String::fromUTF8("88 KEYS \xc2\xb7 A0\xe2\x80\x93" "C8"), 10.5f}, zoom_lcd_{"1.00x", 12.0f},
         octave_lcd_{juce::String::fromUTF8("\xc2\xb1" "0"), 12.0f}, step_lcd_{{}, 11.0f};
     hw::Wheel pitch_{true}, mod_{false};

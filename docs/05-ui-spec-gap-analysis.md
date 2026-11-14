@@ -443,8 +443,43 @@ and the document model. The work is mostly presentation.
    - **Checks.** The `place_prints` unit test, and the desktop check's
      print section covering format, placement, undo, the null, selection,
      Freeze and a silent track. Screenshots 32 and 33.
-8. **Mix:** the channel strip in the right panel and the Mixer deck at the
-   bottom, both on the existing console engine and its automation.
+8. **Mix. Done.** The channel strip and the mixer deck, both on the
+   console engine and its automation.
+   - **Channel strip** (Producer right column, `shell::ChannelPanel`):
+     - Inserts A–E with bypass LEDs (`shell::InsertSlots`). Click an LED
+       to bypass or activate the insert. Click a name to open its window,
+       or to add a processor to an empty slot. Right-click for the full
+       slot menu.
+     - A send knob per FX bus.
+     - Pan, the long-throw fader with its dB scale, and the stereo meter.
+     - Read / Touch / Latch / Write, and M / S.
+     - Clickable IN and OUT readouts. An instrument track's input is what
+       it records onto its audio lane.
+     - In a short column, the inserts become a row of lights and the mode
+       keys go two by two.
+   - **Mixer deck** (`shell::MixerDeck`). It is the Producer view's bottom
+     deck by default, and the Mix stage opens it.
+     - Keyboard | Mixer keys switch the bottom deck; the Console key opens
+       the full console window.
+     - One 78 px strip per track and group/FX bus: a coloured name plate,
+       insert lights (click to bypass, double-click to open), pan, the
+       fader beside its stereo meter, a dB readout, and S/M.
+     - The wider master strip is outlined in the LED colour and pinned at
+       the right, while the other strips scroll sideways.
+     - Clicking a strip's plate selects its track.
+   - **Shared code.**
+     - The insert, output and input menus, insert bypass, and writing a
+       fader, pan or send now live in `console::MixActions`, used by the
+       console window, the channel strip and the deck alike.
+     - `console::MixWriter` turns a gesture into automation while a pass
+       is writing that parameter (Touch, Latch, Write while playing), and
+       into one undo step per gesture otherwise.
+     - Faders and pans follow automation as it plays.
+   - **Meters.** The engine has three independent meter readers per strip
+     (`take_deck_meter(id, reader)`), for the top deck and headers, the
+     channel strip, and the mixer deck, so no display takes another's
+     peaks.
+   - **Checks.** The desktop check's mix section; screenshot 34.
 9. **Master:** live integrated LUFS and true peak, the master chain slots,
    a loudness target, and Export master to WAV and FLAC. MP3 waits for
    the encoder decision.
