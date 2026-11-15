@@ -119,6 +119,16 @@ public:
     /// Playhead in project ticks (through the project's tempo map).
     Ticks position() const;
     double position_seconds() const;
+    /// Audio scrub (Add-On spec §7): tape-style varispeed. While playing at a
+    /// rate other than 1 the whole mix is rendered rate times faster (or
+    /// slower) and resampled, so pitch follows speed, as a tape transport
+    /// does. 0.25..4; 1 is normal playback. Not while recording.
+    void set_varispeed(double rate) noexcept;
+    double varispeed() const noexcept { return varispeed_.load(); }
+    /// A short audible grain for the jog and reverse shuttle: plays from
+    /// `at` for `seconds`, then stops and returns the playhead to `at`.
+    void scrub_grain(Ticks at, double seconds);
+    bool grain_playing() const noexcept { return grain_active_; }
     void set_metronome(bool on) noexcept { metronome_ = on; }
     bool metronome() const noexcept { return metronome_.load(); }
 
@@ -555,6 +565,16 @@ private:
     std::string live_track_;
     std::atomic<int> live_track_index_{-1};
     SurfaceInput surface_input_;
+    // Varispeed: the mix rendered into this at rate x the block, then resampled.
+    void process_varispeed(float* const* outputs, int num_outputs, int num_samples) noexcept;
+    std::atomic<double> varispeed_{1.0};
+    juce::AudioBuffer<float> vs_buffer_;
+    std::array<juce::LagrangeInterpolator, 2> vs_interp_;
+    double vs_frac_ = 0.0;
+    // Scrub grains (message thread).
+    bool grain_active_ = false;
+    Ticks grain_return_ = 0;
+    double grain_until_ms_ = 0.0;
     std::unique_ptr<juce::MidiInputCallback> midi_callback_;
 };
 

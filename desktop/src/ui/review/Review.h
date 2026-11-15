@@ -24,6 +24,10 @@
 #include "ui/hw/HwControls.h"
 #include "vcc/session/Package.h"
 
+namespace vcc::desktop {
+class MasterExportJob;
+}
+
 namespace vcc::desktop::review {
 
 class ReviewPanel final : public juce::Component, private juce::Timer {
@@ -49,6 +53,14 @@ public:
     void keep();
     void back();
     bool ended() const noexcept { return ended_; }
+    /// Renders each filled slot to its own WAV in `folder` (the selection's
+    /// range, else the whole project), with "Review Mixes.txt" saying what
+    /// each holds and where they differ; the versions playing before are
+    /// put back. Runs a slice at a time; false if nothing to render.
+    bool export_mixes(const juce::File& folder);
+    bool exporting() const noexcept { return job_ != nullptr || !export_queue_.empty(); }
+    const juce::StringArray& exported() const noexcept { return exported_; }
+    const juce::String& export_message() const noexcept { return export_message_; }
     const std::string& track_id() const noexcept { return track_; }
 
     void resized() override;
@@ -58,6 +70,8 @@ public:
 private:
     void timerCallback() override;
     void reload();
+    void next_mix();
+    void finish_mixes();
     std::map<std::string, std::string> versions_of(int slot) const;
     bool slot_approved(int slot) const;
     juce::String slot_text(int slot) const;
@@ -70,6 +84,17 @@ private:
     std::map<std::string, std::string> original_;
     bool ended_ = false;
     std::string signature_;
+    // Review mixes.
+    std::unique_ptr<MasterExportJob> job_;
+    std::vector<int> export_queue_;
+    int export_slot_ = -1;
+    juce::File export_folder_;
+    juce::StringArray exported_;
+    juce::String export_message_;
+    std::map<std::string, std::string> before_export_;
+    Ticks export_start_ = 0, export_end_ = 0;
+    std::unique_ptr<juce::FileChooser> chooser_;
+    juce::TextButton comments_{"Comments..."}, mixes_{"Export review mixes..."};
 
     hw::Keycap snapshots_{"Snapshots", true}, track_mode_{"Selected track", true};
     std::array<std::unique_ptr<hw::Keycap>, 3> keys_;
@@ -128,6 +153,52 @@ private:
     juce::File zip_file_;
     juce::String message_;
 };
+
+/// View > Comments: review comments pinned to moments, on a track or the
+/// whole project, with replies; resolve, reopen, delete; a click locates.
+class CommentsPanel final : public juce::Component, private juce::Timer {
+public:
+    explicit CommentsPanel(AppContext& context);
+    ~CommentsPanel() override;
+
+    /// Adds what is typed at the playhead (on the selected track when
+    /// "On the selected track" is on). Returns the id, or empty.
+    std::string add_at_playhead();
+    juce::TextEditor& entry() noexcept { return entry_; }
+    juce::TextEditor& author() noexcept { return author_; }
+    juce::ToggleButton& on_track() noexcept { return on_track_; }
+    void set_show_resolved(bool on);
+    /// Scrolls to and highlights a comment.
+    void focus(const std::string& comment_id);
+    const std::string& focused() const noexcept { return focused_; }
+    /// The comments listed now, in order.
+    std::vector<std::string> listed() const;
+    /// A row's controls, by comment id (for checks).
+    juce::Button* resolve_button(const std::string& comment_id);
+    juce::Button* reply_button(const std::string& comment_id);
+    juce::Component* row(const std::string& comment_id);
+
+    void resized() override;
+    void paint(juce::Graphics& g) override;
+
+private:
+    class Row;
+    void timerCallback() override;
+    void rebuild();
+
+    AppContext& context_;
+    juce::TextEditor entry_, author_;
+    juce::TextButton add_{"Add at playhead"};
+    juce::ToggleButton on_track_{"On the selected track"}, resolved_{"Show resolved"};
+    juce::Label count_;
+    juce::Viewport view_;
+    juce::Component list_;
+    std::vector<std::unique_ptr<Row>> rows_;
+    std::string signature_, focused_;
+};
+
+void show_comments(AppContext& context, const std::string& focus = {});
+CommentsPanel* comments_panel();
 
 /// File > Collect and Save Package.
 void show_package(AppContext& context);

@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <set>
 
@@ -2801,6 +2802,128 @@ Session::VersionDiff Session::compare_versions(const std::string& track_id, cons
         else diff.bars.emplace_back(bar, bar);
     }
     return diff;
+}
+
+}  // namespace vcc::session
+
+// --- Review comments --------------------------------------------------------------------------
+
+namespace vcc::session {
+
+std::string Session::now_utc()
+{
+    const std::time_t t = std::time(nullptr);
+    std::tm tm{};
+#if defined(_WIN32)
+    gmtime_s(&tm, &t);
+#else
+    gmtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return buf;
+}
+
+namespace {
+void sort_comments(project::ProjectData& d)
+{
+    std::stable_sort(d.comments.begin(), d.comments.end(),
+                     [](const project::Comment& a, const project::Comment& b) { return a.seconds < b.seconds; });
+}
+}  // namespace
+
+std::string Session::add_comment(double seconds, const std::string& text, const std::string& author,
+                                 const std::string& track_id, const std::string& created)
+{
+    if (text.empty()) return {};
+    const std::string id = project_.ids().next("cmt");
+    const bool ok = edit("Add comment", [&](project::ProjectData& d) {
+        project::Comment c;
+        c.id = id;
+        c.seconds = std::max(0.0, seconds);
+        c.track_id = d.find_track(track_id) ? track_id : std::string();
+        c.author = author.empty() ? std::string("Reviewer") : author;
+        c.text = text;
+        c.created = created.empty() ? now_utc() : created;
+        d.comments.push_back(std::move(c));
+        sort_comments(d);
+        return true;
+    });
+    return ok ? id : std::string();
+}
+
+namespace {
+template <typename F>
+std::function<bool(project::ProjectData&)> on_comment(const std::string& id, F f)
+{
+    return [id, f](project::ProjectData& d) {
+        for (auto& c : d.comments)
+            if (c.id == id) {
+                const bool changed = f(c);
+                sort_comments(d);
+                return changed;
+            }
+        return false;
+    };
+}
+}  // namespace
+
+bool Session::edit_comment(const std::string& comment_id, const std::string& text)
+{
+    if (text.empty()) return false;
+    return edit("Edit comment", on_comment(comment_id, [text](project::Comment& c) {
+        if (c.text == text) return false;
+        c.text = text;
+        return true;
+    }));
+}
+
+bool Session::move_comment(const std::string& comment_id, double seconds)
+{
+    return edit("Move comment", on_comment(comment_id, [seconds](project::Comment& c) {
+        const double to = std::max(0.0, seconds);
+        if (std::abs(c.seconds - to) < 1e-9) return false;
+        c.seconds = to;
+        return true;
+    }));
+}
+
+bool Session::set_comment_resolved(const std::string& comment_id, bool resolved)
+{
+    return edit(resolved ? "Resolve comment" : "Reopen comment", on_comment(comment_id, [resolved](project::Comment& c) {
+        if (c.resolved == resolved) return false;
+        c.resolved = resolved;
+        return true;
+    }));
+}
+
+bool Session::reply_to_comment(const std::string& comment_id, const std::string& author, const std::string& text,
+                               const std::string& created)
+{
+    if (text.empty()) return false;
+    const std::string when = created.empty() ? now_utc() : created;
+    return edit("Reply to comment", on_comment(comment_id, [author, text, when](project::Comment& c) {
+        c.replies.push_back({author.empty() ? std::string("Reviewer") : author, text, when});
+        return true;
+    }));
+}
+
+bool Session::remove_comment(const std::string& comment_id)
+{
+    return edit("Delete comment", [&](project::ProjectData& d) {
+        const auto before = d.comments.size();
+        d.comments.erase(std::remove_if(d.comments.begin(), d.comments.end(),
+                                        [&](const project::Comment& c) { return c.id == comment_id; }),
+                         d.comments.end());
+        return d.comments.size() != before;
+    });
+}
+
+const project::Comment* Session::find_comment(const std::string& comment_id) const
+{
+    for (const auto& c : data().comments)
+        if (c.id == comment_id) return &c;
+    return nullptr;
 }
 
 }  // namespace vcc::session

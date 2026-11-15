@@ -1346,3 +1346,57 @@ macOS, Linux and Windows. What it took:
       eight borrowed chords with numerals, bVI's line, Chord Mode set to
       E-flat from it, a diatonic chord's line, hiding the row.
       Screenshot `42c-circle-borrowed`.
+29. **Timecode comments. Done** (November 15, 2026; Main Spec §15,
+    "timecode comments, annotations").
+    - A comment is pinned to a moment in project seconds (like a marker:
+      tempo edits never move it), on a track or the whole project, with
+      its author, time (UTC), text, replies and a resolved flag; saved
+      with the project, so a package carries them (its report counts open
+      and resolved). Session ops: add, edit, move, reply, resolve/reopen,
+      delete, each one undo step. Approval does not lock them.
+    - View > Comments (and Add Comment at Playhead; the Director Review's
+      Comments key): type and press Return to add at the playhead, on the
+      selected track or the whole project; your name is remembered. Each
+      entry shows timecode, bar, track, author and time; Reply (the typed
+      text), Resolve/Reopen, Delete; a click locates there; resolved ones
+      can be hidden. Pins on the Composer ruler's Markers row (amber open,
+      grey resolved; a click opens the comment) and small bubbles on the
+      Producer ruler.
+    - Not yet: drawn annotations on the score or picture, mentions and
+      notifications (need sync), comment export as a PDF/CSV report.
+30. **Audio scrub. Done** (Add-On spec §7, "audio scrub where the engine
+    supports it").
+    - The engine has tape-style varispeed: while playing at a rate other
+      than 1 (0.25-4x) the whole mix is rendered rate x the block and
+      resampled into it, so the playhead moves at that speed and pitch
+      follows; Stop and Play always return to normal speed.
+    - The shuttle forward up to 4x plays the mix at its speed; at rest it
+      stops. The jog and the reverse shuttle play short grains (90 ms,
+      at most one per 60 ms) from where they land, the playhead returning
+      there. Past 4x it is the silent stepped seek. It is silent (still
+      moving) while recording or armed, or when a track or bus is writing
+      automation (a heard scrub would write over it). "Audible scrub" in
+      Control Surfaces turns it off.
+    - Not yet: reverse audio (instruments cannot play backwards; the
+      grains stand in), pitch-corrected scrub.
+31. **Review mixes. Done** (Main Spec §15, "export isolated director
+    review mixes ... for each selected variation").
+    - Director Review > Export review mixes: each filled slot is rendered
+      offline (the same render as Export Master) to its own WAV -
+      "<Project> - Review A (<snapshot or version>).wav" - over the
+      selection's range, else the whole project; the versions playing
+      before are put back. "Review Mixes.txt" lists the files with their
+      loudness (LUFS, dBTP), where the slots differ by bar, and the open
+      comments in the range.
+    - **Checks** (29-31). Unit test: comments added in time order, tempo
+      changes do not move them, replies, resolve, edit, move and undo,
+      approval leaves them free, saved and reopened, counted in the
+      package report. Desktop checks: a comment at the playhead on the
+      selected track by the named author, ruler pins and a click opening
+      it, reply and resolve from the window, hiding resolved, click to
+      locate; varispeed offline (a 440 Hz tone at 880 Hz and 2 s travelled
+      at 2x, 220 Hz and 0.5 s at 0.5x, normal speed after Stop); the
+      shuttle heard at its speed and stopping at rest, silent past 4x, a
+      jog grain returning to beat 2, silent while automation is written;
+      review mixes A and B rendered, non-silent and different, with the
+      notes file. Screenshots `52-comments-ruler`, `53-comments`.

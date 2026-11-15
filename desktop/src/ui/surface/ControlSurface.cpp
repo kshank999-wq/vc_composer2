@@ -96,6 +96,7 @@ void ControlSurface::load()
     st.dead_zone = juce::jlimit(0.0, 0.5, s.getDoubleValue("surface_dead_zone", 0.08));
     st.curve = s.getValue("surface_curve", "exponential") == "linear" ? sf::Curve::Linear : sf::Curve::Exponential;
     st.max_speed = juce::jlimit(0.5, 32.0, s.getDoubleValue("surface_max_speed", 8.0));
+    st.audible = s.getBoolValue("surface_audible", true);
     scan_devices();
     configure_input();
 }
@@ -115,6 +116,7 @@ void ControlSurface::save()
     s.setValue("surface_dead_zone", st.dead_zone);
     s.setValue("surface_curve", juce::String(st.curve == sf::Curve::Linear ? "linear" : "exponential"));
     s.setValue("surface_max_speed", st.max_speed);
+    s.setValue("surface_audible", st.audible);
     s.saveIfNeeded();
 }
 
@@ -240,6 +242,26 @@ void ControlSurface::timerCallback()
     process(now_seconds());
 }
 
+bool ControlSurface::audible_ok() const
+{
+    if (!jog_.settings.audible || context_.engine.recording() || context_.engine.record_enabled()) return false;
+    // A strip writing automation would write while the scrub plays.
+    const auto& d = context_.session.data();
+    for (const auto& t : d.tracks)
+        if (t.automation_mode == "write") return false;
+    for (const auto& b : d.buses)
+        if (b.automation_mode == "write") return false;
+    return true;
+}
+
+void ControlSurface::end_varispeed()
+{
+    if (!varispeed_mode_) return;
+    varispeed_mode_ = false;
+    context_.engine.stop();  // back to normal speed too
+    scrub_ = context_.engine.position_seconds();
+}
+
 void ControlSurface::move_to(double seconds, bool on_grid)
 {
     scrub_ = std::max(0.0, seconds);
@@ -293,6 +315,7 @@ void ControlSurface::handle(const sf::Event& e, double now)
                 scrub_ = engine.position_seconds();
                 last_now_ = now;
             }
+            if (!jog_.shuttling()) end_varispeed();
             last_action_ = jog_.shuttling() ? "Shuttle " + juce::String(jog_.shuttle_speed(), 2) + "x" : juce::String("Shuttle at rest");
             return;
         }
@@ -300,6 +323,7 @@ void ControlSurface::handle(const sf::Event& e, double now)
     }
     // Keys: a transport key also brings the shuttle to rest.
     jog_.reset();
+    end_varispeed();
     switch (e.action) {
         case sf::Action::PlayPause: engine.toggle_play(); last_action_ = engine.playing() ? "Play" : "Stop"; break;
         case sf::Action::Play:
@@ -355,6 +379,28 @@ void ControlSurface::process(double now)
         if (const auto e = sf::decode(profile_, r.status, r.data1, r.data2)) handle(*e, now);
     });
     // The shuttle: travel since the last refresh, held within the project.
+    const double speed = jog_.shuttle_speed();
+    if (jog_.shuttling() && speed >= 0.25 && speed <= 4.0 && audible_ok()) {
+        // Heard: the mix plays at the shuttle's speed; the engine moves the playhead.
+        auto& engine = context_.engine;
+        if (!varispeed_mode_) {
+            engine.play();
+            varispeed_mode_ = true;
+        }
+        engine.set_varispeed(speed);
+        scrub_ = engine.position_seconds();
+        const auto t = sf::timeline_of(context_.session.data());
+        if (scrub_ >= t.end_seconds) {
+            end_varispeed();
+            jog_.reset();
+            last_action_ = "Shuttle: at the end";
+        }
+        active_until_ = now + 0.4;
+        last_now_ = now;
+        if (on_moved) on_moved(engine.position(), false);
+        return;
+    }
+    if (varispeed_mode_) end_varispeed();  // too fast, backwards, or no longer allowed
     if (jog_.shuttling()) {
         if (context_.engine.recording()) {
             jog_.reset();
@@ -373,7 +419,18 @@ void ControlSurface::process(double now)
     if (pending_move_) {
         pending_move_ = false;
         const Ticks tick = context_.session.data().tempo.tick_at_seconds(scrub_);
-        context_.engine.locate(tick);
+        auto& engine = context_.engine;
+        const bool user_playing = engine.playing() && !engine.grain_playing();
+        // Heard: a short grain from where it landed (at most one per 60 ms).
+        // (The forward shuttle past 4x stays silent: grains are for the jog
+        // and for going backwards.)
+        const bool grains = !jog_.shuttling() || jog_.shuttle_speed() < 0.0;
+        if (grains && !user_playing && audible_ok() && (last_grain_ < 0.0 || now - last_grain_ >= 0.06 || now < last_grain_)) {
+            engine.scrub_grain(tick, 0.09);
+            last_grain_ = now;
+        } else {
+            engine.locate(tick);
+        }
         if (on_moved) on_moved(tick, pending_on_grid_);
     }
 }
@@ -462,6 +519,13 @@ public:
         };
         addAndMakeVisible(reverse_);
         addAndMakeVisible(accel_);
+        audible_.setTooltip("Hear the scrub: the shuttle forward up to 4x plays at its speed; the jog and reverse play "
+                            "short grains. Silent while recording, armed, or writing automation.");
+        audible_.onClick = [this] {
+            surface_.settings().audible = audible_.getToggleState();
+            surface_.save();
+        };
+        addAndMakeVisible(audible_);
 
         for (auto a : sf::all_actions()) {
             auto row = std::make_unique<Row>();
@@ -519,6 +583,7 @@ public:
         curve_.setSelectedId(st.curve == sf::Curve::Linear ? 2 : 1, juce::dontSendNotification);
         reverse_.setToggleState(st.reverse, juce::dontSendNotification);
         accel_.setToggleState(st.acceleration, juce::dontSendNotification);
+        audible_.setToggleState(st.audible, juce::dontSendNotification);
         for (auto& r : rows_) {
             const auto* b = surface_.profile().find(r->action);
             juce::String text = b ? juce::String(sf::describe(b->source)) : juce::String("-");
@@ -584,8 +649,9 @@ public:
         row(step_label_, step_);
         row(sens_label_, sens_);
         auto toggles = b.removeFromTop(24);
-        reverse_.setBounds(toggles.removeFromLeft(220));
-        accel_.setBounds(toggles);
+        reverse_.setBounds(toggles.removeFromLeft(200));
+        accel_.setBounds(toggles.removeFromLeft(160));
+        audible_.setBounds(toggles);
         b.removeFromTop(6);
         row(dead_label_, dead_);
         row(curve_label_, curve_);
@@ -619,7 +685,7 @@ private:
     juce::ComboBox device_, profile_, step_, curve_;
     juce::Slider sens_{juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight}, dead_{juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight},
         speed_{juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight};
-    juce::ToggleButton reverse_{"Reverse direction"}, accel_{"Acceleration"};
+    juce::ToggleButton reverse_{"Reverse direction"}, accel_{"Acceleration"}, audible_{"Audible scrub"};
     std::vector<std::unique_ptr<Row>> rows_;
     juce::Rectangle<int> meter_area_, controls_title_, settings_title_;
 };

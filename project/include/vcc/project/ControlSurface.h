@@ -104,6 +104,11 @@ struct Settings {
     double dead_zone = 0.08;      ///< Shuttle values within this of rest are rest.
     Curve curve = Curve::Exponential;
     double max_speed = 8.0;       ///< Shuttle at full turn, times real time.
+    /// Audio scrub: the shuttle forward up to 4x plays at its speed (tape
+    /// style), the jog and the reverse shuttle play short grains. Off, or
+    /// when the engine cannot (recording, armed, automation being
+    /// written), it is a silent stepped seek.
+    bool audible = true;
 };
 
 /// Where things are, in project seconds: the jog's grid and the markers.

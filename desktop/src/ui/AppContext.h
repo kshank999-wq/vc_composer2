@@ -39,6 +39,8 @@ struct AppContext {
     /// Stores every hosted plug-in's current state in the project (before a
     /// package copies it; set by the main window).
     std::function<void()> capture_plugin_states;
+    /// Opens the Comments window on a comment (empty: just the window).
+    std::function<void(const std::string& comment_id)> show_comment;
 };
 
 /// Application commands (menus, toolbar buttons and key bindings).
@@ -108,6 +110,9 @@ enum : juce::CommandID {
     showReview,
     collectPackage,
     openPackage,
+    showComments,
+    addComment,
+    exportReviewMixes,
 };
 }  // namespace cmd
 

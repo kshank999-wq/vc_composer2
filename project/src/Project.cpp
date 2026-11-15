@@ -998,6 +998,20 @@ json::Value Project::to_json() const
         root.set("stems", stems);
     }
     root.set("markers", markers);
+    if (!d.comments.empty()) {
+        json::Array comments;
+        for (const auto& c : d.comments) {
+            json::Array replies;
+            for (const auto& r : c.replies)
+                replies.emplace_back(json::Object{{"author", r.author}, {"text", r.text}, {"created", r.created}});
+            json::Object co{{"id", c.id},           {"seconds", c.seconds}, {"author", c.author},
+                            {"text", c.text},       {"created", c.created}, {"resolved", c.resolved},
+                            {"replies", replies}};
+            if (!c.track_id.empty()) co.set("track_id", c.track_id);
+            comments.emplace_back(std::move(co));
+        }
+        root.set("comments", comments);
+    }
     {
         json::Array chords;
         for (const auto& ch : d.chords) chords.emplace_back(json::Object{{"tick", ch.tick}, {"text", ch.text}});
@@ -1332,6 +1346,22 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         m.streamer_seconds = j.get_double("streamer_seconds", 2.0);
         d.markers.push_back(m);
     }
+    for (const auto& j : doc.get("comments") ? doc.get("comments")->as_array() : json::Array{}) {
+        Comment c;
+        c.id = j.get_string("id");
+        if (!unique(c.id)) return fail("missing or duplicate comment id '" + c.id + "'");
+        c.seconds = std::max(0.0, j.get_double("seconds"));
+        c.track_id = j.get_string("track_id");
+        c.author = j.get_string("author");
+        c.text = j.get_string("text");
+        c.created = j.get_string("created");
+        c.resolved = j.get_bool("resolved", false);
+        for (const auto& rj : j.get("replies") ? j.get("replies")->as_array() : json::Array{})
+            c.replies.push_back({rj.get_string("author"), rj.get_string("text"), rj.get_string("created")});
+        d.comments.push_back(std::move(c));
+    }
+    std::stable_sort(d.comments.begin(), d.comments.end(),
+                     [](const Comment& a, const Comment& b) { return a.seconds < b.seconds; });
     for (const auto& j : doc.get("chords") ? doc.get("chords")->as_array() : json::Array{}) {
         ChordMark ch;
         ch.tick = j.get_int("tick");

@@ -334,6 +334,7 @@ MainComponent::MainComponent(AppContext& context)
     context_.show_plugin_window = [this](const std::string& id) { show_plugin_window(id); };
     context_.show_insert_window = [this](const std::string& owner, int slot) { show_insert_window(owner, slot); };
     context_.capture_plugin_states = [this] { capture_plugin_states(); };
+    context_.show_comment = [this](const std::string& id) { review::show_comments(context_, id); };
 
     listener_ = context_.session.add_listener([this](session::Change c) {
         // A MIDI keyboard plays whichever track is selected.
@@ -450,6 +451,7 @@ MainComponent::~MainComponent()
     builtin_windows_.clear();
     context_.show_insert_window = nullptr;
     context_.capture_plugin_states = nullptr;
+    context_.show_comment = nullptr;
 }
 
 void MainComponent::paint(juce::Graphics& g) { g.fillAll(hw::tok::chassis); }
@@ -1550,7 +1552,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::about, cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool,
                 cmd::showCircleOfFifths, cmd::toggleStaffTools, cmd::detachStaffTools, cmd::showRouting,
                 cmd::showControlSurfaces, cmd::jogForward, cmd::jogBack, cmd::showReview,
-                cmd::collectPackage, cmd::openPackage});
+                cmd::collectPackage, cmd::openPackage, cmd::showComments, cmd::addComment});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1638,6 +1640,10 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.setInfo("Collect and Save Package...", "The project and every media file it uses, in one folder", "File", 0);
             break;
         case cmd::openPackage: info.setInfo("Open Package...", "Unpacks a package .zip and opens it", "File", 0); break;
+        case cmd::showComments: info.setInfo("Comments...", "Review comments pinned to moments", "View", 0); break;
+        case cmd::addComment:
+            info.setInfo("Add Comment at Playhead...", "Pins a review comment where the playhead is", "View", 0);
+            break;
         case cmd::showControlSurfaces:
             info.setInfo("Control Surfaces...", "Jog/shuttle wheels and transport controllers", "Tools", 0);
             break;
@@ -1763,6 +1769,11 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showRouting: console::show_routing(context_); break;
         case cmd::showControlSurfaces: surface_ui::show_control_surfaces(context_, *surface_); break;
         case cmd::showReview: review::show_review(context_); break;
+        case cmd::showComments: review::show_comments(context_); break;
+        case cmd::addComment:
+            review::show_comments(context_);
+            if (auto* p = review::comments_panel()) p->entry().grabKeyboardFocus();
+            break;
         case cmd::collectPackage: review::show_package(context_); break;
         case cmd::openPackage:
             if (!confirm_discard()) break;
@@ -1889,6 +1900,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addCommandItem(c, cmd::toggleFollow);
             m.addCommandItem(c, cmd::showRouting);
             m.addCommandItem(c, cmd::showReview);
+            m.addCommandItem(c, cmd::showComments);
+            m.addCommandItem(c, cmd::addComment);
             m.addCommandItem(c, cmd::showCircleOfFifths);
             m.addCommandItem(c, cmd::toggleStaffTools);
             m.addCommandItem(c, cmd::detachStaffTools);

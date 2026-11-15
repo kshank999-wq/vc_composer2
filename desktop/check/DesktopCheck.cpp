@@ -4840,6 +4840,7 @@ void surface_checks(MainWindow& window, const juce::File& dir)
     st.dead_zone = 0.08;
     st.curve = sf::Curve::Linear;
     st.max_speed = 8.0;
+    st.audible = false;  // exact positions here; scrub_checks hears it
     double clock = 1000.0;
     auto send = [&](int status, int d1, int d2) {
         surface.inject(juce::MidiMessage(status, d1, d2));
@@ -5132,6 +5133,45 @@ void review_checks(MainWindow& window, const juce::File& dir)
     pump(40);
     check(active(horn) == h1 && active(strings) == s2, "undo goes back to where the review began (horn A, strings B)");
 
+    // Review mixes: A and B (the snapshots) each rendered to a WAV.
+    ctx.engine.stop();
+    panel->set_mode(review::ReviewPanel::Mode::Snapshots);
+    pump(40);
+    const auto mixes = dir.getChildFile("review-mixes");
+    mixes.deleteRecursively();
+    mixes.createDirectory();
+    const auto before_mix = session.active_versions();
+    const bool started = panel->export_mixes(mixes);
+    for (int i = 0; i < 1200 && panel->exporting(); ++i) pump(25);
+    const auto wavs = mixes.findChildFiles(juce::File::findFiles, false, "*.wav");
+    const auto notes = mixes.getChildFile("Review Mixes.txt").loadFileAsString();
+    auto peak_of = [](const juce::File& f) {
+        juce::AudioFormatManager fm;
+        fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> r(fm.createReaderFor(f));
+        if (!r) return 0.0f;
+        juce::AudioBuffer<float> b(2, static_cast<int>(r->lengthInSamples));
+        r->read(&b, 0, b.getNumSamples(), 0, true, true);
+        return b.getMagnitude(0, b.getNumSamples());
+    };
+    bool a_and_b = wavs.size() == 2;
+    juce::String names;
+    for (const auto& f : wavs) {
+        names << f.getFileName() << " ";
+        a_and_b = a_and_b && peak_of(f) > 0.01f;
+    }
+    check(started && !panel->exporting() && a_and_b && names.contains("Review A (A_ as written)") &&
+              names.contains("Review B (B_ new horn line)") && session.active_versions() == before_mix,
+          "Export review mixes renders A and B to their own non-silent WAVs and puts the versions back: " + names);
+    check(notes.contains("Differences:") && notes.contains("Horn: bars 3-4") && notes.contains("LUFS"),
+          "Review Mixes.txt says what each file is, its loudness, and where they differ");
+    if (wavs.size() == 2) {
+        const auto a = wavs[0].loadFileAsString().length(), b = wavs[1].loadFileAsString().length();
+        juce::MemoryBlock ma, mb;
+        wavs[0].loadFileAsData(ma);
+        wavs[1].loadFileAsData(mb);
+        check(a > 0 && b > 0 && ma != mb, "the two mixes differ (B has the new horn line)");
+    }
     // The selected track's versions: A/B one part.
     panel->set_mode(review::ReviewPanel::Mode::Track);
     pump(40);
@@ -5232,6 +5272,211 @@ void package_checks(MainWindow& window, const juce::File& dir)
           "Open Package unpacks the zip beside it and opens the project with both audio files found (" +
               opened.getFullPathName() + ")");
     root.deleteRecursively();
+}
+
+/// Review comments (Main Spec §15): added at the playhead in the Comments
+/// window, pinned on the Composer ruler (a click on the pin opens it),
+/// replied to, resolved, filtered, saved with the project.
+void comments_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    session.set_tempo(120.0);
+    const auto horn = session.add_track("Horn", "brass.horn_f");
+    session.select_track(horn);
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(100);
+    ctx.engine.locate(session.data().tempo.tick_at_seconds(4.0));  // bar 3
+    ctx.commands.invokeDirectly(cmd::addComment, false);
+    auto* panel = review::comments_panel();
+    for (int i = 0; i < 20 && !panel; ++i) {
+        pump(50);
+        panel = review::comments_panel();
+    }
+    if (!panel) {
+        check(false, "View > Add Comment at Playhead opens the Comments window");
+        return;
+    }
+    panel->author().setText("Director", juce::sendNotificationSync);
+    panel->on_track().setToggleState(true, juce::dontSendNotification);
+    panel->entry().setText("Horns too loud here", false);
+    const auto id = panel->add_at_playhead();
+    pump(80);
+    const auto* c = session.find_comment(id);
+    check(c && std::abs(c->seconds - 4.0) < 0.01 && c->track_id == horn && c->author == "Director" &&
+              panel->listed().size() == 1,
+          "a comment is added at the playhead (4 s, bar 3) on the selected track, by the name given");
+    ctx.engine.locate(session.data().tempo.tick_at_seconds(10.0));
+    panel->on_track().setToggleState(false, juce::dontSendNotification);
+    panel->entry().setText("Lovely ending", false);
+    const auto second = panel->add_at_playhead();
+    pump(80);
+
+    // The ruler shows a pin; a click on it opens the comment.
+    auto& ruler = main.composer().ruler();
+    main.composer().set_origin(0);
+    pump(60);
+    const auto pins = ruler.comment_pins();
+    check(pins.size() == 2, "the Composer ruler pins both comments (" + juce::String(static_cast<int>(pins.size())) + ")");
+    if (!pins.empty()) {
+        const auto at = pins.front().second.getCentre();
+        ruler.mouseDown(mouse_event(ruler, at, at, false));
+        ruler.mouseUp(mouse_event(ruler, at, at, false));
+        pump(60);
+        check(panel->focused() == pins.front().first, "a click on a pin opens the Comments window on that comment");
+    }
+    shoot(main, dir, "52-comments-ruler");
+
+    // A reply, then resolved; resolved ones can be hidden.
+    panel->entry().setText("Pulled back 3 dB", false);
+    if (auto* b = panel->reply_button(id)) b->triggerClick();
+    pump(60);
+    if (auto* b = panel->resolve_button(id)) b->triggerClick();
+    pump(200);
+    c = session.find_comment(id);
+    check(c && c->resolved && c->replies.size() == 1 && c->replies[0].text == "Pulled back 3 dB" && c->replies[0].author == "Director",
+          "Reply adds the typed reply, Resolve resolves");
+    shoot(*panel->getTopLevelComponent(), dir, "53-comments");
+    panel->set_show_resolved(false);
+    pump(40);
+    check(panel->listed().size() == 1 && panel->listed().front() == second, "hiding resolved leaves the open one");
+    panel->set_show_resolved(true);
+    // A click on a row locates there.
+    if (auto* row = panel->row(second)) {
+        row->mouseUp(mouse_event(*row, {20.0f, 10.0f}, {20.0f, 10.0f}, false));
+        pump(40);
+    }
+    check(std::abs(ctx.engine.position_seconds() - 10.0) < 0.01, "a click on a comment locates to it");
+    panel->getTopLevelComponent()->setVisible(false);
+}
+
+/// Audio scrub (Add-On spec §7): the engine's varispeed plays the mix at
+/// the speed asked, pitch with it (a 440 Hz tone at 2x is 880 Hz); the
+/// shuttle forward plays at its speed and stops at rest; past 4x it is a
+/// silent seek; a jog plays a short grain and returns; nothing is heard
+/// while automation is being written.
+void scrub_checks(MainWindow& window, const juce::File& dir)
+{
+    namespace sf = project::surface;
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    session.set_tempo(120.0);
+    const auto project_dir = dir.getChildFile("scrub-check");
+    project_dir.deleteRecursively();
+    project_dir.getChildFile("Audio Files").createDirectory();
+    session.save_as(project_dir.getChildFile("scrub.vcc2").getFullPathName().toStdString());
+    {
+        const auto tone = project_dir.getChildFile("Audio Files/tone.wav");
+        juce::AudioBuffer<float> b(1, 8 * 48000);
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            b.setSample(0, i, 0.5f * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * 440.0 * i / 48000.0)));
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(tone);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(24));
+        if (writer) writer->writeFromAudioSampleBuffer(b, 0, b.getNumSamples());
+    }
+    const auto track = session.add_audio_track("Tone", false);
+    project::AudioClip clip;
+    clip.name = "tone";
+    clip.file = "Audio Files/tone.wav";
+    clip.length = 8.0;
+    clip.channels = 1;
+    clip.file_sample_rate = 48000.0;
+    session.add_audio_clips({{track, clip}}, "Import");
+
+    // Varispeed, offline: frequency and travel at 2x and 0.5x.
+    {
+        PlaybackEngine e(session, ctx.plugins);
+        e.prepare_offline(48000.0, 512);
+        e.locate(0);
+        e.play();
+        auto measure = [&](double rate, double& hz, double& moved) {
+            e.set_varispeed(rate);
+            const double from = e.position_seconds();
+            juce::AudioBuffer<float> out(2, 512), all(1, 48000);
+            for (int done = 0; done < 48000; done += 512) {
+                e.render_offline(out, 512);
+                all.copyFrom(0, done, out, 0, 0, std::min(512, 48000 - done));
+            }
+            int crossings = 0;
+            for (int i = 4800 + 1; i < 48000; ++i)
+                if ((all.getSample(0, i - 1) < 0.0f) != (all.getSample(0, i) < 0.0f)) ++crossings;
+            hz = crossings / 2.0 / 0.9;
+            moved = e.position_seconds() - from;
+        };
+        double hz2 = 0, moved2 = 0, hz05 = 0, moved05 = 0;
+        measure(2.0, hz2, moved2);
+        measure(0.5, hz05, moved05);
+        check(std::abs(hz2 - 880.0) < 20.0 && std::abs(moved2 - 2.0) < 0.05,
+              "varispeed 2x: the 440 Hz tone plays at " + juce::String(hz2, 0) + " Hz and the playhead moves " + juce::String(moved2, 3) + " s in 1 s");
+        check(std::abs(hz05 - 220.0) < 10.0 && std::abs(moved05 - 0.5) < 0.05,
+              "varispeed 0.5x: " + juce::String(hz05, 0) + " Hz, " + juce::String(moved05, 3) + " s in 1 s");
+        e.stop();
+        check(std::abs(e.varispeed() - 1.0) < 1e-9, "Stop returns the transport to normal speed");
+    }
+
+    // The surface, heard.
+    auto& surface = main.surface();
+    surface.set_polling(false);
+    surface.set_device("vcc-check-surface", "VCC Check Surface");
+    surface.use_profile("Generic MIDI (CC 16-23)");
+    auto& st = surface.settings();
+    st.audible = true;
+    st.curve = sf::Curve::Linear;
+    st.dead_zone = 0.08;
+    st.max_speed = 8.0;
+    st.step = sf::Step::Beat;
+    st.acceleration = false;
+    st.detents_per_step = 1;
+    double clock = 5000.0;
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(60);
+    ctx.engine.locate(0);
+    surface.inject(juce::MidiMessage::controllerEvent(1, 17, 80));  // about 1.6x
+    surface.process(clock);
+    const double speed = surface.state().shuttle_speed();
+    check(ctx.engine.playing() && std::abs(ctx.engine.varispeed() - speed) < 1e-6 && speed > 1.0 && speed < 2.0,
+          "the shuttle forward plays the mix at its speed (" + juce::String(ctx.engine.varispeed(), 2) + "x)");
+    surface.inject(juce::MidiMessage::controllerEvent(1, 17, 64));
+    clock += 0.1;
+    surface.process(clock);
+    check(!ctx.engine.playing() && std::abs(ctx.engine.varispeed() - 1.0) < 1e-9, "at rest the scrub stops, at normal speed");
+    surface.inject(juce::MidiMessage::controllerEvent(1, 17, 127));  // 8x: past what is heard
+    clock += 0.1;
+    surface.process(clock);
+    clock += 0.1;
+    surface.process(clock);
+    check(!ctx.engine.playing() && ctx.engine.position_seconds() > 0.5, "past 4x it is a silent stepped seek");
+    surface.inject(juce::MidiMessage::controllerEvent(1, 17, 64));
+    clock += 0.1;
+    surface.process(clock);
+
+    // The jog: a short grain, then back to where it landed.
+    ctx.engine.locate(0);
+    surface.inject(juce::MidiMessage::controllerEvent(1, 16, 1));
+    clock += 1.0;
+    surface.process(clock);
+    const bool grain = ctx.engine.grain_playing() && ctx.engine.playing();
+    pump(300);
+    check(grain && !ctx.engine.grain_playing() && !ctx.engine.playing() && std::abs(ctx.engine.position_seconds() - 0.5) < 1e-3,
+          "a jog detent plays a short grain and the playhead returns to beat 2");
+    // Writing automation: heard scrub would write, so it is silent.
+    session.set_automation_mode(track, "write");
+    surface.inject(juce::MidiMessage::controllerEvent(1, 16, 1));
+    clock += 1.0;
+    surface.process(clock);
+    check(!ctx.engine.grain_playing() && !ctx.engine.playing() && std::abs(ctx.engine.position_seconds() - 1.0) < 1e-3,
+          "with a track writing automation the jog is silent (it still moves)");
+    session.set_automation_mode(track, "read");
+    surface.set_device({}, {});
+    surface.set_polling(true);
+    project_dir.deleteRecursively();
 }
 
 void chord_symbol_checks(MainWindow& window, const juce::File& dir)
@@ -6514,6 +6759,10 @@ int main(int argc, char** argv)
         review_checks(window, dir);
         section("package_checks");
         package_checks(window, dir);
+        section("comments_checks");
+        comments_checks(window, dir);
+        section("scrub_checks");
+        scrub_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

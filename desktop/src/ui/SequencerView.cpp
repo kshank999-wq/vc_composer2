@@ -232,7 +232,8 @@ struct Model final : AutomationTimeline {
     double bpm = 120.0;
     std::vector<project::Cue> cues;
     TempoMap tempo;
-    std::vector<project::Marker> markers;               ///< hits, sync points (picture time)
+    std::vector<project::Marker> markers;
+    std::vector<project::Comment> comments;               ///< hits, sync points (picture time)
     std::vector<project::FlaggedRegion> changed_regions; ///< from comparing cuts
     Ticks end = kTicksPerWhole * 32;
     std::vector<LaneView> lanes;
@@ -470,6 +471,7 @@ struct Model final : AutomationTimeline {
         cues = d.cues;
         tempo = d.tempo;
         markers = d.markers;
+        comments = d.comments;
         changed_regions = d.active_picture() ? d.active_picture()->changed_regions : std::vector<project::FlaggedRegion>{};
         end = session.content_end();
         double audio_end = 0.0;
@@ -954,6 +956,18 @@ public:
                 g.drawText(juce::String(mk.label), juce::Rectangle<float>(x + 6.0f, fh - 17.0f, 120.0f, 11.0f),
                            juce::Justification::centredLeft, true);
             }
+        }
+
+        // Review comments: small bubbles, amber while open.
+        for (const auto& cm : m_.comments) {
+            const float x = static_cast<float>(m_.x_of(static_cast<double>(m_.tempo.tick_at_seconds(std::max(0.0, cm.seconds)))));
+            if (x < area.getX() - 6 || x > area.getRight() + 6) continue;
+            const juce::Rectangle<float> r(x - 1.0f, fh - 17.0f, 12.0f, 9.0f);
+            g.setColour(cm.resolved ? juce::Colour(0xff6b737c) : juce::Colour(0xffe0a040));
+            g.fillRoundedRectangle(r, 2.5f);
+            juce::Path tail;
+            tail.addTriangle(r.getX() + 2.0f, r.getBottom(), r.getX() + 6.0f, r.getBottom(), r.getX() + 2.0f, r.getBottom() + 3.0f);
+            g.fillPath(tail);
         }
 
         // Selected range (punch in/out when punch is on).

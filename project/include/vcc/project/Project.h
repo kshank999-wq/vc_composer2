@@ -478,6 +478,25 @@ struct Marker {
     double streamer_seconds = 2.0;  ///< Length of the streamer leading into it.
 };
 
+/// A review comment pinned to a moment (Main Spec §15, "timecode
+/// comments"): in project seconds like a marker, so it stays with the
+/// picture when the tempo changes; on one track or the whole project.
+struct CommentReply {
+    std::string author;
+    std::string text;
+    std::string created;  ///< ISO 8601, UTC.
+};
+struct Comment {
+    std::string id;
+    double seconds = 0.0;   ///< Project time.
+    std::string track_id;   ///< Empty: the whole project.
+    std::string author;
+    std::string text;
+    std::string created;    ///< ISO 8601, UTC.
+    bool resolved = false;
+    std::vector<CommentReply> replies;
+};
+
 /// A chord symbol over the score (the ruler's Chords row): from `tick`
 /// until the next one. `text` is as written ("Em7", "F#m7b5", "C/E") and
 /// always parses as a chord symbol.
@@ -522,6 +541,7 @@ struct ProjectData {
     std::vector<PictureVersion> pictures;
     std::string active_picture_id;
     std::vector<Marker> markers;
+    std::vector<Comment> comments;  ///< In time order.
     /// Chord symbols, sorted by tick, at most one per tick.
     std::vector<ChordMark> chords;
     std::vector<StemDef> stems;

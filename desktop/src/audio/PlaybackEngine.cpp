@@ -1032,7 +1032,10 @@ void PlaybackEngine::prepare_offline(double sample_rate, int block_size)
 void PlaybackEngine::render_offline(juce::AudioBuffer<float>& out, int num_samples)
 {
     out.clear();
-    process(nullptr, 0, out.getArrayOfWritePointers(), out.getNumChannels(), num_samples);
+    if (std::abs(varispeed_.load() - 1.0) > 1e-6 && playing_.load())
+        process_varispeed(out.getArrayOfWritePointers(), out.getNumChannels(), num_samples);
+    else
+        process(nullptr, 0, out.getArrayOfWritePointers(), out.getNumChannels(), num_samples);
     retire_garbage();
 }
 
@@ -1067,6 +1070,11 @@ void PlaybackEngine::prepare_all(double sr, int bs)
 {
     sample_rate_ = sr;
     block_size_ = std::max(bs, 64);
+    // Varispeed renders up to 4x a block (devices may call with more than
+    // they announced: room for 4096-sample blocks at least).
+    vs_buffer_.setSize(2, 4 * std::max(block_size_, 4096) + 64, false, true, false);
+    for (auto& i : vs_interp_) i.reset();
+    vs_frac_ = 0.0;
     live_input_.reset(sr);
     loudness_.prepare(sr, 2);
     // Processors are re-prepared here (state is kept when the rate is
@@ -1084,6 +1092,12 @@ void PlaybackEngine::request_rebuild() { rebuild_pending_ = true; }
 
 void PlaybackEngine::timerCallback()
 {
+    // A scrub grain has played: back to where it started from.
+    if (grain_active_ && juce::Time::getMillisecondCounterHiRes() >= grain_until_ms_) {
+        grain_active_ = false;
+        stop();
+        locate(grain_return_);
+    }
     drain_gestures();
     // A plug-in that changed its latency (setLatencySamples) re-aligns the mix.
     if (rebuild_pending_ || current_latencies() != latencies_seen_) rebuild_now();
@@ -1611,6 +1625,7 @@ void PlaybackEngine::rebuild_now()
 
 void PlaybackEngine::play()
 {
+    if (!playing_.load()) varispeed_.store(1.0);
     // Wait for note: armed and stopped, Play waits for the first note played.
     if (!playing_.load() && record_enabled_.load() && wait_note_.load()) {
         if (waiting_for_note_.load()) return;
@@ -1705,6 +1720,7 @@ void PlaybackEngine::start_play(bool from_wait)
 
 void PlaybackEngine::stop()
 {
+    varispeed_.store(1.0);  // a scrub ends with the transport; Play is always normal speed
     if (waiting_for_note_.exchange(false)) {
         if (on_transport_changed) on_transport_changed();
         return;
@@ -2377,7 +2393,47 @@ void PlaybackEngine::audioDeviceIOCallbackWithContext(const float* const* inputs
 {
     for (int ch = 0; ch < num_outputs; ++ch)
         if (outputs[ch]) juce::FloatVectorOperations::clear(outputs[ch], num_samples);
-    process(inputs, num_inputs, outputs, num_outputs, num_samples);
+    if (std::abs(varispeed_.load(std::memory_order_relaxed) - 1.0) > 1e-6 && playing_.load(std::memory_order_relaxed))
+        process_varispeed(outputs, num_outputs, num_samples);
+    else
+        process(inputs, num_inputs, outputs, num_outputs, num_samples);
+}
+
+void PlaybackEngine::process_varispeed(float* const* outputs, int num_outputs, int num_samples) noexcept
+{
+    // Render rate x the block (carrying the fraction), then resample it into
+    // the block: the transport moves rate times as fast, the pitch with it.
+    const double rate = varispeed_.load(std::memory_order_relaxed);
+    const double want = static_cast<double>(num_samples) * rate + vs_frac_;
+    int m = static_cast<int>(std::floor(want));
+    vs_frac_ = want - static_cast<double>(m);
+    m = std::clamp(m, 1, vs_buffer_.getNumSamples() - 8);
+    if (m <= 0 || vs_buffer_.getNumChannels() < 2) return;
+    vs_buffer_.clear();
+    float* chans[2] = {vs_buffer_.getWritePointer(0), vs_buffer_.getWritePointer(1)};
+    process(nullptr, 0, chans, 2, m);
+    const double ratio = static_cast<double>(m) / static_cast<double>(num_samples);
+    for (int ch = 0; ch < num_outputs && ch < 2; ++ch)
+        if (outputs[ch]) vs_interp_[static_cast<std::size_t>(ch)].process(ratio, vs_buffer_.getReadPointer(ch), outputs[ch], num_samples);
+    // A mono device hears the left side; more channels than two stay silent.
+}
+
+void PlaybackEngine::set_varispeed(double rate) noexcept
+{
+    const double r = std::clamp(rate, 0.25, 4.0);
+    if ((recording() || record_enabled_.load()) && std::abs(r - 1.0) > 1e-6) return;
+    varispeed_.store(r);
+}
+
+void PlaybackEngine::scrub_grain(Ticks at, double seconds)
+{
+    if (recording() || record_enabled_.load()) return;  // armed: Play would record
+    varispeed_.store(1.0);
+    locate(at);
+    grain_return_ = at;
+    grain_until_ms_ = juce::Time::getMillisecondCounterHiRes() + seconds * 1000.0;
+    grain_active_ = true;
+    if (!playing()) start_play(true);  // from_wait: no count-in for a grain
 }
 
 void PlaybackEngine::process(const float* const* inputs, int num_inputs, float* const* outputs, int num_outputs,

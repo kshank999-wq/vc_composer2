@@ -159,6 +159,11 @@ std::string report_text(const project::ProjectData& d, const Inventory& inv, con
              human_bytes(a.bytes) + ")\n";
     }
     if (!any) r += "  (no media files)\n";
+    if (!d.comments.empty()) {
+        const auto open = std::count_if(d.comments.begin(), d.comments.end(), [](const project::Comment& c) { return !c.resolved; });
+        r += "\nReview comments: " + std::to_string(open) + " open, " + std::to_string(d.comments.size() - static_cast<std::size_t>(open)) +
+             " resolved (they travel in the project)\n";
+    }
     r += "\nNeeded on the receiving machine (never bundled: licensed per machine):\n";
     if (inv.dependencies.empty()) r += "  Nothing beyond VC Composer 2.\n";
     const char* titles[] = {"Instrument plug-ins", "Effect plug-ins", "Sample libraries"};

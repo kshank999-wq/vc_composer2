@@ -205,6 +205,20 @@ void ComposerRuler::paint(juce::Graphics& g)
         const Ticks at = d.tempo.tick_at_seconds(m.seconds);
         flag(at, juce::String(m.label.empty() ? m.kind : m.label).toUpperCase(), juce::Colour(0xff8e98a3));
     }
+    // Review comments: a speech bubble, amber while open, grey once resolved.
+    for (const auto& [id, r] : comment_pins()) {
+        const auto* c = context_.session.find_comment(id);
+        if (!c) continue;
+        juce::Path bubble;
+        bubble.addRoundedRectangle(r.withTrimmedBottom(4.0f), 3.0f);
+        bubble.addTriangle(r.getX() + 3.0f, r.getBottom() - 4.5f, r.getX() + 8.0f, r.getBottom() - 4.5f, r.getX() + 3.0f,
+                           r.getBottom());
+        g.setColour(c->resolved ? juce::Colour(0xff6b737c) : juce::Colour(0xffe0a040));
+        g.fillPath(bubble);
+        g.setColour(juce::Colour(0xff1b1a18));
+        for (int i = 0; i < 3; ++i)
+            g.fillEllipse(r.getX() + 3.5f + static_cast<float>(i) * 3.5f, r.getY() + 4.0f, 2.0f, 2.0f);
+    }
 
     // Chords: the project's chord symbols as solid pills; where a bar has
     // none, what its notes spell, dimmed, as a suggestion (click to keep it).
@@ -396,6 +410,11 @@ void ComposerRuler::mouseDown(const juce::MouseEvent& e)
         return;
     }
     if (row(1).contains(e.getPosition())) {
+        for (const auto& [id, r] : comment_pins())
+            if (r.expanded(3.0f).contains(e.position)) {
+                if (context_.show_comment) context_.show_comment(id);
+                return;
+            }
         // The nearest marker or cue to the left of the click.
         Ticks best = -1;
         for (const auto& c : d.cues)
@@ -406,6 +425,20 @@ void ComposerRuler::mouseDown(const juce::MouseEvent& e)
         }
         if (best >= 0) context_.engine.locate(best);
     }
+}
+
+std::vector<std::pair<std::string, juce::Rectangle<float>>> ComposerRuler::comment_pins() const
+{
+    std::vector<std::pair<std::string, juce::Rectangle<float>>> out;
+    if (!access_.x_of) return out;
+    const auto& d = context_.session.data();
+    const auto markers = row(1).toFloat();
+    for (const auto& c : d.comments) {
+        const float x = access_.x_of(d.tempo.tick_at_seconds(c.seconds));
+        if (x < static_cast<float>(kLabelWidth) - 2.0f || x > static_cast<float>(getWidth())) continue;
+        out.emplace_back(c.id, juce::Rectangle<float>(x - 1.0f, markers.getY() + 3.0f, 15.0f, markers.getHeight() - 6.0f));
+    }
+    return out;
 }
 
 void ComposerRuler::mouseDrag(const juce::MouseEvent& e)

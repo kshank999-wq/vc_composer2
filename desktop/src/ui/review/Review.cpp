@@ -2,8 +2,10 @@
 
 #include <set>
 
+#include "audio/MasterExport.h"
 #include "ui/Dialogs.h"
 #include "ui/hw/HwTheme.h"
+#include "vcc/picture/Picture.h"
 
 namespace vcc::desktop::review {
 
@@ -95,6 +97,24 @@ ReviewPanel::ReviewPanel(AppContext& context) : context_(context)
         addAndMakeVisible(cap);
     }
     approve_.onClick = [this] { approve_current(approve_.getToggleState()); };
+    comments_.setTooltip("Review comments pinned to moments (adds at the playhead)");
+    comments_.onClick = [this] {
+        if (context_.show_comment) context_.show_comment({});
+    };
+    mixes_.setTooltip("Render A, B and C each to its own WAV, for listening away from the app");
+    mixes_.onClick = [this] {
+        const juce::Component::SafePointer<ReviewPanel> safe(this);
+        const auto& path = context_.session.path();
+        const juce::File start = path.empty() ? juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                                              : juce::File(juce::String(path)).getParentDirectory();
+        chooser_ = std::make_unique<juce::FileChooser>("Export review mixes into", start);
+        chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                              [safe](const juce::FileChooser& fc) {
+                                  if (safe && fc.getResult() != juce::File()) safe->export_mixes(fc.getResult());
+                              });
+    };
+    addAndMakeVisible(comments_);
+    addAndMakeVisible(mixes_);
     keep_.onClick = [this] { keep(); };
     back_.onClick = [this] { back(); };
     // Start where it is most useful: two snapshots, or the track's versions.
@@ -112,6 +132,7 @@ ReviewPanel::ReviewPanel(AppContext& context) : context_(context)
 ReviewPanel::~ReviewPanel()
 {
     stopTimer();
+    job_.reset();
     if (review_slot() == this) review_slot() = nullptr;
 }
 
@@ -309,8 +330,106 @@ void ReviewPanel::reload()
     repaint();
 }
 
+bool ReviewPanel::export_mixes(const juce::File& folder)
+{
+    if (exporting()) return false;
+    export_queue_.clear();
+    for (int i = 0; i < 3; ++i)
+        if (!slots_[static_cast<std::size_t>(i)].empty()) export_queue_.push_back(i);
+    if (export_queue_.empty()) {
+        export_message_ = "Nothing to render: put something in A, B or C";
+        return false;
+    }
+    context_.engine.stop();
+    before_export_ = context_.session.active_versions();
+    if (ended_ || current_ < 0) original_ = before_export_;
+    export_folder_ = folder;
+    exported_.clear();
+    const auto& sel = context_.session.selection();
+    export_start_ = sel.has_range() ? sel.from : 0;
+    export_end_ = sel.has_range() ? sel.to : context_.session.content_end();
+    export_message_ = "Rendering...";
+    startTimerHz(30);
+    next_mix();
+    return true;
+}
+
+void ReviewPanel::next_mix()
+{
+    if (export_queue_.empty()) {
+        finish_mixes();
+        return;
+    }
+    export_slot_ = export_queue_.front();
+    export_queue_.erase(export_queue_.begin());
+    // This slot's versions, from where the review began.
+    auto versions = mode_ == Mode::Snapshots ? original_ : before_export_;
+    for (const auto& [track, version] : versions_of(export_slot_)) versions[track] = version;
+    context_.session.audition_versions(versions);
+    const juce::String label = slot_text(export_slot_).fromFirstOccurrenceOf("(", false, false).upToLastOccurrenceOf(")", false, false);
+    const juce::String name = juce::String(session::package::safe_name(context_.session.data().name)) + " - Review " +
+                              juce::String(kSlotNames[export_slot_]) + " (" +
+                              juce::String(session::package::safe_name(label.toStdString())) + ").wav";
+    MasterExportRequest request;
+    request.file = export_folder_.getChildFile(name);
+    request.start = export_start_;
+    request.end = export_end_;
+    request.tail_seconds = 2.0;
+    job_ = std::make_unique<MasterExportJob>(context_, request);
+    export_message_ = "Rendering " + juce::String(kSlotNames[export_slot_]) + "...";
+    diff_.setText(export_message_, juce::dontSendNotification);
+}
+
+void ReviewPanel::finish_mixes()
+{
+    context_.session.audition_versions(before_export_);
+    // What each file holds, and where they differ.
+    const auto& d = context_.session.data();
+    juce::String notes = "Review mixes of \"" + juce::String(d.name) + "\"\n";
+    notes << "Range: bar " << d.meter.bar_at(export_start_) << " to bar " << d.meter.bar_at(std::max<Ticks>(0, export_end_ - 1))
+          << " (" << picture::project_timecode(d, d.tempo.seconds_at(export_start_)) << " - "
+          << picture::project_timecode(d, d.tempo.seconds_at(export_end_)) << ")\n\n";
+    for (const auto& f : exported_) notes << "  " << f << "\n";
+    const auto diff = difference();
+    if (diff.isNotEmpty()) notes << "\nDifferences: " << diff << "\n";
+    int open = 0;
+    for (const auto& c : d.comments) {
+        if (c.resolved) continue;
+        const Ticks at = d.tempo.tick_at_seconds(c.seconds);
+        if (at < export_start_ || at > export_end_) continue;
+        if (open++ == 0) notes << "\nOpen comments in this range:\n";
+        notes << "  " << picture::project_timecode(d, c.seconds) << "  bar " << picture::locate_in_music(d, c.seconds).bar << "  "
+              << c.author << ": " << c.text << "\n";
+    }
+    export_folder_.getChildFile("Review Mixes.txt").replaceWithText(notes);
+    export_message_ = "Rendered " + juce::String(exported_.size()) + " review mix" + (exported_.size() == 1 ? "" : "es") +
+                      " into " + export_folder_.getFullPathName();
+    if (context_.status) context_.status(export_message_);
+    startTimerHz(10);
+    export_slot_ = -1;
+    reload();
+    diff_.setText(export_message_, juce::dontSendNotification);
+}
+
 void ReviewPanel::timerCallback()
 {
+    if (job_) {
+        if (job_->step(30.0)) return;
+        const auto r = job_->result();
+        const auto file = job_->request().file;
+        job_.reset();
+        if (!r.ok) {
+            export_queue_.clear();
+            export_message_ = "Review mixes stopped: " + r.message;
+            context_.session.audition_versions(before_export_);
+            startTimerHz(10);
+            diff_.setText(export_message_, juce::dontSendNotification);
+            return;
+        }
+        exported_.add(file.getFileName() + juce::String::formatted("  (%.1f LUFS, %.1f dBTP)", r.integrated, r.true_peak));
+        next_mix();
+        return;
+    }
     // Snapshots and versions added, renamed or approved elsewhere.
     const auto& d = context_.session.data();
     std::string sig = track_ + "|";
@@ -387,13 +506,18 @@ void ReviewPanel::resized()
     back_.setBounds(actions.removeFromRight(90));
     actions.removeFromRight(8);
     keep_.setBounds(actions.removeFromRight(90));
-    b.removeFromTop(10);
+    b.removeFromTop(8);
+    auto more = b.removeFromTop(28);
+    comments_.setBounds(more.removeFromLeft(130));
+    more.removeFromLeft(8);
+    mixes_.setBounds(more.removeFromLeft(190));
+    b.removeFromTop(8);
     help_.setBounds(b.removeFromTop(40));
 }
 
 void show_review(AppContext& context)
 {
-    dialogs::show_tool(review_window(), "Director Review", 760, 400, [&context] { return new ReviewPanel(context); },
+    dialogs::show_tool(review_window(), "Director Review", 760, 440, [&context] { return new ReviewPanel(context); },
                        [] {
                            // Closing without Keep: back to where the review began.
                            if (auto* p = review_slot(); p && !p->ended()) p->back();
@@ -401,6 +525,283 @@ void show_review(AppContext& context)
 }
 
 ReviewPanel* review_panel() { return review_slot(); }
+
+// --- Comments ----------------------------------------------------------------------------
+
+namespace {
+juce::Component::SafePointer<dialogs::ToolWindow>& comments_window()
+{
+    static juce::Component::SafePointer<dialogs::ToolWindow> w;
+    return w;
+}
+CommentsPanel*& comments_slot()
+{
+    static CommentsPanel* p = nullptr;
+    return p;
+}
+juce::String when_text(const std::string& iso)
+{
+    // "2026-11-15T18:42:10Z" -> "2026-11-15 18:42"
+    juce::String s(iso);
+    return s.length() >= 16 ? s.substring(0, 10) + " " + s.substring(11, 16) : s;
+}
+}  // namespace
+
+class CommentsPanel::Row final : public juce::Component {
+public:
+    Row(AppContext& context, const project::Comment& c) : context_(context), id_(c.id)
+    {
+        const auto& d = context.session.data();
+        juce::String head = juce::String(picture::project_timecode(d, c.seconds)) + "  -  bar " +
+                            juce::String(picture::locate_in_music(d, c.seconds).bar);
+        if (const auto* t = d.find_track(c.track_id)) head << "  -  " << t->name;
+        head << "  -  " << c.author << ", " << when_text(c.created);
+        head_ = head;
+        text_ = juce::String(c.text);
+        for (const auto& r : c.replies) replies_.add(juce::String(r.author) + ": " + juce::String(r.text));
+        resolved_ = c.resolved;
+        resolve_.setButtonText(c.resolved ? "Reopen" : "Resolve");
+        resolve_.setComponentID("comment_resolve_" + juce::String(c.id));
+        reply_.setComponentID("comment_reply_" + juce::String(c.id));
+        resolve_.onClick = [this] {
+            if (const auto* cm = context_.session.find_comment(id_)) context_.session.set_comment_resolved(id_, !cm->resolved);
+        };
+        reply_.onClick = [this] {
+            auto* panel = comments_slot();
+            const auto text = panel ? panel->entry().getText().trim() : juce::String();
+            if (text.isEmpty()) {
+                if (context_.status) context_.status("Type the reply in the box at the top, then press Reply");
+                return;
+            }
+            context_.session.reply_to_comment(id_, panel->author().getText().toStdString(), text.toStdString());
+            panel->entry().clear();
+        };
+        remove_.onClick = [this] { context_.session.remove_comment(id_); };
+        for (auto* b : {&resolve_, &reply_, &remove_}) addAndMakeVisible(*b);
+    }
+
+    const std::string& id() const noexcept { return id_; }
+    juce::Button& resolve() noexcept { return resolve_; }
+    juce::Button& reply() noexcept { return reply_; }
+    bool highlighted = false;
+
+    int height_for(int width) const
+    {
+        juce::AttributedString a;
+        a.append(text_, hw::fonts::ui(13.0f, false));
+        juce::TextLayout layout;
+        layout.createLayout(a, static_cast<float>(width - 24));
+        return 26 + static_cast<int>(std::ceil(layout.getHeight())) + 16 * replies_.size() + 34;
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().reduced(4, 3).toFloat();
+        g.setColour(highlighted ? hw::Theme::get().lcd().withAlpha(0.18f) : juce::Colour(0xff23272c));
+        g.fillRoundedRectangle(r, 5.0f);
+        g.setColour(resolved_ ? juce::Colour(0xff6b737c) : juce::Colour(0xffe0a040));
+        g.fillRoundedRectangle(r.removeFromLeft(4.0f), 2.0f);
+        r.removeFromLeft(8.0f);
+        g.setColour(hw::tok::text);
+        g.setFont(hw::fonts::ui(11.0f, true));
+        g.drawText(head_ + (resolved_ ? "  -  RESOLVED" : ""), r.removeFromTop(20.0f), juce::Justification::centredLeft, true);
+        juce::AttributedString a;
+        a.append(text_, hw::fonts::ui(13.0f, false), resolved_ ? hw::tok::text : hw::tok::text_bright);
+        juce::TextLayout layout;
+        layout.createLayout(a, r.getWidth() - 8.0f);
+        layout.draw(g, r.removeFromTop(layout.getHeight() + 4.0f));
+        g.setFont(hw::fonts::ui(11.5f, false));
+        g.setColour(hw::tok::text);
+        for (const auto& reply : replies_) g.drawText("    " + reply, r.removeFromTop(16.0f), juce::Justification::centredLeft, true);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(10, 6).removeFromBottom(26);
+        remove_.setBounds(r.removeFromRight(70));
+        r.removeFromRight(6);
+        reply_.setBounds(r.removeFromRight(70));
+        r.removeFromRight(6);
+        resolve_.setBounds(r.removeFromRight(80));
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        if (const auto* c = context_.session.find_comment(id_)) {
+            context_.engine.locate(context_.session.data().tempo.tick_at_seconds(c->seconds));
+            if (auto* p = comments_slot()) p->focus(id_);
+        }
+    }
+
+private:
+    AppContext& context_;
+    std::string id_;
+    juce::String head_, text_;
+    juce::StringArray replies_;
+    bool resolved_ = false;
+    juce::TextButton resolve_{"Resolve"}, reply_{"Reply"}, remove_{"Delete"};
+};
+
+CommentsPanel::CommentsPanel(AppContext& context) : context_(context)
+{
+    setComponentID("comments_panel");
+    comments_slot() = this;
+    entry_.setTextToShowWhenEmpty("Comment at the playhead (or a reply)...", hw::tok::text.withAlpha(0.5f));
+    entry_.setMultiLine(false);
+    entry_.onReturnKey = [this] { add_at_playhead(); };
+    auto saved = hw::ui_settings().getValue("review_author");
+    if (saved.isEmpty()) saved = juce::SystemStats::getFullUserName();
+    if (saved.isEmpty()) saved = juce::SystemStats::getLogonName();
+    author_.setText(saved, false);
+    author_.setTooltip("Your name on comments and replies");
+    author_.onTextChange = [this] { hw::ui_settings().setValue("review_author", author_.getText()); };
+    add_.onClick = [this] { add_at_playhead(); };
+    resolved_.setToggleState(hw::ui_settings().getBoolValue("comments_show_resolved", true), juce::dontSendNotification);
+    resolved_.onClick = [this] { set_show_resolved(resolved_.getToggleState()); };
+    style_label(count_, 12.0f, true);
+    view_.setViewedComponent(&list_, false);
+    view_.setScrollBarsShown(true, false);
+    for (auto* c : std::initializer_list<juce::Component*>{&entry_, &author_, &add_, &on_track_, &resolved_, &count_, &view_})
+        addAndMakeVisible(*c);
+    rebuild();
+    startTimerHz(8);
+}
+
+CommentsPanel::~CommentsPanel()
+{
+    stopTimer();
+    if (comments_slot() == this) comments_slot() = nullptr;
+}
+
+std::string CommentsPanel::add_at_playhead()
+{
+    const auto text = entry_.getText().trim();
+    if (text.isEmpty()) return {};
+    const std::string track = on_track_.getToggleState() ? context_.session.selected_track() : std::string();
+    const auto id = context_.session.add_comment(context_.engine.position_seconds(), text.toStdString(),
+                                                 author_.getText().trim().toStdString(), track);
+    if (!id.empty()) {
+        entry_.clear();
+        focused_ = id;
+        rebuild();
+        if (context_.status) context_.status("Comment added at " + juce::String(picture::project_timecode(context_.session.data(), context_.engine.position_seconds())));
+    }
+    return id;
+}
+
+void CommentsPanel::set_show_resolved(bool on)
+{
+    resolved_.setToggleState(on, juce::dontSendNotification);
+    hw::ui_settings().setValue("comments_show_resolved", on);
+    signature_.clear();
+    rebuild();
+}
+
+void CommentsPanel::focus(const std::string& comment_id)
+{
+    focused_ = comment_id;
+    if (const auto* c = context_.session.find_comment(comment_id); c && c->resolved && !resolved_.getToggleState())
+        set_show_resolved(true);
+    for (auto& r : rows_) {
+        r->highlighted = r->id() == comment_id;
+        r->repaint();
+        if (r->highlighted) view_.setViewPosition(0, std::max(0, r->getY() - 8));
+    }
+}
+
+std::vector<std::string> CommentsPanel::listed() const
+{
+    std::vector<std::string> out;
+    for (const auto& r : rows_) out.push_back(r->id());
+    return out;
+}
+
+juce::Component* CommentsPanel::row(const std::string& comment_id)
+{
+    for (auto& r : rows_)
+        if (r->id() == comment_id) return r.get();
+    return nullptr;
+}
+
+juce::Button* CommentsPanel::resolve_button(const std::string& comment_id)
+{
+    for (auto& r : rows_)
+        if (r->id() == comment_id) return &r->resolve();
+    return nullptr;
+}
+
+juce::Button* CommentsPanel::reply_button(const std::string& comment_id)
+{
+    for (auto& r : rows_)
+        if (r->id() == comment_id) return &r->reply();
+    return nullptr;
+}
+
+void CommentsPanel::rebuild()
+{
+    const auto& d = context_.session.data();
+    rows_.clear();
+    int open = 0;
+    for (const auto& c : d.comments) {
+        if (!c.resolved) ++open;
+        if (c.resolved && !resolved_.getToggleState()) continue;
+        rows_.push_back(std::make_unique<Row>(context_, c));
+        rows_.back()->highlighted = c.id == focused_;
+        list_.addAndMakeVisible(*rows_.back());
+    }
+    count_.setText(juce::String(open) + " open, " + juce::String(static_cast<int>(d.comments.size()) - open) + " resolved",
+                   juce::dontSendNotification);
+    resized();
+}
+
+void CommentsPanel::timerCallback()
+{
+    const auto& d = context_.session.data();
+    std::string sig;
+    for (const auto& c : d.comments)
+        sig += c.id + "|" + std::to_string(c.seconds) + c.text + (c.resolved ? "R" : "") + std::to_string(c.replies.size()) + ";";
+    if (sig != signature_) {
+        signature_ = sig;
+        rebuild();
+    }
+}
+
+void CommentsPanel::paint(juce::Graphics& g) { g.fillAll(hw::tok::panel_bottom); }
+
+void CommentsPanel::resized()
+{
+    auto b = getLocalBounds().reduced(12);
+    auto top = b.removeFromTop(28);
+    add_.setBounds(top.removeFromRight(130));
+    top.removeFromRight(6);
+    author_.setBounds(top.removeFromRight(140));
+    top.removeFromRight(6);
+    entry_.setBounds(top);
+    b.removeFromTop(6);
+    auto opts = b.removeFromTop(24);
+    on_track_.setBounds(opts.removeFromLeft(190));
+    resolved_.setBounds(opts.removeFromLeft(150));
+    count_.setBounds(opts);
+    b.removeFromTop(6);
+    view_.setBounds(b);
+    const int w = std::max(100, b.getWidth() - view_.getScrollBarThickness());
+    int y = 0;
+    for (auto& r : rows_) {
+        const int h = r->height_for(w);
+        r->setBounds(0, y, w, h);
+        y += h;
+    }
+    list_.setSize(w, std::max(y, 10));
+}
+
+void show_comments(AppContext& context, const std::string& focus)
+{
+    dialogs::show_tool(comments_window(), "Comments", 640, 560, [&context] { return new CommentsPanel(context); });
+    if (!focus.empty())
+        if (auto* p = comments_slot()) p->focus(focus);
+}
+
+CommentsPanel* comments_panel() { return comments_slot(); }
 
 // --- Package -----------------------------------------------------------------------------
 

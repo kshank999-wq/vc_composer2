@@ -52,6 +52,8 @@ public:
         juce::Rectangle<float> bounds;
     };
     std::vector<Pill> chord_pills() const;
+    /// Review comments as pins in the Markers row (id, where drawn).
+    std::vector<std::pair<std::string, juce::Rectangle<float>>> comment_pins() const;
 
     void paint(juce::Graphics& g) override;
     void resized() override;

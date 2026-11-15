@@ -190,6 +190,21 @@ public:
 
     std::string add_marker(double project_seconds, const std::string& kind, const std::string& label = {});
     bool update_marker(const std::string& marker_id, const std::function<void(project::Marker&)>& change);
+
+    // --- Review comments (Main Spec §15) -------------------------------------------------
+    /// Pins a comment at `seconds` (project time), on a track or (empty) the
+    /// whole project. `created` defaults to now (UTC). One undo step; the id.
+    std::string add_comment(double seconds, const std::string& text, const std::string& author,
+                            const std::string& track_id = {}, const std::string& created = {});
+    bool edit_comment(const std::string& comment_id, const std::string& text);
+    bool move_comment(const std::string& comment_id, double seconds);
+    bool set_comment_resolved(const std::string& comment_id, bool resolved);
+    bool reply_to_comment(const std::string& comment_id, const std::string& author, const std::string& text,
+                          const std::string& created = {});
+    bool remove_comment(const std::string& comment_id);
+    const project::Comment* find_comment(const std::string& comment_id) const;
+    /// "2026-11-15T18:42:10Z".
+    static std::string now_utc();
     bool remove_marker(const std::string& marker_id);
     /// Hit-point tool: refits the tempo between `from_tick` and `target_tick`
     /// so that `target_tick` sounds exactly on the marker (one undo step).

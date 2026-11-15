@@ -276,3 +276,54 @@ TEST_CASE("package: media are collected, paths made relative, dependencies liste
     CHECK(!fs::exists(fs::u8path(tmp("pkg-out") + "/Cancelled")));
     CHECK_EQ(session::package::safe_name("a/b:c?"), std::string("a_b_c_"));
 }
+
+TEST_CASE("review: timecode comments are pinned in time, threaded, resolvable, saved and packaged")
+{
+    Session s(catalogs());
+    s.new_empty();
+    const auto horn = s.add_track("Horn", "brass.horn_f");
+    const auto late = s.add_comment(12.5, "Horns too loud here", "Director", horn, "2026-11-15T10:00:00Z");
+    const auto early = s.add_comment(3.0, "Love this opening", "Director");
+    REQUIRE(!late.empty());
+    REQUIRE(s.data().comments.size() == 2u);
+    CHECK_EQ(s.data().comments[0].id, early);  // kept in time order
+    CHECK_EQ(s.data().comments[1].track_id, horn);
+    CHECK_EQ(s.data().comments[1].created, std::string("2026-11-15T10:00:00Z"));
+    CHECK(s.data().comments[0].created.size() == 20u);  // now, UTC
+    CHECK(s.add_comment(1.0, "", "x").empty());           // nothing to say: nothing added
+    CHECK(s.add_comment(1.0, "On a gone track", "x", "no-track") != "");
+    CHECK(s.data().comments[0].track_id.empty());          // an unknown track: the whole project
+    CHECK(s.remove_comment(s.data().comments[0].id));
+
+    // A tempo change does not move them (they are in picture time).
+    CHECK(s.set_tempo(90.0));
+    CHECK(std::abs(s.find_comment(late)->seconds - 12.5) < 1e-9);
+    CHECK(s.reply_to_comment(late, "Composer", "Pulled them back 3 dB"));
+    CHECK(s.set_comment_resolved(late, true));
+    CHECK(!s.set_comment_resolved(late, true));  // unchanged: no step
+    CHECK(s.edit_comment(early, "Love this opening - keep it"));
+    CHECK(s.move_comment(early, 2.0));
+    CHECK_EQ(s.project().undo_label(), std::string("Move comment"));
+    CHECK(s.undo());
+    CHECK(std::abs(s.find_comment(early)->seconds - 3.0) < 1e-9);
+    // Approval does not lock comments: they are about the music, not in it.
+    const auto v = s.data().find_track(horn)->active_version_id;
+    CHECK(s.set_version_approved(horn, v, true));
+    CHECK(s.reply_to_comment(late, "Director", "Approved"));
+
+    const auto path = tmp("comments.vcc2");
+    REQUIRE(s.save_as(path));
+    Session r(catalogs());
+    REQUIRE(r.open(path));
+    const auto* c = r.find_comment(late);
+    REQUIRE(c);
+    CHECK(c->resolved);
+    CHECK_EQ(c->author, std::string("Director"));
+    REQUIRE(c->replies.size() == 2u);
+    CHECK_EQ(c->replies[0].text, std::string("Pulled them back 3 dB"));
+    CHECK_EQ(r.find_comment(early)->text, std::string("Love this opening - keep it"));
+    // The package report counts them.
+    session::package::Options o;
+    const auto report = session::package::report_text(r.data(), session::package::inventory(r.data(), r.path()), o);
+    CHECK(report.find("Review comments: 1 open, 1 resolved") != std::string::npos);
+}

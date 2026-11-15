@@ -107,6 +107,11 @@ private:
     double last_scan_ = -10.0;
     bool pending_move_ = false;
     bool pending_on_grid_ = false;
+    bool varispeed_mode_ = false;  ///< The shuttle is playing the mix at its speed.
+    double last_grain_ = -1.0;
+    /// Whether scrubbing may be heard now (see Settings::audible).
+    bool audible_ok() const;
+    void end_varispeed();
     juce::String last_action_;
     int messages_ = 0;
 };
