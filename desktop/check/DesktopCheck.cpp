@@ -3032,6 +3032,191 @@ void clip_editing_checks(MainWindow& window, const juce::File& dir)
     }
 }
 
+/// Edit modes and the Smart tool, driven with the mouse on real clips:
+/// Grid snaps and Slip does not, Shuffle closes gaps when deleting,
+/// trimming and moving, Spot puts a clip at a typed time, and the Smart
+/// tool's top half selects a range that Delete and Cmd/Ctrl+T act on.
+void edit_mode_checks(MainWindow& window, const juce::File& dir)
+{
+    using Mode = SequencerView::EditMode;
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto project_dir = dir.getChildFile("edit-mode-check");
+    project_dir.deleteRecursively();
+    project_dir.getChildFile("Audio Files").createDirectory();
+    std::string error;
+    session.save_as(project_dir.getChildFile("modes.vcc2").getFullPathName().toStdString(), &error);
+    const auto tone = project_dir.getChildFile("Audio Files").getChildFile("tone.wav");
+    {
+        juce::AudioBuffer<float> b(1, 4 * 48000);
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            b.setSample(0, i, 0.5f * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * 440.0 * i / 48000.0)));
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(tone);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(24));
+        if (writer) writer->writeFromAudioSampleBuffer(b, 0, b.getNumSamples());
+    }
+    const auto track = session.add_audio_track("Gtr", false);
+    // Three 1 s clips at 0, 1 and 3 s (a gap before the third).
+    std::vector<std::pair<std::string, project::AudioClip>> in;
+    for (double at : {0.0, 1.0, 3.0}) {
+        project::AudioClip clip;
+        clip.name = "tone";
+        clip.file = "Audio Files/tone.wav";
+        clip.start_seconds = at;
+        clip.source_offset = at;
+        clip.length = 1.0;
+        clip.channels = 1;
+        clip.file_sample_rate = 48000.0;
+        in.emplace_back(track, clip);
+    }
+    const auto ids = session.add_audio_clips(in, "Import");
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(100);
+    auto& seq = main.sequencer();
+    auto* lanes = find_by_id(main, "sequencer_lanes");
+    if (ids.size() != 3 || !lanes) {
+        check(false, "the edit-mode check's clips are placed");
+        return;
+    }
+    auto start_of = [&](const std::string& id) {
+        for (const auto& c : session.data().find_track(track)->active_version()->audio_clips)
+            if (c.id == id) return c.start_seconds;
+        return -1.0;
+    };
+    auto count = [&] { return session.data().find_track(track)->active_version()->audio_clips.size(); };
+    auto near = [](double a, double b, double tol = 0.002) { return std::abs(a - b) < tol; };
+    // A point on a clip: `at` seconds into it, at `y` (0 top, 1 bottom) of its height.
+    auto point = [&](const std::string& id, double at, float y) {
+        const auto r = seq.clip_bounds(track, id);
+        return juce::Point<float>(r.getX() + static_cast<float>(at) * r.getWidth(), r.getY() + y * r.getHeight());
+    };
+    auto px_per_second = [&] { return seq.clip_bounds(track, ids[0]).getWidth(); };
+
+    // The keys: the toolbar's Edit keys and F1-F4 / F6 choose them, and light.
+    if (auto* key = dynamic_cast<juce::Button*>(find_by_id(main, "edit_mode_1"))) key->triggerClick();
+    pump(60);
+    const bool slip = seq.edit_mode() == Mode::Slip;
+    auto* mappings = ctx.commands.getKeyMappings();
+    const bool fkeys = mappings && mappings->findCommandForKeyPress(juce::KeyPress(juce::KeyPress::F1Key)) == cmd::editShuffle &&
+                       mappings->findCommandForKeyPress(juce::KeyPress(juce::KeyPress::F3Key)) == cmd::editSpot &&
+                       mappings->findCommandForKeyPress(juce::KeyPress(juce::KeyPress::F6Key)) == cmd::toggleSmartTool;
+    ctx.commands.invokeDirectly(cmd::editGrid, false);
+    pump(60);
+    auto* grid_key = dynamic_cast<juce::Button*>(find_by_id(main, "edit_mode_3"));
+    auto* slip_key = dynamic_cast<juce::Button*>(find_by_id(main, "edit_mode_1"));
+    check(slip && fkeys && seq.edit_mode() == Mode::Grid && grid_key && grid_key->getToggleState() && slip_key &&
+              !slip_key->getToggleState(),
+          "the Edit keys and F1-F4 choose Shuffle, Slip, Spot or Grid, and the chosen key lights (F6: Smart tool)");
+
+    // Grid snaps a dragged clip; Slip leaves it where it is let go.
+    const float nudge = 0.35f * px_per_second();
+    drag(*lanes, point(ids[2], 0.5, 0.75f), point(ids[2], 0.5, 0.75f) + juce::Point<float>(nudge, 0.0f));
+    const double gridded = start_of(ids[2]);
+    const double grid_step = 0.5;  // a quarter at 120 bpm at this zoom
+    const bool on_grid = near(std::fmod(gridded + 1e-6, grid_step), 0.0, 0.003) && gridded > 3.1;
+    if (gridded > 3.1) session.undo();
+    seq.set_edit_mode(Mode::Slip);
+    drag(*lanes, point(ids[2], 0.5, 0.75f), point(ids[2], 0.5, 0.75f) + juce::Point<float>(nudge, 0.0f));
+    const double slipped = start_of(ids[2]);
+    if (slipped > 3.01) session.undo();
+    check(on_grid && near(slipped, 3.35, 0.03),
+          "Grid snaps a dragged clip to the grid (" + juce::String(gridded, 3) + " s); Slip leaves it where it is let go (" +
+              juce::String(slipped, 3) + " s)");
+
+    // Shuffle: deleting the middle clip pulls the third in after the first.
+    seq.set_edit_mode(Mode::Shuffle);
+    seq.select_clip(track, ids[1]);
+    lanes->keyPressed(juce::KeyPress(juce::KeyPress::deleteKey));
+    check(count() == 2 && near(start_of(ids[2]), 2.0) && session.undo_label() == "Delete clip",
+          "Shuffle: Delete closes the gap - the clip after moves 1 s earlier");
+    session.undo();
+    // Trimming the middle clip's end 0.25 s shorter pulls the clip after it in.
+    drag(*lanes, point(ids[1], 1.0, 0.75f) - juce::Point<float>(1.0f, 0.0f),
+         point(ids[1], 0.75, 0.75f) - juce::Point<float>(1.0f, 0.0f));
+    const double trimmed_last = start_of(ids[2]);
+    check(near(trimmed_last, 2.75, 0.03) && near(start_of(ids[1]), 1.0) && session.undo_label() == "Trim clip end",
+          "Shuffle: trimming a clip's end moves the clips after it with it (" + juce::String(trimmed_last, 3) + " s)");
+    session.undo();
+    // Dragging the third clip to the front: it goes in at 0 and the others make room.
+    drag(*lanes, point(ids[2], 0.5, 0.75f), point(ids[0], 0.1, 0.75f));
+    check(near(start_of(ids[2]), 0.0) && near(start_of(ids[0]), 1.0) && near(start_of(ids[1]), 2.0) &&
+              session.undo_label() == "Move clip",
+          "Shuffle: a clip dragged to the front goes in at 0, and the others move up to make room");
+    shoot(main, dir, "edit-mode-shuffle");
+    session.undo();
+
+    // Spot: a typed time, in bars|beats, min:sec or timecode.
+    const auto& d = session.data();
+    const auto bbt = SequencerView::spot_text(d, 2.5, 0), mmss = SequencerView::spot_text(d, 2.5, 1),
+               tc = SequencerView::spot_text(d, 2.5, 2);
+    const auto back_bbt = SequencerView::parse_spot_text(d, "2|2|000", 0);
+    const auto back_mmss = SequencerView::parse_spot_text(d, "0:02.5", 1);
+    const auto back_tc = SequencerView::parse_spot_text(d, tc, 2);
+    check(bbt == "2|2|000" && mmss == "0:02.500" && back_bbt && near(*back_bbt, 2.5) && back_mmss && near(*back_mmss, 2.5) &&
+              back_tc && near(*back_tc, 2.5, 0.05) && !SequencerView::parse_spot_text(d, "soon", 0),
+          "Spot reads and writes bars|beats (" + bbt + "), min:sec (" + mmss + ") and timecode (" + tc + ")");
+    seq.set_edit_mode(Mode::Spot);
+    lanes->mouseDown(mouse_event(*lanes, point(ids[2], 0.5, 0.75f), point(ids[2], 0.5, 0.75f), false));
+    pump(60);
+    auto* modal = juce::ModalComponentManager::getInstance()->getModalComponent(0);
+    const bool asked = dynamic_cast<juce::AlertWindow*>(modal) != nullptr;
+    if (modal) modal->exitModalState(0);
+    pump(60);
+    seq.select_clip(track, ids[2]);
+    const bool spotted = seq.spot_selected(*back_bbt);
+    check(asked && spotted && near(start_of(ids[2]), 2.5) && session.undo_label() == "Spot clip",
+          "Spot: a click on a clip asks where it starts, and the clip goes exactly there");
+    session.undo();
+
+    // The Smart tool: the top half of a clip selects a range; Delete takes it out.
+    seq.set_edit_mode(Mode::Grid);
+    seq.set_smart_tool(true);
+    pump(60);
+    auto* smart_key = dynamic_cast<juce::Button*>(find_by_id(main, "edit_smart"));
+    drag(*lanes, point(ids[0], 0.5, 0.25f), point(ids[1], 0.5, 0.25f));
+    const auto range = seq.range();
+    const auto& tempo = session.data().tempo;
+    const bool selected = near(tempo.seconds_at(range.first), 0.5) && near(tempo.seconds_at(range.second), 1.5);
+    shoot(main, dir, "edit-mode-smart");
+    lanes->keyPressed(juce::KeyPress(juce::KeyPress::deleteKey));
+    check(smart_key && smart_key->getToggleState() && selected && count() == 3 && session.undo_label() == "Delete range" &&
+              near(start_of(ids[1]), 1.5) && near(start_of(ids[2]), 3.0),
+          "Smart tool: dragging in a clip's top half selects 0.5-1.5 s across two clips; Delete cuts it out of both");
+    session.undo();
+    // In Shuffle the range's gap closes.
+    seq.set_edit_mode(Mode::Shuffle);
+    seq.select_track_range({track}, tempo.tick_at_seconds(0.5), tempo.tick_at_seconds(1.5));
+    const bool deleted = seq.delete_selection();
+    check(deleted && near(start_of(ids[1]), 0.5) && near(start_of(ids[2]), 2.0),
+          "Smart tool in Shuffle: deleting the range closes the gap after it");
+    session.undo();
+    // Cmd/Ctrl+T on a range splits at both edges; a click locates the playhead.
+    seq.set_edit_mode(Mode::Grid);
+    seq.select_track_range({track}, tempo.tick_at_seconds(0.5), tempo.tick_at_seconds(1.5));
+    lanes->keyPressed(juce::KeyPress('t', juce::ModifierKeys::commandModifier, 't'));
+    const auto split_count = count();
+    session.undo();
+    session.undo();
+    const auto at = point(ids[2], 0.5, 0.25f);
+    lanes->mouseDown(mouse_event(*lanes, at, at, false));
+    lanes->mouseUp(mouse_event(*lanes, at, at, false));
+    pump(60);
+    const double located = tempo.seconds_at(ctx.engine.position());
+    check(split_count == 5 && near(located, 3.5, 0.01) && seq.range().first == seq.range().second,
+          "Smart tool: Cmd/Ctrl+T splits at the range's edges (" + juce::String(static_cast<int>(split_count)) +
+              " clips); a click in the top half moves the playhead there (" + juce::String(located, 3) + " s)");
+    // The bottom half still moves the clip.
+    drag(*lanes, point(ids[2], 0.5, 0.75f), point(ids[2], 0.5, 0.75f) + juce::Point<float>(px_per_second(), 0.0f));
+    check(near(start_of(ids[2]), 4.0, 0.01), "Smart tool: the bottom half of a clip still moves it");
+    session.undo();
+    seq.set_smart_tool(false);
+    seq.set_edit_mode(Mode::Grid);
+}
+
 /// MIDI tools: input quantize and controllers while recording, Quantize and
 /// Velocity on played-in notes, the Q key, the CC lane (drawn by call and
 /// by mouse), and drawn CCs reaching playback.
@@ -4761,6 +4946,7 @@ int main(int argc, char** argv)
         realtime_print_checks(window, dir);
         recording_workflow_checks(window, dir);
         clip_editing_checks(window, dir);
+        edit_mode_checks(window, dir);
         midi_tools_checks(window, dir);
         drag_drop_checks(window, dir);
         midi_comp_checks(window, dir);

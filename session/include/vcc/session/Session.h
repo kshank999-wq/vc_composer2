@@ -339,6 +339,23 @@ public:
     /// is possible.
     bool crossfade_audio_clips(const std::string& track_id, const std::string& first_id, const std::string& second_id,
                                double seconds);
+    // --- Shuffle edit mode: the clips on a lane stay butted together -----------------------
+    /// Deletes clips and closes the gap each leaves: the later clips on its
+    /// lane move earlier by its length ("Delete clip(s)").
+    bool remove_audio_clips_shuffle(const std::vector<ClipRef>& clips);
+    /// Changes one clip (a trim) and moves the later clips on its lane by
+    /// however much its end moved. Coalesces under `label`, as a drag does.
+    bool update_audio_clip_shuffle(const std::string& track_id, const std::string& clip_id, const std::string& label,
+                                   const std::function<void(project::AudioClip&)>& change);
+    /// Moves a clip within its lane: the gap it leaves closes, and it goes in
+    /// at the clip boundary (a start or an end, or 0) nearest `target_seconds`,
+    /// pushing the clips from there on later by its length ("Move clip").
+    bool shuffle_move_audio_clip(const std::string& track_id, const std::string& clip_id, double target_seconds);
+    /// Deletes [from, to) from the main-lane clips of these tracks: clips
+    /// inside go, clips across an edge are trimmed or split. With `shuffle`
+    /// the later clips move earlier to close the gap ("Delete range").
+    bool delete_audio_range(const std::vector<std::string>& track_ids, double from, double to, bool shuffle);
+
     /// Moves clips by `seconds` (negative: earlier, never before 0) ("Nudge clip").
     bool nudge_audio_clips(const std::string& track_id, const std::vector<std::string>& clip_ids, double seconds);
     /// Replaces clips with one (a consolidated file, made by the caller) as

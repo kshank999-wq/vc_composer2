@@ -4,6 +4,8 @@
 // piano roll for editing the selected track's MIDI regions.
 #pragma once
 
+#include <optional>
+
 #include "vcc/project/MidiTools.h"
 
 #include "ui/AppContext.h"
@@ -63,6 +65,32 @@ public:
     /// Opens or closes a track's take lanes under it (where a drag across a
     /// take comps it onto the main lane, and a double-click promotes it).
     void show_take_lanes(const std::string& track_id, bool show);
+
+    // --- Edit modes and the Smart tool (the Producer toolbar's Edit keys, F1-F4, F6) -----
+    /// Shuffle: clips on a lane stay butted together (moving, trimming and
+    /// deleting close or open the gaps). Slip: clips move freely. Spot: a
+    /// click on a clip asks for its start time. Grid: moves and trims snap to
+    /// the grid. Cmd/Ctrl while dragging inverts snapping in every mode.
+    enum class EditMode { Shuffle, Slip, Spot, Grid };
+    EditMode edit_mode() const;
+    void set_edit_mode(EditMode mode);
+    /// The Smart tool: on a clip, the top half drags a range on its track
+    /// (Delete removes it, Cmd/Ctrl+T splits at its edges), the bottom half
+    /// moves the clip; edges trim and the top corners fade, as always.
+    bool smart_tool() const;
+    void set_smart_tool(bool on);
+    /// Selects [from, to) on these tracks' clip rows, as the Smart tool does.
+    void select_track_range(const std::vector<std::string>& track_ids, Ticks from, Ticks to);
+    /// What Delete does in the lanes: the Smart range, else the selected
+    /// clips (closing the gaps in Shuffle). False when nothing was deleted.
+    bool delete_selection();
+    /// A main-lane clip's rectangle in the lanes component ("sequencer_lanes").
+    juce::Rectangle<float> clip_bounds(const std::string& track_id, const std::string& clip_id) const;
+    /// Spot: puts the selected clip's start at `seconds` (the Spot dialog's OK).
+    bool spot_selected(double seconds);
+    /// The Spot dialog's time scales: 0 Bars|Beats, 1 Min:Sec, 2 Timecode.
+    static juce::String spot_text(const project::ProjectData& d, double seconds, int scale);
+    static std::optional<double> parse_spot_text(const project::ProjectData& d, const juce::String& text, int scale);
 
     // --- Clip editing on the selected clip (also its menu and keys) ----------------------
     /// Splits the selected clip's track at the playhead (Cmd/Ctrl+T).

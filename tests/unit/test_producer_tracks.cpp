@@ -297,3 +297,83 @@ TEST_CASE("sidechain: strips and compressor/gate inserts keyed from another trac
     s.undo();
     CHECK(s.data().find_track(bass)->sidechain == kick);
 }
+
+TEST_CASE("edit modes: Shuffle closes and opens gaps; a range deletes across clips")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto a = s.add_audio_track("Gtr", false);
+    // Three 2 s clips at 0, 2 and 5 s (a 1 s gap before the third).
+    std::vector<std::pair<std::string, project::AudioClip>> in;
+    for (double at : {0.0, 2.0, 5.0}) {
+        project::AudioClip c;
+        c.file = "Audio Files/gtr.wav";
+        c.start_seconds = at;
+        c.source_offset = at;
+        c.length = 2.0;
+        in.emplace_back(a, c);
+    }
+    const auto ids = s.add_audio_clips(in, "Record");
+    REQUIRE(ids.size() == 3);
+    auto clips = [&] { return s.data().find_track(a)->active_version()->audio_clips; };
+    auto start_of = [&](const std::string& id) {
+        for (const auto& c : clips())
+            if (c.id == id) return c.start_seconds;
+        return -1.0;
+    };
+    auto near = [](double x, double y) { return std::abs(x - y) < 1e-9; };
+
+    // Shuffle delete: the second goes, the third moves 2 s earlier.
+    CHECK(s.remove_audio_clips_shuffle({{a, ids[1]}}));
+    CHECK(s.undo_label() == "Delete clip");
+    CHECK(clips().size() == 2);
+    CHECK(near(start_of(ids[2]), 3.0));
+    s.undo();
+    CHECK(near(start_of(ids[2]), 5.0));
+
+    // Shuffle trim: the first ends 0.5 s sooner; everything after follows.
+    CHECK(s.update_audio_clip_shuffle(a, ids[0], "Trim clip end", [](project::AudioClip& c) { c.length = 1.5; }));
+    CHECK(s.update_audio_clip_shuffle(a, ids[0], "Trim clip end", [](project::AudioClip& c) { c.length = 1.0; }));
+    CHECK(near(start_of(ids[1]), 1.0));
+    CHECK(near(start_of(ids[2]), 4.0));
+    s.undo();  // the drag was one step
+    CHECK(near(start_of(ids[1]), 2.0));
+    CHECK(near(start_of(ids[2]), 5.0));
+
+    // Shuffle move: the third to the front pushes the others back by 2 s.
+    CHECK(s.shuffle_move_audio_clip(a, ids[2], 0.3));
+    CHECK(s.undo_label() == "Move clip");
+    CHECK(near(start_of(ids[2]), 0.0));
+    CHECK(near(start_of(ids[0]), 2.0));
+    CHECK(near(start_of(ids[1]), 4.0));
+    s.undo();
+    // The first to just after the second: the second closes up to 0.
+    CHECK(s.shuffle_move_audio_clip(a, ids[0], 2.1));
+    CHECK(near(start_of(ids[1]), 0.0));
+    CHECK(near(start_of(ids[0]), 2.0));
+    CHECK(near(start_of(ids[2]), 5.0));
+    CHECK(!s.shuffle_move_audio_clip(a, ids[0], 2.2));  // already there: no step
+    s.undo();
+
+    // A range across the first two (1 to 3 s): trimmed either side.
+    CHECK(s.delete_audio_range({a}, 1.0, 3.0, false));
+    CHECK(s.undo_label() == "Delete range");
+    auto v = clips();
+    REQUIRE(v.size() == 3);
+    CHECK(near(v[0].length, 1.0));
+    CHECK(near(v[1].start_seconds, 3.0));
+    CHECK(near(v[1].source_offset, 3.0));
+    CHECK(near(v[1].length, 1.0));
+    CHECK(near(v[2].start_seconds, 5.0));
+    s.undo();
+    // Inside one clip with Shuffle: it splits, and everything after closes up.
+    CHECK(s.delete_audio_range({a}, 2.5, 3.0, true));
+    v = clips();
+    REQUIRE(v.size() == 4);
+    CHECK(near(v[1].length, 0.5));
+    CHECK(near(v[2].start_seconds, 2.5));
+    CHECK(near(v[2].source_offset, 3.0));
+    CHECK(near(v[2].length, 1.0));
+    CHECK(v[2].id != v[1].id);
+    CHECK(near(v[3].start_seconds, 4.5));
+}

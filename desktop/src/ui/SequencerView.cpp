@@ -16,6 +16,8 @@
 #include "ui/WaveformCache.h"
 #include "ui/hw/HwControls.h"
 #include "ui/hw/HwTheme.h"
+#include "ui/shell/TopDeck.h"
+#include "vcc/picture/Picture.h"
 #include "vcc/project/Automation.h"
 #include "vcc/project/MidiTools.h"
 #include "vcc/project/Performance.h"
@@ -267,6 +269,38 @@ struct Model final : AutomationTimeline {
     std::set<std::string> show_automation;
     std::map<std::string, int> lane_heights;  ///< "owner/lane id" -> row height
     bool pencil = false;
+    /// Edit mode and the Smart tool (view state, like the pencil).
+    using EditMode = SequencerView::EditMode;
+    EditMode edit_mode = EditMode::Grid;
+    bool smart = false;
+    /// A Smart-tool range: the tracks it covers, and the range it was made
+    /// as (a range set any other way, on the ruler, covers no track).
+    std::set<std::string> range_tracks;
+    Ticks smart_from = 0, smart_to = 0;
+    int spot_scale = 0;  ///< the Spot dialog's time scale, remembered
+    bool smart_range_live() const
+    {
+        return !range_tracks.empty() && has_range() && range_start == smart_from && range_end == smart_to;
+    }
+    /// Whether a drag snaps: in Grid mode, unless Cmd/Ctrl is held (and the
+    /// other way round in the other modes).
+    bool snaps(bool command_down) const { return (edit_mode == EditMode::Grid) != command_down; }
+    void set_edit_mode(EditMode mode)
+    {
+        if (edit_mode == mode) return;
+        edit_mode = mode;
+        static const char* what[] = {"Shuffle: clips stay butted together; moving, trimming or deleting closes the gap",
+                                     "Slip: clips move freely", "Spot: click a clip to type where it starts",
+                                     "Grid: moves and trims snap to the grid"};
+        ctx.status(what[static_cast<int>(mode)]);
+    }
+    void set_smart(bool on)
+    {
+        if (smart == on) return;
+        smart = on;
+        ctx.status(on ? "Smart tool: the top half of a clip selects a range, the bottom half moves it"
+                      : "Smart tool off");
+    }
     /// MIDI tools: the quantize settings last used, and what the piano
     /// roll's bottom lane shows (-1 velocity, else a controller number).
     project::QuantizeSettings quantize{kTicksPerQuarter / 4, 1.0, 0.0, false};
@@ -968,7 +1002,7 @@ public:
         if (e.mods.isPopupMenu() || e.mouseDownPosition.x < kHeader) return;
         if (!selecting_ && e.getDistanceFromDragStartX() * e.getDistanceFromDragStartX() < 16) return;
         selecting_ = true;
-        const bool free = e.mods.isCommandDown();
+        const bool free = !m_.snaps(e.mods.isCommandDown());
         auto at = [&](double x) {
             const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(m_.tick_of(x)));
             return free ? t : m_.snap(t, m_.clip_grid(), false);
@@ -1185,6 +1219,33 @@ public:
                 g.drawText("Drop here for a new track", row.withTrimmedLeft(kHeader + 8), juce::Justification::centredLeft);
             }
         }
+        // The Smart tool's range, on the clip rows of its tracks.
+        if (m_.smart_range_live()) {
+            juce::Graphics::ScopedSaveState state(g);
+            g.reduceClipRegion(timeline);
+            const float x0 = static_cast<float>(m_.x_of(static_cast<double>(m_.range_start)));
+            const float x1 = static_cast<float>(m_.x_of(static_cast<double>(m_.range_end)));
+            for (std::size_t i = 0; i < m_.lanes.size(); ++i) {
+                const auto& l = m_.lanes[i];
+                if (!m_.range_tracks.count(l.id)) continue;
+                const auto base = juce::Rectangle<int>(0, m_.lane_top(i) - scroll_y_, getWidth(), m_.base_height(l));
+                const auto row = m_.clip_row(l, base).toFloat();
+                g.setColour(colours::accent.withAlpha(0.30f));
+                g.fillRect(juce::Rectangle<float>(x0, row.getY(), std::max(1.0f, x1 - x0), row.getHeight()));
+            }
+        }
+        // A clip being shuffled: its ghost where the mouse is.
+        if (drag_ == Drag::Move && shuffle_live_) {
+            juce::Graphics::ScopedSaveState state(g);
+            g.reduceClipRegion(timeline);
+            const float x = static_cast<float>(m_.x_of_seconds(shuffle_target_));
+            const float x1 = static_cast<float>(m_.x_of_seconds(shuffle_target_ + drag_clip_.length));
+            const auto ghost = juce::Rectangle<float>(x, drag_row_.getY(), std::max(2.0f, x1 - x), drag_row_.getHeight());
+            g.setColour(colours::accent.withAlpha(0.18f));
+            g.fillRect(ghost);
+            g.setColour(colours::accent);
+            g.drawRect(ghost, 1.5f);
+        }
         // A selection box being dragged.
         if (drag_ == Drag::Band) {
             const auto box = juce::Rectangle<float>(band_start_, band_end_);
@@ -1309,6 +1370,22 @@ public:
         const auto rect = clip_rect(c, clip_row_of(lane, hit));
         drag_ = zone_for(c, rect, e.position);
         drag_clip_ = c;
+        // Spot: a click on a clip asks where it starts.
+        if (m_.edit_mode == Model::EditMode::Spot && hit.take == 0 && drag_ == Drag::Move) {
+            drag_ = Drag::None;
+            show_spot_dialog(track, c.id);
+            return;
+        }
+        // The Smart tool: the top half of a clip selects a range on its track.
+        if (m_.smart && hit.take == 0 && drag_ == Drag::Move && e.position.y < rect.getCentreY()) {
+            select_clip({}, {});
+            clear_smart_range();
+            drag_ = Drag::Select;
+            drag_track_ = track;
+            return;
+        }
+        shuffle_live_ = false;
+        drag_row_ = rect;
         // Swipe comping: dragging across a take picks that part of it for
         // the main lane. Alt-drag moves the take instead.
         if (hit.take > 0 && drag_ == Drag::Move && !e.mods.isAltDown()) {
@@ -1353,13 +1430,35 @@ public:
             repaint();
             return;
         }
+        if (drag_ == Drag::Select) {
+            const bool loose = !m_.snaps(e.mods.isCommandDown());
+            auto at = [&](double x) {
+                const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(std::llround(m_.tick_of(std::max<double>(x, kHeader)))));
+                return loose ? t : m_.snap(t, m_.clip_grid(), false);
+            };
+            const Ticks a = at(e.mouseDownPosition.x), b = at(e.x);
+            set_smart_range({drag_track_}, std::min(a, b), std::max(a, b));
+            return;
+        }
         const project::AudioClip o = drag_clip_;
-        const bool free = e.mods.isCommandDown();  // Cmd/Ctrl: no snapping
+        const bool free = !m_.snaps(e.mods.isCommandDown());  // Grid snaps; Cmd/Ctrl inverts
         auto snapped = [&](double tick) {
             const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(std::llround(tick)));
             return free ? t : m_.snap(t, m_.clip_grid(), false);
         };
         const double dticks = m_.tick_of(e.x) - m_.tick_of(e.mouseDownPosition.x);
+        // Shuffle: the clip follows the mouse as a ghost and goes in at the
+        // nearest clip edge on release.
+        if (drag_ == Drag::Move && m_.edit_mode == Model::EditMode::Shuffle) {
+            if (!shuffle_live_ && std::abs(e.getDistanceFromDragStartX()) < 3) return;
+            const Ticks t0 = m_.tempo.tick_at_seconds(o.start_seconds);
+            shuffle_target_ = m_.tempo.seconds_at(std::max<Ticks>(0, static_cast<Ticks>(std::llround(static_cast<double>(t0) + dticks))));
+            shuffle_live_ = true;
+            m_.ctx.status("Shuffle: release to put the clip at the nearest clip edge");
+            repaint();
+            return;
+        }
+        const bool shuffle_trim = m_.edit_mode == Model::EditMode::Shuffle && (drag_ == Drag::TrimLeft || drag_ == Drag::TrimRight);
         project::AudioClip c = o;
         switch (drag_) {
             case Drag::Move: {
@@ -1371,7 +1470,8 @@ public:
                 const Ticks t0 = m_.tempo.tick_at_seconds(o.start_seconds);
                 double d = m_.tempo.seconds_at(snapped(static_cast<double>(t0) + dticks)) - o.start_seconds;
                 d = juce::jlimit(-o.source_offset, o.length - kMinClip, d);
-                c.start_seconds = o.start_seconds + d;
+                // In Shuffle the clip's start stays and what follows closes up.
+                c.start_seconds = shuffle_trim ? o.start_seconds : o.start_seconds + d;
                 c.source_offset = o.source_offset + d;
                 c.length = o.length - d;
                 break;
@@ -1397,6 +1497,7 @@ public:
             }
             case Drag::Comp:
             case Drag::Band:
+            case Drag::Select:
             case Drag::None: return;
         }
         const project::AudioClip* now = m_.clip(drag_track_, o.id);
@@ -1406,19 +1507,45 @@ public:
             same(now->length, c.length) && same(now->fade_in, c.fade_in) && same(now->fade_out, c.fade_out) &&
             same(now->gain_db, c.gain_db))
             return;
-        m_.ctx.session.update_audio_clip(drag_track_, o.id, drag_label_, [c](project::AudioClip& x) {
+        const auto apply = [c](project::AudioClip& x) {
             x.start_seconds = c.start_seconds;
             x.source_offset = c.source_offset;
             x.length = c.length;
             x.fade_in = c.fade_in;
             x.fade_out = c.fade_out;
             x.gain_db = c.gain_db;
-        });
+        };
+        if (shuffle_trim) m_.ctx.session.update_audio_clip_shuffle(drag_track_, o.id, drag_label_, apply);
+        else m_.ctx.session.update_audio_clip(drag_track_, o.id, drag_label_, apply);
         if (drag_ == Drag::Gain) m_.ctx.status("Clip gain " + db_text(c.gain_db));
     }
 
-    void mouseUp(const juce::MouseEvent&) override
+    void mouseUp(const juce::MouseEvent& e) override
     {
+        if (drag_ == Drag::Select) {
+            drag_ = Drag::None;
+            if (!m_.smart_range_live()) {
+                // A click, no drag: the playhead goes there; any range goes.
+                const bool loose = !m_.snaps(e.mods.isCommandDown());
+                const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(std::llround(m_.tick_of(std::max<double>(e.x, kHeader)))));
+                clear_smart_range();
+                m_.ctx.engine.locate(loose ? t : m_.snap(t, m_.clip_grid(), false));
+            } else {
+                const double secs = m_.tempo.seconds_at(m_.range_end) - m_.tempo.seconds_at(m_.range_start);
+                m_.ctx.status("Selected " + juce::String(secs, 2) + " s: Delete removes it" +
+                              (m_.edit_mode == Model::EditMode::Shuffle ? juce::String(" and closes the gap") : juce::String()) +
+                              ", Cmd/Ctrl+T splits at its edges");
+            }
+            return;
+        }
+        if (drag_ == Drag::Move && shuffle_live_) {
+            drag_ = Drag::None;
+            shuffle_live_ = false;
+            repaint();
+            if (m_.ctx.session.shuffle_move_audio_clip(drag_track_, drag_clip_.id, shuffle_target_))
+                m_.ctx.status("Shuffled the clip into place");
+            return;
+        }
         if (drag_ == Drag::Band) {
             drag_ = Drag::None;
             const auto box = juce::Rectangle<float>(band_start_, band_end_);
@@ -1458,7 +1585,18 @@ public:
             const int index = clip_at(*hit.lane, hit, e.position);
             if (index >= 0) {
                 const auto& c = hit.lane->clips[static_cast<std::size_t>(index)];
-                switch (zone_for(c, clip_rect(c, clip_row_of(*hit.lane, hit)), e.position)) {
+                const auto r = clip_rect(c, clip_row_of(*hit.lane, hit));
+                const Drag zone = zone_for(c, r, e.position);
+                const bool main = hit.take == 0 && zone == Drag::Move;
+                if (main && m_.edit_mode == Model::EditMode::Spot) {
+                    setMouseCursor(juce::MouseCursor::PointingHandCursor);
+                    return;
+                }
+                if (main && m_.smart && e.position.y < r.getCentreY()) {
+                    setMouseCursor(juce::MouseCursor::IBeamCursor);
+                    return;
+                }
+                switch (zone) {
                     case Drag::TrimLeft:
                     case Drag::TrimRight: shape = juce::MouseCursor::LeftRightResizeCursor; break;
                     case Drag::FadeIn:
@@ -1469,6 +1607,7 @@ public:
                         break;
                     case Drag::Comp:
                     case Drag::Band:
+                    case Drag::Select:
                     case Drag::None: shape = juce::MouseCursor::NormalCursor; break;
                 }
             } else if (take_region_at(*hit.lane, hit, e.position)) {
@@ -1509,16 +1648,16 @@ public:
         // Cmd/Ctrl+T: split at the playhead (clips and MIDI regions; with no
         // clip selected, the selected track's).
         if (key.getModifiers().isCommandDown() && (key.getKeyCode() == 'T' || key.getKeyCode() == 't')) {
-            split_at_playhead();
+            if (m_.smart_range_live()) split_smart_range();
+            else split_at_playhead();
+            return true;
+        }
+        if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) return delete_selection();
+        if (key == juce::KeyPress::escapeKey && m_.smart_range_live()) {
+            clear_smart_range();
             return true;
         }
         if (m_.clip_id.empty()) return false;
-        if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) {
-            const auto clips = m_.selected_clips();
-            select_clip({}, {});
-            m_.ctx.session.remove_audio_clips(clips);
-            return true;
-        }
         if (key == juce::KeyPress::escapeKey) {
             select_clip({}, {});
             return true;
@@ -1559,7 +1698,7 @@ public:
     Ticks drop_tick(int x) const
     {
         const Ticks t = std::max<Ticks>(0, static_cast<Ticks>(std::llround(m_.tick_of(std::max(x, kHeader)))));
-        return m_.snap(t, m_.clip_grid(), false);
+        return m_.snaps(false) ? m_.snap(t, m_.clip_grid(), false) : t;
     }
 
     void filesDropped(const juce::StringArray& files, int x, int y) override
@@ -1740,7 +1879,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Move, TrimLeft, TrimRight, FadeIn, FadeOut, Gain, Comp, Band };
+    enum class Drag { None, Move, TrimLeft, TrimRight, FadeIn, FadeOut, Gain, Comp, Band, Select };
 
     /// The track whose header's bottom edge is under `p`, or null.
     const LaneView* resize_edge_at(juce::Point<int> p) const
@@ -2053,6 +2192,110 @@ private:
         menu.showMenuAsync({});
     }
 
+public:
+    /// A main-lane clip's rectangle in this component (empty when not shown).
+    juce::Rectangle<float> clip_bounds(const std::string& track, const std::string& id) const
+    {
+        int top = -scroll_y_;
+        for (const auto& l : m_.lanes) {
+            if (l.id == track)
+                for (const auto& c : l.clips)
+                    if (c.id == id && c.lane == 0)
+                        return clip_rect(c, m_.clip_row(l, {0, top, getWidth() - kScroll, m_.base_height(l)}));
+            top += m_.row_height(l);
+        }
+        return {};
+    }
+
+    // --- Edit modes ----------------------------------------------------------------------
+
+    void set_smart_range(const std::set<std::string>& tracks, Ticks from, Ticks to)
+    {
+        m_.range_tracks = tracks;
+        m_.range_start = m_.smart_from = from;
+        m_.range_end = m_.smart_to = to;
+        if (m_.range_changed) m_.range_changed();
+        if (auto* p = getParentComponent()) p->repaint();
+    }
+    void clear_smart_range()
+    {
+        const bool had = m_.smart_range_live();
+        m_.range_tracks.clear();
+        if (had) {
+            m_.range_start = m_.range_end = 0;
+            if (m_.range_changed) m_.range_changed();
+        }
+        if (auto* p = getParentComponent()) p->repaint();
+    }
+    std::vector<std::string> smart_tracks() const { return {m_.range_tracks.begin(), m_.range_tracks.end()}; }
+
+    /// Delete: the Smart range, else the selected clips (Shuffle closes the gaps).
+    bool delete_selection()
+    {
+        if (m_.smart_range_live()) {
+            const double from = m_.tempo.seconds_at(m_.range_start), to = m_.tempo.seconds_at(m_.range_end);
+            const bool shuffle = m_.edit_mode == Model::EditMode::Shuffle;
+            const bool ok = m_.ctx.session.delete_audio_range(smart_tracks(), from, to, shuffle);
+            clear_smart_range();
+            if (ok) m_.ctx.status(shuffle ? "Deleted the range and closed the gap" : "Deleted the range");
+            return ok;
+        }
+        if (m_.clip_id.empty()) return false;
+        const auto clips = m_.selected_clips();
+        select_clip({}, {});
+        return m_.edit_mode == Model::EditMode::Shuffle ? m_.ctx.session.remove_audio_clips_shuffle(clips)
+                                                        : m_.ctx.session.remove_audio_clips(clips);
+    }
+
+    /// Cmd/Ctrl+T on a Smart range: splits its tracks' clips at both edges.
+    void split_smart_range()
+    {
+        const auto tracks = smart_tracks();
+        int n = static_cast<int>(m_.ctx.session.split_audio_clips(tracks, m_.tempo.seconds_at(m_.range_end)).size());
+        n += static_cast<int>(m_.ctx.session.split_audio_clips(tracks, m_.tempo.seconds_at(m_.range_start)).size());
+        m_.ctx.status(n > 0 ? "Split at the range's edges" : "No clip crosses the range's edges");
+    }
+
+    bool spot(const std::string& track, const std::string& id, double seconds)
+    {
+        return m_.ctx.session.update_audio_clip(track, id, unique_label("Spot clip"),
+                                                [seconds](project::AudioClip& x) { x.start_seconds = std::max(0.0, seconds); });
+    }
+
+    void show_spot_dialog(const std::string& track, const std::string& id)
+    {
+        const project::AudioClip* c = m_.clip(track, id);
+        if (!c) return;
+        const auto& d = m_.ctx.session.data();
+        const double start = c->start_seconds;
+        auto* w = new juce::AlertWindow("Spot", "Where \"" + juce::String(c->name.empty() ? std::string("the clip") : c->name) +
+                                                    "\" starts. Now " + SequencerView::spot_text(d, start, m_.spot_scale) +
+                                                    ", " + juce::String(c->length, 3) + " s long.",
+                                        juce::MessageBoxIconType::NoIcon);
+        w->addComboBox("scale", {"Bars|Beats", "Min:Sec", "Timecode"}, "Time scale");
+        w->addTextEditor("start", SequencerView::spot_text(d, start, m_.spot_scale), "Start");
+        if (auto* combo = w->getComboBoxComponent("scale")) {
+            combo->setSelectedItemIndex(m_.spot_scale, juce::dontSendNotification);
+            combo->onChange = [this, w, combo, start] {
+                m_.spot_scale = combo->getSelectedItemIndex();
+                if (auto* t = w->getTextEditor("start"))
+                    t->setText(SequencerView::spot_text(m_.ctx.session.data(), start, m_.spot_scale), false);
+            };
+        }
+        w->addButton("Spot", 1, juce::KeyPress(juce::KeyPress::returnKey));
+        w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+        juce::Component::SafePointer<LaneArea> self(this);
+        w->enterModalState(true, juce::ModalCallbackFunction::create([self, w, track, id](int r) {
+            if (r != 1 || !self) return;
+            const auto text = w->getTextEditorContents("start");
+            if (const auto s = SequencerView::parse_spot_text(self->m_.ctx.session.data(), text, self->m_.spot_scale))
+                self->spot(track, id, *s);
+            else
+                self->m_.ctx.status("Could not read \"" + text + "\" as a time");
+        }), true);
+    }
+
+private:
     void show_clip_menu(const LaneView& lane, const project::AudioClip& c)
     {
         auto& session = m_.ctx.session;
@@ -2061,6 +2304,10 @@ private:
         menu.addSectionHeader(juce::String(c.name.empty() ? std::string("Clip") : c.name));
         if (c.lane > 0)
             menu.addItem("Promote take", [&session, track, id] { promote_take(session, track, id); });
+        juce::Component::SafePointer<LaneArea> self(this);
+        menu.addItem("Spot...", [self, track, id] {
+            if (self) self->show_spot_dialog(track, id);
+        });
         const auto chosen = m_.is_clip_selected(track, id) ? m_.selected_clips()
                                                            : std::vector<std::pair<std::string, std::string>>{{track, id}};
         const juce::String what = chosen.size() > 1 ? juce::String(static_cast<int>(chosen.size())) + " clips" : juce::String("clip");
@@ -2582,6 +2829,9 @@ private:
     juce::ScrollBar vscroll_{true};
     int scroll_y_ = 0;
     Drag drag_ = Drag::None;
+    bool shuffle_live_ = false;        ///< a Shuffle move under way
+    double shuffle_target_ = 0.0;      ///< where its ghost is (seconds)
+    juce::Rectangle<float> drag_row_;  ///< the dragged clip at the click
     std::string drag_track_, drag_label_;
     project::AudioClip drag_clip_;
     double file_length_ = 0.0;  ///< Of the dragged clip's file, when known.
@@ -4815,6 +5065,75 @@ void SequencerView::set_row_height(const std::string& track_id, int height)
     m.heights[m.is_expanded(*l) ? track_id + "#x" : track_id] = juce::jlimit(m.min_height(*l), 600, height);
     impl_->lanes.update_scroll();
     impl_->lanes.repaint();
+}
+
+SequencerView::EditMode SequencerView::edit_mode() const { return impl_->model.edit_mode; }
+void SequencerView::set_edit_mode(EditMode mode)
+{
+    impl_->model.set_edit_mode(mode);
+    impl_->lanes.repaint();
+}
+bool SequencerView::smart_tool() const { return impl_->model.smart; }
+void SequencerView::set_smart_tool(bool on) { impl_->model.set_smart(on); }
+void SequencerView::select_track_range(const std::vector<std::string>& track_ids, Ticks from, Ticks to)
+{
+    impl_->lanes.set_smart_range({track_ids.begin(), track_ids.end()}, std::min(from, to), std::max(from, to));
+}
+bool SequencerView::delete_selection() { return impl_->lanes.delete_selection(); }
+juce::Rectangle<float> SequencerView::clip_bounds(const std::string& track_id, const std::string& clip_id) const
+{
+    return impl_->lanes.clip_bounds(track_id, clip_id);
+}
+bool SequencerView::spot_selected(double seconds)
+{
+    const auto& m = impl_->model;
+    return !m.clip_id.empty() && impl_->lanes.spot(m.clip_track, m.clip_id, seconds);
+}
+
+juce::String SequencerView::spot_text(const project::ProjectData& d, double seconds, int scale)
+{
+    seconds = std::max(0.0, seconds);
+    if (scale == 2) return juce::String(picture::project_timecode(d, seconds));
+    if (scale == 1) {
+        const int minutes = static_cast<int>(seconds / 60.0);
+        return juce::String(minutes) + ":" + juce::String(seconds - minutes * 60.0, 3).paddedLeft('0', 6);
+    }
+    return shell::bars_beats_ticks(d.meter, d.tempo.tick_at_seconds(seconds));
+}
+
+std::optional<double> SequencerView::parse_spot_text(const project::ProjectData& d, const juce::String& text, int scale)
+{
+    const auto t = text.trim();
+    if (t.isEmpty()) return std::nullopt;
+    if (scale == 2) {
+        const auto s = picture::project_seconds_for_timecode(d, t.toStdString());
+        if (!s) return std::nullopt;
+        return std::max(0.0, *s);
+    }
+    juce::StringArray parts;
+    if (scale == 1) {
+        // [h:]m:ss.sss, or plain seconds.
+        parts.addTokens(t, ":", "");
+        double s = 0.0;
+        for (const auto& p : parts) {
+            if (!p.trim().containsOnly("0123456789.")) return std::nullopt;
+            s = s * 60.0 + p.trim().getDoubleValue();
+        }
+        return s;
+    }
+    // Bars|Beats|ticks (ticks in 960ths of a quarter); "|", "." or ":" between.
+    parts.addTokens(t, "|.: ", "");
+    parts.removeEmptyStrings();
+    if (parts.isEmpty() || parts.size() > 3) return std::nullopt;
+    for (const auto& p : parts)
+        if (!p.containsOnly("0123456789")) return std::nullopt;
+    const int bar = std::max(1, parts[0].getIntValue());
+    const int beat = parts.size() > 1 ? std::max(1, parts[1].getIntValue()) : 1;
+    const int tick = parts.size() > 2 ? std::max(0, parts[2].getIntValue()) : 0;
+    const auto sig = d.meter.at_bar(bar);
+    const Ticks at = d.meter.bar_start(bar) + static_cast<Ticks>(beat - 1) * sig.beat_ticks() +
+                     static_cast<Ticks>(tick) * (kTicksPerQuarter / 960);
+    return d.tempo.seconds_at(at);
 }
 
 void SequencerView::paint(juce::Graphics& g) { g.fillAll(colours::background); }

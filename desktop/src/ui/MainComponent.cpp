@@ -262,6 +262,8 @@ MainComponent::MainComponent(AppContext& context)
         else sequencer_.zoom(larger);
     };
     toolbar_.on_pencil = [this](bool on) { sequencer_.set_pencil_mode(on); };
+    toolbar_.on_edit_mode = [this](int mode) { sequencer_.set_edit_mode(static_cast<SequencerView::EditMode>(mode)); };
+    toolbar_.on_smart = [this](bool on) { sequencer_.set_smart_tool(on); };
     // The Composer keys and the inspector run notation commands on the
     // score being written, and hand the keyboard back to it.
     auto run = [this](composer::Command c) {
@@ -610,7 +612,7 @@ void MainComponent::timerCallback()
     deck_.update_position();
     const auto& sel = context_.session.selection();
     deck_.set_range(sel.from, sel.to);
-    toolbar_.update(punch_, sequencer_.pencil_mode());
+    toolbar_.update(punch_, sequencer_.pencil_mode(), static_cast<int>(sequencer_.edit_mode()), sequencer_.smart_tool());
     if (page_view_.isVisible()) page_view_.set_playhead(tick);
     if (composer_.isVisible()) {
         composer_.set_playhead(tick, playing);
@@ -1284,7 +1286,7 @@ void MainComponent::set_punch(bool on)
     punch_ = on;
     context_.engine.set_punch(on, range.first, range.second);
     sequencer_.set_punch_display(on);
-    toolbar_.update(on, sequencer_.pencil_mode());
+    toolbar_.update(on, sequencer_.pencil_mode(), static_cast<int>(sequencer_.edit_mode()), sequencer_.smart_tool());
     if (changed) {
         if (on) {
             const auto& m = context_.session.data().meter;
@@ -1447,7 +1449,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
-                cmd::about});
+                cmd::about, cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1528,6 +1530,22 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             break;
         case cmd::showMixer: info.setInfo("Mixer", "", "View", 0); info.addDefaultKeypress('m', cmdKey); break;
         case cmd::showControlGallery: info.setInfo("Control Gallery", "", "View", 0); break;
+        case cmd::editShuffle:
+        case cmd::editSlip:
+        case cmd::editSpot:
+        case cmd::editGrid: {
+            static const char* names[] = {"Shuffle", "Slip", "Spot", "Grid"};
+            const int i = static_cast<int>(id - cmd::editShuffle);
+            info.setInfo(juce::String(names[i]) + " Mode", "Producer view edit mode", "Edit",
+                         static_cast<int>(sequencer_.edit_mode()) == i ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.addDefaultKeypress(KP::F1Key + i, 0);
+            break;
+        }
+        case cmd::toggleSmartTool:
+            info.setInfo("Smart Tool", "On a clip: the top half selects a range, the bottom half moves it", "Edit",
+                         sequencer_.smart_tool() ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.addDefaultKeypress(KP::F6Key, 0);
+            break;
         case cmd::zoomIn: info.setInfo("Zoom In", "", "View", 0); info.addDefaultKeypress('=', cmdKey); break;
         case cmd::zoomOut: info.setInfo("Zoom Out", "", "View", 0); info.addDefaultKeypress('-', cmdKey); break;
         case cmd::toggleView:
@@ -1612,6 +1630,13 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showSequencer: show_workspace(Workspace::Sequencer); break;
         case cmd::showMixer: show_mixer(); break;
         case cmd::showControlGallery: show_control_gallery(); break;
+        case cmd::editShuffle:
+        case cmd::editSlip:
+        case cmd::editSpot:
+        case cmd::editGrid:
+            sequencer_.set_edit_mode(static_cast<SequencerView::EditMode>(info.commandID - cmd::editShuffle));
+            break;
+        case cmd::toggleSmartTool: sequencer_.set_smart_tool(!sequencer_.smart_tool()); break;
         case cmd::toggleView:
             show_workspace(workspace_ == Workspace::Composer ? Workspace::Producer : Workspace::Composer);
             break;
@@ -1698,6 +1723,9 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         case 1:
             m.addCommandItem(c, cmd::undo);
             m.addCommandItem(c, cmd::redo);
+            m.addSeparator();
+            for (auto id : {cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool})
+                m.addCommandItem(c, id);
             m.addSeparator();
             m.addSubMenu("Keyboard Shortcuts", shortcuts_menu());
             break;

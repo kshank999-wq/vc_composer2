@@ -87,6 +87,11 @@ enum : juce::CommandID {
     addAuxBus,
     addGroupBus,
     about = 0x1600,
+    editShuffle = 0x1700,
+    editSlip,
+    editSpot,
+    editGrid,
+    toggleSmartTool,
 };
 }  // namespace cmd
 

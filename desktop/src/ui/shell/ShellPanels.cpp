@@ -142,8 +142,31 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
         pdc.setTooltip("Plug-in delay compensation: delays everything to line up with the slowest plug-in path");
         pdc.onClick = [this] { context_.engine.set_delay_compensation(!context_.engine.delay_compensation()); };
         groups_.push_back(record);
+        Group edit{"Edit mode"};
+        edit.producer = true;
+        static const char* modes[] = {"Shuffle", "Slip", "Spot", "Grid"};
+        static const char* tips[] = {"Shuffle (F1): clips stay butted together; moving, trimming or deleting closes the gap",
+                                     "Slip (F2): clips move freely", "Spot (F3): click a clip to type where it starts",
+                                     "Grid (F4): moves and trims snap to the grid (Cmd/Ctrl while dragging: free)"};
+        for (int i = 0; i < 4; ++i) {
+            auto& k = add(edit, modes[i], i == 0 ? 70 : i == 2 ? 52 : 50, false);
+            k.set_led_dot(true);
+            k.setTooltip(tips[i]);
+            k.setComponentID("edit_mode_" + juce::String(i));
+            k.onClick = [this, i] {
+                if (on_edit_mode) on_edit_mode(i);
+            };
+        }
+        groups_.push_back(edit);
         Group tools{"Tools"};
         tools.producer = true;
+        auto& smart = add(tools, "Smart", 62, false);
+        smart.set_led_dot(true);
+        smart.setComponentID("edit_smart");
+        smart.setTooltip("Smart tool (F6): on a clip, the top half selects a range, the bottom half moves it");
+        smart.onClick = [this, &smart] {
+            if (on_smart) on_smart(!smart.getToggleState());
+        };
         auto& pencil = add(tools, "Pencil", 66, false);
         pencil.set_led_dot(true);
         pencil.setTooltip("Pencil (P): draw automation freehand");
@@ -232,10 +255,13 @@ void Toolbar::set_producer(bool producer)
     repaint();
 }
 
-void Toolbar::update(bool punch, bool pencil)
+void Toolbar::update(bool punch, bool pencil, int edit_mode, bool smart)
 {
     if (auto* p = key("Punch")) p->setToggleState(punch, juce::dontSendNotification);
     if (auto* p = key("Pencil")) p->setToggleState(pencil, juce::dontSendNotification);
+    if (auto* p = key("Smart")) p->setToggleState(smart, juce::dontSendNotification);
+    for (const auto* legend : {"Shuffle", "Slip", "Spot", "Grid"})
+        if (auto* p = key(legend)) p->setToggleState(p->getComponentID() == "edit_mode_" + juce::String(edit_mode), juce::dontSendNotification);
     // Delay compensation, and how much it adds.
     for (const auto& g : groups_)
         for (auto* k : g.keys)

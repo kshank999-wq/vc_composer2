@@ -25,10 +25,14 @@ class Toolbar final : public juce::Component {
 public:
     explicit Toolbar(AppContext& context);
     void set_producer(bool producer);
-    /// Refreshes the keys that mirror state (PDC, punch, pencil).
-    void update(bool punch, bool pencil);
+    /// Refreshes the keys that mirror state (PDC, punch, pencil, the edit
+    /// mode lit: 0 Shuffle, 1 Slip, 2 Spot, 3 Grid; the Smart tool).
+    void update(bool punch, bool pencil, int edit_mode = 3, bool smart = false);
     std::function<void(bool larger)> on_zoom;
     std::function<void(bool on)> on_pencil;
+    /// The Edit keys: Shuffle, Slip, Spot, Grid (0-3), and the Smart tool.
+    std::function<void(int mode)> on_edit_mode;
+    std::function<void(bool on)> on_smart;
     /// A Composer key (note entry, value, dot, accidental) ran a notation command.
     std::function<void(composer::Command)> on_command;
     /// The View keys: Track (false) or Page (true).

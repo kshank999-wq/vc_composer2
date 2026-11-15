@@ -1650,6 +1650,143 @@ bool Session::crossfade_audio_clips(const std::string& track_id, const std::stri
     }));
 }
 
+namespace {
+/// Moves the clips on `lane` that start at or after `at` by `by` seconds.
+void shift_lane_after(project::TrackVersion& v, int lane, double at, double by, const std::string& skip = {})
+{
+    if (std::abs(by) < 1e-12) return;
+    for (auto& c : v.audio_clips)
+        if (c.lane == lane && c.id != skip && c.start_seconds >= at - 1e-6) c.start_seconds = std::max(0.0, c.start_seconds + by);
+}
+void sort_clips(project::TrackVersion& v)
+{
+    std::stable_sort(v.audio_clips.begin(), v.audio_clips.end(), [](const project::AudioClip& a, const project::AudioClip& b) {
+        return a.lane != b.lane ? a.lane < b.lane : a.start_seconds < b.start_seconds;
+    });
+}
+}  // namespace
+
+bool Session::remove_audio_clips_shuffle(const std::vector<ClipRef>& clips)
+{
+    if (clips.empty()) return false;
+    return edit(clips.size() == 1 ? "Delete clip" : "Delete clips", [&](project::ProjectData& d) {
+        bool any = false;
+        for (const auto& clip : clips) {
+            project::Track* t = d.find_track(clip.first);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
+            if (!v) continue;
+            auto it = std::find_if(v->audio_clips.begin(), v->audio_clips.end(),
+                                   [&clip](const project::AudioClip& c) { return c.id == clip.second; });
+            if (it == v->audio_clips.end()) continue;
+            const project::AudioClip gone = *it;
+            v->audio_clips.erase(it);
+            shift_lane_after(*v, gone.lane, gone.end_seconds(), -gone.length);
+            any = true;
+        }
+        return any;
+    });
+}
+
+bool Session::update_audio_clip_shuffle(const std::string& track_id, const std::string& clip_id, const std::string& label,
+                                        const std::function<void(project::AudioClip&)>& change)
+{
+    if (!project_.edit_coalescing(label, on_track(track_id, [&](project::Track& t) {
+            project::TrackVersion* v = t.active_version();
+            if (!v) return false;
+            for (auto& c : v->audio_clips)
+                if (c.id == clip_id) {
+                    const double old_end = c.end_seconds();
+                    change(c);
+                    c.id = clip_id;
+                    c.source_offset = std::max(0.0, c.source_offset);
+                    c.fade_in = std::clamp(c.fade_in, 0.0, c.length);
+                    c.fade_out = std::clamp(c.fade_out, 0.0, c.length - c.fade_in);
+                    if (c.length <= 0.0 || c.file.empty()) return false;
+                    const int lane = c.lane;
+                    const double moved = c.end_seconds() - old_end;
+                    shift_lane_after(*v, lane, old_end, moved, clip_id);
+                    return true;
+                }
+            return false;
+        })))
+        return false;
+    document_changed();
+    return true;
+}
+
+bool Session::shuffle_move_audio_clip(const std::string& track_id, const std::string& clip_id, double target_seconds)
+{
+    return edit("Move clip", on_track(track_id, [&](project::Track& t) {
+        project::TrackVersion* v = t.active_version();
+        if (!v) return false;
+        auto it = std::find_if(v->audio_clips.begin(), v->audio_clips.end(),
+                               [&clip_id](const project::AudioClip& c) { return c.id == clip_id; });
+        if (it == v->audio_clips.end()) return false;
+        project::AudioClip moving = *it;
+        const double was = moving.start_seconds;
+        v->audio_clips.erase(it);
+        shift_lane_after(*v, moving.lane, moving.end_seconds(), -moving.length);
+        // The boundary nearest the target: 0, or a start or an end on the lane.
+        double best = 0.0;
+        for (const auto& c : v->audio_clips) {
+            if (c.lane != moving.lane) continue;
+            for (double b : {c.start_seconds, c.end_seconds()})
+                if (std::abs(b - target_seconds) < std::abs(best - target_seconds)) best = b;
+        }
+        shift_lane_after(*v, moving.lane, best, moving.length);
+        moving.start_seconds = best;
+        v->audio_clips.push_back(moving);
+        sort_clips(*v);
+        return std::abs(best - was) > 1e-9;  // nothing moved: no undo step
+    })) && (document_changed(), true);
+}
+
+bool Session::delete_audio_range(const std::vector<std::string>& track_ids, double from, double to, bool shuffle)
+{
+    from = std::max(0.0, from);
+    if (to - from < 1e-6) return false;
+    return edit("Delete range", [&](project::ProjectData& d) {
+        bool any = false;
+        for (const auto& id : track_ids) {
+            project::Track* t = d.find_track(id);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
+            if (!v) continue;
+            std::vector<project::AudioClip> kept;
+            bool changed = false;
+            for (const auto& c : v->audio_clips) {
+                if (c.lane != 0 || c.end_seconds() <= from + 1e-9 || c.start_seconds >= to - 1e-9) {
+                    kept.push_back(c);
+                    continue;
+                }
+                changed = true;
+                if (c.start_seconds < from) {  // the part before the range stays
+                    project::AudioClip left = c;
+                    left.length = from - c.start_seconds;
+                    left.fade_out = 0.0;
+                    left.fade_in = std::min(left.fade_in, left.length);
+                    kept.push_back(left);
+                }
+                if (c.end_seconds() > to) {  // and the part after it
+                    project::AudioClip right = c;
+                    if (c.start_seconds < from) right.id = project_.ids().next("clip");
+                    right.start_seconds = to;
+                    right.source_offset = c.source_offset + (to - c.start_seconds);
+                    right.length = c.end_seconds() - to;
+                    right.fade_in = 0.0;
+                    right.fade_out = std::min(right.fade_out, right.length);
+                    kept.push_back(right);
+                }
+            }
+            if (!changed) continue;
+            v->audio_clips = std::move(kept);
+            if (shuffle) shift_lane_after(*v, 0, to, -(to - from));
+            sort_clips(*v);
+            any = true;
+        }
+        return any;
+    });
+}
+
 bool Session::nudge_audio_clips(const std::string& track_id, const std::vector<std::string>& clip_ids, double seconds)
 {
     if (clip_ids.empty() || seconds == 0.0) return false;

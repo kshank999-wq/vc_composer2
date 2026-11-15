@@ -98,9 +98,7 @@ and the document model. The work is mostly presentation.
   - Export master to WAV, MP3 and FLAC, with dither on 16-bit.
 - A Mixer deck at the bottom, with a tab back to the keyboard. The
   console is a separate window today.
-- Producer toolbar:
-  - Shuffle, Slip, Spot and Grid edit modes;
-  - the Smart tool;
+- Producer toolbar (edit modes and the Smart tool: done, step 18):
   - nudge;
   - quantize, input quantize and merge.
 - MIDI CC lanes, consolidate, comping across MIDI takes (MIDI takes
@@ -873,3 +871,42 @@ macOS, Linux and Windows. What it took:
       system moves the playhead to its first bar; zoom; a new track appears
       as another part; the Track key brings the lanes back. Screenshots
       `36-page-view`, `36b-page-view-music`.
+
+18. **Edit modes and the Smart tool. Done** (November 15, 2026). The
+    Producer toolbar's Edit mode keys, F1-F4, and Edit > ... Mode:
+    - **Grid** (the default): clip moves and trims snap to the grid, which
+      follows the zoom. Cmd/Ctrl while dragging inverts snapping in every
+      mode; the ruler's range follows the mode too.
+    - **Slip**: clips move and trim freely.
+    - **Shuffle**: the clips on a lane stay butted together. Delete closes
+      the gap a clip leaves (`Session::remove_audio_clips_shuffle`); a trim
+      moves the clips after it by however much its end moved, the start
+      staying put on a left trim (`update_audio_clip_shuffle`); a dragged
+      clip follows the mouse as a ghost and goes in at the nearest clip
+      edge (or 0) on release, the gap it left closing and the clips from
+      there on moving later to make room (`shuffle_move_audio_clip`).
+    - **Spot**: a click on a main-lane clip opens the Spot dialog, which
+      reads and writes the start in Bars|Beats, Min:Sec or Timecode (the
+      project's frame rate and start), remembering the scale. "Spot..." is
+      also on every clip's menu, whatever the mode.
+    - **Smart tool** (the Tools group's Smart key, F6): on a main-lane clip,
+      the top half drags a range on that track (drawn on its clip row, and
+      shown in the top deck's start/end/length); the bottom half moves the
+      clip; edges trim and the top corners fade as before. A click in the
+      top half locates the playhead. Delete removes the range from the
+      track's clips (`delete_audio_range`: clips inside go, clips across an
+      edge are trimmed or split; in Shuffle the rest closes up), Cmd/Ctrl+T
+      splits at its edges, Escape clears it. A range dragged on the ruler
+      covers no track and is never deleted.
+    - Not yet: these modes on MIDI regions in the lanes (the piano roll
+      keeps its own grid), Spot when dropping files, and Shift-extending a
+      Smart range to other tracks.
+    - **Checks.** Unit test: Shuffle delete, trim, move and range delete
+      with undo. The desktop check, on three clips with the mouse: the keys
+      and F-keys light; Grid snaps a drag to 3.5 s where Slip leaves it at
+      3.35 s; Shuffle deletes, trims and moves closing gaps; Spot opens the
+      dialog and the three time scales round-trip; the Smart tool's top
+      half selects 0.5-1.5 s across two clips and Delete cuts it out, in
+      Shuffle closing the gap; Cmd/Ctrl+T splits at both edges; a click
+      locates; the bottom half still moves. Screenshots `edit-mode-shuffle`,
+      `edit-mode-smart`.
