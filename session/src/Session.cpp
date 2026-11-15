@@ -1250,7 +1250,9 @@ bool Session::remove_audio_clips(const std::vector<ClipRef>& clips)
     if (clips.empty()) return false;
     return edit(clips.size() == 1 ? "Delete clip" : "Delete clips", [&](project::ProjectData& d) {
         bool any = false;
-        for (const auto& [track, id] : clips) {
+        for (const auto& clip : clips) {
+            const auto& track = clip.first;
+            const auto& id = clip.second;
             project::Track* t = d.find_track(track);
             project::TrackVersion* v = t ? t->active_version() : nullptr;
             if (!v) continue;
@@ -1270,7 +1272,9 @@ bool Session::update_audio_clips(const std::vector<ClipRef>& clips, const std::s
     if (clips.empty()) return false;
     return edit(label, [&](project::ProjectData& d) {
         bool any = false;
-        for (const auto& [track, id] : clips) {
+        for (const auto& clip : clips) {
+            const auto& track = clip.first;
+            const auto& id = clip.second;
             project::Track* t = d.find_track(track);
             project::TrackVersion* v = t ? t->active_version() : nullptr;
             if (!v) continue;

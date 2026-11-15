@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 
 #include <cstdio>
@@ -271,7 +272,7 @@ TEST_CASE("MIDI comping: a range of a take replaces the main lane's notes there;
     take2.controllers.push_back({Q * 5, 0, 64, 127});
     s.add_recorded_regions({{t, take1}}, "Record MIDI");
     s.add_recorded_regions({{t, take2}}, "Record MIDI");  // take 2 main, take 1 on lane 1
-    auto regions = [&] { return s.data().find_track(t)->active_version()->regions; };
+    auto regions = [&]() -> const std::vector<project::MidiRegion>& { return s.data().find_track(t)->active_version()->regions; };
     std::string take1_id;
     for (const auto& r : regions())
         if (r.lane == 1) take1_id = r.id;
