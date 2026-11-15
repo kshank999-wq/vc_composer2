@@ -3306,6 +3306,45 @@ void drag_drop_checks(MainWindow& window, const juce::File& dir)
               !d.tracks.back().active_version()->audio_clips.empty() &&
               d.tracks.back().active_version()->audio_clips[0].start_seconds < 0.001,
           "audio dropped on the window lands on a new audio track at the playhead");
+
+    // MusicXML dropped on the window: its parts become tracks with their notation.
+    {
+        session.new_from_template("cinematic.horror.psychological");
+        std::string e2;
+        const auto xml_project = source.getChildFile("xml-source.vcc2");
+        session.save_as(xml_project.getFullPathName().toStdString(), &e2);
+        main.show_workspace(MainComponent::Workspace::Composer);
+        pump(50);
+        auto& composer = main.composer();
+        session.select_track(session.music_tracks().front()->id);
+        pump(50);
+        composer.grabKeyboardFocus();
+        for (const char ch : {'5', 'c', 'd', 'e', 'f'}) composer.keyPressed(juce::KeyPress(ch));
+        pump(50);
+        const auto xml = source.getChildFile("Theme.musicxml");
+        juce::String m;
+        export_musicxml_file(ctx, xml, false, m);
+        session.save_as(xml_project.getFullPathName().toStdString(), &e2);  // clean, so a later open asks nothing
+        session.new_empty();
+        const auto before_xml = session.data().tracks.size();
+        check(main.isInterestedInFileDrag({xml.getFullPathName()}) && !target->isInterestedInFileDrag({xml.getFullPathName()}),
+              "the window takes MusicXML; the sequencer's lanes leave it to the window");
+        main.filesDropped({xml.getFullPathName()}, 10, 10);
+        pump(100);
+        int notes = 0;
+        for (const auto& t : session.data().tracks)
+            if (const auto* v = t.active_version()) notes += static_cast<int>(v->score.total_note_count());
+        check(session.data().tracks.size() > before_xml && notes >= 4,
+              "a dropped MusicXML file adds its parts as tracks with their notation (" +
+                  juce::String(static_cast<int>(session.data().tracks.size() - before_xml)) + " tracks, " + juce::String(notes) +
+                  " notes)");
+
+        // A project file dropped on the window opens it.
+        session.new_empty();
+        main.filesDropped({xml_project.getFullPathName()}, 10, 10);
+        pump(100);
+        check(juce::File(juce::String(session.path())) == xml_project, "a dropped project file opens");
+    }
 }
 
 /// MIDI take comping in the sequencer: the TAKES key in an instrument

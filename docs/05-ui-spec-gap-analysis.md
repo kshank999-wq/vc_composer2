@@ -746,8 +746,13 @@ macOS, Linux and Windows. What it took:
       file on that row (from the bar under the pointer), a text file
       (nothing changes), and the WAV on the window (a new audio track at
       the playhead). Screenshot `drag-drop`.
-    - Not yet: dropping a MusicXML file into the score, or a project file
-      to open it; dragging clips out to the desktop.
+    - **MusicXML and projects** (added November 15): a .musicxml, .xml or
+      .mxl file dropped on the window adds its parts as tracks with their
+      notation (as File > Import MusicXML, one undo step a file); a .vcc2
+      project file dropped on the window opens it, after offering to save
+      the project that is open. (The sequencer's lanes take audio and MIDI
+      and leave these to the window.)
+    - Not yet: dragging clips out to the desktop.
 
 14. **MIDI take comping. Done.**
     - MIDI takes now show as take lanes under their instrument track (a

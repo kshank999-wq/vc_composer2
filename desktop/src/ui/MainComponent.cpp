@@ -1321,15 +1321,29 @@ std::vector<std::string> MainComponent::import_audio_files(const juce::Array<juc
 
 ImportResult MainComponent::import_files(const juce::Array<juce::File>& files, const std::string& track_id, double at_seconds)
 {
-    juce::Array<juce::File> audio, midi;
+    juce::Array<juce::File> audio, midi, scores;
+    juce::File project;
     juce::StringArray skipped;
     for (const auto& f : files) {
         if (is_midi_file(f)) midi.add(f);
         else if (is_audio_file(f)) audio.add(f);
+        else if (is_musicxml_file(f)) scores.add(f);
+        else if (is_project_file(f) && project == juce::File()) project = f;
         else skipped.add(f.getFileName());
     }
     ImportResult all;
+    // A project file: opened (after asking to save the one open), and that is all.
+    if (project != juce::File()) {
+        if (confirm_discard()) open_file(project);
+        return all;
+    }
     juce::StringArray messages;
+    // MusicXML: each file's parts become tracks with their notation (one undo step a file).
+    for (const auto& f : scores) {
+        juce::String message;
+        if (import_musicxml_file(context_, f, false, message)) messages.add(message);
+        else all.unreadable.add(f.getFileName() + " (" + message + ")");
+    }
     if (!audio.isEmpty()) {
         auto r = vcc::desktop::import_audio_files(context_, audio, track_id, at_seconds);
         all.ids = r.ids;
@@ -1361,8 +1375,10 @@ ImportResult MainComponent::import_files(const juce::Array<juce::File>& files, c
 
 bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
 {
-    for (const auto& f : files)
-        if (is_audio_file(juce::File(f)) || is_midi_file(juce::File(f))) return true;
+    for (const auto& f : files) {
+        const juce::File file(f);
+        if (is_audio_file(file) || is_midi_file(file) || is_musicxml_file(file) || is_project_file(file)) return true;
+    }
     return false;
 }
 

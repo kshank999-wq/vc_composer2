@@ -12,6 +12,8 @@ bool is_audio_file(const juce::File& f)
 }
 
 bool is_midi_file(const juce::File& f) { return f.hasFileExtension("mid;midi;smf"); }
+bool is_musicxml_file(const juce::File& f) { return f.hasFileExtension("musicxml;xml;mxl"); }
+bool is_project_file(const juce::File& f) { return f.hasFileExtension("vcc2"); }
 
 ImportResult import_audio_files(AppContext& context, const juce::Array<juce::File>& files, const std::string& track_id,
                                 double at_seconds, bool allow_selected)

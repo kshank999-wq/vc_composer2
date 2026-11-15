@@ -13,6 +13,10 @@ namespace vcc::desktop {
 
 bool is_audio_file(const juce::File& f);
 bool is_midi_file(const juce::File& f);
+/// MusicXML (.musicxml, .xml, .mxl): imported into the score.
+bool is_musicxml_file(const juce::File& f);
+/// A VC Composer 2 project (.vcc2): opened.
+bool is_project_file(const juce::File& f);
 
 struct ImportResult {
     std::vector<std::string> ids;     ///< Clips placed (audio).
