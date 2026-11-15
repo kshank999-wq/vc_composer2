@@ -9,6 +9,12 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <csignal>
+#if !defined(_WIN32)
+#include <execinfo.h>
+#include <unistd.h>
+#endif
+
 #include "MainWindow.h"
 #include "PlatformFixes.h"
 #include "audio/CueRenderer.h"
@@ -85,8 +91,38 @@ int failures = 0;
 void check(bool ok, const juce::String& what)
 {
     std::printf("%s %s\n", ok ? "  ok  " : "  FAIL", what.toRawUTF8());
+    std::fflush(stdout);  // a crash must not swallow the lines before it
     if (!ok) ++failures;
 }
+
+// Which check is running, and where a crash happened (CI on another
+// platform otherwise shows only "SegFault").
+const char* g_section = "start";
+void section(const char* name)
+{
+    g_section = name;
+    std::printf("== %s\n", name);
+    std::fflush(stdout);
+}
+#if !defined(_WIN32)
+void on_crash(int sig)
+{
+    char line[256];
+    const int n = std::snprintf(line, sizeof line, "\n*** signal %d in section %s\n", sig, g_section);
+    if (n > 0) (void) ::write(2, line, static_cast<size_t>(n));
+    void* frames[64];
+    const int count = ::backtrace(frames, 64);
+    ::backtrace_symbols_fd(frames, count, 2);
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+void install_crash_handler()
+{
+    for (int sig : {SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE}) std::signal(sig, on_crash);
+}
+#else
+void install_crash_handler() {}
+#endif
 
 /// Runs the message loop for `ms`, and at least until everything already
 /// posted (a triggerClick, an async update) has been handled: a slow
@@ -5176,6 +5212,7 @@ void hosting_checks(AppContext& ctx, const juce::File& dir)
 
 int main(int argc, char** argv)
 {
+    install_crash_handler();
     vcc::desktop::prepare_display();
     juce::ScopedJuceInitialiser_GUI gui;
     const juce::File dir(argc > 1 ? juce::String(argv[1]) : juce::File::getCurrentWorkingDirectory().getChildFile("screenshots").getFullPathName());
@@ -5183,6 +5220,7 @@ int main(int argc, char** argv)
     // `vcc_desktop_check <dir> --ipc-only`: just the plug-in IPC wait check
     // (fast; for checking the kernel wait on a new platform or machine).
     if (argc > 2 && juce::String(argv[2]) == "--ipc-only") {
+        section("ipc_wait_checks");
         ipc_wait_checks(dir);
         std::printf("%s: %d failure(s)\n", failures == 0 ? "PASSED" : "FAILED", failures);
         return failures == 0 ? 0 : 1;
@@ -5238,6 +5276,7 @@ int main(int argc, char** argv)
 
         window.main().show_workspace(MainComponent::Workspace::Sequencer);
         shoot(window.main(), dir, "02-sequencer");
+        section("performance_checks");
         performance_checks(ctx, window.main(), track, dir);
         window.main().show_workspace(MainComponent::Workspace::Composer);
 
@@ -5774,36 +5813,67 @@ int main(int argc, char** argv)
                   "a fresh plug-in instance restores the saved state");
         }
 
+        section("console_and_recording_checks");
         console_and_recording_checks(ctx, dir);
+        section("automation_checks");
         automation_checks(ctx, dir, plugin_track.empty() ? std::nullopt : std::optional<project::PluginRef>(plugin_ref));
+        section("delay_compensation_checks");
         delay_compensation_checks(ctx, dir, plugin_track.empty() ? std::nullopt : std::optional<project::PluginRef>(plugin_ref));
+        section("ipc_wait_checks");
         ipc_wait_checks(dir);
+        section("hosting_checks");
         hosting_checks(ctx, dir);
+        section("insert_window_checks");
         insert_window_checks(ctx, dir);
+        section("hardware_control_checks");
         hardware_control_checks(window.main(), dir);
+        section("shell_checks");
         shell_checks(window, dir);
+        section("selection_and_shortcut_checks");
         selection_and_shortcut_checks(window, dir);
+        section("composer_lane_checks");
         composer_lane_checks(window, dir);
+        section("loop_and_keyboard_checks");
         loop_and_keyboard_checks(window, dir);
+        section("producer_track_checks");
         producer_track_checks(window, dir);
+        section("print_checks");
         print_checks(window, dir);
+        section("mix_checks");
         mix_checks(window, dir);
+        section("master_checks");
         master_checks(window, dir);
+        section("follow_checks");
         follow_checks(window, dir);
+        section("realtime_print_checks");
         realtime_print_checks(window, dir);
+        section("recording_workflow_checks");
         recording_workflow_checks(window, dir);
+        section("clip_editing_checks");
         clip_editing_checks(window, dir);
+        section("edit_mode_checks");
         edit_mode_checks(window, dir);
+        section("midi_tools_checks");
         midi_tools_checks(window, dir);
+        section("drag_drop_checks");
         drag_drop_checks(window, dir);
+        section("midi_comp_checks");
         midi_comp_checks(window, dir);
+        section("sidechain_checks");
         sidechain_checks(window, dir);
+        section("page_view_checks");
         page_view_checks(window, dir);
+        section("chord_symbol_checks");
         chord_symbol_checks(window, dir);
+        section("chord_mode_checks");
         chord_mode_checks(window, dir);
+        section("range_checks");
         range_checks(window, dir);
+        section("circle_checks");
         circle_checks(window, dir);
+        section("trans_checks");
         trans_checks(window, dir);
+        section("staff_tools_checks");
         staff_tools_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
