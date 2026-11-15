@@ -452,3 +452,115 @@ TEST_CASE("progressions: chords written into the score, split at barlines, tied,
     for (const auto& n : n0) dotted_half = dotted_half || (n.duration.value == notation::NoteValue::Half && n.duration.dots == 1);
     CHECK(dotted_half);
 }
+
+#include "vcc/session/Relink.h"
+
+TEST_CASE("relink: missing media are found by name in searched folders and relinked in one undo step")
+{
+    const std::string root = tmp("relink");
+    fs::remove_all(fs::u8path(root));
+    // Recorded on one machine...
+    write_bytes(root + "/Old/Project/Audio Files/Vln_01.wav", 100, 'a');
+    write_bytes(root + "/Old/Media/Choir.wav", 100, 'c');
+    write_bytes(root + "/Old/Media/Horns.wav", 100, 'h');
+    write_bytes(root + "/Old/Movies/Cut3.mov", 100, 'm');
+
+    Session s(catalogs());
+    s.new_empty();
+    const auto vox = s.add_audio_track("Vox", true);
+    auto clip = [](const std::string& file, double at, int lane = 0) {
+        project::AudioClip c;
+        c.file = file;
+        c.start_seconds = at;
+        c.length = 1.0;
+        c.lane = lane;
+        return c;
+    };
+    REQUIRE(s.add_audio_clips({{vox, clip(root + "/Old/Project/Audio Files/Vln_01.wav", 0.0)},
+                               {vox, clip(root + "/Old/Media/Choir.wav", 2.0)},
+                               {vox, clip(root + "/Old/Media/Choir.wav", 4.0, 1)},  // a take, same file
+                               {vox, clip(root + "/Old/Media/Horns.wav", 6.0)}},
+                              "Import", false)
+                .size() == 4u);
+    project::PictureVersion pic;
+    pic.name = "Cut 3";
+    pic.path = root + "/Old/Movies/Cut3.mov";
+    s.import_picture(pic);
+    fs::create_directories(fs::u8path(root + "/New/Project"));
+    REQUIRE(s.save_as(root + "/New/Project/Cue.vcc2"));
+    CHECK(session::relink::missing(s.data(), s.path()).empty());
+
+    // ...and opened on another, where everything sits somewhere else.
+    fs::create_directories(fs::u8path(root + "/New/Project/Audio Files"));
+    fs::rename(fs::u8path(root + "/Old/Project/Audio Files/Vln_01.wav"), fs::u8path(root + "/New/Project/Audio Files/vln_01.WAV"));
+    fs::create_directories(fs::u8path(root + "/Drive/Sessions/Media"));
+    fs::rename(fs::u8path(root + "/Old/Media/Choir.wav"), fs::u8path(root + "/Drive/Sessions/Media/Choir.wav"));
+    write_bytes(root + "/Drive/Backup/Choir.wav", 50, 'x');            // same name, other folder: ranks lower
+    write_bytes(root + "/Drive/.Trash/Horns.wav", 100, 'h');           // hidden folders are not searched
+    write_bytes(root + "/Drive/Bounces/Horns.aif", 100, 'h');          // converted: offered, never chosen
+    fs::create_directories(fs::u8path(root + "/Drive/Picture A"));
+    fs::create_directories(fs::u8path(root + "/Drive/Picture B"));
+    fs::rename(fs::u8path(root + "/Old/Movies/Cut3.mov"), fs::u8path(root + "/Drive/Picture A/Cut3.mov"));
+    write_bytes(root + "/Drive/Picture B/Cut3.mov", 100, 'n');         // two equally good: the user picks
+    fs::remove_all(fs::u8path(root + "/Old"));
+
+    const auto gone = session::relink::missing(s.data(), s.path());
+    REQUIRE(gone.size() == 4u);  // Vln_01, Choir (used twice: one asset), Horns, the picture
+    int calls = 0;
+    const auto res = session::relink::search(gone, {root + "/New", root + "/Drive", root + "/New/Project"}, [&](int) {
+        ++calls;
+        return true;
+    });
+    CHECK(!res.cancelled);
+    CHECK(calls >= 1);
+    CHECK(res.files_scanned >= 6);
+    CHECK_EQ(res.found(), 2);
+    CHECK_EQ(res.ambiguous(), 2);
+    std::map<std::string, std::string> pick;
+    for (const auto& m : res.matches) {
+        const std::string name = fs::u8path(m.stored).filename().u8string();
+        if (name == "Vln_01.wav") {
+            CHECK_EQ(m.candidates.size(), 1u);  // found once though two searched folders hold it
+            CHECK_EQ(m.chosen, root + "/New/Project/Audio Files/vln_01.WAV");
+        } else if (name == "Choir.wav") {
+            REQUIRE(m.candidates.size() == 2u);
+            CHECK_EQ(m.chosen, root + "/Drive/Sessions/Media/Choir.wav");  // its folder matches "Media"
+        } else if (name == "Horns.wav") {
+            REQUIRE(m.candidates.size() == 1u);
+            CHECK(!m.candidates[0].same_name);
+            CHECK(m.chosen.empty());
+            pick[m.stored] = m.candidates[0].path;  // the user accepts the .aif
+        } else {
+            CHECK(m.kind == session::package::Asset::Kind::Picture);
+            CHECK_EQ(m.candidates.size(), 2u);
+            CHECK(m.chosen.empty());
+            pick[m.stored] = root + "/Drive/Picture A/Cut3.mov";
+        }
+        if (!m.chosen.empty()) pick[m.stored] = m.chosen;
+    }
+
+    const auto undo_before = s.undo_label();
+    CHECK_EQ(s.relink_media(pick), 5);  // four clips (two share Choir) and the picture
+    CHECK_EQ(s.undo_label(), std::string("Relink media"));
+    CHECK(session::relink::missing(s.data(), s.path()).empty());
+    const auto& clips = s.data().find_track(vox)->active_version()->audio_clips;
+    // Inside the project's folder: stored relative, so the project stays portable.
+    CHECK_EQ(clips[0].file, std::string("Audio Files/vln_01.WAV"));
+    CHECK_EQ(clips[1].file, root + "/Drive/Sessions/Media/Choir.wav");
+    CHECK_EQ(clips[2].file, clips[1].file);
+    CHECK_EQ(clips[3].file, root + "/Drive/Bounces/Horns.aif");
+    CHECK_EQ(s.data().pictures.front().path, root + "/Drive/Picture A/Cut3.mov");
+    CHECK_EQ(s.relink_media(pick), 0);  // nothing left to do: no empty undo step
+    s.undo();
+    CHECK_EQ(session::relink::missing(s.data(), s.path()).size(), 4u);
+    CHECK_EQ(s.undo_label(), undo_before);
+    s.redo();
+
+    // An approved version's music is locked, but where its files are kept is not.
+    const auto vid = s.data().find_track(vox)->active_version_id;
+    REQUIRE(s.set_version_approved(vox, vid, true));
+    std::map<std::string, std::string> back{{root + "/Drive/Bounces/Horns.aif", root + "/Drive/.Trash/Horns.wav"}};
+    CHECK_EQ(s.relink_media(back), 1);
+
+    CHECK_EQ(session::relink::stored_path(root + "/elsewhere/x.wav", ""), root + "/elsewhere/x.wav");
+}

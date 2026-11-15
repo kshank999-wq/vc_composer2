@@ -1513,3 +1513,52 @@ macOS, Linux and Windows. What it took:
     - **Checks**: `perf_checks` in the desktop check prints the numbers
       and fails only past generous limits (CI machines vary); the score
       file test now checks that plain notes carry no default fields.
+36. **Accessibility: names and contrast. Done** (November 15, 2026; Main
+    Spec §19 phase 5). A screen reader reads a control by its title; a
+    combo box, slider or text field with no title reads as "combo box".
+    - **Audit**: `accessibility_checks` in the desktop check walks the
+      Composer and Producer views and every tool window (Circle of
+      Fifths, Routing, Director Review, Comments, Package, Control
+      Surfaces, Relink, Stem Export, Cue Manager, Picture, Ostinato
+      Creator, Chord Explorer, Templates) and fails on any button,
+      slider, combo box or text field without a name, listing where it
+      is. The first run found 80 in 14 places (18 of them the version
+      combo repeated on each track row).
+    - **Fixed**: each now has a title saying what it sets ("Track
+      version", "Borrow from", "Shuttle dead zone", "Send to Reverb",
+      "Pitch bend wheel", "Target track" ...). The Cue Manager's styled
+      fields take their hint or id as the title, so new ones are named
+      without a second step.
+    - **Contrast**: the same section checks the theme's text colours
+      against the surfaces they are drawn on (WCAG relative luminance):
+      body and dim text, silk labels, keycap legends and the LCD at
+      4.5:1, notation ink on paper at 7:1, accent colours (large) at
+      3:1. All pass today; a theme change that breaks one fails the check.
+    - Still to do: a keyboard focus order review per window, and testing
+      with VoiceOver and Narrator on real machines.
+37. **Relink Missing Media. Done** (November 15, 2026; Main Spec §16).
+    When audio or picture moved (another machine, a renamed drive),
+    File > Relink Missing Media finds them again:
+    - **Opening** a project with missing media says how many and where
+      to relink in the status line; the Package window points there too.
+    - **The window** lists each missing file (what used it, where it
+      was), searches folders - the project's folder's parent to start,
+      plus any added - in the background, for every missing file in one
+      pass (`vcc/session/Relink.h`). Names match ignoring case; hidden
+      folders are skipped; a file reached through two folders counts once.
+    - **Choosing**: among files of the same name, the one whose folders
+      match more of the stored path ("Media/Choir.wav") is chosen; when
+      none is clearly better the row is marked and left to the user. A
+      media file with the same name in another format (a .wav converted
+      to .aif) is offered but never chosen alone. Any row can be pointed
+      at a file by hand.
+    - **Relink** rewrites every reference (every version, takes, picture
+      cuts) as one undo step, "Relink media". A file inside the
+      project's folder is stored relative, so the project stays
+      portable. Relinking is allowed on approved versions: where a
+      clip's file is kept is not its music (the approval lock now
+      ignores file paths).
+    - **Tests**: `test_review_package` (ranking, ambiguity, other
+      formats, hidden folders, one undo step, relative storage, approved
+      versions); `relink_checks` in the desktop check (open, search,
+      pick the ambiguous file, relink, undo).

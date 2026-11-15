@@ -242,7 +242,7 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 | Main 2: scoring workflow | Template wizard UI, library search/mapping UI, articulation engine, video + timecode, temp tracks, cues | Data model and timecode done; UI and media pending |
 | Main 3: DAW production | Audio record/edit, mixer/buses/inserts/sends, automation, device I/O, PDC, stems/score export | **Console mixer, channel DSP, buses/sends, audio recording with punch and takes, clip editing, automation (read/touch/latch/write, lanes for every strip control, sends, inserts and plug-in parameters) and plug-in delay compensation (its switch saved with the project, undoable) done.** MusicXML import/export, PDF parts and full score, and stem export (mix plus stems per project or per cue, wet or dry, with a sum-to-mix check) done. |
 | Main 4: collaboration | Versions, snapshots, A/B review, sync, roles, comments, packaging | **Local part done**: track versions, snapshots, Director Review (A/B/C of snapshots or a track's versions, bar-level differences, approval that locks a version, review mixes per slot), timecode comments with replies, Collect and Save Package / Open Package. Sync and roles pending (they need a server) |
-| Main 5: hardening | Performance, plug-in matrix, video sync, recovery, accessibility, signed installers | Pending |
+| Main 5: hardening | Performance, plug-in matrix, video sync, recovery, accessibility, signed installers | **Performance pass, accessibility (names for every control, theme contrast) and Relink Missing Media done** (docs/05 steps 35-37). Plug-in matrix, video sync soak, signed installers pending |
 
 ### Immediate next steps
 

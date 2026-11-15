@@ -581,6 +581,11 @@ public:
     bool rename_version(const std::string& track_id, const std::string& version_id, const std::string& name);
     /// The project's name (the package and export names follow it). One undo step.
     bool rename_project(const std::string& name);
+    /// Points missing media at files found (stored path -> file found; see
+    /// relink::search), every clip and picture cut that uses them, as one
+    /// undo step "Relink media". Files inside the project's folder are
+    /// stored relative. Returns the references changed (0: nothing to do).
+    int relink_media(const std::map<std::string, std::string>& relinks);
     /// Makes a snapshot's versions active, one undo step.
     bool recall_snapshot(const std::string& snapshot_id);
     bool rename_snapshot(const std::string& snapshot_id, const std::string& name);

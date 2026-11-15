@@ -73,6 +73,7 @@ ReviewPanel::ReviewPanel(AppContext& context) : context_(context)
         key.onClick = [this, i] { play_slot(i); };
         addAndMakeVisible(key);
         auto& combo = choosers_[static_cast<std::size_t>(i)];
+        combo.setTitle(juce::String("Slot ") + kSlotNames[i]);
         combo.setTextWhenNothingSelected("(empty)");
         combo.onChange = [this, i] {
             auto& c = choosers_[static_cast<std::size_t>(i)];
@@ -646,6 +647,7 @@ CommentsPanel::CommentsPanel(AppContext& context) : context_(context)
 {
     setComponentID("comments_panel");
     comments_slot() = this;
+    entry_.setTitle("Comment text");
     entry_.setTextToShowWhenEmpty("Comment at the playhead (or a reply)...", hw::tok::text.withAlpha(0.5f));
     entry_.setMultiLine(false);
     entry_.onReturnKey = [this] { add_at_playhead(); };
@@ -653,6 +655,7 @@ CommentsPanel::CommentsPanel(AppContext& context) : context_(context)
     if (saved.isEmpty()) saved = juce::SystemStats::getFullUserName();
     if (saved.isEmpty()) saved = juce::SystemStats::getLogonName();
     author_.setText(saved, false);
+    author_.setTitle("Author");
     author_.setTooltip("Your name on comments and replies");
     author_.onTextChange = [this] { hw::ui_settings().setValue("review_author", author_.getText()); };
     add_.onClick = [this] { add_at_playhead(); };
@@ -812,6 +815,7 @@ PackagePanel::PackagePanel(AppContext& context) : context_(context)
     style_label(title_, 15.0f, true);
     style_label(folder_, 12.0f, false);
     style_label(status_, 12.0f, true);
+    report_.setTitle("Package report");
     report_.setMultiLine(true);
     report_.setReadOnly(true);
     report_.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 12.0f, juce::Font::plain));
@@ -871,7 +875,7 @@ void PackagePanel::refresh_inventory()
     report_.setText(session::package::report_text(d, inventory_, o), juce::dontSendNotification);
     if (message_.isEmpty())
         status_.setText(context_.session.path().empty() ? juce::String("Unsaved project: save it first so media beside it are found")
-                        : inventory_.missing() > 0 ? juce::String(inventory_.missing()) + " missing file(s): the package lists them"
+                        : inventory_.missing() > 0 ? juce::String(inventory_.missing()) + " missing file(s): the package lists them (File > Relink Missing Media finds moved ones)"
                                                    : juce::String("Ready"),
                         juce::dontSendNotification);
 }

@@ -242,6 +242,9 @@ std::string version_music(const TrackVersion& v)
     m.name.clear();
     m.notes.clear();
     m.approved = false;
+    // Where a clip's file is kept is not the music: relinking a moved file
+    // leaves an approved version approved.
+    for (auto& c : m.audio_clips) c.file.clear();
     ProjectData one;
     Track t;
     t.id = "t";

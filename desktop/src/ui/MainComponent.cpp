@@ -3,6 +3,7 @@
 #include "ui/composer/CircleOfFifths.h"
 #include "ui/console/RoutingCanvas.h"
 #include "ui/review/Review.h"
+#include "ui/review/Relink.h"
 #include "vcc/theory/Chord.h"
 
 #include "ui/hw/HwGallery.h"
@@ -794,7 +795,11 @@ void MainComponent::open_file(const juce::File& file)
         context_.session.edit("Recovered from autosave", [](project::ProjectData&) { return true; });
     }
     context_.engine.locate(0);
-    context_.status("Opened " + file.getFileName());
+    const auto missing = session::relink::missing(context_.session.data(), context_.session.path()).size();
+    context_.status("Opened " + file.getFileName() +
+                    (missing > 0 ? " - " + juce::String(static_cast<int>(missing)) +
+                                       " media file(s) missing: File > Relink Missing Media... finds them"
+                                 : juce::String()));
 }
 
 void MainComponent::capture_plugin_states()
@@ -1561,7 +1566,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::about, cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool,
                 cmd::showCircleOfFifths, cmd::toggleStaffTools, cmd::detachStaffTools, cmd::showRouting,
                 cmd::showControlSurfaces, cmd::jogForward, cmd::jogBack, cmd::showReview,
-                cmd::collectPackage, cmd::openPackage, cmd::showComments, cmd::addComment});
+                cmd::collectPackage, cmd::openPackage, cmd::showComments, cmd::addComment, cmd::relinkMedia});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1649,6 +1654,10 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.setInfo("Collect and Save Package...", "The project and every media file it uses, in one folder", "File", 0);
             break;
         case cmd::openPackage: info.setInfo("Open Package...", "Unpacks a package .zip and opens it", "File", 0); break;
+        case cmd::relinkMedia:
+            info.setInfo("Relink Missing Media...", "Finds moved audio and picture files and points the project at them",
+                         "File", 0);
+            break;
         case cmd::showComments: info.setInfo("Comments...", "Review comments pinned to moments", "View", 0); break;
         case cmd::addComment:
             info.setInfo("Add Comment at Playhead...", "Pins a review comment where the playhead is", "View", 0);
@@ -1784,6 +1793,7 @@ bool MainComponent::perform(const InvocationInfo& info)
             if (auto* p = review::comments_panel()) p->entry().grabKeyboardFocus();
             break;
         case cmd::collectPackage: review::show_package(context_); break;
+        case cmd::relinkMedia: review::show_relink(context_); break;
         case cmd::openPackage:
             if (!confirm_discard()) break;
             chooser_ = std::make_unique<juce::FileChooser>("Open package", juce::File(), "*.zip");
@@ -1886,7 +1896,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addCommandItem(c, cmd::importAudio);
             m.addCommandItem(c, cmd::importMusicXml);
             m.addSeparator();
-            for (auto id : {cmd::save, cmd::saveAs, cmd::saveAsTemplate, cmd::collectPackage}) m.addCommandItem(c, id);
+            for (auto id : {cmd::save, cmd::saveAs, cmd::saveAsTemplate, cmd::collectPackage, cmd::relinkMedia}) m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::exportStems, cmd::exportMidi, cmd::exportMusicXml, cmd::exportFullScorePdf, cmd::exportPartsPdf,
                             cmd::exportScoreSvg})

@@ -113,6 +113,7 @@ enum : juce::CommandID {
     showComments,
     addComment,
     exportReviewMixes,
+    relinkMedia,
 };
 }  // namespace cmd
 

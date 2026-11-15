@@ -40,6 +40,7 @@
 #include "ui/console/RoutingCanvas.h"
 #include "ui/surface/ControlSurface.h"
 #include "ui/review/Review.h"
+#include "ui/review/Relink.h"
 #include "ui/composer/TransposePopover.h"
 #include "ui/composer/ComposerRuler.h"
 #include "vcc/theory/Chord.h"
@@ -5460,6 +5461,121 @@ void package_checks(MainWindow& window, const juce::File& dir)
     root.deleteRecursively();
 }
 
+/// Relink missing media (Main Spec §16): a project whose audio moved opens
+/// saying what is missing; File > Relink Missing Media searches folders in the
+/// background, proposes the clear matches, leaves an ambiguous one to pick,
+/// and relinks everything as one undo step.
+void relink_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    const auto root = dir.getChildFile("relink-check");
+    root.deleteRecursively();
+    const auto project_dir = root.getChildFile("Studio/Cue 3M2");
+    auto write_wav = [](const juce::File& f, float freq) {
+        f.getParentDirectory().createDirectory();
+        juce::AudioBuffer<float> b(1, 24000);
+        for (int i = 0; i < b.getNumSamples(); ++i) b.setSample(0, i, 0.2f * std::sin(static_cast<float>(i) * freq));
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(f);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(24));
+        if (writer) writer->writeFromAudioSampleBuffer(b, 0, b.getNumSamples());
+    };
+    const auto pad = project_dir.getChildFile("Audio Files/Pad.wav");
+    const auto choir = root.getChildFile("Library/Choir.wav");
+    const auto hit = root.getChildFile("Library/Hit.wav");
+    write_wav(pad, 0.05f);
+    write_wav(choir, 0.03f);
+    write_wav(hit, 0.08f);
+    session.new_empty();
+    session.rename_project("Cue 3M2");
+    const auto track = session.add_audio_track("Stems", false);
+    auto clip = [](const juce::File& f, double at) {
+        project::AudioClip c;
+        c.name = f.getFileNameWithoutExtension().toStdString();
+        c.file = f.getFullPathName().toStdString();
+        c.start_seconds = at;
+        c.length = 0.5;
+        c.channels = 1;
+        c.file_sample_rate = 48000.0;
+        return c;
+    };
+    session.add_audio_clips({{track, clip(pad, 0.0)}, {track, clip(choir, 1.0)}, {track, clip(hit, 2.0)}}, "Import", false);
+    const auto project_file = project_dir.getChildFile("Cue 3M2.vcc2");
+    session.save_as(project_file.getFullPathName().toStdString());
+    session.new_empty();
+
+    // Everything moves: the project's own audio to another subfolder, the
+    // library to another drive; a second Hit.wav makes that one ambiguous.
+    const auto drive = root.getChildFile("Drive");
+    project_dir.getChildFile("Bounced").createDirectory();
+    pad.moveFileTo(project_dir.getChildFile("Bounced/Pad.wav"));
+    drive.getChildFile("Library").createDirectory();
+    choir.moveFileTo(drive.getChildFile("Library/Choir.wav"));
+    drive.getChildFile("Takes A").createDirectory();
+    drive.getChildFile("Takes B").createDirectory();
+    hit.moveFileTo(drive.getChildFile("Takes A/Hit.wav"));
+    write_wav(drive.getChildFile("Takes B/Hit.wav"), 0.09f);
+    root.getChildFile("Library").deleteRecursively();
+
+    juce::String said;
+    auto old_status = ctx.status;
+    ctx.status = [&said, old_status](const juce::String& s) {
+        said = s;
+        if (old_status) old_status(s);
+    };
+    main.open_file(project_file);
+    pump(100);
+    ctx.status = old_status;
+    check(said.contains("3 media file(s) missing") && said.contains("Relink Missing Media"),
+          "opening a project whose media moved says how many are missing and where to relink: " + said);
+
+    ctx.commands.invokeDirectly(cmd::relinkMedia, false);
+    review::RelinkPanel* panel = nullptr;
+    wait_for([&] { return (panel = review::relink_panel()) != nullptr; });
+    if (!panel) {
+        check(false, "File > Relink Missing Media opens the window");
+        return;
+    }
+    check(panel->missing().size() == 3u && panel->folders().size() == 1 &&
+              juce::File(panel->folders()[0]) == project_dir.getParentDirectory(),
+          "the window lists the 3 missing files and searches beside the project to start (" +
+              panel->folders().joinIntoString("; ") + ")");
+    panel->add_folder(drive);
+    panel->add_folder(drive.getChildFile("Library"));  // inside a listed folder: adds nothing
+    check(panel->folders().size() == 2, "a folder inside one already listed is not added twice");
+    panel->search();
+    wait_for([&] { return !panel->searching(); }, 10000);
+    int pad_i = -1, choir_i = -1, hit_i = -1;
+    for (int i = 0; i < static_cast<int>(panel->missing().size()); ++i) {
+        const juce::String stored(panel->missing()[static_cast<std::size_t>(i)].stored);
+        (stored.endsWith("Pad.wav") ? pad_i : stored.endsWith("Choir.wav") ? choir_i : hit_i) = i;
+    }
+    check(!panel->searching() && panel->chosen(pad_i) == project_dir.getChildFile("Bounced/Pad.wav").getFullPathName() &&
+              panel->chosen(choir_i) == drive.getChildFile("Library/Choir.wav").getFullPathName() &&
+              panel->chosen(hit_i).isEmpty() && panel->message().contains("1 to pick"),
+          "one search finds both clear matches and leaves the ambiguous Hit.wav to pick: " + panel->message());
+    shoot(*panel->getTopLevelComponent(), dir, "57-relink");
+    panel->choose(hit_i, drive.getChildFile("Takes A/Hit.wav").getFullPathName());
+    const int changed = panel->relink();
+    int found = 0;
+    for (const auto& c : session.data().find_track(track)->active_version()->audio_clips)
+        if (juce::File(juce::String(session.resolve_audio_path(c.file))).existsAsFile()) ++found;
+    const auto first = session.data().find_track(track)->active_version()->audio_clips.front().file;
+    check(changed == 3 && found == 3 && panel->missing().empty() && session.undo_label() == "Relink media" &&
+              first == "Bounced/Pad.wav",
+          "Relink points all three clips at the files found, as one undo step, the project's own audio stored "
+          "relative (" + juce::String(first) + "): " + panel->message());
+    session.undo();
+    panel->refresh();
+    check(panel->missing().size() == 3u, "Undo puts the old paths back");
+    session.redo();
+    panel->getTopLevelComponent()->setVisible(false);
+    root.deleteRecursively();
+}
+
 /// Review comments (Main Spec §15): added at the playhead in the Comments
 /// window, pinned on the Composer ruler (a click on the pin opens it),
 /// replied to, resolved, filtered, saved with the project.
@@ -5796,6 +5912,101 @@ void perf_checks(MainWindow& window, const juce::File& dir)
     file.deleteFile();
     session.new_empty();
     pump(60);
+}
+
+/// Accessibility (Main Spec §19 phase 5): every control a screen reader can
+/// reach has a name. Walks the main window in each view and the tool
+/// windows, and lists any button, slider, list or text field (or anything
+/// that takes keyboard focus) without one.
+struct Unnamed {
+    juce::String where;
+};
+std::vector<Unnamed> unnamed_controls(juce::Component& root)
+{
+    std::vector<Unnamed> out;
+    std::function<void(juce::Component&, const juce::String&)> walk = [&](juce::Component& c, const juce::String& path) {
+        if (!c.isShowing()) return;
+        const juce::String here = path + "/" + (c.getComponentID().isNotEmpty() ? c.getComponentID() : juce::String(typeid(c).name()));
+        const bool interactive = dynamic_cast<juce::Button*>(&c) != nullptr || dynamic_cast<juce::Slider*>(&c) != nullptr ||
+                                 dynamic_cast<juce::ComboBox*>(&c) != nullptr || dynamic_cast<juce::TextEditor*>(&c) != nullptr;
+        // Parts of a control (a slider's text box, a list's label) speak for it.
+        const bool part_of_control = c.getParentComponent() != nullptr &&
+                                     (dynamic_cast<juce::Slider*>(c.getParentComponent()) != nullptr ||
+                                      dynamic_cast<juce::ComboBox*>(c.getParentComponent()) != nullptr);
+        if (interactive && !part_of_control && c.isAccessible()) {
+            juce::String name;
+            if (auto* h = c.getAccessibilityHandler()) name = h->getTitle();
+            if (name.trim().isEmpty()) out.push_back({here});
+        }
+        for (auto* child : c.getChildren()) walk(*child, here);
+    };
+    walk(root, {});
+    return out;
+}
+
+void accessibility_checks(MainWindow& window, const juce::File& dir)
+{
+    juce::ignoreUnused(dir);
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.suspense.tension");
+    pump(150);
+    auto report = [&](const juce::String& what, juce::Component& root) {
+        const auto found = unnamed_controls(root);
+        juce::String list;
+        for (std::size_t i = 0; i < found.size() && i < 12; ++i) list << "\n      " << found[i].where;
+        check(found.empty(), what + ": every control has a name for screen readers (" + juce::String(static_cast<int>(found.size())) +
+                                 " without" + (found.empty() ? juce::String(")") : juce::String("):") + list));
+    };
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(150);
+    report("Composer view", main);
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(150);
+    report("Producer view", main);
+    for (auto id : {cmd::showCircleOfFifths, cmd::showRouting, cmd::showReview, cmd::showComments, cmd::collectPackage,
+                    cmd::showControlSurfaces, cmd::relinkMedia}) {
+        ctx.commands.invokeDirectly(id, false);
+        pump(200);
+    }
+    for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;) {
+        auto* w = juce::TopLevelWindow::getTopLevelWindow(i);
+        if (!w || w == &window || !w->isShowing()) continue;
+        report("\"" + w->getName() + "\" window", *w);
+        w->setVisible(false);
+    }
+
+    // Contrast: text colours against the surfaces they are drawn on, WCAG
+    // 2.x relative luminance; 4.5:1 for body text, 3:1 for large legends.
+    auto lum = [](juce::Colour c) {
+        auto ch = [](float v) { return v <= 0.03928f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); };
+        return 0.2126f * ch(c.getFloatRed()) + 0.7152f * ch(c.getFloatGreen()) + 0.0722f * ch(c.getFloatBlue());
+    };
+    auto ratio = [&](juce::Colour a, juce::Colour b) {
+        const float la = lum(a), lb = lum(b);
+        return (std::max(la, lb) + 0.05f) / (std::min(la, lb) + 0.05f);
+    };
+    struct Pair { const char* what; juce::Colour fg, bg; float need; };
+    const Pair pairs[] = {
+        {"text on background", colours::text, colours::background, 4.5f},
+        {"text on raised panels", colours::text, colours::panel_raised, 4.5f},
+        {"dim text on panels", colours::text_dim, colours::panel, 4.5f},
+        {"dim text on raised panels", colours::text_dim, colours::panel_raised, 4.5f},
+        {"placeholder text on panels", colours::placeholder, colours::panel, 4.5f},
+        {"silk labels on the hardware panel", hw::tok::silk, hw::tok::panel_top, 4.5f},
+        {"keycap legends", hw::tok::text, hw::tok::key_top, 4.5f},
+        {"LCD readout", hw::Theme::get().lcd(), hw::tok::lcd_bg, 4.5f},
+        {"notation ink on paper", juce::Colours::black, colours::paper, 7.0f},
+        {"accent on background (large)", colours::accent, colours::background, 3.0f},
+    };
+    juce::String low;
+    for (const auto& p : pairs) {
+        const float r = ratio(p.fg, p.bg);
+        if (r < p.need) low << "\n      " << p.what << ": " << juce::String(r, 2) << ":1 (needs " << juce::String(p.need, 1) << ":1)";
+    }
+    check(low.isEmpty(), "theme text colours meet WCAG contrast" + (low.isEmpty() ? juce::String() : ":" + low));
 }
 
 void chord_symbol_checks(MainWindow& window, const juce::File& dir)
@@ -7078,12 +7289,16 @@ int main(int argc, char** argv)
         review_checks(window, dir);
         section("package_checks");
         package_checks(window, dir);
+        section("relink_checks");
+        relink_checks(window, dir);
         section("comments_checks");
         comments_checks(window, dir);
         section("scrub_checks");
         scrub_checks(window, dir);
         section("perf_checks");
         perf_checks(window, dir);
+        section("accessibility_checks");
+        accessibility_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

@@ -1,4 +1,5 @@
 #include "vcc/session/Session.h"
+#include "vcc/session/Relink.h"
 
 #include <algorithm>
 #include <cctype>
@@ -2643,6 +2644,16 @@ bool Session::rename_project(const std::string& name)
         d.name = name;
         return true;
     });
+}
+
+int Session::relink_media(const std::map<std::string, std::string>& relinks)
+{
+    int changed = 0;
+    const bool ok = edit("Relink media", [&](project::ProjectData& d) {
+        changed = relink::apply(d, relinks, path_);
+        return changed > 0;
+    });
+    return ok ? changed : 0;
 }
 
 bool Session::recall_snapshot(const std::string& snapshot_id)
