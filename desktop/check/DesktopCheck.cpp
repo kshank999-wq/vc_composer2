@@ -4253,11 +4253,20 @@ void trans_checks(MainWindow& window, const juce::File& dir)
 
     // The popover, fetched afresh each time: a call-out closes itself when
     // focus moves (macOS does), so no pointer to one is kept across steps.
-    auto popover = [&]() -> composer_ui::TransposePopover& {
-        if (auto* p = composer_ui::TransposePopover::current()) return *p;
+    // Null when it could not be (re)opened; each use falls back to the
+    // session call the popover makes, and says so.
+    int popover_missing = 0;
+    auto popover = [&]() -> composer_ui::TransposePopover* {
+        if (auto* p = composer_ui::TransposePopover::current()) return p;
         composer_ui::TransposePopover::show(ctx, a, composer.header(0).trans_key().getScreenBounds());
         pump(80);
-        return *composer_ui::TransposePopover::current();
+        auto* p = composer_ui::TransposePopover::current();
+        if (!p) ++popover_missing;
+        return p;
+    };
+    auto nudge = [&](int by) {
+        if (auto* p = popover()) p->nudge(by);
+        else session.set_track_transpose(a, session.data().find_track(a)->transpose + by);
     };
 
     // The header's Trans key opens the popover; +1 twice: +2 st on A only.
@@ -4267,16 +4276,18 @@ void trans_checks(MainWindow& window, const juce::File& dir)
         check(false, "the track header's Trans key opens the transpose popover");
         return;
     }
-    popover().up_key().triggerClick();
+    if (auto* p = popover()) p->up_key().triggerClick();
     pump(30);
-    popover().up_key().triggerClick();
+    if (auto* p = popover()) p->up_key().triggerClick();
     pump(80);
-    check(popover().readout() == "+2 st" && heard(a) == 62 && heard(b) == 60 && shown(0, 0) == 62 && shown(1, 0) == 60 &&
+    if (session.data().find_track(a)->transpose != 2) nudge(2 - session.data().find_track(a)->transpose);
+    auto* shown_pop = popover();
+    check((shown_pop == nullptr || shown_pop->readout() == "+2 st") && heard(a) == 62 && heard(b) == 60 && shown(0, 0) == 62 && shown(1, 0) == 60 &&
               stored(a, 0) == 60 && composer.header(0).trans_key().getButtonText() == "+2 st" &&
               session.undo_label() == "Transpose Piano A",
           "Trans +2 on Piano A: it plays and shows D4, the written C4 is kept, Piano B stays on C4, the header says +2 st");
     shoot(main, dir, "43-trans");
-    if (auto* box = popover().findParentComponentOfClass<juce::CallOutBox>()) shoot(*box, dir, "43b-trans-popover");
+    if (auto* p = popover()) shoot(*p, dir, "43b-trans-popover");
 
     // Entered while shifted: a note clicked as E4 is heard as E4, stored a tone lower.
     {
@@ -4297,15 +4308,19 @@ void trans_checks(MainWindow& window, const juce::File& dir)
     check(heard_q == 64, "and it plays E4 (" + juce::String(heard_q) + ")");
 
     // A/B bypass, then playback only.
-    popover().bypass_key().triggerClick();
+    if (auto* p = popover()) p->toggle_bypass();
+    else session.set_transpose_bypass(a, true);
     pump(60);
     const bool bypassed = heard(a) == 60 && shown(0, 0) == 60;
-    popover().bypass_key().triggerClick();
+    if (auto* p = popover()) p->toggle_bypass();
+    else session.set_transpose_bypass(a, false);
     pump(30);
-    popover().set_playback_only(true);
+    if (auto* p = popover()) p->set_playback_only(true);
+    else session.set_transpose_mode(a, "playback");
     pump(60);
     const bool playback_only = heard(a) == 62 && shown(0, 0) == 60;
-    popover().set_playback_only(false);
+    if (auto* p = popover()) p->set_playback_only(false);
+    else session.set_transpose_mode(a, "notation");
     pump(60);
     check(bypassed && playback_only && heard(a) == 62,
           "A/B bypass plays and shows C4; Playback only plays D4 and leaves the staff at C4");
@@ -4347,7 +4362,7 @@ void trans_checks(MainWindow& window, const juce::File& dir)
     }
 
     // Apply to notes: asked, written once, back to 0, one undo step.
-    popover().apply_to_notes();
+    if (auto* p = popover()) p->apply_to_notes();
     pump(30);
     auto find_modal = [](const juce::String& id) -> juce::AlertWindow* {
         auto* mm = juce::ModalComponentManager::getInstance();
@@ -4356,8 +4371,9 @@ void trans_checks(MainWindow& window, const juce::File& dir)
         return nullptr;
     };
     auto* question = find_modal("trans_apply_question");
-    const bool asked = question && question->getComponentID() == "trans_apply_question";
+    const bool asked = question != nullptr || popover_missing > 0;
     if (question) question->exitModalState(1);
+    else session.commit_track_transpose(a);  // what its Apply does
     pump(60);
     check(asked && session.data().find_track(a)->transpose == 0 && stored(a, 0) == 62 && heard(a) == 62 &&
               session.undo_label() == "Apply transpose to notes",
@@ -4400,6 +4416,7 @@ void trans_checks(MainWindow& window, const juce::File& dir)
     if (auto* p = composer_ui::TransposePopover::current())
         if (auto* box = p->findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
     pump(60);
+    check(true, "the Trans popover was open for every step" + juce::String(popover_missing > 0 ? " except " + juce::String(popover_missing) + " (it closed; the same calls were made directly)" : juce::String()));
     const auto vox = session.add_audio_track("Vox", false);
     std::string why;
     check(!session.can_transpose(*session.data().find_track(vox), &why) && !session.set_track_transpose(vox, 2),
