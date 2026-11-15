@@ -4630,12 +4630,20 @@ void routing_checks(MainWindow& window, const juce::File& dir)
         }
     });
     main.show_workspace(MainComponent::Workspace::Sequencer);
+    // The toolbar's commands go to the focused window's target: make sure
+    // that is the main window, not a tool window left by earlier checks.
+    window.toFront(true);
+    main.grabKeyboardFocus();
     pump(80);
-    if (auto* key = main.toolbar().key("Routing")) key->triggerClick();
-    pump(200);
+    auto* key = main.toolbar().key("Routing");
+    if (key) key->triggerClick();
     auto* canvas = console::routing_canvas();
+    for (int i = 0; i < 20 && !canvas; ++i) {
+        pump(100);
+        canvas = console::routing_canvas();
+    }
     if (!canvas) {
-        check(false, "the Routing key opens the Visual Routing window");
+        check(false, juce::String("the Routing key opens the Visual Routing window (key ") + (key ? "found" : "missing") + ")");
         return;
     }
     canvas->fit();
