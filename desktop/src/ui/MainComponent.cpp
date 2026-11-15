@@ -217,6 +217,7 @@ MainComponent::MainComponent(AppContext& context)
       status_strip_(context),
       keyboard_(context),
       mixer_deck_(context),
+      page_view_(context),
       tracks_(context),
       composer_(context),
       sequencer_(context)
@@ -248,11 +249,16 @@ MainComponent::MainComponent(AppContext& context)
     mixer_deck_.on_console = [this] { show_console_window(); };
     addAndMakeVisible(tracks_);
     addAndMakeVisible(composer_);
+    addChildComponent(page_view_);
+    toolbar_.on_page_view = [this](bool page) { set_page_view(page); };
     addChildComponent(sequencer_);
     deck_.on_view = [this](bool producer) { show_workspace(producer ? Workspace::Producer : Workspace::Composer); };
     edit_.on_stage = [this](int stage) { go_to_stage(stage); };
     toolbar_.on_zoom = [this](bool larger) {
-        if (workspace_ == Workspace::Composer) composer_.zoom(larger);
+        if (workspace_ == Workspace::Composer) {
+            if (page_mode_) page_view_.zoom(larger);
+            else composer_.zoom(larger);
+        }
         else sequencer_.zoom(larger);
     };
     toolbar_.on_pencil = [this](bool on) { sequencer_.set_pencil_mode(on); };
@@ -497,6 +503,7 @@ void MainComponent::resized()
     print_tab_.setToggleState(right_tab_ == 1, juce::dontSendNotification);
     const auto content = edit_.getBounds().getIntersection(edit_.content_area() + edit_.getPosition());
     composer_.setBounds(content);
+    page_view_.setBounds(content);
     sequencer_.setBounds(content);
 }
 
@@ -525,10 +532,10 @@ void MainComponent::show_bottom_mixer(bool mixer)
 void MainComponent::go_to_stage(int stage)
 {
     switch (stage) {
-        case 0: show_workspace(Workspace::Composer); break;
+        case 0: set_page_view(false); break;  // Compose: writing, in the Track view
         case 1: {
-            // Score: parts and the full score.
-            show_workspace(Workspace::Composer);
+            // Score: the full score on pages, with parts and the full score to print.
+            set_page_view(true);
             edit_.set_stage(1);
             juce::PopupMenu m;
             m.addItem("Export parts (PDF)...", [this] { export_parts_pdf_dialog(); });
@@ -564,7 +571,8 @@ void MainComponent::show_workspace(Workspace w)
         if (full_console_) full_console_->setVisible(false);
     }
     const bool producer = w == Workspace::Producer;
-    composer_.setVisible(!producer);
+    composer_.setVisible(!producer && !page_mode_);
+    page_view_.setVisible(!producer && page_mode_);
     sequencer_.setVisible(producer);
     markers_.setVisible(!producer);
     selection_.setVisible(!producer);
@@ -577,8 +585,22 @@ void MainComponent::show_workspace(Workspace w)
     edit_.set_stage(producer ? 2 : 0);
     if (producer) channel_.refresh();
     resized();
-    if (w == Workspace::Composer) composer_.grabKeyboardFocus();
-    else sequencer_.grabKeyboardFocus();
+    if (w == Workspace::Composer) {
+        if (page_mode_) page_view_.grabKeyboardFocus();
+        else composer_.grabKeyboardFocus();
+    } else {
+        sequencer_.grabKeyboardFocus();
+    }
+}
+
+void MainComponent::set_page_view(bool page)
+{
+    page_mode_ = page;
+    toolbar_.set_page_view(page);
+    if (workspace_ != Workspace::Composer) show_workspace(Workspace::Composer);
+    else show_workspace(Workspace::Composer);  // shows the one and hides the other
+    context_.status(page ? "Page view: the full score as it prints - click a system to move the playhead there"
+                         : "Track view");
 }
 
 void MainComponent::timerCallback()
@@ -589,6 +611,7 @@ void MainComponent::timerCallback()
     const auto& sel = context_.session.selection();
     deck_.set_range(sel.from, sel.to);
     toolbar_.update(punch_, sequencer_.pencil_mode());
+    if (page_view_.isVisible()) page_view_.set_playhead(tick);
     if (composer_.isVisible()) {
         composer_.set_playhead(tick, playing);
         // The Composer keys light from the editor: entry, value, dot, rest, voice.
@@ -1568,7 +1591,10 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::toggleFollow: set_follow(!context_.follow); break;
         case cmd::zoomIn:
         case cmd::zoomOut:
-            if (workspace_ == Workspace::Composer) composer_.zoom(info.commandID == cmd::zoomIn);
+            if (workspace_ == Workspace::Composer) {
+                if (page_mode_) page_view_.zoom(info.commandID == cmd::zoomIn);
+                else composer_.zoom(info.commandID == cmd::zoomIn);
+            }
             else sequencer_.zoom(info.commandID == cmd::zoomIn);
             break;
         case cmd::showVideo: show_video_window(context_); break;

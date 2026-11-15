@@ -7,6 +7,7 @@
 
 #include "ui/AppContext.h"
 #include "ui/ComposerView.h"
+#include "ui/composer/PageView.h"
 #include "ui/Import.h"
 #include "ui/MixerComponent.h"
 #include "ui/SequencerView.h"
@@ -108,6 +109,10 @@ public:
     void go_to_stage(int stage);
 
     ComposerView& composer() noexcept { return composer_; }
+    /// The Composer view's Page view (the score on pages) or Track view.
+    void set_page_view(bool page);
+    bool page_view_shown() const noexcept { return page_mode_; }
+    PageView& page_view() noexcept { return page_view_; }
     SequencerView& sequencer() noexcept { return sequencer_; }
     MixerWindow* mixer_window() noexcept { return mixer_.get(); }
 
@@ -161,6 +166,8 @@ private:
     shell::StatusStrip status_strip_;
     shell::KeyboardDeck keyboard_;
     shell::MixerDeck mixer_deck_;
+    PageView page_view_;
+    bool page_mode_ = false;
     bool bottom_mixer_ = true;
     bool mixer_full_ = false;
     std::unique_ptr<MixerComponent> full_console_;

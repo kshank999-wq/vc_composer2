@@ -226,15 +226,14 @@ std::string abbreviate(const std::string& name)
 
 }  // namespace
 
-int export_full_score_pdf(AppContext& context, const juce::File& file, const FullScoreSettings& settings,
-                          juce::String& message)
+std::unique_ptr<FullScoreLayout> lay_out_full_score(AppContext& context, const FullScoreSettings& settings,
+                                                    juce::String& message)
 {
     const auto& fonts = music_font();
     engraving::LayoutEngine engine;
     if (fonts.loaded) engine.set_glyph_table(fonts.glyphs);
     const auto& d = context.session.data();
 
-    std::vector<notation::Score> scores;  // the printed views, kept alive for the layout
     std::vector<const project::Track*> tracks;
     for (const auto* t : context.session.music_tracks()) {
         const auto* v = t->active_version();
@@ -243,7 +242,7 @@ int export_full_score_pdf(AppContext& context, const juce::File& file, const Ful
     }
     if (tracks.empty()) {
         message = "Nothing to print: no instrument track holds notation";
-        return 0;
+        return nullptr;
     }
     if (settings.score_order) {
         auto family_of = [&](const project::Track* t) {
@@ -254,6 +253,8 @@ int export_full_score_pdf(AppContext& context, const juce::File& file, const Ful
             return score_rank(family_of(a)) < score_rank(family_of(b));
         });
     }
+    auto out = std::make_unique<FullScoreLayout>();
+    auto& scores = out->scores;  // kept alive with the layout
     scores.reserve(tracks.size());
     std::vector<engraving::ScorePart> parts;
     for (const auto* t : tracks) {
@@ -286,8 +287,28 @@ int export_full_score_pdf(AppContext& context, const juce::File& file, const Ful
     opts.composer = d.production.composer;
     opts.hide_empty_staves = settings.hide_empty_staves;
     opts.bars_per_system = std::max(1, settings.bars_per_system);
-    const auto laid = engraving::lay_out_score(parts, engine, opts);
+    out->laid = engraving::lay_out_score(parts, engine, opts);
+    out->staff_space_mm = space;
+    out->page_width_mm = w;
+    out->page_height_mm = h;
+    out->parts = static_cast<int>(parts.size());
+    out->title = opts.title;
+    return out;
+}
 
+int export_full_score_pdf(AppContext& context, const juce::File& file, const FullScoreSettings& settings,
+                          juce::String& message)
+{
+    const auto& fonts = music_font();
+    const auto& d = context.session.data();
+    const auto full = lay_out_full_score(context, settings, message);
+    if (!full) return 0;
+    const auto& laid = full->laid;
+    const double space = full->staff_space_mm;
+    const auto parts_count = full->parts;
+    struct {
+        std::string title;
+    } opts{full->title};
     engraving::PdfOptions pdf_opts;
     pdf_opts.music_font = ui::embedded_music_font_bytes();
     pdf_opts.points_per_staff_space = 72.0 / 25.4 * space;
@@ -301,7 +322,7 @@ int export_full_score_pdf(AppContext& context, const juce::File& file, const Ful
         return 0;
     }
     const int pages = static_cast<int>(laid.pages.size());
-    message = "Printed the full score (" + juce::String(static_cast<int>(parts.size())) + " parts, " +
+    message = "Printed the full score (" + juce::String(parts_count) + " parts, " +
               juce::String(pages) + " page" + (pages == 1 ? "" : "s") + ", " +
               juce::String(settings.concert_pitch ? "concert pitch" : "transposed") + ") to " + file.getFileName();
     if (laid.crowded_system_count > 0)

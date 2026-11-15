@@ -31,6 +31,9 @@ public:
     std::function<void(bool on)> on_pencil;
     /// A Composer key (note entry, value, dot, accidental) ran a notation command.
     std::function<void(composer::Command)> on_command;
+    /// The View keys: Track (false) or Page (true).
+    std::function<void(bool page)> on_page_view;
+    void set_page_view(bool page);
     /// Lights the Composer keys from the editor: entry on, the value it
     /// enters, dot, triplet, rest.
     void set_entry_state(bool entry, const notation::Duration& value, bool rest);

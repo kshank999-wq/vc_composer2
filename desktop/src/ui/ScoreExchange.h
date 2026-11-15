@@ -3,7 +3,12 @@
 // The menus call these; the headless check calls them directly.
 #pragma once
 
+#include <memory>
+#include <vector>
+
 #include "ui/AppContext.h"
+#include "vcc/engraving/PrintLayout.h"
+#include "vcc/notation/Score.h"
 
 namespace vcc::desktop {
 
@@ -35,6 +40,22 @@ struct FullScoreSettings {
     /// strings, then the rest) instead of track order.
     bool score_order = true;
 };
+
+/// The full score on pages, as it prints: the Page view draws these, the
+/// PDF export writes them.
+struct FullScoreLayout {
+    std::vector<notation::Score> scores;  ///< The printed views (the layout points into them).
+    engraving::PrintResult laid;
+    double staff_space_mm = 1.25;
+    double page_width_mm = 297.0, page_height_mm = 420.0;
+    int parts = 0;
+    std::string title;
+};
+
+/// Lays the full score out (null, with the reason in `message`, when no
+/// instrument track holds notation).
+std::unique_ptr<FullScoreLayout> lay_out_full_score(AppContext& context, const FullScoreSettings& settings,
+                                                    juce::String& message);
 
 /// Prints the full score (every instrument track that holds notation, in
 /// track order, bracketed by family) to one PDF. Returns the pages written.

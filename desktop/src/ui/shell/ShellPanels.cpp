@@ -57,10 +57,17 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
         Group view{"View"};
         auto& track = add(view, "Track", 58, true);
         track.setToggleState(true, juce::dontSendNotification);
-        track.setTooltip("Track view: one staff per track");
-        auto& page = add(view, "Page", 52);
-        page.setEnabled(false);
-        page.setTooltip("Page view (coming with the Score stage)");
+        track.setTooltip("Track view: one staff per track, where notes are written");
+        track.setComponentID("view_track");
+        auto& page = add(view, "Page", 52, true);
+        page.setTooltip("Page view: the full score on pages, as it prints");
+        page.setComponentID("view_page");
+        track.onClick = [this] {
+            if (on_page_view) on_page_view(false);
+        };
+        page.onClick = [this] {
+            if (on_page_view) on_page_view(true);
+        };
         add(view, "Mixer", 62).onClick = invoke(cmd::showMixer);
         groups_.push_back(view);
         Group tools{"Tools"};
@@ -199,6 +206,12 @@ void Toolbar::set_entry_state(bool entry, const notation::Duration& value, bool 
     lit(C::ToggleDot, value.dots > 0);
     lit(C::ToggleTuplet, value.tuplet.is_tuplet());
     lit(C::ToggleRest, rest);
+}
+
+void Toolbar::set_page_view(bool page)
+{
+    if (auto* t = key("Track")) t->setToggleState(!page, juce::dontSendNotification);
+    if (auto* p = key("Page")) p->setToggleState(page, juce::dontSendNotification);
 }
 
 hw::Keycap* Toolbar::key(const juce::String& legend)

@@ -3474,6 +3474,89 @@ void sidechain_checks(MainWindow& window, const juce::File& dir)
     check(allocations.load() == before, "keyed dynamics allocate nothing on the audio thread");
 }
 
+/// The Composer view's Page view: the full score on pages as it prints,
+/// switched with the toolbar's Track | Page keys (and the Score stage).
+void page_view_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_from_template("cinematic.horror.psychological");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(100);
+    auto* page_key = main.toolbar().key("Page");
+    check(page_key && page_key->isEnabled(), "the Page key is enabled");
+    if (!page_key) return;
+    page_key->triggerClick();
+    pump(300);
+    auto& pv = main.page_view();
+    check(main.page_view_shown() && pv.isVisible() && !main.composer().isVisible() && page_key->getToggleState(),
+          "the Page key shows the score on pages in place of the track lanes");
+    const int pages = pv.page_count();
+    const auto first = pv.page_rect(0);
+    const double aspect = first.getWidth() > 0 ? first.getHeight() / first.getWidth() : 0.0;
+    check(pages >= 1 && pv.layout() && pv.layout()->parts > 1 && std::abs(aspect - 420.0 / 297.0) < 0.02,
+          "the pages are the printed full score on A3 (" + juce::String(pages) + " pages, " +
+              juce::String(pv.layout() ? pv.layout()->parts : 0) + " parts, aspect " + juce::String(aspect, 3) + ")");
+    shoot(main, dir, "36-page-view");
+
+    // Sixteen bars of music: several systems. A click on one below the first
+    // moves the playhead to its first bar.
+    // (Typed into the score in the Track view, then back to the Page view.)
+    if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
+    pump(80);
+    {
+        auto& composer = main.composer();
+        session.select_track(session.music_tracks().front()->id);
+        pump(50);
+        composer.grabKeyboardFocus();
+        composer.keyPressed(juce::KeyPress('6'));  // half notes
+        for (int i = 0; i < 32; ++i) composer.keyPressed(juce::KeyPress("cdefgab"[i % 7]));
+        pump(50);
+    }
+    page_key->triggerClick();
+    pump(100);
+    pv.relayout();
+    int target = 0;
+    juce::Point<float> where;
+    for (int p = 0; p < pv.page_count() && target <= 1; ++p) {
+        const auto r = pv.page_rect(p);
+        for (float y = r.getY() + 20.0f; y < r.getBottom() && target <= 1; y += 6.0f) {
+            where = {r.getCentreX(), y};
+            target = pv.bar_at(where);
+        }
+    }
+    shoot(main, dir, "36b-page-view-music");
+    if (target > 1) {
+        pv.mouseDown(mouse_event(pv, where, where, false));
+        pump(50);
+    }
+    check(target > 1 && session.data().meter.bar_at(ctx.engine.position()) == target,
+          "clicking a system moves the playhead to its first bar (bar " + juce::String(target) + "; " +
+              juce::String(pv.layout() ? pv.layout()->laid.bar_count : -1) + " bars, " +
+              juce::String(pv.layout() ? static_cast<int>(pv.layout()->laid.system_count) : -1) + " systems, " +
+              juce::String(pv.page_count()) + " pages)");
+
+    // Zoom.
+    const float before = pv.page_rect(0).getWidth();
+    pv.zoom(true);
+    pump(30);
+    check(pv.page_rect(0).getWidth() > before * 1.2f, "zooming in makes the pages larger");
+    pv.zoom(false);
+
+    // It follows edits: a new track appears as another part.
+    const int parts = pv.layout() ? pv.layout()->parts : 0;
+    session.add_track("Felt Piano", "keys.felt_piano");
+    pv.relayout();
+    check(pv.layout() && pv.layout()->parts == parts + 1, "the pages follow the score (a new part is laid out)");
+
+    // Track brings the lanes back.
+    if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
+    pump(80);
+    check(!main.page_view_shown() && main.composer().isVisible() && !pv.isVisible(), "the Track key brings the track lanes back");
+}
+
 void realtime_print_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -4504,6 +4587,7 @@ int main(int argc, char** argv)
         drag_drop_checks(window, dir);
         midi_comp_checks(window, dir);
         sidechain_checks(window, dir);
+        page_view_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

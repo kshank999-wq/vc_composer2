@@ -814,3 +814,26 @@ macOS, Linux and Windows. What it took:
       quarter to two-fifths of the strip; COMPACT returns to the 262 px
       bottom deck; Cmd/Ctrl+M from the Composer view opens it and closes it
       back to the Composer view. Screenshot `35b-mixer-full`.
+
+17. **Page view. Done** (the last disabled control).
+    - The toolbar's **Track | Page** keys switch the Composer view between
+      the track lanes (where notes are written) and the full score on
+      pages, exactly as File > Export Full Score prints it: the same
+      layout (`lay_out_full_score`, now shared by the view and the PDF),
+      A3 transposed score in orchestral order, bracketed by family, with
+      the title, instrument names and a staff size that fits the
+      orchestra. The **Score** stage opens the Page view; **Compose**
+      returns to the Track view.
+    - Pages are drawn as sheets on the desk with the screen notation
+      renderer. The wheel scrolls; Cmd/Ctrl+wheel and the zoom keys zoom
+      (100 % fits a page to the view's width, up to its printed size).
+      The system the playhead is in is marked; clicking a system moves
+      the playhead to its first bar. The pages are re-laid a moment after
+      an edit, and only while they are shown.
+    - It shows the score; writing and editing stay in the Track view.
+    - **Checks.** The Page key (enabled, lit, the lanes hidden); the pages
+      are the printed A3 score (aspect 1.414, all the parts); notes typed in
+      the Track view lay out as 16 bars in 4 systems; a click on a later
+      system moves the playhead to its first bar; zoom; a new track appears
+      as another part; the Track key brings the lanes back. Screenshots
+      `36-page-view`, `36b-page-view-music`.
