@@ -26,6 +26,9 @@ ComposerRuler::ComposerRuler(AppContext& context, TimelineAccess access) : conte
         editor_.setVisible(false);
     };
     editor_.onFocusLost = [this] {
+        // A focus change left over from before the editor opened (some
+        // platforms deliver it late) must not close the editor just opened.
+        if (juce::Time::getMillisecondCounter() - opened_at_ < 400) return;
         if (editor_.isVisible()) commit_chord_edit();
     };
     listener_ = context_.session.add_listener([this](session::Change c) {
@@ -308,6 +311,7 @@ void ComposerRuler::edit_chord_at(Ticks tick)
             text = chords_[static_cast<std::size_t>(bar - 1)];
     }
     editing_ = tick;
+    opened_at_ = juce::Time::getMillisecondCounter();
     editor_.setColour(juce::TextEditor::outlineColourId, hw::Theme::get().lcd());
     editor_.setText(text, false);
     editor_.setVisible(true);

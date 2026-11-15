@@ -4263,16 +4263,19 @@ void chord_symbol_checks(MainWindow& window, const juce::File& dir)
           "a click on beat 3 of bar 2 opens an empty editor there, and G7/B lands on that beat");
 
     // A bad symbol is refused and the editor stays; Escape closes it.
+    pump(100);  // any focus change from the last edit arrives first
     ruler.mouseDown(mouse_event(ruler, beat3, beat3, false));
     pump(30);
+    const bool reopened = editor.isVisible();
     editor.setText("hello");
     editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
     pump(30);
     const bool refused = editor.isVisible() && d.chords.size() == 2 && d.chords[1].text == "G7/B";
     editor.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));
     pump(30);
-    check(refused && !editor.isVisible() && d.chords[1].text == "G7/B",
-          "a symbol that is not a chord is refused and the editor stays open; Escape closes it unchanged");
+    check(reopened && refused && !editor.isVisible() && d.chords[1].text == "G7/B",
+          "a symbol that is not a chord is refused and the editor stays open; Escape closes it unchanged [reopened " +
+              juce::String(reopened ? "y" : "n") + ", refused " + (refused ? "y" : "n") + "]");
     pills = ruler.chord_pills();
     const bool shown = std::count_if(pills.begin(), pills.end(), [](const auto& p) { return !p.suggestion; }) == 2;
     shoot(main, dir, "39-chord-symbols");

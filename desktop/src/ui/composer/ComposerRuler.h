@@ -74,6 +74,7 @@ private:
     std::vector<std::string> chords_;
     juce::TextEditor editor_;
     Ticks editing_ = -1;
+    juce::uint32 opened_at_ = 0;
     /// Per music track: its colour and the spans worth showing (phrases, or bars with notes).
     struct Lane {
         juce::Colour colour;
