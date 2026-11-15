@@ -192,6 +192,18 @@ public:
     bool fit_tempo_to_marker(const std::string& marker_id, Ticks target_tick, Ticks from_tick,
                              std::string* error = nullptr);
 
+    // --- Chord symbols (the ruler's Chords row; MusicXML <harmony>; printed) ---------------
+    /// Sets the chord symbol at `tick` ("Chord symbol"); empty text removes
+    /// it. False when the text is not a chord symbol or nothing changes.
+    bool set_chord_symbol(Ticks tick, const std::string& text);
+    bool remove_chord_symbol(Ticks tick);
+    /// Replaces the symbols in [from, to) with these (ticks inside the span),
+    /// as one step labelled `label`. An empty list clears the span.
+    bool replace_chord_symbols(Ticks from, Ticks to, const std::vector<project::ChordMark>& chords,
+                               const std::string& label = "Chord symbols");
+    /// The symbol sounding at `tick` (the last one at or before it), or null.
+    const project::ChordMark* chord_symbol_at(Ticks tick) const;
+
     bool set_production(const project::Production& production);
     std::string add_reel(const std::string& name);
     std::string add_scene(const std::string& reel_id, const std::string& name);

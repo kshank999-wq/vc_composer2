@@ -200,6 +200,11 @@ ImportSummary Session::import_musicxml(const std::string& xml, bool replace_proj
                     if (t.tick > 0) d.tempo.set(t.tick, std::clamp(t.bpm, 20.0, 400.0));
             }
         }
+        // Chord symbols: the file's, when the project takes its maps or has none.
+        if (!r.chords.empty() && (take_maps || d.chords.empty())) {
+            d.chords.clear();
+            for (const auto& ch : r.chords) d.chords.push_back({ch.tick, ch.text});
+        }
         for (const auto& p : planned) {
             project::Track t;
             t.id = p.id;

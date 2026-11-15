@@ -6,6 +6,7 @@
 #include "ui/Theme.h"
 #include "ui/composer/ChordDetect.h"
 #include "ui/hw/HwControls.h"
+#include "vcc/theory/Chord.h"
 #include "vcc/theory/Pitch.h"
 
 namespace vcc::desktop::composer_ui {
@@ -14,6 +15,19 @@ ComposerRuler::ComposerRuler(AppContext& context, TimelineAccess access) : conte
 {
     setOpaque(true);
     hw::Theme::get().addChangeListener(this);
+    addChildComponent(editor_);
+    editor_.setComponentID("chord_editor");
+    editor_.setFont(hw::fonts::ui(12.0f, true));
+    editor_.setJustification(juce::Justification::centredLeft);
+    editor_.setTextToShowWhenEmpty("Chord, e.g. Dm7", hw::tok::text.withAlpha(0.5f));
+    editor_.onReturnKey = [this] { commit_chord_edit(); };
+    editor_.onEscapeKey = [this] {
+        editing_ = -1;
+        editor_.setVisible(false);
+    };
+    editor_.onFocusLost = [this] {
+        if (editor_.isVisible()) commit_chord_edit();
+    };
     listener_ = context_.session.add_listener([this](session::Change c) {
         if (c == session::Change::Document) refresh();
         if (c == session::Change::Selection) repaint();
@@ -189,22 +203,24 @@ void ComposerRuler::paint(juce::Graphics& g)
         flag(at, juce::String(m.label.empty() ? m.kind : m.label).toUpperCase(), juce::Colour(0xff8e98a3));
     }
 
-    // Chords: one pill per bar where the music spells one.
-    const auto chords = row(2);
-    for (int bar = bar0; bar <= bar1; ++bar) {
-        if (bar < 1 || bar > static_cast<int>(chords_.size())) continue;
-        const auto& symbol = chords_[static_cast<std::size_t>(bar - 1)];
-        if (symbol.empty()) continue;
-        const float x = access_.x_of(d.meter.bar_start(bar)) + 6.0f;
-        g.setFont(hw::fonts::ui(11.5f, true));
-        const float w = juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), symbol) + 14.0f;
-        const auto pill = juce::Rectangle<float>(x, static_cast<float>(chords.getY()) + 3.0f, w, static_cast<float>(kRow) - 6.0f);
-        g.setColour(juce::Colour(0xff2a2e34));
-        g.fillRoundedRectangle(pill, pill.getHeight() / 2.0f);
-        g.setColour(hw::tok::edge);
-        g.drawRoundedRectangle(pill, pill.getHeight() / 2.0f, 1.0f);
-        g.setColour(hw::tok::text_bright);
-        g.drawText(juce::String(symbol), pill, juce::Justification::centred, false);
+    // Chords: the project's chord symbols as solid pills; where a bar has
+    // none, what its notes spell, dimmed, as a suggestion (click to keep it).
+    juce::ignoreUnused(bar0, bar1);
+    g.setFont(hw::fonts::ui(11.5f, true));
+    for (const auto& p : chord_pills()) {
+        const auto pill = p.bounds;
+        if (p.suggestion) {
+            g.setColour(hw::tok::edge.withAlpha(0.7f));
+            g.drawRoundedRectangle(pill, pill.getHeight() / 2.0f, 1.0f);
+            g.setColour(hw::tok::text.withAlpha(0.45f));
+        } else {
+            g.setColour(juce::Colour(0xff2a2e34));
+            g.fillRoundedRectangle(pill, pill.getHeight() / 2.0f);
+            g.setColour(theme.lcd().withAlpha(0.8f));
+            g.drawRoundedRectangle(pill, pill.getHeight() / 2.0f, 1.2f);
+            g.setColour(hw::tok::text_bright);
+        }
+        g.drawText(p.text, pill, juce::Justification::centred, false);
     }
 
     // Tempo: a line at the tempo, labelled where it changes.
@@ -230,6 +246,89 @@ void ComposerRuler::paint(juce::Graphics& g)
                         static_cast<float>(bars.getY()) + 8.0f);
         g.fillPath(cap);
     }
+}
+
+std::vector<ComposerRuler::Pill> ComposerRuler::chord_pills() const
+{
+    std::vector<Pill> out;
+    if (!access_.x_of || !access_.tick_at) return out;
+    const auto& d = context_.session.data();
+    const auto chords = row(2);
+    const Ticks first = std::max<Ticks>(0, access_.tick_at(static_cast<float>(kLabelWidth)));
+    const Ticks last = access_.tick_at(static_cast<float>(getWidth()));
+    const juce::Font font = hw::fonts::ui(11.5f, true);
+    auto pill = [&](Ticks tick, const juce::String& text, bool suggestion, float inset) {
+        Pill p;
+        p.tick = tick;
+        p.text = text;
+        p.suggestion = suggestion;
+        const float w = juce::GlyphArrangement::getStringWidth(font, text) + 14.0f;
+        p.bounds = {access_.x_of(tick) + inset, static_cast<float>(chords.getY()) + 3.0f, w, static_cast<float>(kRow) - 6.0f};
+        out.push_back(p);
+    };
+    for (const auto& ch : d.chords) {
+        if (ch.tick > last) break;
+        const auto parsed = theory::parse_chord_symbol(ch.text);
+        const juce::String text = parsed ? juce::String::fromUTF8(parsed->display_name().c_str()) : juce::String(ch.text);
+        if (ch.tick >= first - 4 * kTicksPerWhole) pill(ch.tick, text, false, 3.0f);
+    }
+    const int bar0 = d.meter.bar_at(first), bar1 = d.meter.bar_at(std::max(first, last)) + 1;
+    for (int bar = std::max(1, bar0); bar <= bar1 && bar <= static_cast<int>(chords_.size()); ++bar) {
+        const auto& symbol = chords_[static_cast<std::size_t>(bar - 1)];
+        if (symbol.empty()) continue;
+        const Ticks a = d.meter.bar_start(bar), b = d.meter.bar_start(bar + 1);
+        const bool has = std::any_of(d.chords.begin(), d.chords.end(), [&](const auto& m) { return m.tick >= a && m.tick < b; });
+        if (!has) pill(a, juce::String(symbol), true, 6.0f);
+    }
+    return out;
+}
+
+void ComposerRuler::resized()
+{
+    if (editor_.isVisible() && editing_ >= 0 && access_.x_of)
+        editor_.setBounds(juce::roundToInt(access_.x_of(editing_)) + 2, row(2).getY() + 1, 120, kRow - 2);
+}
+
+void ComposerRuler::edit_chord_at(Ticks tick)
+{
+    const auto& d = context_.session.data();
+    tick = std::max<Ticks>(0, tick);
+    juce::String text;
+    for (const auto& ch : d.chords)
+        if (ch.tick == tick) text = ch.text;
+    if (text.isEmpty()) {
+        const int bar = d.meter.bar_at(tick);
+        if (d.meter.bar_start(bar) == tick && bar >= 1 && bar <= static_cast<int>(chords_.size()))
+            text = chords_[static_cast<std::size_t>(bar - 1)];
+    }
+    editing_ = tick;
+    editor_.setColour(juce::TextEditor::outlineColourId, hw::Theme::get().lcd());
+    editor_.setText(text, false);
+    editor_.setVisible(true);
+    resized();
+    editor_.grabKeyboardFocus();
+    editor_.selectAll();
+    context_.status("Type a chord symbol (Dm7, F#m7b5, C/E) and press Return; empty removes it, Escape cancels");
+}
+
+bool ComposerRuler::commit_chord_edit()
+{
+    if (editing_ < 0) return false;
+    const auto text = editor_.getText().trim().toStdString();
+    auto& session = context_.session;
+    const auto& d = session.data();
+    const bool had = std::any_of(d.chords.begin(), d.chords.end(), [&](const auto& m) { return m.tick == editing_; });
+    if (!text.empty() && !theory::parse_chord_symbol(text)) {
+        editor_.setColour(juce::TextEditor::outlineColourId, juce::Colours::red);
+        editor_.repaint();
+        context_.status("\"" + juce::String(text) + "\" is not a chord symbol I can read (try Dm7, Bbmaj9, G7/B)");
+        return false;
+    }
+    const Ticks at = editing_;
+    editing_ = -1;
+    editor_.setVisible(false);
+    if (text.empty()) return had && session.remove_chord_symbol(at);
+    return session.set_chord_symbol(at, text);
 }
 
 void ComposerRuler::overview_scroll(float x)
@@ -260,6 +359,30 @@ void ComposerRuler::mouseDown(const juce::MouseEvent& e)
         drag_from_ = (t + beat / 2) / beat * beat;
         drag_ = Drag::Range;
         context_.engine.locate(t);
+        return;
+    }
+    if (row(2).contains(e.getPosition())) {
+        // A pill: edit it (or, right-click, remove it); elsewhere a new
+        // symbol on the beat clicked.
+        for (const auto& p : chord_pills()) {
+            if (!p.bounds.contains(e.position)) continue;
+            if (e.mods.isPopupMenu()) {
+                if (p.suggestion) return;
+                juce::PopupMenu menu;
+                const Ticks at = p.tick;
+                menu.addItem("Edit chord symbol", [this, at] { edit_chord_at(at); });
+                menu.addItem("Remove chord symbol", [this, at] { context_.session.remove_chord_symbol(at); });
+                menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this));
+                return;
+            }
+            edit_chord_at(p.tick);
+            return;
+        }
+        if (e.mods.isPopupMenu()) return;
+        const auto sig = d.meter.at_bar(d.meter.bar_at(t));
+        const Ticks beat = std::max<Ticks>(1, sig.beat_ticks());
+        const Ticks bs = d.meter.bar_start(d.meter.bar_at(t));
+        edit_chord_at(bs + (t - bs) / beat * beat);
         return;
     }
     if (row(1).contains(e.getPosition())) {

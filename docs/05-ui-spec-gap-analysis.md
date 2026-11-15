@@ -22,7 +22,7 @@ and the document model. The work is mostly presentation.
 | Mixer with strips and master | Yes: the hardware-style console. |
 | Print score to audio | Partly. Stem and mix bounces render offline to WAV, and any track can already hold audio clips. Nothing yet prints a track onto its own audio lane. |
 | Parts and score export (Score stage) | Yes: PDF parts, full score PDF, MusicXML. |
-| Markers, tempo map, meter map | Yes in the model. Chord symbols per bar are not stored yet. |
+| Markers, tempo map, meter map, chord symbols | Yes in the model (chord symbols since step 19). |
 
 ## Missing
 
@@ -910,3 +910,43 @@ macOS, Linux and Windows. What it took:
       Shuffle closing the gap; Cmd/Ctrl+T splits at both edges; a click
       locates; the bottom half still moves. Screenshots `edit-mode-shuffle`,
       `edit-mode-smart`.
+
+19. **Chord symbols. Done** (November 15, 2026).
+    - **Model.** `ProjectData::chords`: `ChordMark {tick, text}`, sorted,
+      one per tick, saved as `"chords"` in the project file. The text is
+      kept as written and must parse (`theory::parse_chord_symbol`); a
+      symbol lasts until the next. Session: `set_chord_symbol` (empty text
+      removes), `remove_chord_symbol`, `replace_chord_symbols` (a span, one
+      step), `chord_symbol_at`.
+    - **Ruler (Composer view, Chords row).** The project's symbols are solid
+      pills (Unicode accidentals). A bar with none shows what its notes
+      spell (the existing chord detection) as a dimmed suggestion. A click
+      on a pill edits it inline (prefilled; a suggestion's click keeps it
+      with Return), a click elsewhere in the row starts a symbol on the beat
+      under the pointer; a symbol that does not parse is refused with the
+      editor left open; empty removes; Escape cancels; right-click a pill to
+      edit or remove it.
+    - **Chord Explorer.** Send to Track writes the progression's symbols
+      over its bars, replacing those there, in the same undo step as the
+      notes.
+    - **MusicXML.** Export writes `<harmony>` (root, kind with our symbol
+      as its text, bass for slash chords and inversions, degrees for
+      add/altered qualities) on the first part, at written pitch when that
+      part transposes; measures run on to the last symbol. Import reads the
+      first part that has any, back to concert pitch, from the kind text or
+      else the kind and its degrees (other programs' files); the session
+      keeps them when it takes the file's maps or has none.
+    - **Print.** The full-score layout (PDF and the Page view) prints them
+      over the top staff, at that part's written pitch in a transposed
+      score.
+    - Not yet: symbols in the Producer view's ruler, in the printed parts
+      (a lead-sheet option for rhythm-section parts), and the Ostinato
+      Creator following the stored symbols.
+    - **Checks.** Unit tests: session edits with undo, save and reopen,
+      Chord Explorer's symbols in one undo step, a MusicXML round trip
+      through a B-flat clarinet (written D / A7 / G#m7b5 / Cmaj9, read back
+      at concert pitch), another program's kind-and-degrees `<harmony>`
+      (Eb7b9, Am7/G). Desktop check: the suggestion, keeping it with a
+      click and Return, G7/B typed on beat 3 of bar 2, a bad symbol
+      refused, Escape, removal, the Page view printing both. Screenshots
+      `39-chord-symbols`, `39b-chord-symbols-page`.

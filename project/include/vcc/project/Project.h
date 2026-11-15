@@ -462,6 +462,14 @@ struct Marker {
     double streamer_seconds = 2.0;  ///< Length of the streamer leading into it.
 };
 
+/// A chord symbol over the score (the ruler's Chords row): from `tick`
+/// until the next one. `text` is as written ("Em7", "F#m7b5", "C/E") and
+/// always parses as a chord symbol.
+struct ChordMark {
+    Ticks tick = 0;
+    std::string text;
+};
+
 /// A named recall of which version each track plays (Main Spec §15 cue
 /// snapshots for director A/B).
 struct Snapshot {
@@ -497,6 +505,8 @@ struct ProjectData {
     std::vector<PictureVersion> pictures;
     std::string active_picture_id;
     std::vector<Marker> markers;
+    /// Chord symbols, sorted by tick, at most one per tick.
+    std::vector<ChordMark> chords;
     std::vector<StemDef> stems;
     std::vector<Snapshot> snapshots;
     std::vector<std::string> applied_templates;

@@ -1,6 +1,7 @@
 #include "vcc/session/Session.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -13,6 +14,7 @@
 #include "vcc/project/Performance.h"
 #include "vcc/project/Render.h"
 #include "vcc/project/Stems.h"
+#include "vcc/theory/Chord.h"
 
 namespace vcc::session {
 
@@ -581,7 +583,95 @@ project::InsertResult Session::insert_notes(const std::string& id, Ticks start, 
 project::InsertResult Session::send_progression(const std::string& id, const theory::ProgressionRender& render,
                                                 const std::string& progression_id, project::CollisionPolicy policy)
 {
-    return insert_notes(id, render.start, render.end, render.notes, policy, "chord_explorer:" + progression_id);
+    const std::string source = "chord_explorer:" + progression_id;
+    auto r = insert_notes(id, render.start, render.end, render.notes, policy, source);
+    if (!r.ok) return r;
+    // The progression's symbols over those bars, in the same undo step.
+    std::vector<project::ChordMark> marks;
+    for (const auto& rc : render.chords)
+        if (marks.empty() || marks.back().tick < rc.start) marks.push_back({rc.start, rc.chord.name()});
+    const auto* t = data().find_track(id);
+    const std::string label = "Insert " + source + " on " + (t ? t->name : std::string());
+    if (project_.edit_coalescing(label, [&](project::ProjectData& d) {
+            auto& v = d.chords;
+            v.erase(std::remove_if(v.begin(), v.end(),
+                                   [&](const project::ChordMark& m) { return m.tick >= render.start && m.tick < render.end; }),
+                    v.end());
+            v.insert(v.end(), marks.begin(), marks.end());
+            std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.tick < b.tick; });
+            return true;
+        }))
+        document_changed();
+    return r;
+}
+
+// --- Chord symbols ---------------------------------------------------------------------
+
+bool Session::set_chord_symbol(Ticks tick, const std::string& text)
+{
+    if (tick < 0) return false;
+    std::string clean = text;
+    while (!clean.empty() && std::isspace(static_cast<unsigned char>(clean.back()))) clean.pop_back();
+    while (!clean.empty() && std::isspace(static_cast<unsigned char>(clean.front()))) clean.erase(clean.begin());
+    if (clean.empty()) return remove_chord_symbol(tick);
+    if (!theory::parse_chord_symbol(clean)) return false;
+    return edit("Chord symbol " + clean, [&](project::ProjectData& d) {
+        auto& v = d.chords;
+        auto it = std::lower_bound(v.begin(), v.end(), tick, [](const project::ChordMark& m, Ticks t) { return m.tick < t; });
+        if (it != v.end() && it->tick == tick) {
+            if (it->text == clean) return false;
+            it->text = clean;
+        } else {
+            v.insert(it, project::ChordMark{tick, clean});
+        }
+        return true;
+    });
+}
+
+bool Session::remove_chord_symbol(Ticks tick)
+{
+    return edit("Remove chord symbol", [&](project::ProjectData& d) {
+        auto& v = d.chords;
+        const auto n = v.size();
+        v.erase(std::remove_if(v.begin(), v.end(), [&](const project::ChordMark& m) { return m.tick == tick; }), v.end());
+        return v.size() != n;
+    });
+}
+
+bool Session::replace_chord_symbols(Ticks from, Ticks to, const std::vector<project::ChordMark>& chords,
+                                    const std::string& label)
+{
+    if (to <= from) return false;
+    std::vector<project::ChordMark> in;
+    for (const auto& m : chords)
+        if (m.tick >= from && m.tick < to && theory::parse_chord_symbol(m.text)) in.push_back(m);
+    std::sort(in.begin(), in.end(), [](const auto& a, const auto& b) { return a.tick < b.tick; });
+    in.erase(std::unique(in.begin(), in.end(), [](const auto& a, const auto& b) { return a.tick == b.tick; }), in.end());
+    return edit(label, [&](project::ProjectData& d) {
+        auto& v = d.chords;
+        std::vector<project::ChordMark> out;
+        for (const auto& m : v)
+            if (m.tick < from || m.tick >= to) out.push_back(m);
+        out.insert(out.end(), in.begin(), in.end());
+        std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.tick < b.tick; });
+        const bool same = out.size() == v.size() &&
+                          std::equal(out.begin(), out.end(), v.begin(), [](const auto& a, const auto& b) {
+                              return a.tick == b.tick && a.text == b.text;
+                          });
+        if (same) return false;
+        v = std::move(out);
+        return true;
+    });
+}
+
+const project::ChordMark* Session::chord_symbol_at(Ticks tick) const
+{
+    const project::ChordMark* best = nullptr;
+    for (const auto& m : data().chords) {
+        if (m.tick > tick) break;
+        best = &m;
+    }
+    return best;
 }
 
 project::InsertResult Session::send_ostinato(const std::string& id, const ostinato::Variant& v,

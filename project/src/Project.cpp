@@ -7,6 +7,7 @@
 
 #include "vcc/core/Files.h"
 #include "vcc/notation/ScoreFile.h"
+#include "vcc/theory/Chord.h"
 #include "vcc/theory/Pitch.h"
 
 namespace vcc::project {
@@ -926,6 +927,11 @@ json::Value Project::to_json() const
         root.set("stems", stems);
     }
     root.set("markers", markers);
+    {
+        json::Array chords;
+        for (const auto& ch : d.chords) chords.emplace_back(json::Object{{"tick", ch.tick}, {"text", ch.text}});
+        root.set("chords", chords);
+    }
 
     json::Array snaps;
     for (const auto& s : d.snapshots) {
@@ -1245,6 +1251,15 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         m.cue_id = j.get_string("cue_id");
         m.streamer_seconds = j.get_double("streamer_seconds", 2.0);
         d.markers.push_back(m);
+    }
+    for (const auto& j : doc.get("chords") ? doc.get("chords")->as_array() : json::Array{}) {
+        ChordMark ch;
+        ch.tick = j.get_int("tick");
+        ch.text = j.get_string("text");
+        // A symbol that no longer parses, or a second one on a tick, is dropped.
+        if (ch.tick < 0 || !theory::parse_chord_symbol(ch.text)) continue;
+        if (!d.chords.empty() && d.chords.back().tick >= ch.tick) continue;
+        d.chords.push_back(std::move(ch));
     }
     for (const auto& j : doc.get("snapshots") ? doc.get("snapshots")->as_array() : json::Array{}) {
         Snapshot s{j.get_string("id"), j.get_string("name"), {}};

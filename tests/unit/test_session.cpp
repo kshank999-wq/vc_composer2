@@ -122,6 +122,19 @@ TEST_CASE("score commits, generators and plugin refs go through one undo step ea
     auto r = s.send_progression(t, *render, prog->id, project::CollisionPolicy::Ask);
     CHECK(r.ok);
     CHECK_EQ(s.undo_label().find("chord_explorer"), 7u);  // "Insert chord_explorer:..."
+    // The progression's chord symbols land over its bars, in the same undo step.
+    REQUIRE(s.data().chords.size() == render->chords.size());
+    CHECK_EQ(s.data().chords.front().tick, render->start);
+    CHECK_EQ(s.data().chords.front().text, render->chords.front().chord.name());
+    {
+        const std::size_t before = s.project().history_size();
+        s.undo();
+        CHECK(s.data().chords.empty());
+        CHECK_EQ(s.data().find_track(t)->active_version()->score.total_note_count(), 1u);
+        s.redo();
+        CHECK_EQ(s.project().history_size(), before);
+        CHECK_EQ(s.data().chords.size(), render->chords.size());
+    }
 
     project::PluginRef ref{"VST3", "VST3-Test-1234", "Test Synth", "Acme", ""};
     REQUIRE(s.set_instrument_plugin(t, ref));

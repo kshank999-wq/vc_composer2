@@ -18,6 +18,7 @@
 
 #include "MusicXmlCommon.h"
 #include "vcc/interchange/Xml.h"
+#include "vcc/theory/Chord.h"
 
 namespace vcc::interchange {
 
@@ -139,6 +140,15 @@ struct RawKey {
     std::string mode = "major";
 };
 
+struct RawHarmony {
+    Rational offset;
+    std::string root;  ///< "F#" (written pitch); empty: no chord (N.C.)
+    std::string kind;  ///< <kind> value
+    std::string text;  ///< <kind text="...">
+    std::string bass;
+    std::vector<std::string> degrees;  ///< "add b9", "alter #5", "subtract 3"
+};
+
 struct RawMeasure {
     std::string number;
     bool implicit = false;
@@ -146,6 +156,7 @@ struct RawMeasure {
     std::optional<std::pair<int, int>> time;
     std::vector<RawNote> notes;
     std::vector<RawDirection> directions;
+    std::vector<RawHarmony> harmonies;
     std::vector<RawKey> keys;
     std::vector<RawClef> clefs;
     std::vector<RawTranspose> transposes;
@@ -223,6 +234,8 @@ private:
     RawDirection read_direction(const xml::Element& d, long long divisions);
     void layout(const std::vector<RawPart>& parts);
     ImportedPart build(const RawPart& part, bool first);
+    /// A <harmony> as chord-symbol text at concert pitch, or nullopt.
+    static std::optional<std::string> harmony_text(const RawHarmony& h, int diatonic, int chromatic);
 
     ImportResult result_;
     std::map<std::string, int> counts_;
@@ -690,7 +703,34 @@ void Importer::read_part(const xml::Element& part_el, RawPart& part)
                 if (c.child("repeat")) count("repeat barlines (music not unfolded)");
                 if (c.child("ending")) count("volta endings");
             } else if (name == "harmony") {
-                count("chord symbols");
+                RawHarmony h;
+                h.offset = pos;
+                if (const auto off = detail::parse_double(c.child_text("offset")))
+                    h.offset = pos + Rational::of(static_cast<long long>(std::llround(*off)), divisions);
+                if (h.offset.negative()) h.offset = Rational{};
+                auto step = [](const xml::Element* e, const char* step_name, const char* alter_name) {
+                    std::string s;
+                    if (!e) return s;
+                    s = e->child_text(step_name);
+                    const auto alter = detail::parse_double(e->child_text(alter_name));
+                    const int a = alter ? static_cast<int>(std::lround(*alter)) : 0;
+                    for (int i = 0; i < a; ++i) s += "#";
+                    for (int i = 0; i > a; --i) s += "b";
+                    return s;
+                };
+                h.root = step(c.child("root"), "root-step", "root-alter");
+                if (const auto* k = c.child("kind")) {
+                    h.kind = k->text;
+                    h.text = k->attribute("text");
+                }
+                h.bass = step(c.child("bass"), "bass-step", "bass-alter");
+                for (const auto* d : c.children_named("degree")) {
+                    const auto alter = detail::parse_double(d->child_text("degree-alter"));
+                    const int a = alter ? static_cast<int>(std::lround(*alter)) : 0;
+                    h.degrees.push_back(d->child_text("degree-type") + " " + (a > 0 ? "#" : a < 0 ? "b" : "") +
+                                        d->child_text("degree-value"));
+                }
+                m.harmonies.push_back(std::move(h));
             } else if (name == "figured-bass") {
                 count("figured bass figures");
             } else if (name == "print" || name == "bookmark" || name == "link" || name == "grouping" ||
@@ -794,8 +834,72 @@ bool minor_mode(const std::string& mode)
     return mode == "minor" || mode == "aeolian" || mode == "dorian" || mode == "phrygian" || mode == "locrian";
 }
 
+std::optional<std::string> Importer::harmony_text(const RawHarmony& h, int diatonic, int chromatic)
+{
+    // Written -> concert: the part's <transpose> (written + interval = sounding).
+    auto concert = [&](const std::string& name) -> std::optional<std::string> {
+        const auto sp = theory::SpelledPitch::parse(name);
+        if (!sp) return std::nullopt;
+        if (chromatic == 0) return sp->name();
+        nt::Pitch p;
+        p.step = static_cast<nt::Step>(sp->letter);
+        p.alteration = static_cast<std::int8_t>(sp->alteration);
+        p.octave = 4;
+        p = detail::transpose_pitch(p, diatonic, chromatic, nt::KeySignature{});
+        theory::SpelledPitch out;
+        out.letter = static_cast<int>(p.step);
+        out.alteration = p.alteration;
+        return out.name();
+    };
+    const auto root = concert(h.root);
+    if (!root) return std::nullopt;
+    std::string slash;
+    if (!h.bass.empty()) {
+        const auto bass = concert(h.bass);
+        if (!bass) return std::nullopt;
+        slash = "/" + *bass;
+    }
+    std::vector<std::string> tries;
+    if (!h.text.empty()) tries.push_back(*root + h.text + slash);
+    // From the kind and its degrees.
+    std::size_t n = 0;
+    const auto* kinds = detail::harmony_kinds(&n);
+    std::string symbol;
+    bool known = false;
+    for (std::size_t i = 0; i < n && !known; ++i)
+        if (h.kind == kinds[i].kind) {
+            const auto* q = theory::find_quality(kinds[i].quality);
+            if (q) {
+                symbol = q->symbol;
+                known = true;
+            }
+        }
+    if (!known && h.kind == "power") {
+        symbol = "5";
+        known = true;
+    }
+    if (known) {
+        std::string extra;
+        for (const auto& d : h.degrees) {
+            const auto space = d.find(' ');
+            const std::string type = d.substr(0, space), value = space == std::string::npos ? "" : d.substr(space + 1);
+            if (type == "add") extra += (symbol.empty() || symbol == "m") && value.find_first_of("#b") == std::string::npos
+                                            ? "add" + value
+                                            : value;
+            else if (type == "alter") extra += value;
+            else if (type == "subtract") extra += "omit" + value;
+        }
+        tries.push_back(*root + symbol + extra + slash);
+        tries.push_back(*root + symbol + slash);
+    }
+    for (const auto& t : tries)
+        if (theory::parse_chord_symbol(t)) return t;
+    return std::nullopt;
+}
+
 ImportedPart Importer::build(const RawPart& part, bool first)
 {
+    std::vector<ImportedChord> harmonies;
     ImportedPart out;
     out.id = part.info.id;
     out.name = part.info.name.empty() ? part.info.id : part.info.name;
@@ -1120,6 +1224,14 @@ ImportedPart Importer::build(const RawPart& part, bool first)
             }
         }
 
+        // Chord symbols, at concert pitch.
+        for (const RawHarmony& h : m.harmonies) {
+            if (h.root.empty() || h.kind == "none") continue;
+            const auto& tr = transposes.empty() ? RawTranspose{} : transposes[0];
+            if (auto text = harmony_text(h, tr.diatonic, tr.chromatic)) harmonies.push_back({lay.start + h.offset.ticks(), *text});
+            else count("chord symbols that could not be read");
+        }
+
         // Directions.
         for (const RawDirection& d : m.directions) {
             const Ticks tick = lay.start + d.offset.ticks();
@@ -1208,6 +1320,11 @@ ImportedPart Importer::build(const RawPart& part, bool first)
         if (out.score.insert_note(s, n) == nt::kInvalidEventId) ++rejected;
     }
     if (rejected > 0) count("notes the score model rejected", rejected);
+    if (result_.chords.empty() && !harmonies.empty()) {
+        std::stable_sort(harmonies.begin(), harmonies.end(), [](const auto& a, const auto& b) { return a.tick < b.tick; });
+        for (const auto& h : harmonies)
+            if (result_.chords.empty() || result_.chords.back().tick < h.tick) result_.chords.push_back(h);
+    }
     return out;
 }
 

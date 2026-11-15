@@ -1005,13 +1005,13 @@ TEST_CASE("import: MuseScore-style grand staff with voices, backup/forward and c
     REQUIRE(r.keys.size() == 2u);
     CHECK_EQ(r.keys[1].fifths, 1);
     CHECK_EQ(r.keys[1].tick, 2 * Q);
-    bool clef_warning = false, harmony = false;
-    for (const auto& w : r.warnings) {
-        clef_warning = clef_warning || w.find("clef changes") != std::string::npos;
-        harmony = harmony || w == "1 chord symbols ignored";
-    }
+    bool clef_warning = false;
+    for (const auto& w : r.warnings) clef_warning = clef_warning || w.find("clef changes") != std::string::npos;
     CHECK(clef_warning);
-    CHECK(harmony);
+    // Its chord symbol (kind major, empty text) is read, not ignored.
+    REQUIRE(r.chords.size() == 1u);
+    CHECK_EQ(r.chords[0].tick, 0);
+    CHECK_EQ(r.chords[0].text, std::string("C"));
 }
 
 TEST_CASE("import: a percussion part maps instruments to General MIDI drums")
@@ -1227,4 +1227,122 @@ TEST_CASE("session: instruments are guessed from part names, transposition and p
     CHECK_EQ(s.guess_instrument(part("Acoustic Grand Piano", 0, 2)), std::string("keys.piano"));
     CHECK_EQ(s.guess_instrument(part("Staff", 0, 1, 40)), std::string("strings.violin"));
     CHECK_EQ(s.guess_instrument(part("Mystery")), std::string("keys.piano"));
+}
+
+TEST_CASE("chord symbols: session edits, save and reopen, MusicXML round trip through a transposing part")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const std::string cl = s.add_track("Clarinet in Bb", "woodwinds.clarinet_bb");
+    s.add_track("Piano", "keys.piano");
+    const Ticks bar = 4 * Q;
+
+    // Setting, replacing, refusing and removing, each one undo step.
+    CHECK(s.set_chord_symbol(0, "C"));
+    CHECK(s.undo_label() == "Chord symbol C");
+    CHECK(s.set_chord_symbol(bar + 2 * Q, " G7/B "));
+    CHECK(s.set_chord_symbol(2 * bar, "F#m7b5"));
+    CHECK(s.set_chord_symbol(3 * bar, "Bbmaj9"));
+    CHECK(!s.set_chord_symbol(3 * bar, "Bbmaj9"));  // unchanged: no step
+    CHECK(!s.set_chord_symbol(4 * bar, "not a chord"));
+    REQUIRE(s.data().chords.size() == 4);
+    CHECK(s.data().chords[1].text == "G7/B");
+    CHECK(s.chord_symbol_at(bar + 3 * Q) && s.chord_symbol_at(bar + 3 * Q)->text == "G7/B");
+    CHECK(s.chord_symbol_at(bar) && s.chord_symbol_at(bar)->text == "C");
+    CHECK(s.set_chord_symbol(0, "Cmaj7"));
+    CHECK(s.data().chords[0].text == "Cmaj7");
+    s.undo();
+    CHECK(s.data().chords[0].text == "C");
+    CHECK(s.set_chord_symbol(4 * bar, "Am"));
+    CHECK(s.remove_chord_symbol(4 * bar));
+    CHECK(s.undo_label() == "Remove chord symbol");
+    CHECK(s.data().chords.size() == 4);
+    // Replacing a span: only the symbols inside it go.
+    CHECK(s.replace_chord_symbols(bar, 3 * bar, {{bar, "Dm7"}, {2 * bar, "G7"}}));
+    REQUIRE(s.data().chords.size() == 4);
+    CHECK(s.data().chords[1].text == "Dm7");
+    CHECK(s.data().chords[3].text == "Bbmaj9");
+    s.undo();
+
+    // Saved and reopened.
+    const std::string path = std::string(VCC_TEST_TMP_DIR) + "/chords.vcc2";
+    REQUIRE(s.save_as(path));
+    session::Session reopened(catalogs());
+    REQUIRE(reopened.open(path));
+    REQUIRE(reopened.data().chords.size() == 4);
+    CHECK(reopened.data().chords[2].tick == 2 * bar);
+    CHECK(reopened.data().chords[2].text == "F#m7b5");
+
+    // Written export: the clarinet (first part) carries them a tone up.
+    {
+        const std::string xml = s.export_musicxml(dated());
+        keep("export_chord_symbols.musicxml", xml);
+        auto r = ix::xml::parse(xml);
+        REQUIRE(r.ok);
+        const Element* p1 = part_by_id(r.root, "P1");
+        REQUIRE(p1);
+        std::vector<std::string> roots;
+        for (const auto* m : p1->children_named("measure"))
+            for (const auto* h : m->children_named("harmony")) {
+                std::string root = h->child("root")->child_text("root-step") + h->child("root")->child_text("root-alter");
+                roots.push_back(root + ":" + h->child_text("kind"));
+            }
+        REQUIRE(roots.size() == 4);
+        CHECK(roots[0] == "D:major");
+        CHECK(roots[1] == "A:dominant");
+        CHECK(roots[2] == "G1:half-diminished");
+        CHECK(roots[3] == "C:major-ninth");
+        // The bass of G7/B, written: C#.
+        const Element* m2 = p1->children_named("measure")[1];
+        const Element* h2 = m2->children_named("harmony")[0];
+        REQUIRE(h2->child("bass"));
+        CHECK(h2->child("bass")->child_text("bass-step") == "C");
+        CHECK(h2->child("bass")->child_text("bass-alter") == "1");
+        // P2 (the piano) has none.
+        const Element* p2 = part_by_id(r.root, "P2");
+        REQUIRE(p2);
+        for (const auto* m : p2->children_named("measure")) CHECK(m->children_named("harmony").empty());
+
+        // Read back: at concert pitch, at their ticks.
+        auto imp = ix::import_musicxml(xml);
+        REQUIRE(imp.ok);
+        REQUIRE(imp.chords.size() == 4);
+        CHECK(imp.chords[0].text == "C");
+        CHECK(imp.chords[1].tick == bar + 2 * Q);
+        CHECK(imp.chords[1].text == "G7/B");
+        CHECK(imp.chords[2].text == "F#m7b5");
+        CHECK(imp.chords[3].text == "Bbmaj9");
+        session::Session s2(catalogs());
+        auto sum = s2.import_musicxml(xml, true);
+        CHECK(sum.ok);
+        REQUIRE(s2.data().chords.size() == 4);
+        CHECK(s2.data().chords[3].tick == 3 * bar);
+    }
+    // Concert export: as written in the project.
+    {
+        auto opts = dated();
+        opts.concert_pitch = true;
+        auto r = ix::xml::parse(s.export_musicxml(opts));
+        REQUIRE(r.ok);
+        const Element* h = part_by_id(r.root, "P1")->children_named("measure")[0]->children_named("harmony")[0];
+        CHECK(h->child("root")->child_text("root-step") == "C");
+    }
+    // A <harmony> from another program: kind and degrees, no text.
+    {
+        const std::string other = R"(<?xml version="1.0"?>
+<score-partwise version="4.0"><part-list><score-part id="P1"><part-name>Lead</part-name></score-part></part-list>
+<part id="P1"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+<harmony><root><root-step>E</root-step><root-alter>-1</root-alter></root><kind>dominant</kind>
+<degree><degree-value>9</degree-value><degree-alter>-1</degree-alter><degree-type>add</degree-type></degree></harmony>
+<note><pitch><step>E</step><octave>4</octave></pitch><duration>2</duration><type>half</type></note>
+<harmony><root><root-step>A</root-step></root><kind>minor-seventh</kind><bass><bass-step>G</bass-step></bass></harmony>
+<note><pitch><step>E</step><octave>4</octave></pitch><duration>2</duration><type>half</type></note>
+</measure></part></score-partwise>)";
+        auto imp = ix::import_musicxml(other);
+        REQUIRE(imp.ok);
+        REQUIRE(imp.chords.size() == 2);
+        CHECK(imp.chords[0].text == "Eb7b9");
+        CHECK(imp.chords[1].tick == 2 * Q);
+        CHECK(imp.chords[1].text == "Am7/G");
+    }
 }

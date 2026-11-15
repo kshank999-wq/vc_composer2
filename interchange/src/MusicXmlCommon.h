@@ -161,4 +161,27 @@ inline long long gcd_ll(long long a, long long b) noexcept
     return a;
 }
 
+/// MusicXML <kind> values for the chord qualities (theory/Chord.cpp), and
+/// back. Qualities MusicXML has no kind for are a kind plus <degree>s.
+struct HarmonyKind {
+    const char* quality;  ///< theory quality id
+    const char* kind;     ///< MusicXML kind value
+};
+inline const HarmonyKind* harmony_kinds(std::size_t* count) noexcept
+{
+    static const HarmonyKind k[] = {
+        {"maj", "major"}, {"m", "minor"}, {"dim", "diminished"}, {"aug", "augmented"},
+        {"sus2", "suspended-second"}, {"sus4", "suspended-fourth"}, {"6", "major-sixth"}, {"m6", "minor-sixth"},
+        {"69", "major-sixth"}, {"7", "dominant"}, {"maj7", "major-seventh"}, {"m7", "minor-seventh"},
+        {"m7b5", "half-diminished"}, {"dim7", "diminished-seventh"}, {"mmaj7", "major-minor"},
+        {"aug7", "augmented-seventh"}, {"augmaj7", "major-seventh"}, {"7sus4", "suspended-fourth"},
+        {"add9", "major"}, {"madd9", "minor"}, {"9", "dominant-ninth"}, {"maj9", "major-ninth"},
+        {"m9", "minor-ninth"}, {"7b9", "dominant"}, {"7#9", "dominant"}, {"11", "dominant-11th"},
+        {"m11", "minor-11th"}, {"maj7#11", "major-seventh"}, {"13", "dominant-13th"}, {"maj13", "major-13th"},
+        {"m13", "minor-13th"}, {"7alt", "dominant"},
+    };
+    *count = sizeof(k) / sizeof(k[0]);
+    return k;
+}
+
 }  // namespace vcc::interchange::detail

@@ -1,5 +1,7 @@
 #include "ui/ScoreExchange.h"
 
+#include "vcc/theory/Chord.h"
+
 #include <algorithm>
 
 #include "AppResources.h"
@@ -251,6 +253,33 @@ void save_full_score_settings(const FullScoreSettings& f)
     s.saveIfNeeded();
 }
 
+/// The project's chord symbols as text over a printed part, at the part's
+/// written pitch when it transposes (a concert print passes a score whose
+/// staves no longer do).
+static void add_chord_symbols(const project::ProjectData& d, notation::Score& score)
+{
+    const int t = score.staff_count() > 0 ? score.staff(0).transposition_semitones : 0;
+    // Written = sounding - t: the letter steps for that many semitones.
+    static const int kSteps[12] = {0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6};
+    const int semis = -t;
+    const int steps = semis >= 0 ? kSteps[semis % 12] + 7 * (semis / 12) : -(kSteps[(-semis) % 12] + 7 * ((-semis) / 12));
+    for (const auto& ch : d.chords) {
+        auto chord = theory::parse_chord_symbol(ch.text);
+        if (!chord) continue;
+        std::string text = ch.text;
+        if (t != 0) {
+            if (chord->bass || chord->inversion > 0) chord->bass = chord->bass_note().transposed(steps, semis);
+            chord->inversion = 0;
+            chord->root = chord->root.transposed(steps, semis);
+            text = chord->name();
+        }
+        notation::TextMarking m;
+        m.tick = ch.tick;
+        m.text = text;
+        score.add_text(m);
+    }
+}
+
 std::unique_ptr<FullScoreLayout> lay_out_full_score(AppContext& context, const FullScoreSettings& settings,
                                                     juce::String& message)
 {
@@ -292,6 +321,8 @@ std::unique_ptr<FullScoreLayout> lay_out_full_score(AppContext& context, const F
         part.group = bracket_group(def ? def->family : t->family);
         parts.push_back(part);
     }
+    // Chord symbols over the top staff of the score.
+    if (!d.chords.empty() && !scores.empty()) add_chord_symbols(d, scores.front());
 
     engraving::ScoreOptions opts;
     double w = 297, h = 420, space = 1.25;  // A3, 5 mm staff

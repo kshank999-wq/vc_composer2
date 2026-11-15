@@ -3817,6 +3817,103 @@ void sidechain_checks(MainWindow& window, const juce::File& dir)
 
 /// The Composer view's Page view: the full score on pages as it prints,
 /// switched with the toolbar's Track | Page keys (and the Score stage).
+/// Chord symbols: the ruler's suggestion kept with a click, one typed on a
+/// beat, a bad one refused, Escape, editing to empty removes, and the
+/// symbols printed over the full score's top staff in the Page view.
+void chord_symbol_checks(MainWindow& window, const juce::File& dir)
+{
+    using composer::Command;
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto track = session.add_track("Piano", "keys.piano");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
+    pump(100);
+    auto& composer = main.composer();
+    session.select_track(track);
+    pump(50);
+    composer.grabKeyboardFocus();
+    // A C major chord filling bar 1 (a whole note), then a bar of G.
+    composer.keyPressed(juce::KeyPress('7'));
+    composer.keyPressed(juce::KeyPress('c'));
+    composer.keyPressed(juce::KeyPress('E', juce::ModifierKeys::shiftModifier, 'E'));
+    composer.keyPressed(juce::KeyPress('G', juce::ModifierKeys::shiftModifier, 'G'));
+    composer.keyPressed(juce::KeyPress('g'));
+    pump(150);
+    auto& ruler = composer.ruler();
+    const auto& d = session.data();
+    const Ticks bar = d.meter.at_bar(1).ticks_per_bar();
+    auto pills = ruler.chord_pills();
+    const auto suggestion = std::find_if(pills.begin(), pills.end(), [](const auto& p) { return p.suggestion && p.tick == 0; });
+    check(suggestion != pills.end() && suggestion->text == "C" && d.chords.empty(),
+          "the Chords row suggests what bar 1 spells (C), dimmed, before anything is stored");
+    if (suggestion == pills.end()) return;
+
+    // Click the suggestion: the editor opens with it; Return keeps it.
+    const auto at = suggestion->bounds.getCentre();
+    ruler.mouseDown(mouse_event(ruler, at, at, false));
+    pump(30);
+    auto& editor = ruler.chord_editor();
+    const bool opened = editor.isVisible() && editor.getText() == "C";
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    pump(50);
+    check(opened && !editor.isVisible() && d.chords.size() == 1 && d.chords[0].tick == 0 && d.chords[0].text == "C" &&
+              session.undo_label() == "Chord symbol C",
+          "clicking the suggestion opens the chord editor with it, and Return stores it (one undo step)");
+
+    // A click on beat 3 of bar 2 opens an empty editor there; G7/B is stored on that beat.
+    const float x = composer.x_of_tick(bar + 2 * kTicksPerQuarter) + 4.0f;
+    const juce::Point<float> beat3(x, static_cast<float>(composer_ui::ComposerRuler::kOverview + 6 + 2 * composer_ui::ComposerRuler::kRow + 10));
+    ruler.mouseDown(mouse_event(ruler, beat3, beat3, false));
+    pump(30);
+    const bool empty_editor = editor.isVisible() && editor.getText().isEmpty();
+    editor.setText("G7/B");
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    pump(50);
+    check(empty_editor && d.chords.size() == 2 && d.chords[1].tick == bar + 2 * kTicksPerQuarter && d.chords[1].text == "G7/B",
+          "a click on beat 3 of bar 2 opens an empty editor there, and G7/B lands on that beat");
+
+    // A bad symbol is refused and the editor stays; Escape closes it.
+    ruler.mouseDown(mouse_event(ruler, beat3, beat3, false));
+    pump(30);
+    editor.setText("hello");
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    pump(30);
+    const bool refused = editor.isVisible() && d.chords.size() == 2 && d.chords[1].text == "G7/B";
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));
+    pump(30);
+    check(refused && !editor.isVisible() && d.chords[1].text == "G7/B",
+          "a symbol that is not a chord is refused and the editor stays open; Escape closes it unchanged");
+    pills = ruler.chord_pills();
+    const bool shown = std::count_if(pills.begin(), pills.end(), [](const auto& p) { return !p.suggestion; }) == 2;
+    shoot(main, dir, "39-chord-symbols");
+    check(shown, "the stored symbols show as solid pills in the Chords row");
+
+    // On the printed score: over the top staff, in the Page view too.
+    if (auto* page_key = main.toolbar().key("Page")) page_key->triggerClick();
+    pump(200);
+    auto& pv = main.page_view();
+    pv.relayout();
+    std::vector<std::string> printed;
+    if (pv.layout() && !pv.layout()->scores.empty())
+        for (const auto& t : pv.layout()->scores.front().texts()) printed.push_back(t.text);
+    check(printed.size() == 2 && printed[0] == "C" && printed[1] == "G7/B",
+          "the Page view (and the full-score PDF) print the chord symbols over the top staff");
+    shoot(main, dir, "39b-chord-symbols-page");
+    if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
+    pump(80);
+
+    // Editing a symbol to nothing removes it.
+    ruler.edit_chord_at(bar + 2 * kTicksPerQuarter);
+    editor.setText("");
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    pump(30);
+    check(d.chords.size() == 1 && session.undo_label() == "Remove chord symbol", "emptying a symbol's editor removes it");
+}
+
 void page_view_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -4952,6 +5049,7 @@ int main(int argc, char** argv)
         midi_comp_checks(window, dir);
         sidechain_checks(window, dir);
         page_view_checks(window, dir);
+        chord_symbol_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

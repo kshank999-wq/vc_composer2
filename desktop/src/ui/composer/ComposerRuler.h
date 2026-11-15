@@ -33,10 +33,28 @@ public:
     ~ComposerRuler() override;
 
     void set_playhead(Ticks tick);
-    /// The chord symbols read from the score, bar by bar (for the check).
+    /// The chord symbols read from the score, bar by bar (for the check):
+    /// shown as suggestions in bars with no chord symbol of the project's.
     const std::vector<std::string>& chords() const noexcept { return chords_; }
 
+    /// Opens the chord editor at `tick` (a click in the Chords row does
+    /// this): over the symbol there, else empty, or the bar's suggestion.
+    void edit_chord_at(Ticks tick);
+    /// The inline editor (visible while editing): Return sets the symbol,
+    /// an empty one removes it, Escape cancels.
+    juce::TextEditor& chord_editor() noexcept { return editor_; }
+    bool commit_chord_edit();
+    /// Where a chord pill is drawn (the project's or a suggestion), for checks.
+    struct Pill {
+        Ticks tick = 0;
+        juce::String text;
+        bool suggestion = false;
+        juce::Rectangle<float> bounds;
+    };
+    std::vector<Pill> chord_pills() const;
+
     void paint(juce::Graphics& g) override;
+    void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
@@ -54,6 +72,8 @@ private:
     int listener_ = 0;
     project::RenderCache render_;
     std::vector<std::string> chords_;
+    juce::TextEditor editor_;
+    Ticks editing_ = -1;
     /// Per music track: its colour and the spans worth showing (phrases, or bars with notes).
     struct Lane {
         juce::Colour colour;

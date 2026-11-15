@@ -114,6 +114,11 @@ struct ImportedKey {
     std::string mode = "major";  ///< MusicXML mode: major, minor, dorian, ...
 };
 
+struct ImportedChord {
+    Ticks tick = 0;
+    std::string text;  ///< Parses as a chord symbol, at concert pitch ("F#m7b5", "C/E").
+};
+
 struct ImportResult {
     bool ok = false;
     std::string error;  ///< "line 42: mismatched end tag </note>, expected </pitch>".
@@ -125,6 +130,8 @@ struct ImportResult {
     std::vector<ImportedTempo> tempos;                  ///< Sorted by tick.
     std::vector<ImportedTimeSignature> time_signatures; ///< First at tick 0.
     std::vector<ImportedKey> keys;                      ///< Of the first part; first at tick 0.
+    /// The chord symbols (<harmony>) of the first part that has any.
+    std::vector<ImportedChord> chords;
 
     int measure_count = 0;
     bool has_pickup = false;

@@ -7,6 +7,7 @@
 // accidentals are worked out, and the smallest <divisions> that expresses
 // every duration exactly is chosen. Last the measures are written.
 #include "vcc/interchange/MusicXml.h"
+#include "vcc/theory/Chord.h"
 
 #include <algorithm>
 #include <cctype>
@@ -195,7 +196,7 @@ struct Chord {
     std::vector<int> slur_stops;
 };
 
-enum class DirKind { Dynamic, WedgeStart, WedgeStop, Tempo, Words };
+enum class DirKind { Dynamic, WedgeStart, WedgeStop, Tempo, Words, Harmony };
 
 struct Direction {
     Ticks offset = 0;
@@ -284,6 +285,7 @@ private:
     void write_part(xml::Writer& w, const PartCtx& part, bool first_part);
     void write_event(xml::Writer& w, const PartCtx& part, const Lane& lane, const Event& e);
     void write_direction(xml::Writer& w, const PartCtx& part, const Direction& d);
+    void write_harmony(xml::Writer& w, const PartCtx& part, const Direction& d);
 
     std::size_t measure_index_at(Ticks tick) const
     {
@@ -364,6 +366,8 @@ void Exporter::layout_measures(const std::vector<PartCtx>& parts)
     Ticks end = 0;
     for (const auto& p : parts) end = std::max(end, p.score->end_tick());
     for (const auto& t : tempos_) end = std::max(end, t.tick + 1);
+    if (!parts.empty())
+        for (const auto& ch : data_.chords) end = std::max(end, ch.tick + 1);  // every chord symbol gets its bar
     int bars = end > 0 ? data_.meter.bar_at(end - 1) : 1;
     const auto& changes = data_.meter.changes();
     if (!changes.empty()) bars = std::max(bars, changes.back().bar);
@@ -799,6 +803,16 @@ void Exporter::build_part(PartCtx& part, bool first_part)
         part.measures[mi].directions.push_back(dir);
     }
     if (first_part) {
+        // Chord symbols ride on the first part, as on a lead sheet.
+        for (const auto& ch : data_.chords) {
+            if (!theory::parse_chord_symbol(ch.text)) continue;
+            auto [mi, off] = place(ch.tick, false);
+            Direction dir;
+            dir.kind = DirKind::Harmony;
+            dir.offset = off;
+            dir.text = ch.text;
+            part.measures[mi].directions.push_back(dir);
+        }
         for (const auto& t : tempos_) {
             auto [mi, off] = place(t.tick, false);
             Direction dir;
@@ -1013,8 +1027,74 @@ void Exporter::write_event(xml::Writer& w, const PartCtx& part, const Lane& lane
     }
 }
 
+void Exporter::write_harmony(xml::Writer& w, const PartCtx& part, const Direction& d)
+{
+    const auto chord = theory::parse_chord_symbol(d.text);
+    if (!chord) return;
+    // A transposing part reads its chord symbols at written pitch, like its notes.
+    const nt::Staff& staff = part.score->staff(0);
+    const int t = opts_.concert_pitch ? 0 : staff.transposition_semitones;
+    const nt::KeySignature key = part.score->key_signature_at(0);
+    auto spelled = [&](const theory::SpelledPitch& sp) {
+        nt::Pitch p;
+        p.step = static_cast<nt::Step>(sp.letter);
+        p.alteration = static_cast<std::int8_t>(sp.alteration);
+        p.octave = 4;
+        if (t != 0) p = detail::transpose_pitch(p, -detail::diatonic_for_semitones(t), -t, key);
+        return p;
+    };
+    auto write_step = [&](const char* step_name, const char* alter_name, const nt::Pitch& p) {
+        w.leaf(step_name, std::string(1, "CDEFGAB"[static_cast<int>(p.step)]));
+        if (p.alteration != 0) w.leaf(alter_name, std::to_string(p.alteration));
+    };
+    const char* kind = "other";
+    std::size_t n = 0;
+    const auto* kinds = detail::harmony_kinds(&n);
+    for (std::size_t i = 0; i < n; ++i)
+        if (chord->quality.id == kinds[i].quality) kind = kinds[i].kind;
+    w.open("harmony", {{"print-frame", "no"}});
+    w.open("root");
+    write_step("root-step", "root-alter", spelled(chord->root));
+    w.close();
+    w.leaf("kind", kind, {{"text", chord->quality.symbol}});
+    if (chord->bass || chord->inversion > 0) {  // "G7/B" parses as an inversion
+        w.open("bass");
+        write_step("bass-step", "bass-alter", spelled(chord->bass_note()));
+        w.close();
+    }
+    // Degrees for what the kind does not say: the tones beyond its stack.
+    auto degree = [&](int value, int alter, const char* type) {
+        w.open("degree");
+        w.leaf("degree-value", std::to_string(value));
+        w.leaf("degree-alter", std::to_string(alter));
+        w.leaf("degree-type", type);
+        w.close();
+    };
+    const std::string& q = chord->quality.id;
+    if (q == "69" || q == "add9" || q == "madd9") degree(9, 0, "add");
+    else if (q == "augmaj7") degree(5, 1, "alter");
+    else if (q == "7sus4") degree(7, -1, "add");
+    else if (q == "7b9") degree(9, -1, "add");
+    else if (q == "7#9") degree(9, 1, "add");
+    else if (q == "maj7#11") degree(11, 1, "add");
+    else if (q == "7alt") {
+        degree(9, -1, "add");
+        degree(9, 1, "add");
+        degree(13, -1, "add");
+    }
+    static const int natural[] = {0, 0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21};
+    for (const auto& a : chord->added)
+        if (a.degree >= 1 && a.degree <= 13) degree(a.degree, a.semitones - natural[a.degree], "add");
+    for (int o : chord->omit_degrees) degree(o, 0, "subtract");
+    w.close();
+}
+
 void Exporter::write_direction(xml::Writer& w, const PartCtx& part, const Direction& d)
 {
+    if (d.kind == DirKind::Harmony) {
+        write_harmony(w, part, d);
+        return;
+    }
     const bool multi = part.score->staff_count() > 1;
     const bool above = d.kind == DirKind::Tempo || d.kind == DirKind::Words;
     w.open("direction", {{"placement", above ? "above" : "below"}});
@@ -1061,6 +1141,7 @@ void Exporter::write_direction(xml::Writer& w, const PartCtx& part, const Direct
             w.close();
             break;
         }
+        case DirKind::Harmony: break;
     }
     if (d.voice > 0) w.leaf("voice", std::to_string(d.voice));
     if (multi) w.leaf("staff", std::to_string(d.staff + 1));
