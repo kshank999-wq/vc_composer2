@@ -234,14 +234,14 @@ not calendar promises; a full DAW is a multi-year programme (Main Spec §19).
 |---|---|---|
 | Supplement P0: foundation | Schema, registry, instrument IDs, placeholder resolver | **Done**: 314 instruments, validated |
 | Supplement P1: catalog | Cinematic, modern, regional, era and composer packs | **Done**: 203 templates. Cultural packs await expert review |
-| Supplement P2: Chord Explorer engine | Keys/modes, progressions, voicings, insertion | **Done** (engine); UI pending |
-| Supplement P3: Ostinato engine | Seeded generator, 16-bar variants, insertion | **Done** (engine); UI pending |
+| Supplement P2: Chord Explorer engine | Keys/modes, progressions, voicings, insertion | **Done**: engine and Chord Explorer window; Chord Mode, chord symbols and the Circle of Fifths built on it (docs/05) |
+| Supplement P3: Ostinato engine | Seeded generator, 16-bar variants, insertion | **Done**: engine and Ostinato Creator window (A/B/C variants, Send to Track) |
 | Supplement P4: polish | Custom/save/import/export, mapper warnings, favorites | Engine done; favorites/UI pending |
 | Main 0: discovery | Reuse audit, framework/licensing decision, VST3 host spike | Reuse audit and port done (02). **Framework licence needs a decision** (01) |
 | Main 1: core scoring MVP | Desktop shell, notation entry, shared track panel, MIDI mirror, playback, shortcuts, save/reload, basic VST3 | **Done** in `desktop/`: Composer view with keyboard and mouse entry, track panel, Sequencer, playback via the placeholder synth or VST3/AU instruments, save/reload/autosave. Verified headlessly on Linux; macOS/Windows built in CI |
 | Main 2: scoring workflow | Template wizard UI, library search/mapping UI, articulation engine, video + timecode, temp tracks, cues | Data model and timecode done; UI and media pending |
 | Main 3: DAW production | Audio record/edit, mixer/buses/inserts/sends, automation, device I/O, PDC, stems/score export | **Console mixer, channel DSP, buses/sends, audio recording with punch and takes, clip editing, automation (read/touch/latch/write, lanes for every strip control, sends, inserts and plug-in parameters) and plug-in delay compensation (its switch saved with the project, undoable) done.** MusicXML import/export, PDF parts and full score, and stem export (mix plus stems per project or per cue, wet or dry, with a sum-to-mix check) done. |
-| Main 4: collaboration | Versions, snapshots, A/B review, sync, roles, comments, packaging | Versions and snapshots done (local); sync pending |
+| Main 4: collaboration | Versions, snapshots, A/B review, sync, roles, comments, packaging | **Local part done**: track versions, snapshots, Director Review (A/B/C of snapshots or a track's versions, bar-level differences, approval that locks a version), Collect and Save Package / Open Package. Sync, roles and comments pending (sync and roles need a server) |
 | Main 5: hardening | Performance, plug-in matrix, video sync, recovery, accessibility, signed installers | Pending |
 
 ### Immediate next steps

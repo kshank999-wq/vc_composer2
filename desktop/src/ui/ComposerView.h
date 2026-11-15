@@ -91,6 +91,8 @@ public:
     /// A jog or shuttle moved the playhead: keep it in view, and (on the
     /// grid) bring the entry cursor there too.
     void follow_jog(Ticks tick, bool move_cursor);
+    /// Drops the working copy's uncommitted change (the session refused it).
+    void discard_uncommitted();
     Ticks origin() const noexcept { return origin_; }
     /// How many ticks the lanes show.
     Ticks shown_ticks() const { return visible_ticks(); }

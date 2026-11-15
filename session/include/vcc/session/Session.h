@@ -533,6 +533,44 @@ public:
     /// Moves an insert within its chain ("Move insert"): the order the engine runs.
     bool move_insert(const std::string& owner_id, int from, int to);
 
+    // --- Review: snapshots, A/B auditions, approval (Main Spec §15) ----------------------
+
+    /// Records every track's active version under a name ("Create snapshot").
+    std::string create_snapshot(const std::string& name);
+    bool rename_version(const std::string& track_id, const std::string& version_id, const std::string& name);
+    /// The project's name (the package and export names follow it). One undo step.
+    bool rename_project(const std::string& name);
+    /// Makes a snapshot's versions active, one undo step.
+    bool recall_snapshot(const std::string& snapshot_id);
+    bool rename_snapshot(const std::string& snapshot_id, const std::string& name);
+    bool remove_snapshot(const std::string& snapshot_id);
+    /// Track id -> active version id, for every track with versions.
+    std::map<std::string, std::string> active_versions() const;
+    /// Plays other versions with no undo step (an A/B audition: switching
+    /// back and forth is listening, not editing). Unknown ids are skipped.
+    bool audition_versions(const std::map<std::string, std::string>& versions);
+    /// Ends an audition on `chosen` as one undo step from `from` (the
+    /// versions before the audition began); nothing when they are the same.
+    bool choose_versions(const std::string& label, const std::map<std::string, std::string>& from,
+                         const std::map<std::string, std::string>& chosen);
+    /// Approves (locks) or releases a version; one undo step.
+    bool set_version_approved(const std::string& track_id, const std::string& version_id, bool approved);
+    bool set_snapshot_approved(const std::string& snapshot_id, bool approved);
+    /// Why the last edit was refused because of an approved version, or empty.
+    const std::string& last_refusal() const noexcept { return project_.last_refusal(); }
+
+    /// Where two versions of a track differ, by bar (notes as played -
+    /// performance included - articulation messages, controllers and audio).
+    struct VersionDiff {
+        std::vector<std::pair<int, int>> bars;  ///< Inclusive bar ranges that differ.
+        std::size_t notes_a = 0, notes_b = 0;
+        bool same() const noexcept { return bars.empty(); }
+        /// "Same music", "bars 5-8, 12".
+        std::string describe() const;
+    };
+    VersionDiff compare_versions(const std::string& track_id, const std::string& version_a,
+                                 const std::string& version_b) const;
+
     // --- Track Trans (Add-On Features spec §10) ----------------------------------------
     /// Whether a track can be transposed: pitched notes only (not audio,
     /// buses, unpitched percussion or the drum channel). False with why.

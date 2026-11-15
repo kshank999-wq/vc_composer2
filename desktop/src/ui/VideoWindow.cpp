@@ -36,6 +36,11 @@ FrameRate frame_rate_for(double fps, bool drop)
 
 juce::File resolve_picture_file(const AppContext& context, const project::PictureVersion& picture)
 {
+    // A packaged project keeps its picture beside it ("Picture/Cut3.mov").
+    if (!juce::File::isAbsolutePath(juce::String(picture.path))) {
+        if (context.session.path().empty()) return {};
+        return juce::File(juce::String(context.session.path())).getParentDirectory().getChildFile(juce::String(picture.path));
+    }
     const juce::File stored(juce::String(picture.path));
     if (stored.existsAsFile()) return stored;
     // Relink: the same file name beside the project (media moved with it).

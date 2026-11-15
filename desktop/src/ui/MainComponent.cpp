@@ -2,6 +2,7 @@
 
 #include "ui/composer/CircleOfFifths.h"
 #include "ui/console/RoutingCanvas.h"
+#include "ui/review/Review.h"
 #include "vcc/theory/Chord.h"
 
 #include "ui/hw/HwGallery.h"
@@ -332,6 +333,7 @@ MainComponent::MainComponent(AppContext& context)
     };
     context_.show_plugin_window = [this](const std::string& id) { show_plugin_window(id); };
     context_.show_insert_window = [this](const std::string& owner, int slot) { show_insert_window(owner, slot); };
+    context_.capture_plugin_states = [this] { capture_plugin_states(); };
 
     listener_ = context_.session.add_listener([this](session::Change c) {
         // A MIDI keyboard plays whichever track is selected.
@@ -447,6 +449,7 @@ MainComponent::~MainComponent()
     plugin_windows_.clear();
     builtin_windows_.clear();
     context_.show_insert_window = nullptr;
+    context_.capture_plugin_states = nullptr;
 }
 
 void MainComponent::paint(juce::Graphics& g) { g.fillAll(hw::tok::chassis); }
@@ -699,6 +702,15 @@ void MainComponent::timerCallback()
         }
     }
     if (sequencer_.isVisible()) sequencer_.set_playhead(tick, playing);
+    // An edit refused by an approved version: say why, and drop what the
+    // Composer had written on its working copy.
+    if (const auto refused = context_.session.project().refusal_count(); refused != refusals_seen_) {
+        if (refused > refusals_seen_ && !context_.session.last_refusal().empty()) {
+            context_.status("Not changed: " + juce::String(context_.session.last_refusal()));
+            composer_.discard_uncommitted();
+        }
+        refusals_seen_ = refused;
+    }
     // A plug-in that crashed in its own process: the session plays on without it.
     if (const auto crashed = context_.engine.take_newly_crashed_plugins(); !crashed.isEmpty())
         context_.status(crashed.joinIntoString(", ") + (crashed.size() == 1 ? " has" : " have") +
@@ -736,6 +748,19 @@ bool MainComponent::confirm_discard()
     if (r == 0) return false;
     if (r == 1) return save(false);
     return true;
+}
+
+void MainComponent::open_package(const juce::File& zip)
+{
+    juce::String error;
+    const auto project = review::unpack(zip, error);
+    if (project == juce::File()) {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Could not open the package", error);
+        return;
+    }
+    open_file(project);
+    context_.status("Opened the package in " + project.getParentDirectory().getFullPathName() +
+                    " (its Package Report.txt lists the plug-ins and libraries it needs)");
 }
 
 void MainComponent::open_file(const juce::File& file)
@@ -1524,7 +1549,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
                 cmd::about, cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool,
                 cmd::showCircleOfFifths, cmd::toggleStaffTools, cmd::detachStaffTools, cmd::showRouting,
-                cmd::showControlSurfaces, cmd::jogForward, cmd::jogBack});
+                cmd::showControlSurfaces, cmd::jogForward, cmd::jogBack, cmd::showReview,
+                cmd::collectPackage, cmd::openPackage});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1605,6 +1631,13 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             break;
         case cmd::showMixer: info.setInfo("Mixer", "", "View", 0); info.addDefaultKeypress('m', cmdKey); break;
         case cmd::showControlGallery: info.setInfo("Control Gallery", "", "View", 0); break;
+        case cmd::showReview:
+            info.setInfo("Director Review...", "A/B/C: compare snapshots or a track's versions, approve one", "View", 0);
+            break;
+        case cmd::collectPackage:
+            info.setInfo("Collect and Save Package...", "The project and every media file it uses, in one folder", "File", 0);
+            break;
+        case cmd::openPackage: info.setInfo("Open Package...", "Unpacks a package .zip and opens it", "File", 0); break;
         case cmd::showControlSurfaces:
             info.setInfo("Control Surfaces...", "Jog/shuttle wheels and transport controllers", "Tools", 0);
             break;
@@ -1729,6 +1762,16 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showCircleOfFifths: composer_ui::show_circle_of_fifths(context_); break;
         case cmd::showRouting: console::show_routing(context_); break;
         case cmd::showControlSurfaces: surface_ui::show_control_surfaces(context_, *surface_); break;
+        case cmd::showReview: review::show_review(context_); break;
+        case cmd::collectPackage: review::show_package(context_); break;
+        case cmd::openPackage:
+            if (!confirm_discard()) break;
+            chooser_ = std::make_unique<juce::FileChooser>("Open package", juce::File(), "*.zip");
+            chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [this](const juce::FileChooser& fc) {
+                                      if (fc.getResult() != juce::File()) open_package(fc.getResult());
+                                  });
+            break;
         case cmd::jogForward: surface_->jog(1); break;
         case cmd::jogBack: surface_->jog(-1); break;
         case cmd::toggleStaffTools:
@@ -1817,13 +1860,13 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
     auto* c = &context_.commands;
     switch (index) {
         case 0:
-            for (auto id : {cmd::newFromTemplate, cmd::newProject, cmd::open}) m.addCommandItem(c, id);
+            for (auto id : {cmd::newFromTemplate, cmd::newProject, cmd::open, cmd::openPackage}) m.addCommandItem(c, id);
             m.addSeparator();
             m.addCommandItem(c, cmd::importPicture);
             m.addCommandItem(c, cmd::importAudio);
             m.addCommandItem(c, cmd::importMusicXml);
             m.addSeparator();
-            for (auto id : {cmd::save, cmd::saveAs, cmd::saveAsTemplate}) m.addCommandItem(c, id);
+            for (auto id : {cmd::save, cmd::saveAs, cmd::saveAsTemplate, cmd::collectPackage}) m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::exportStems, cmd::exportMidi, cmd::exportMusicXml, cmd::exportFullScorePdf, cmd::exportPartsPdf,
                             cmd::exportScoreSvg})
@@ -1845,6 +1888,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             m.addCommandItem(c, cmd::toggleFollow);
             m.addCommandItem(c, cmd::showRouting);
+            m.addCommandItem(c, cmd::showReview);
             m.addCommandItem(c, cmd::showCircleOfFifths);
             m.addCommandItem(c, cmd::toggleStaffTools);
             m.addCommandItem(c, cmd::detachStaffTools);

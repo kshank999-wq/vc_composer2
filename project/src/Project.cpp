@@ -233,10 +233,72 @@ Project::Project()
 
 Project::Project(ProjectData data, std::uint64_t next_id) : data_(std::move(data)), ids_(next_id) {}
 
+namespace {
+
+/// A version's music, as saved: everything but its name, notes and approval.
+std::string version_music(const TrackVersion& v)
+{
+    TrackVersion m = v;
+    m.name.clear();
+    m.notes.clear();
+    m.approved = false;
+    ProjectData one;
+    Track t;
+    t.id = "t";
+    t.versions.push_back(std::move(m));
+    t.active_version_id = t.versions.back().id;
+    one.tracks.push_back(std::move(t));
+    const auto doc = Project(std::move(one)).to_json();
+    const auto* tracks = doc.get("tracks");
+    if (!tracks || tracks->as_array().empty()) return {};
+    const auto* versions = tracks->as_array().front().get("versions");
+    return versions ? json::write(*versions) : std::string();
+}
+
+}  // namespace
+
+bool Project::breaks_approval(const ProjectData& working)
+{
+    refusal_.clear();
+    bool any = false;
+    for (const auto& t : data_.tracks)
+        for (const auto& v : t.versions) any = any || v.approved;
+    if (!any) return false;
+    // Compare like with like: the old document under the new meter and key
+    // (a global meter or key change reaches every score, approved or not).
+    ProjectData probe = data_;
+    probe.meter = working.meter;
+    probe.key = working.key;
+    probe.sync_scores();
+    for (const auto& before : probe.tracks) {
+        const Track* after = working.find_track(before.id);
+        if (!after) continue;  // removing a whole track is its own decision
+        for (const auto& v : before.versions) {
+            if (!v.approved) continue;
+            const auto it = std::find_if(after->versions.begin(), after->versions.end(),
+                                         [&](const TrackVersion& x) { return x.id == v.id; });
+            if (it == after->versions.end()) {
+                refusal_ = v.name + " of " + before.name + " is approved: un-approve it to delete it";
+                ++refusals_;
+                return true;
+            }
+            if (!it->approved) continue;  // un-approving in the same edit
+            if (version_music(*it) != version_music(v)) {
+                refusal_ = v.name + " of " + before.name +
+                           " is approved: duplicate it to try changes, or un-approve it to edit it";
+                ++refusals_;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool Project::edit(const std::string& label, const std::function<bool(ProjectData&)>& change)
 {
     ProjectData working = data_;
     bool ok = false;
+    refusal_.clear();
     try {
         ok = change(working);
     } catch (...) {
@@ -244,6 +306,7 @@ bool Project::edit(const std::string& label, const std::function<bool(ProjectDat
     }
     if (!ok) return false;
     working.sync_scores();
+    if (breaks_approval(working)) return false;
     undo_.push_back({label, std::move(data_), {}});
     data_ = std::move(working);
     redo_.clear();
@@ -255,6 +318,7 @@ bool Project::edit_coalescing(const std::string& label, const std::function<bool
     if (undo_.empty() || undo_.back().label != label || !redo_.empty()) return edit(label, change);
     ProjectData working = data_;
     bool ok = false;
+    refusal_.clear();
     try {
         ok = change(working);
     } catch (...) {
@@ -262,6 +326,7 @@ bool Project::edit_coalescing(const std::string& label, const std::function<bool
     }
     if (!ok) return false;
     working.sync_scores();
+    if (breaks_approval(working)) return false;
     data_ = std::move(working);  // the existing step's "before" stays as it was
     return true;
 }
@@ -309,7 +374,7 @@ std::string Project::add_track(const std::string& name, TrackKind kind, const st
         t.include_in_export = kind != TrackKind::Reference;
         t.output_bus_id = "bus-master";
         if (kind != TrackKind::Folder) {
-            t.versions.push_back({version, "Version 1", {}, score_for_track(t.name), {}, {}, {}, std::nullopt, {}, {}});
+            t.versions.push_back({version, "Version 1", {}, score_for_track(t.name), {}, {}, {}, std::nullopt, {}, {}, false});
             t.active_version_id = version;
         }
         d.tracks.push_back(t);
@@ -397,6 +462,7 @@ std::optional<std::string> Project::duplicate_version(const std::string& track_i
         TrackVersion copy = *tr->active_version();
         copy.id = id;
         copy.name = label;
+        copy.approved = false;  // the copy is the one to work on
         for (std::size_t i = 0; i < copy.regions.size(); ++i) copy.regions[i].id = region_ids[i];
         for (std::size_t i = 0; i < copy.phrases.size(); ++i) copy.phrases[i].id = phrase_ids[i];
         tr->versions.push_back(copy);
@@ -814,6 +880,7 @@ json::Value Project::to_json() const
                             {"score", notation::score_to_json(v.score)}, {"regions", regions},
                             {"articulation_overrides", string_array(v.articulation_overrides)}};
             if (v.gain_db) vo.set("gain_db", *v.gain_db);
+            if (v.approved) vo.set("approved", true);
             {
                 json::Array perf;
                 for (const auto& [id, ov] : v.performance) {
@@ -941,7 +1008,9 @@ json::Value Project::to_json() const
     for (const auto& s : d.snapshots) {
         json::Object tv;
         for (const auto& [k, v] : s.track_versions) tv.set(k, v);
-        snaps.emplace_back(json::Object{{"id", s.id}, {"name", s.name}, {"track_versions", tv}});
+        json::Object so{{"id", s.id}, {"name", s.name}, {"track_versions", tv}};
+        if (s.approved) so.set("approved", true);
+        snaps.emplace_back(std::move(so));
     }
     root.set("snapshots", snaps);
     root.set("applied_templates", string_array(d.applied_templates));
@@ -1071,6 +1140,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
             v.notes = vj.get_string("notes");
             v.articulation_overrides = vj.get_string_array("articulation_overrides");
             if (const auto* g = vj.get("gain_db")) v.gain_db = g->as_double();
+            v.approved = vj.get_bool("approved", false);
             if (const auto* sj = vj.get("score")) {
                 notation::ScoreLoadResult loaded = notation::score_from_json(*sj, v.score);
                 if (!loaded.ok) return fail("version " + v.id + " score: " + loaded.error);
@@ -1272,7 +1342,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         d.chords.push_back(std::move(ch));
     }
     for (const auto& j : doc.get("snapshots") ? doc.get("snapshots")->as_array() : json::Array{}) {
-        Snapshot s{j.get_string("id"), j.get_string("name"), {}};
+        Snapshot s{j.get_string("id"), j.get_string("name"), {}, j.get_bool("approved", false)};
         if (!unique(s.id)) return fail("missing or duplicate snapshot id '" + s.id + "'");
         if (const auto* tv = j.get("track_versions"))
             for (const auto& m : tv->as_object()) s.track_versions[m.first] = m.second.as_string();

@@ -36,6 +36,9 @@ struct AppContext {
     /// The Circle of Fifths' "Send to Chord Mode": fills the Composer's chord
     /// palette with a chord and opens it (set by the main window).
     std::function<void(const std::string& chord_symbol)> send_to_chord_mode;
+    /// Stores every hosted plug-in's current state in the project (before a
+    /// package copies it; set by the main window).
+    std::function<void()> capture_plugin_states;
 };
 
 /// Application commands (menus, toolbar buttons and key bindings).
@@ -102,6 +105,9 @@ enum : juce::CommandID {
     showControlSurfaces,
     jogForward,
     jogBack,
+    showReview,
+    collectPackage,
+    openPackage,
 };
 }  // namespace cmd
 

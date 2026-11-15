@@ -39,6 +39,7 @@
 #include "ui/composer/CircleOfFifths.h"
 #include "ui/console/RoutingCanvas.h"
 #include "ui/surface/ControlSurface.h"
+#include "ui/review/Review.h"
 #include "ui/composer/TransposePopover.h"
 #include "ui/composer/ComposerRuler.h"
 #include "vcc/theory/Chord.h"
@@ -5012,6 +5013,195 @@ void surface_checks(MainWindow& window, const juce::File& dir)
     pump(30);
 }
 
+/// Director review (Main Spec §15): A/B between whole-project snapshots and
+/// between a track's versions while playing, with no undo steps; where they
+/// differ, by bar; approval locks a version (an edit is refused and said);
+/// Keep is one undo step; closing goes back.
+void review_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto horn = session.add_track("Horn", "brass.horn_f");
+    const auto strings = session.add_track("Strings", "strings.violins_1");
+    std::vector<NoteEvent> line;
+    for (int i = 0; i < 32; ++i) line.push_back({i * kTicksPerQuarter, kTicksPerQuarter, 60 + (i % 4), 80, 0, {}});
+    session.insert_notes(horn, 0, 8 * kTicksPerWhole, line, project::CollisionPolicy::Replace, "line");
+    session.insert_notes(strings, 0, 8 * kTicksPerWhole, line, project::CollisionPolicy::Replace, "line");
+    const auto h1 = session.data().find_track(horn)->active_version_id;
+    const auto s1 = session.data().find_track(strings)->active_version_id;
+    const auto snap_a = session.create_snapshot("A: as written");
+    const auto h2 = *session.duplicate_version(horn);
+    const auto s2 = *session.duplicate_version(strings);
+    std::vector<NoteEvent> alt;
+    for (int i = 0; i < 8; ++i) alt.push_back({2 * kTicksPerWhole + i * kTicksPerQuarter, kTicksPerQuarter, 67, 90, 0, {}});
+    session.insert_notes(horn, 2 * kTicksPerWhole, 4 * kTicksPerWhole, alt, project::CollisionPolicy::Replace, "alt");
+    const auto snap_b = session.create_snapshot("B: new horn line");
+    // Start the review from a mix of the two (horn A, strings B).
+    session.set_active_version(horn, h1);
+    session.select_track(horn);
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(80);
+    ctx.commands.invokeDirectly(cmd::showReview, false);
+    auto* panel = review::review_panel();
+    for (int i = 0; i < 20 && !panel; ++i) {
+        pump(50);
+        panel = review::review_panel();
+    }
+    if (!panel) {
+        check(false, "View > Director Review opens the window");
+        return;
+    }
+    check(panel->mode() == review::ReviewPanel::Mode::Snapshots && panel->assigned(0) == snap_a && panel->assigned(1) == snap_b,
+          "with two snapshots, the review puts them in A and B");
+    const auto history = session.project().history_size();
+    ctx.engine.play();
+    auto active = [&](const std::string& t) { return session.data().find_track(t)->active_version_id; };
+    auto* key_b = dynamic_cast<juce::Button*>(find_by_id(*panel, "review_slot_B"));
+    if (key_b) key_b->triggerClick();
+    pump(80);
+    check(active(horn) == h2 && active(strings) == s2 && ctx.engine.playing(), "B plays snapshot B, and the music plays on");
+    panel->keyPressed(juce::KeyPress('a'));
+    pump(40);
+    check(active(horn) == h1 && active(strings) == s1, "the A key plays snapshot A");
+    panel->keyPressed(juce::KeyPress('2'));
+    pump(40);
+    check(active(horn) == h2 && session.project().history_size() == history,
+          "switching A and B back and forth adds nothing to undo");
+    const auto diff = panel->difference();
+    check(diff.contains("Horn: bars 3-4") && diff.contains("Strings: Same music"),
+          "the review says where B differs from A: " + diff);
+    shoot(*panel->getTopLevelComponent(), dir, "50-director-review");
+
+    // Approve A: its versions lock; an edit is refused and said.
+    panel->play_slot(0);
+    panel->approve_current(true);
+    pump(40);
+    const auto* sa = &session.data().snapshots.front();
+    check(sa->approved && session.data().find_track(horn)->active_version()->approved,
+          "approving A marks the snapshot and pins its versions");
+    const auto before_edit = session.project().history_size();
+    session.insert_notes(horn, 0, kTicksPerWhole, {{0, kTicksPerQuarter, 72, 80, 0, {}}}, project::CollisionPolicy::Replace, "x");
+    pump(120);
+    check(session.project().history_size() == before_edit &&
+              main.status_strip().message().contains("is approved"),
+          "an edit to an approved version is refused, and the status line says why: " + main.status_strip().message());
+
+    // Keep B: one undo step from where the review began.
+    panel->play_slot(1);
+    const auto steps = session.project().history_size();
+    panel->keep();
+    pump(40);
+    check(session.project().history_size() == steps + 1 && active(horn) == h2 && active(strings) == s2,
+          "Keep makes B the project's choice in one undo step");
+    session.undo();
+    pump(40);
+    check(active(horn) == h1 && active(strings) == s2, "undo goes back to where the review began (horn A, strings B)");
+
+    // The selected track's versions: A/B one part.
+    panel->set_mode(review::ReviewPanel::Mode::Track);
+    pump(40);
+    check(panel->assigned(0) == h1 && panel->assigned(1) == h2 && panel->difference().contains("bars 3-4"),
+          "in track mode A and B are the horn's versions, differing in bars 3-4: " + panel->difference());
+    panel->play_slot(1);
+    pump(40);
+    check(active(horn) == h2 && active(strings) == s2, "B plays the horn's second version, the strings untouched");
+    // Closing without Keep: back.
+    if (auto* w = dynamic_cast<dialogs::ToolWindow*>(panel->getTopLevelComponent())) w->closeButtonPressed();
+    pump(80);
+    check(active(horn) == h1, "closing the review without Keep goes back to where it began");
+    ctx.engine.stop();
+    session.set_version_approved(horn, h1, false);
+}
+
+/// Packaging (Main Spec §16): the project and its media into one folder and
+/// a .zip, with a report; the .zip opens elsewhere with every file found.
+void package_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    const auto root = dir.getChildFile("package-check");
+    root.deleteRecursively();
+    const auto project_dir = root.getChildFile("Studio/Cue 2M1");
+    const auto audio = project_dir.getChildFile("Audio Files/Pad.wav");
+    const auto outside = root.getChildFile("Library/Choir.wav");
+    for (const auto& f : {audio, outside}) {
+        f.getParentDirectory().createDirectory();
+        juce::AudioBuffer<float> b(1, 48000);
+        for (int i = 0; i < b.getNumSamples(); ++i) b.setSample(0, i, 0.2f * std::sin(static_cast<float>(i) * 0.05f));
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(f);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(24));
+        if (writer) writer->writeFromAudioSampleBuffer(b, 0, b.getNumSamples());
+    }
+    session.new_empty();
+    session.rename_project("Cue 2M1");
+    const auto pad = session.add_audio_track("Pad", false);
+    project::AudioClip a;
+    a.name = "Pad";
+    a.file = "Audio Files/Pad.wav";
+    a.length = 1.0;
+    a.channels = 1;
+    a.file_sample_rate = 48000.0;
+    project::AudioClip c = a;
+    c.name = "Choir";
+    c.file = outside.getFullPathName().toStdString();
+    c.start_seconds = 2.0;
+    project::AudioClip lost = a;
+    lost.name = "Lost";
+    lost.file = root.getChildFile("Gone/Lost.wav").getFullPathName().toStdString();
+    lost.start_seconds = 4.0;
+    session.add_audio_clips({{pad, a}, {pad, c}, {pad, lost}}, "Import", false);
+    const auto horn = session.add_track("Horn", "brass.horn_f");
+    session.update_track_mix(horn, "Library", [](project::Track& t) { t.plugin_requirements = {"Spitfire Symphonic Brass"}; });
+    session.save_as(project_dir.getChildFile("Cue 2M1.vcc2").getFullPathName().toStdString());
+
+    ctx.commands.invokeDirectly(cmd::collectPackage, false);
+    auto* panel = review::package_panel();
+    for (int i = 0; i < 20 && !panel; ++i) {
+        pump(50);
+        panel = review::package_panel();
+    }
+    if (!panel) {
+        check(false, "File > Collect and Save Package opens the window");
+        return;
+    }
+    panel->destination() = root.getChildFile("Out/Cue 2M1 Package");
+    panel->make_zip().setToggleState(true, juce::dontSendNotification);
+    panel->start();
+    for (int i = 0; i < 200 && panel->busy(); ++i) pump(50);
+    const auto& r = panel->result();
+    const auto folder = root.getChildFile("Out/Cue 2M1 Package");
+    check(!panel->busy() && r.ok && r.copied == 2 && folder.getChildFile("Audio Files/Pad.wav").existsAsFile() &&
+              folder.getChildFile("Audio Files/Choir.wav").existsAsFile() && panel->zip_file().existsAsFile(),
+          "the package holds both audio files and a .zip is made: " + panel->message());
+    const auto report = folder.getChildFile("Package Report.txt").loadFileAsString();
+    check(report.contains("MISSING (1)") && report.contains("Lost.wav") && report.contains("Spitfire Symphonic Brass"),
+          "the report lists the missing file and the library the receiving machine needs");
+    shoot(*panel->getTopLevelComponent(), dir, "51-package");
+    panel->getTopLevelComponent()->setVisible(false);
+
+    // Somewhere else entirely: the zip opens and finds its media.
+    const auto moved = root.getChildFile("Elsewhere/Cue 2M1 Package.zip");
+    moved.getParentDirectory().createDirectory();
+    panel->zip_file().copyFileTo(moved);
+    main.open_package(moved);
+    pump(120);
+    const auto opened = juce::File(juce::String(session.path()));
+    int found = 0;
+    if (const auto* t = session.data().find_track(pad))
+        for (const auto& clip : t->active_version()->audio_clips)
+            if (juce::File(juce::String(session.resolve_audio_path(clip.file))).existsAsFile()) ++found;
+    check(opened.isAChildOf(root.getChildFile("Elsewhere")) && found == 2 && session.data().name == "Cue 2M1",
+          "Open Package unpacks the zip beside it and opens the project with both audio files found (" +
+              opened.getFullPathName() + ")");
+    root.deleteRecursively();
+}
+
 void chord_symbol_checks(MainWindow& window, const juce::File& dir)
 {
     using composer::Command;
@@ -6288,6 +6478,10 @@ int main(int argc, char** argv)
         routing_checks(window, dir);
         section("surface_checks");
         surface_checks(window, dir);
+        section("review_checks");
+        review_checks(window, dir);
+        section("package_checks");
+        package_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

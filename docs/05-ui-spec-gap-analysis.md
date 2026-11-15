@@ -1259,3 +1259,59 @@ macOS, Linux and Windows. What it took:
       (CC 33 on channel 3 becomes the jog, the old control stops); Jog
       Forward; the window's Learn key. Screenshots `47-surface-producer`,
       `48-surface-composer`, `49-control-surfaces`.
+27. **Director review and project packaging. Done** (November 15, 2026;
+    Main Spec §15 and §16).
+    - **Director Review** (View > Director Review). Slots A, B and C hold
+      whole-project snapshots (Capture records what plays now) or the
+      selected track's versions. The A/B/C keys (or 1-3) switch while the
+      transport plays; it is an audition, so nothing reaches undo
+      (`Session::audition_versions`). For snapshots, a track a snapshot
+      does not cover plays as it was when the review began. The window
+      says where the slots differ, per track and by bar
+      (`Session::compare_versions`: the notes as played - performance
+      included - articulation messages, controllers and audio clips),
+      e.g. "A vs B: Horn: bars 3-4; Strings: Same music". Keep makes what
+      plays the project's choice in one undo step (`choose_versions`);
+      Back, or closing the window, returns to where the review began.
+    - **Approval.** "Approved (locked)" in the review, or Approve in the
+      track's menu, pins a version; approving a snapshot pins its
+      versions. The lock lives in `Project::edit`: any edit that would
+      change an approved version's music (its score, regions, performance,
+      audio, phrases) or delete it is refused, whatever window it came
+      from, and the status line says why ("Version 1 of Horn is approved:
+      duplicate it to try changes, or un-approve it to edit it"). The
+      Composer drops the refused change from its working copy. Renaming,
+      the mix, tempo and global key or meter changes stay free; a
+      duplicate starts unapproved. The version list shows "(approved)".
+      Approval is saved with the project.
+    - **Collect and Save Package** (File menu). Into a new folder: the
+      project (media paths made relative), `Audio Files/` with every audio
+      file any version uses (takes and other versions too; two different
+      files with one name are numbered), `Picture/` (optional), `Package
+      Report.txt` and `package.json`. The report lists missing files (they
+      keep their old path) and what the receiving machine needs:
+      instrument and effect plug-ins and sample libraries, which are never
+      bundled (licensed per machine). Plug-in states are captured first
+      and travel in the project. It runs in the background with progress
+      and Cancel (a cancelled or failed package removes what it wrote),
+      and can also write a .zip. **Open Package** unpacks a .zip beside it
+      and opens the project inside; relative picture paths resolve from
+      the project's folder.
+    - Not yet: timecode comments and annotations, sync and roles (need a
+      server), review mixes per slot (render each slot to audio),
+      approval of whole cues as deliverables, and relinking missing media
+      by search.
+    - **Checks.** Unit tests: version differences by bar ("bars 3-4, 7"),
+      auditions without undo steps, Keep as one step and its undo,
+      approval refusing notes, score edits and deletion while allowing
+      rename, tempo, mix, key changes and duplicates, approval saved;
+      packaging with relative and absolute media, a same-named file,
+      takes, a missing file, the picture, a plug-in dependency, reopening
+      after a move, without the picture, into a non-empty folder
+      (refused), cancelled (nothing left). Desktop check: A/B of two
+      snapshots while playing, the A and 2 keys, no undo steps, the
+      difference text, approval and a refused edit with its status
+      message, Keep and undo, track mode, closing goes back; packaging to
+      a folder and .zip with the report, then Open Package elsewhere with
+      both audio files found. Screenshots `50-director-review`,
+      `51-package`.

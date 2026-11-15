@@ -2605,3 +2605,202 @@ bool Session::apply_notate(const std::string& track_id, const NotatePlan& plan, 
 }
 
 }  // namespace vcc::session
+
+// --- Review ----------------------------------------------------------------------------------
+
+namespace vcc::session {
+
+std::string Session::create_snapshot(const std::string& name)
+{
+    const auto id = project_.create_snapshot(name.empty() ? "Snapshot " + std::to_string(data().snapshots.size() + 1) : name);
+    document_changed();
+    return id;
+}
+
+bool Session::rename_version(const std::string& track_id, const std::string& version_id, const std::string& name)
+{
+    if (!project_.rename_version(track_id, version_id, name)) return false;
+    document_changed();
+    return true;
+}
+
+bool Session::rename_project(const std::string& name)
+{
+    if (name.empty()) return false;
+    return edit("Rename project", [&](project::ProjectData& d) {
+        if (d.name == name) return false;
+        d.name = name;
+        return true;
+    });
+}
+
+bool Session::recall_snapshot(const std::string& snapshot_id)
+{
+    if (!project_.recall_snapshot(snapshot_id)) return false;
+    document_changed();
+    return true;
+}
+
+bool Session::rename_snapshot(const std::string& snapshot_id, const std::string& name)
+{
+    if (name.empty()) return false;
+    return edit("Rename snapshot", [&](project::ProjectData& d) {
+        for (auto& s : d.snapshots)
+            if (s.id == snapshot_id && s.name != name) {
+                s.name = name;
+                return true;
+            }
+        return false;
+    });
+}
+
+bool Session::remove_snapshot(const std::string& snapshot_id)
+{
+    return edit("Delete snapshot", [&](project::ProjectData& d) {
+        const auto before = d.snapshots.size();
+        d.snapshots.erase(std::remove_if(d.snapshots.begin(), d.snapshots.end(),
+                                         [&](const project::Snapshot& s) { return s.id == snapshot_id; }),
+                          d.snapshots.end());
+        return d.snapshots.size() != before;
+    });
+}
+
+std::map<std::string, std::string> Session::active_versions() const
+{
+    std::map<std::string, std::string> out;
+    for (const auto& t : data().tracks)
+        if (!t.active_version_id.empty()) out[t.id] = t.active_version_id;
+    return out;
+}
+
+namespace {
+/// Applies `versions` to `d`; true when anything changed.
+bool apply_versions(project::ProjectData& d, const std::map<std::string, std::string>& versions)
+{
+    bool changed = false;
+    for (const auto& entry : versions) {
+        const std::string& version_id = entry.second;
+        project::Track* t = d.find_track(entry.first);
+        if (!t || t->active_version_id == version_id) continue;
+        const bool exists = std::any_of(t->versions.begin(), t->versions.end(),
+                                        [&](const project::TrackVersion& v) { return v.id == version_id; });
+        if (!exists) continue;
+        t->active_version_id = version_id;
+        changed = true;
+    }
+    return changed;
+}
+}  // namespace
+
+bool Session::audition_versions(const std::map<std::string, std::string>& versions)
+{
+    bool changed = false;
+    project_.modify_unrecorded([&](project::ProjectData& d) { changed = apply_versions(d, versions); });
+    if (changed) document_changed();
+    return changed;
+}
+
+bool Session::choose_versions(const std::string& label, const std::map<std::string, std::string>& from,
+                              const std::map<std::string, std::string>& chosen)
+{
+    // Back to where the audition began (unrecorded), then the choice as one step.
+    project_.modify_unrecorded([&](project::ProjectData& d) { apply_versions(d, from); });
+    const bool changed = project_.edit(label, [&](project::ProjectData& d) { return apply_versions(d, chosen); });
+    document_changed();
+    return changed;
+}
+
+bool Session::set_version_approved(const std::string& track_id, const std::string& version_id, bool approved)
+{
+    return edit(approved ? "Approve version" : "Release approval", on_track(track_id, [&](project::Track& t) {
+        for (auto& v : t.versions)
+            if (v.id == version_id && v.approved != approved) {
+                v.approved = approved;
+                return true;
+            }
+        return false;
+    }));
+}
+
+bool Session::set_snapshot_approved(const std::string& snapshot_id, bool approved)
+{
+    return edit(approved ? "Approve snapshot" : "Release snapshot approval", [&](project::ProjectData& d) {
+        for (auto& s : d.snapshots)
+            if (s.id == snapshot_id && s.approved != approved) {
+                s.approved = approved;
+                return true;
+            }
+        return false;
+    });
+}
+
+std::string Session::VersionDiff::describe() const
+{
+    if (bars.empty()) return "Same music";
+    std::string text = bars.size() == 1 && bars[0].first == bars[0].second ? "bar " : "bars ";
+    for (std::size_t i = 0; i < bars.size(); ++i) {
+        if (i) text += ", ";
+        text += std::to_string(bars[i].first);
+        if (bars[i].second != bars[i].first) text += "-" + std::to_string(bars[i].second);
+    }
+    return text;
+}
+
+Session::VersionDiff Session::compare_versions(const std::string& track_id, const std::string& version_a,
+                                               const std::string& version_b) const
+{
+    VersionDiff diff;
+    const project::Track* track = data().find_track(track_id);
+    if (!track) return diff;
+    const auto& d = data();
+    // Each bar's material, as text, from one version.
+    auto by_bar = [&](const std::string& version_id, std::size_t& count) {
+        std::map<int, std::multiset<std::string>> bars;
+        project::Track t = *track;
+        if (std::none_of(t.versions.begin(), t.versions.end(),
+                         [&](const project::TrackVersion& v) { return v.id == version_id; }))
+            return bars;
+        t.active_version_id = version_id;
+        const auto r = project::render_track(t);
+        count = r.notes.size();
+        auto key = [](const char* kind, std::initializer_list<long long> values) {
+            std::string k = kind;
+            for (auto v : values) k += ":" + std::to_string(v);
+            return k;
+        };
+        for (const auto& n : r.notes)
+            bars[d.meter.bar_at(n.start)].insert(key("n", {n.start, n.duration, n.pitch, n.velocity, n.channel}) + n.articulation);
+        for (const auto& n : r.keyswitches)
+            bars[d.meter.bar_at(n.start)].insert(key("k", {n.start, n.duration, n.pitch, n.velocity}));
+        for (const auto& c : r.controllers)
+            bars[d.meter.bar_at(c.tick)].insert(key("c", {c.tick, c.channel, c.controller, c.value}));
+        for (const auto& v : t.versions) {
+            if (v.id != version_id) continue;
+            for (const auto& c : v.audio_clips) {
+                char buf[256];
+                std::snprintf(buf, sizeof buf, "a:%s:%.6f:%.6f:%.6f:%.3f:%.4f:%.4f:%d:%d", c.file.c_str(), c.start_seconds,
+                              c.source_offset, c.length, c.gain_db, c.fade_in, c.fade_out, c.lane, c.muted ? 1 : 0);
+                const int first = d.meter.bar_at(d.tempo.tick_at_seconds(c.start_seconds));
+                const int last = d.meter.bar_at(std::max<Ticks>(0, d.tempo.tick_at_seconds(c.end_seconds()) - 1));
+                for (int b = first; b <= last; ++b) bars[b].insert(buf);
+            }
+        }
+        return bars;
+    };
+    const auto a = by_bar(version_a, diff.notes_a);
+    const auto b = by_bar(version_b, diff.notes_b);
+    std::set<int> differ;
+    for (const auto& [bar, items] : a) {
+        const auto it = b.find(bar);
+        if (it == b.end() || it->second != items) differ.insert(bar);
+    }
+    for (const auto& [bar, items] : b)
+        if (!a.count(bar)) differ.insert(bar);
+    for (int bar : differ) {
+        if (!diff.bars.empty() && diff.bars.back().second == bar - 1) diff.bars.back().second = bar;
+        else diff.bars.emplace_back(bar, bar);
+    }
+    return diff;
+}
+
+}  // namespace vcc::session

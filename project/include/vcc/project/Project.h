@@ -153,6 +153,10 @@ struct TrackVersion {
     std::vector<AudioClip> audio_clips;
     /// Phrase blocks over the score, in time order.
     std::vector<Phrase> phrases;
+    /// Approved (Main Spec §15, "approved-version pinning"): its music is
+    /// locked. Edits that would change it are refused until it is
+    /// un-approved; duplicating it gives an unapproved copy to work on.
+    bool approved = false;
 };
 
 /// A hosted instrument plug-in on a track (Main Spec §10.6: "persist plugin
@@ -488,6 +492,7 @@ struct Snapshot {
     std::string id;
     std::string name;
     std::map<std::string, std::string> track_versions;  ///< track id -> version id
+    bool approved = false;  ///< The director's pick (shown; recall is unaffected).
 };
 
 struct ProjectData {
@@ -575,6 +580,12 @@ public:
     /// state that is not the composer's edit (a plug-in's own state chunk).
     void modify_unrecorded(const std::function<void(ProjectData&)>& change);
 
+    /// Why the last edit was refused by the project itself (an approved
+    /// version's music would have changed), or empty.
+    const std::string& last_refusal() const noexcept { return refusal_; }
+    /// How many edits have been refused that way (a UI polls it to say why).
+    std::uint64_t refusal_count() const noexcept { return refusals_; }
+
     bool can_undo() const noexcept { return !undo_.empty(); }
     bool can_redo() const noexcept { return !redo_.empty(); }
     std::string undo_label() const;
@@ -616,8 +627,14 @@ public:
     std::vector<const Track*> export_tracks() const;
 
 private:
+    /// Whether `working` changes an approved version's music (or deletes
+    /// one from a track that stays); sets refusal_.
+    bool breaks_approval(const ProjectData& working);
+
     ProjectData data_;
     IdAllocator ids_;
+    std::string refusal_;
+    std::uint64_t refusals_ = 0;
     struct Step {
         std::string label;
         ProjectData before;

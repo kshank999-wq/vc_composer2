@@ -43,6 +43,8 @@ public:
     /// True when it is fine to discard the document (saved, or the user agreed).
     bool confirm_discard();
     void open_file(const juce::File& file);
+    /// Unpacks a package .zip beside it and opens the project inside.
+    void open_package(const juce::File& zip);
     bool save(bool save_as);
     void show_mixer();
     /// Every hardware control of the UI spec, in the current theme.
@@ -188,6 +190,7 @@ private:
     ComposerView composer_;
     SequencerView sequencer_;
     std::unique_ptr<surface_ui::ControlSurface> surface_;
+    std::uint64_t refusals_seen_ = 0;
     Workspace workspace_ = Workspace::Composer;
     std::unique_ptr<MixerWindow> mixer_;
     std::map<std::string, std::unique_ptr<PluginWindow>> plugin_windows_;

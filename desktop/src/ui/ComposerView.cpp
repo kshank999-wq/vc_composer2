@@ -450,6 +450,13 @@ void ComposerView::follow_jog(Ticks tick, bool move_cursor)
         if (s->track_id() == editing_track_) s->view().set_cursor(editor_->cursor().tick, editor_->cursor().staff_index, note_entry_);
 }
 
+void ComposerView::discard_uncommitted()
+{
+    reload_working_copy(false);
+    apply_view_settings();
+    repaint();
+}
+
 void ComposerView::zoom(bool larger)
 {
     pixels_per_space_ = juce::jlimit(4.0, 16.0, pixels_per_space_ * (larger ? 1.15 : 1.0 / 1.15));

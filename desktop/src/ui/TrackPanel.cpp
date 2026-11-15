@@ -112,7 +112,8 @@ public:
         version_.clear(juce::dontSendNotification);
         int active = 0;
         for (std::size_t i = 0; i < t->versions.size(); ++i) {
-            version_.addItem(t->versions[i].name, static_cast<int>(i) + 1);
+            version_.addItem(juce::String(t->versions[i].name) + (t->versions[i].approved ? juce::String(" (approved)") : juce::String()),
+                             static_cast<int>(i) + 1);
             if (t->versions[i].id == t->active_version_id) active = static_cast<int>(i) + 1;
         }
         version_.addSeparator();
@@ -534,6 +535,13 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
     juce::PopupMenu m;
     m.addSectionHeader(t->name);
     m.addItem("Duplicate as new version", [&c, id] { c.session.duplicate_version(id); });
+    if (const auto* v = t->active_version()) {
+        const std::string vid = v->id;
+        if (v->approved)
+            m.addItem("Release approval of " + juce::String(v->name), [&c, id, vid] { c.session.set_version_approved(id, vid, false); });
+        else
+            m.addItem("Approve " + juce::String(v->name) + " (lock it)", [&c, id, vid] { c.session.set_version_approved(id, vid, true); });
+    }
     juce::PopupMenu instruments;
     instruments.addItem("Built-in placeholder sound", true, t->instrument_plugin.empty(),
                         [&c, id] { c.session.set_instrument_plugin(id, {}); });
