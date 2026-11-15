@@ -190,6 +190,12 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
         Group view{"View"};
         view.producer = true;
         add(view, "Mixer", 62).onClick = invoke(cmd::showMixer);
+        {
+            auto& routing = add(view, "Routing", 66);
+            routing.setComponentID("producer_routing");
+            routing.setTooltip("Visual routing: every track, bus, send and output as one signal-flow map");
+            routing.onClick = invoke(cmd::showRouting);
+        }
         add(view, "Picture", 70).onClick = invoke(cmd::showVideo);
         add(view, "Cues", 56).onClick = invoke(cmd::showCueManager);
         groups_.push_back(view);

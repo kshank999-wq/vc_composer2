@@ -9,6 +9,7 @@
 #include "vcc/interchange/Xml.h"
 #include "vcc/project/Render.h"
 #include "vcc/project/RenderCache.h"
+#include "vcc/project/Routing.h"
 #include "vcc/session/Session.h"
 #include "vcc/theory/Chord.h"
 #include "vcc_test.h"
@@ -1549,4 +1550,85 @@ TEST_CASE("track Trans: one track, heard once, reset, bypass, saved, applied to 
     CHECK_EQ(session::Session::interval_name(-12), std::string("octave down"));
     CHECK_EQ(session::Session::interval_name(7), std::string("perfect 5th up"));
     CHECK_EQ(session::Session::interval_name(-14), std::string("major 2nd + an octave down"));
+}
+
+TEST_CASE("routing: the graph, strings to reverb to orchestra bus to master, loops refused")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const std::string strings = s.add_track("Strings", "strings.violins_1");
+    const std::string horn = s.add_track("Horn", "brass.horn_f");
+    const std::string verb = s.add_bus("Reverb", "fx");
+    const std::string orch = s.add_bus("Orchestra", "group");
+    std::string why;
+    CHECK(s.route_output(strings, orch, &why));
+    CHECK_EQ(s.undo_label(), std::string("Route output"));
+    CHECK(s.add_send(strings, verb, false, -10.0, &why));
+    CHECK_EQ(s.undo_label(), std::string("Add send"));
+    CHECK(s.route_output(verb, orch, &why));  // the return into the orchestra bus
+
+    auto g = project::routing_graph(s.data());
+    auto col = [&](const std::string& id) { return g.node(id) ? g.node(id)->column : -1; };
+    CHECK_EQ(col(strings), 0);
+    CHECK_EQ(col(verb), 1);
+    CHECK_EQ(col(orch), 2);
+    CHECK_EQ(col("bus-master"), 3);
+    CHECK_EQ(col("hw-out"), 4);
+    auto down = g.downstream(strings);
+    for (const char* id : {"bus-master", "hw-out"}) CHECK(std::find(down.begin(), down.end(), id) != down.end());
+    CHECK(std::find(down.begin(), down.end(), verb) != down.end());
+    auto up = g.upstream(orch);
+    CHECK(std::find(up.begin(), up.end(), strings) != up.end());
+    CHECK(std::find(up.begin(), up.end(), horn) == up.end());
+    int sends = 0;
+    for (const auto& e : g.edges)
+        if (e.kind == project::RouteEdge::Kind::Send && e.from == strings && e.to == verb) {
+            ++sends;
+            CHECK(std::abs(e.level_db + 10.0) < 1e-9);
+            CHECK(!e.pre_fader);
+        }
+    CHECK_EQ(sends, 1);
+
+    // Loops are refused, and the reason names the path.
+    CHECK(!s.route_output(orch, verb, &why));
+    CHECK(why.find("loop") != std::string::npos);
+    CHECK(why.find("Orchestra") != std::string::npos);
+    CHECK(why.find("Reverb") != std::string::npos);
+    CHECK(!s.add_send(orch, verb, false, -6.0, &why));
+    CHECK(!s.route_output(verb, verb, &why));
+    CHECK(!s.add_send(strings, verb, true, -6.0, &why));  // already sends there
+    CHECK(why.find("already") != std::string::npos);
+    CHECK(!s.route_output("bus-master", orch, &why));
+    CHECK(!s.add_send(strings, "bus-master", false, -6.0, &why));
+    // A track never closes a loop (nothing feeds a track).
+    CHECK(s.add_send(horn, verb, true, -14.0, &why));
+
+    // Sends change (coalescing) and go; inserts move in order.
+    CHECK(s.update_send(strings, 0, "Send level", [](project::Send& x) { x.level_db = -6.0; }));
+    CHECK(s.update_send(strings, 0, "Send level", [](project::Send& x) { x.level_db = -3.0; }));
+    CHECK(std::abs(s.data().find_track(strings)->sends[0].level_db + 3.0) < 1e-9);
+    s.undo();
+    CHECK(std::abs(s.data().find_track(strings)->sends[0].level_db + 10.0) < 1e-9);
+    CHECK(s.update_send(strings, 0, "Send pre", [](project::Send& x) { x.pre_fader = true; }));
+    CHECK(s.data().find_track(strings)->sends[0].pre_fader);
+    s.update_track_mix(strings, "inserts", [](project::Track& t) {
+        project::InsertSlot a, b, c;
+        a.kind = "eq";
+        b.kind = "compressor";
+        c.kind = "reverb";
+        t.inserts = {a, b, c};
+    });
+    CHECK(s.move_insert(strings, 2, 0));
+    CHECK_EQ(s.undo_label(), std::string("Move insert"));
+    CHECK_EQ(s.data().find_track(strings)->inserts[0].kind, std::string("reverb"));
+    CHECK_EQ(s.data().find_track(strings)->inserts[1].kind, std::string("eq"));
+    g = project::routing_graph(s.data());
+    REQUIRE(g.node(strings)->inserts.size() == 3u);
+    CHECK_EQ(g.node(strings)->inserts[0].name, std::string("Reverb"));
+    CHECK(!s.move_insert(strings, 0, 5));
+    CHECK(s.remove_send(strings, 0));
+    CHECK_EQ(s.undo_label(), std::string("Remove send"));
+    CHECK(s.data().find_track(strings)->sends.empty());
+    s.undo();
+    CHECK_EQ(s.data().find_track(strings)->sends.size(), 1u);
 }

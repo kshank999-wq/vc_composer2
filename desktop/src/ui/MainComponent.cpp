@@ -1,6 +1,7 @@
 #include "ui/MainComponent.h"
 
 #include "ui/composer/CircleOfFifths.h"
+#include "ui/console/RoutingCanvas.h"
 #include "vcc/theory/Chord.h"
 
 #include "ui/hw/HwGallery.h"
@@ -1515,7 +1516,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
                 cmd::about, cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool,
-                cmd::showCircleOfFifths, cmd::toggleStaffTools, cmd::detachStaffTools});
+                cmd::showCircleOfFifths, cmd::toggleStaffTools, cmd::detachStaffTools, cmd::showRouting});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1596,6 +1597,10 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             break;
         case cmd::showMixer: info.setInfo("Mixer", "", "View", 0); info.addDefaultKeypress('m', cmdKey); break;
         case cmd::showControlGallery: info.setInfo("Control Gallery", "", "View", 0); break;
+        case cmd::showRouting:
+            info.setInfo("Visual Routing...", "Tracks, buses, sends and outputs as a signal-flow map", "View", 0);
+            info.addDefaultKeypress('r', cmdKey | juce::ModifierKeys::altModifier);
+            break;
         case cmd::showCircleOfFifths:
             info.setInfo("Circle of Fifths...", "Key reference: scales, diatonic chords, related keys", "View", 0);
             break;
@@ -1709,6 +1714,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showMixer: show_mixer(); break;
         case cmd::showControlGallery: show_control_gallery(); break;
         case cmd::showCircleOfFifths: composer_ui::show_circle_of_fifths(context_); break;
+        case cmd::showRouting: console::show_routing(context_); break;
         case cmd::toggleStaffTools:
             composer_.set_staff_tools_collapsed(!composer_.staff_tools_collapsed());
             break;
@@ -1822,6 +1828,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
                 m.addCommandItem(c, id);
             m.addSeparator();
             m.addCommandItem(c, cmd::toggleFollow);
+            m.addCommandItem(c, cmd::showRouting);
             m.addCommandItem(c, cmd::showCircleOfFifths);
             m.addCommandItem(c, cmd::toggleStaffTools);
             m.addCommandItem(c, cmd::detachStaffTools);

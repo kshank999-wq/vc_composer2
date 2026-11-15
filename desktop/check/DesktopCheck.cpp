@@ -37,6 +37,7 @@
 #include "ui/console/ConsoleView.h"
 #include "ui/TrackPanel.h"
 #include "ui/composer/CircleOfFifths.h"
+#include "ui/console/RoutingCanvas.h"
 #include "ui/composer/TransposePopover.h"
 #include "ui/composer/ComposerRuler.h"
 #include "vcc/theory/Chord.h"
@@ -4603,6 +4604,163 @@ void staff_tools_checks(MainWindow& window, const juce::File& dir)
 /// Chord symbols: the ruler's suggestion kept with a click, one typed on a
 /// beat, a bad one refused, Escape, editing to empty removes, and the
 /// symbols printed over the full score's top staff in the Page view.
+/// Visual Routing (Add-On spec §5): the chain strings -> reverb send -> aux
+/// return -> orchestra bus -> master -> hardware out is built on the canvas
+/// with the mouse; mixer edits show on the canvas and canvas edits in the
+/// session; a loop is refused with its path; an insert is reordered.
+void routing_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    ctx.engine.locate(0);
+    session.new_empty();
+    const auto strings = session.add_track("Strings", "strings.violins_1");
+    const auto horns = session.add_track("Horns", "brass.horn_f");
+    const auto reverb = session.add_bus("Hall Reverb", "fx");
+    const auto orch = session.add_bus("Orchestra", "group");
+    session.update_track_mix(strings, "Inserts", [](project::Track& t) {
+        t.inserts.clear();
+        for (const char* k : {"eq", "compressor"}) {
+            project::InsertSlot slot;
+            slot.kind = k;
+            slot.suggestion = false;
+            t.inserts.push_back(slot);
+        }
+    });
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(80);
+    if (auto* key = main.toolbar().key("Routing")) key->triggerClick();
+    pump(200);
+    auto* canvas = console::routing_canvas();
+    if (!canvas) {
+        check(false, "the Routing key opens the Visual Routing window");
+        return;
+    }
+    canvas->fit();
+    pump(30);
+    const auto& g0 = canvas->graph();
+    check(g0.node(strings) && g0.node(horns) && g0.node(reverb) && g0.node(orch) && g0.node("bus-master") && g0.node("hw-out"),
+          "the canvas shows the tracks, both buses, the master and the hardware output");
+
+    auto has_edge = [&](const std::string& from, const std::string& to, project::RouteEdge::Kind kind) {
+        for (const auto& e : canvas->graph().edges)
+            if (e.from == from && e.to == to && e.kind == kind) return true;
+        return false;
+    };
+    using EK = project::RouteEdge::Kind;
+    auto wire = [&](const std::string& from, const std::string& to, int mods) {
+        canvas->refresh();
+        const auto a = canvas->output_port(from);
+        const auto b = canvas->node_bounds(to).getCentre();
+        drag(*canvas, a, b, (mods & juce::ModifierKeys::altModifier) != 0, mods & ~juce::ModifierKeys::altModifier);
+        pump(40);
+        canvas->refresh();
+    };
+    // Shift+drag strings -> reverb: a post-fader send.
+    wire(strings, reverb, juce::ModifierKeys::shiftModifier);
+    const auto* st = session.data().find_track(strings);
+    check(has_edge(strings, reverb, EK::Send) && st && st->sends.size() == 1 && st->sends[0].bus_id == reverb &&
+              !st->sends[0].pre_fader,
+          "a Shift-drag from Strings onto Hall Reverb adds a post-fader send (session and canvas)");
+    // Alt+drag horns -> reverb: pre-fader.
+    wire(horns, reverb, juce::ModifierKeys::altModifier);
+    const auto* ht = session.data().find_track(horns);
+    check(ht && ht->sends.size() == 1 && ht->sends[0].pre_fader, "an Alt-drag adds a pre-fader send");
+    // Plain drags: outputs. Strings and the reverb return to the orchestra bus.
+    wire(strings, orch, 0);
+    wire(reverb, orch, 0);
+    st = session.data().find_track(strings);
+    check(st && st->output_bus_id == orch && has_edge(strings, orch, EK::Output) && has_edge(reverb, orch, EK::Output) &&
+              has_edge(orch, "bus-master", EK::Output) && has_edge("bus-master", "hw-out", EK::Output),
+          "plain drags route outputs: strings -> reverb send -> aux return -> orchestra bus -> master -> hardware out");
+    const auto* rn = canvas->graph().node(reverb);
+    const auto* on = canvas->graph().node(orch);
+    const auto* mn = canvas->graph().node("bus-master");
+    check(rn && on && mn && rn->column < on->column && on->column < mn->column,
+          "the layout follows the signal: the reverb left of the orchestra bus, the bus left of the master");
+
+    // A loop: the orchestra bus into the reverb would come back to itself.
+    const auto history = session.project().history_size();
+    wire(orch, reverb, 0);
+    check(session.project().history_size() == history && canvas->message().startsWith("Not connected") &&
+              canvas->message().contains("loop") && canvas->message().contains("Orchestra") &&
+              !has_edge(orch, reverb, EK::Output),
+          "a connection that would loop is refused, and the message names the path: " + canvas->message());
+    shoot(*canvas->getTopLevelComponent(), dir, "45-routing-refused");
+
+    // Edits from the mixer side show on the canvas.
+    session.update_send(strings, 0, "Send level", [](project::Send& s) { s.level_db = -6.0; });
+    pump(120);
+    bool level_shown = false;
+    for (const auto& e : canvas->graph().edges)
+        if (e.from == strings && e.kind == EK::Send) level_shown = std::abs(e.level_db + 6.0) < 0.05;
+    check(level_shown, "a send level changed on the mixer shows on the canvas");
+
+    // The inspector edits the line it was clicked on.
+    int send_edge = -1;
+    for (std::size_t i = 0; i < canvas->graph().edges.size(); ++i)
+        if (canvas->graph().edges[i].from == strings && canvas->graph().edges[i].kind == EK::Send) send_edge = static_cast<int>(i);
+    const auto click = canvas->edge_point(send_edge, 0.3f);
+    canvas->mouseDown(mouse_event(*canvas, click, click, false));
+    canvas->mouseUp(mouse_event(*canvas, click, click, false));
+    pump(30);
+    check(canvas->selected_edge() == send_edge, "a click on the send line selects it");
+    canvas->pre_toggle().setToggleState(true, juce::sendNotificationSync);
+    canvas->level_slider().setValue(-3.0, juce::sendNotificationSync);
+    pump(30);
+    st = session.data().find_track(strings);
+    check(st && st->sends.size() == 1 && st->sends[0].pre_fader && std::abs(st->sends[0].level_db + 3.0) < 0.05,
+          "the inspector makes the send pre-fader at -3 dB");
+    session.undo();
+    session.undo();
+    pump(80);
+    st = session.data().find_track(strings);
+    check(st && st->sends.size() == 1 && !st->sends[0].pre_fader && std::abs(st->sends[0].level_db + 6.0) < 0.05,
+          "both inspector edits undo");
+
+    // Insert order: drag the compressor above the EQ.
+    canvas->refresh();
+    const auto comp = canvas->insert_bounds(strings, 1).getCentre();
+    const auto eq = canvas->insert_bounds(strings, 0).getCentre();
+    drag(*canvas, comp, eq.translated(0, -2));
+    st = session.data().find_track(strings);
+    check(st && st->inserts.size() == 2 && st->inserts[0].kind == "compressor" && st->inserts[1].kind == "eq",
+          "dragging an insert chip reorders the chain (compressor before EQ)");
+
+    // Tracing and isolation.
+    canvas->select_node(horns);
+    canvas->set_isolate(true);
+    pump(30);
+    check(canvas->node_shown(horns) && canvas->node_shown(reverb) && canvas->node_shown(orch) &&
+              canvas->node_shown("bus-master") && !canvas->node_shown(strings),
+          "Isolate on Horns shows its path (reverb, orchestra, master) and hides Strings");
+    canvas->set_isolate(false);
+    check(canvas->search("orch") == 1, "search finds the orchestra bus");
+    canvas->search({});
+    canvas->select_node(strings);
+    canvas->fit();
+    for (std::size_t i = 0; i < canvas->graph().edges.size(); ++i)
+        if (canvas->graph().edges[i].from == strings && canvas->graph().edges[i].kind == EK::Send) canvas->select_edge(static_cast<int>(i));
+    pump(60);
+    check(canvas->level_slider().isShowing(), "the selected send opens the inspector");
+    shoot(*canvas->getTopLevelComponent(), dir, "46-routing-canvas");
+
+    // Disconnect from the inspector: strings back to the master.
+    int out_edge = -1;
+    for (std::size_t i = 0; i < canvas->graph().edges.size(); ++i)
+        if (canvas->graph().edges[i].from == strings && canvas->graph().edges[i].kind == EK::Output) out_edge = static_cast<int>(i);
+    canvas->select_edge(out_edge);
+    canvas->remove_button().triggerClick();
+    pump(80);
+    st = session.data().find_track(strings);
+    check(st && (st->output_bus_id.empty() || st->output_bus_id == "bus-master" || st->output_bus_id == "master"),
+          "Disconnect sends the strings back to the master");
+    if (auto* w = canvas->getTopLevelComponent()) w->setVisible(false);
+    pump(30);
+}
+
 void chord_symbol_checks(MainWindow& window, const juce::File& dir)
 {
     using composer::Command;
@@ -5875,6 +6033,8 @@ int main(int argc, char** argv)
         trans_checks(window, dir);
         section("staff_tools_checks");
         staff_tools_checks(window, dir);
+        section("routing_checks");
+        routing_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

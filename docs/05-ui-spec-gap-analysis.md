@@ -1160,3 +1160,44 @@ macOS, Linux and Windows. What it took:
       key re-times the selected note, the window comes back where it was
       left, and a place on a missing display opens on the main one; Dock.
       Screenshots `44-staff-tools`, `44b-staff-tools-detached`.
+25. **Visual routing canvas. Done** (November 15, 2026; Add-On Features
+    spec §5, Feature C). View > Visual Routing (Cmd/Ctrl+Alt+R) or the
+    Producer toolbar's Routing key opens the whole signal path as one map.
+    - **Model.** `project::routing_graph` reads the graph from the project
+      every time: audio-carrying tracks, buses, the master and the hardware
+      output; outputs and sends as edges. There is no second routing
+      state, so the canvas and the mixer are two views of one routing and
+      a change in either shows in the other. Layout follows signal flow:
+      tracks on the left, each bus one column past the deepest thing
+      feeding it, then the master, then the hardware output.
+    - **Editing.** All edits are session edits (undoable, saved, applied
+      to the engine by the usual snapshot swap): `route_output`,
+      `add_send`, `remove_send`, `update_send`, `move_insert`. A
+      connection that would let a signal reach itself is refused, and the
+      refusal names the loop ("it would loop: Orchestra -> Hall Reverb ->
+      Orchestra"); so are sends to the master and duplicate sends.
+    - **Canvas.** Nodes show kind (colour), channel format, fader level,
+      mute, a meter and the insert chain in order. Outputs are solid
+      lines; sends are dashed and labelled with level and pre/post. A
+      line that skips a column runs around the nodes in between. Drag
+      from an output port onto a bus: a plain drop routes the output,
+      Shift adds a post-fader send, Alt a pre-fader send. A click on a
+      line opens the inspector (level, pan, pre-fader, mute, Remove send /
+      Disconnect); right-click offers the same removal. Drag an insert
+      chip to reorder the chain. Selecting a node traces what feeds it and
+      what it feeds; Isolate hides the rest. Search, Fit, zoom (+/-,
+      Cmd/Ctrl+wheel), pan (drag the background or scroll) and a mini-map
+      (click to jump).
+    - Not yet: creating buses and plug-ins from the canvas, hardware
+      inputs and multiple hardware outputs, per-channel (surround)
+      formats, and saved canvas positions (the layout is always
+      automatic).
+    - **Checks.** Unit test: the graph for strings -> reverb -> orchestra
+      bus -> master, layout columns, loops refused with their path.
+      Desktop check: the chain strings -> reverb send -> aux return ->
+      orchestra bus -> master -> hardware out built by mouse drags with
+      Shift/Alt; the loop refused with its path; a mixer-side send level
+      shown on the canvas; the inspector making a send pre-fader at -3 dB
+      and both edits undoing; an insert reordered by drag; Isolate and
+      search; Disconnect back to the master. Screenshots
+      `45-routing-refused`, `46-routing-canvas`.

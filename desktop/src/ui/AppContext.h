@@ -98,6 +98,7 @@ enum : juce::CommandID {
     showCircleOfFifths,
     toggleStaffTools,
     detachStaffTools,
+    showRouting,
 };
 }  // namespace cmd
 

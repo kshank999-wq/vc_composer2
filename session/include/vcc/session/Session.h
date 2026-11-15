@@ -518,6 +518,21 @@ public:
     /// Sounding range for a track (instrument range, or full piano).
     std::pair<int, int> range_for(const project::Track& track) const;
 
+    // --- Routing (the Visual Routing canvas, Add-On Features spec §5) ------------------
+    /// Points a track's or bus's output at `bus_id` ("Route output"). False,
+    /// with the reason in `why`, for the master, an unknown bus or a loop.
+    bool route_output(const std::string& source_id, const std::string& bus_id, std::string* why = nullptr);
+    /// A new send from a track or bus to a bus ("Add send"); false with why
+    /// for a loop, a send that is already there, or the master.
+    bool add_send(const std::string& source_id, const std::string& bus_id, bool pre_fader, double level_db,
+                  std::string* why = nullptr);
+    bool remove_send(const std::string& source_id, int index);
+    /// Changes one send (level, pre/post, mute, pan); coalesces under `label`.
+    bool update_send(const std::string& source_id, int index, const std::string& label,
+                     const std::function<void(project::Send&)>& change);
+    /// Moves an insert within its chain ("Move insert"): the order the engine runs.
+    bool move_insert(const std::string& owner_id, int from, int to);
+
     // --- Track Trans (Add-On Features spec §10) ----------------------------------------
     /// Whether a track can be transposed: pitched notes only (not audio,
     /// buses, unpitched percussion or the drum channel). False with why.

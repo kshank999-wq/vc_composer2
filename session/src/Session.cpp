@@ -14,6 +14,7 @@
 #include "vcc/project/Automation.h"
 #include "vcc/project/Performance.h"
 #include "vcc/project/Render.h"
+#include "vcc/project/Routing.h"
 #include "vcc/project/Stems.h"
 #include "vcc/theory/Chord.h"
 
@@ -1042,6 +1043,115 @@ std::pair<int, int> Session::range_for(const project::Track& track) const
 {
     if (const auto* def = instrument_for(track)) return {def->range_low, def->range_high};
     return {21, 108};
+}
+
+// --- Routing -------------------------------------------------------------------------------
+
+namespace {
+/// The sends and inserts of a track or a bus, for edits that treat both alike.
+template <typename F>
+bool on_source(project::ProjectData& d, const std::string& id, F&& f)
+{
+    if (auto* t = d.find_track(id)) return f(t->sends, t->inserts);
+    if (auto* b = d.find_bus(id)) return f(b->sends, b->inserts);
+    return false;
+}
+}  // namespace
+
+bool Session::route_output(const std::string& source_id, const std::string& bus_id, std::string* why)
+{
+    const auto& d = data();
+    auto no = [&](const std::string& reason) {
+        if (why) *why = reason;
+        return false;
+    };
+    const auto* to = d.find_bus(bus_id);
+    if (!to) return no("there is no such bus");
+    if (source_id == "bus-master") return no("the master goes to the hardware output");
+    std::string loop;
+    if (project::would_loop(d, source_id, bus_id, &loop)) return no(loop);
+    if (d.find_track(source_id)) return set_output_bus(source_id, bus_id) || no("it already goes there");
+    if (!d.find_bus(source_id)) return no("there is no such track or bus");
+    return edit("Route output", [&](project::ProjectData& pd) {
+        auto* b = pd.find_bus(source_id);
+        if (!b || b->output == bus_id) return false;
+        b->output = bus_id;
+        return true;
+    }) || no("it already goes there");
+}
+
+bool Session::add_send(const std::string& source_id, const std::string& bus_id, bool pre_fader, double level_db, std::string* why)
+{
+    const auto& d = data();
+    auto no = [&](const std::string& reason) {
+        if (why) *why = reason;
+        return false;
+    };
+    if (!d.find_bus(bus_id) || bus_id == "bus-master") return no("sends go to an FX or group bus");
+    if (source_id == "bus-master") return no("the master has no sends");
+    std::string loop;
+    if (project::would_loop(d, source_id, bus_id, &loop)) return no(loop);
+    bool exists = false;
+    if (const auto* t = d.find_track(source_id))
+        exists = std::any_of(t->sends.begin(), t->sends.end(), [&](const project::Send& s) { return s.bus_id == bus_id; });
+    else if (const auto* b = d.find_bus(source_id))
+        exists = std::any_of(b->sends.begin(), b->sends.end(), [&](const project::Send& s) { return s.bus_id == bus_id; });
+    else
+        return no("there is no such track or bus");
+    if (exists) return no("it already sends there");
+    return edit("Add send", [&](project::ProjectData& pd) {
+        return on_source(pd, source_id, [&](std::vector<project::Send>& sends, auto&) {
+            project::Send s(bus_id, std::clamp(level_db, -96.0, 12.0));
+            s.pre_fader = pre_fader;
+            sends.push_back(s);
+            return true;
+        });
+    });
+}
+
+bool Session::remove_send(const std::string& source_id, int index)
+{
+    return edit("Remove send", [&](project::ProjectData& pd) {
+        return on_source(pd, source_id, [&](std::vector<project::Send>& sends, auto&) {
+            if (index < 0 || index >= static_cast<int>(sends.size())) return false;
+            sends.erase(sends.begin() + index);
+            return true;
+        });
+    });
+}
+
+bool Session::update_send(const std::string& source_id, int index, const std::string& label,
+                          const std::function<void(project::Send&)>& change)
+{
+    if (!project_.edit_coalescing(label, [&](project::ProjectData& pd) {
+            return on_source(pd, source_id, [&](std::vector<project::Send>& sends, auto&) {
+                if (index < 0 || index >= static_cast<int>(sends.size())) return false;
+                const std::string bus = sends[static_cast<std::size_t>(index)].bus_id;
+                change(sends[static_cast<std::size_t>(index)]);
+                auto& s = sends[static_cast<std::size_t>(index)];
+                s.bus_id = bus;  // where it goes is route_output's / add_send's to change
+                s.level_db = std::clamp(s.level_db, -96.0, 12.0);
+                s.pan = std::clamp(s.pan, -1.0, 1.0);
+                return true;
+            });
+        }))
+        return false;
+    document_changed();
+    return true;
+}
+
+bool Session::move_insert(const std::string& owner_id, int from, int to)
+{
+    return edit("Move insert", [&](project::ProjectData& pd) {
+        return on_source(pd, owner_id, [&](auto&, std::vector<project::InsertSlot>& inserts) {
+            const int n = static_cast<int>(inserts.size());
+            if (from < 0 || from >= n || to < 0 || to >= n || from == to) return false;
+            auto slot = inserts[static_cast<std::size_t>(from)];
+            inserts.erase(inserts.begin() + from);
+            inserts.insert(inserts.begin() + to, slot);
+            return true;
+        });
+    });
 }
 
 // --- Track Trans ---------------------------------------------------------------------------
