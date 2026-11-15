@@ -335,3 +335,32 @@ TEST_CASE("key reference: borrowed chords, labelled against the home key and nev
                     CHECK(!(b.chord.root.pitch_class() == d.chord.root.pitch_class() && b.chord.quality.id == d.chord.quality.id));
         }
 }
+
+TEST_CASE("key reference: borrowing from other scales on the same tonic")
+{
+    auto list = [](const std::vector<BorrowedChord>& v) {
+        std::string out;
+        for (const auto& b : v) out += (out.empty() ? "" : " ") + b.roman + "=" + b.chord.name();
+        return out;
+    };
+    const auto c = key_reference(*Key::parse("C major"));
+    // The parallel source is what the reference already carries.
+    CHECK_EQ(list(borrowed_chords(c, BorrowSource::Parallel, false)), list(c.borrowed_triads));
+    // C Mixolydian lends the bVII and the minor v (and the diminished iii).
+    CHECK_EQ(list(borrowed_chords(c, BorrowSource::Mixolydian, false)), std::string("iii\xC2\xB0=Edim v=Gm \xE2\x99\xADVII=Bb"));
+    // C Lydian: the major II, #iv° and vii.
+    CHECK_EQ(list(borrowed_chords(c, BorrowSource::Lydian, false)), std::string("II=D \xE2\x99\xAFiv\xC2\xB0=F#dim vii=Bm"));
+    CHECK_EQ(borrowed_chords(c, BorrowSource::Lydian, false)[0].source, std::string("C Lydian"));
+    // A minor from A Dorian: the major IV and the minor ii.
+    const auto am = key_reference(*Key::parse("A minor"));
+    CHECK_EQ(list(borrowed_chords(am, BorrowSource::Dorian, false)), std::string("ii=Bm IV=D vi\xC2\xB0=F#dim"));
+    // Nothing new: A harmonic minor seen from itself.
+    const auto ah = key_reference(*Key::parse("A minor"), MinorForm::Harmonic);
+    CHECK(borrowed_chords(ah, BorrowSource::HarmonicMinor, false).empty());
+    // Flat keys spell with double flats where the scale needs them (Eb Locrian's v is Bbb).
+    const auto eb = key_reference(*Key::parse("Eb major"));
+    bool double_flat = false;
+    for (const auto& b : borrowed_chords(eb, BorrowSource::Locrian, false)) double_flat = double_flat || b.chord.name() == "Bbb";
+    CHECK(double_flat);
+    CHECK_EQ(borrow_source_name(BorrowSource::Parallel, true), std::string("Parallel major"));
+}

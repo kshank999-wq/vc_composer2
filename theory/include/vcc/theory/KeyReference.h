@@ -76,6 +76,19 @@ struct KeyReference {
 /// natural minor of their key signature's family).
 KeyReference key_reference(const Key& key, MinorForm form = MinorForm::Natural);
 
+/// Where borrowed chords come from: the parallel key first (with the
+/// Neapolitan, as in KeyReference::borrowed_*), then the other scales on
+/// the same tonic.
+enum class BorrowSource { Parallel, Dorian, Phrygian, Lydian, Mixolydian, Locrian, HarmonicMinor, MelodicMinor };
+const std::vector<BorrowSource>& borrow_sources();
+/// "Parallel minor", "Parallel major", "Dorian", ... ("Harmonic minor").
+std::string borrow_source_name(BorrowSource s, bool minor_home);
+/// The chords `ref`'s key can borrow from `source` (triads or sevenths): the
+/// source scale's chords that the key shown does not already have,
+/// numbered against the home key. Empty when the source adds nothing (the
+/// harmonic minor, seen from A harmonic minor).
+std::vector<BorrowedChord> borrowed_chords(const KeyReference& ref, BorrowSource source, bool sevenths);
+
 /// The major key, or its relative minor, with this key signature (-7..7).
 Key key_for_signature(int fifths, bool minor);
 

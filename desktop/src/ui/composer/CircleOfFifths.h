@@ -38,11 +38,13 @@ public:
     /// Shows or hides the borrowed chords (modal mixture). Remembered.
     void set_borrowed(bool on);
     bool borrowed_shown() const noexcept { return borrowed_; }
-    /// The borrowed chords shown (triads or sevenths, as the 7ths key says).
-    const std::vector<theory::BorrowedChord>& borrowed() const noexcept
-    {
-        return sevenths_ ? ref_.borrowed_sevenths : ref_.borrowed_triads;
-    }
+    /// The borrowed chords shown (triads or sevenths, as the 7ths key says),
+    /// from the source chosen: the parallel key first, or another scale on
+    /// the same tonic. Remembered.
+    const std::vector<theory::BorrowedChord>& borrowed() const noexcept { return lent_; }
+    void set_borrow_source(theory::BorrowSource source);
+    theory::BorrowSource borrow_source() const noexcept { return borrow_source_; }
+    juce::ComboBox& borrow_box() { return borrow_from_; }
     /// Selects a borrowed chord: highlighted, heard, ready for Chord Mode.
     void select_borrowed(int index, bool audition = true);
     int selected_borrowed() const noexcept { return selected_borrowed_; }
@@ -89,6 +91,9 @@ private:
     int selected_ = -1;
     int selected_borrowed_ = -1;
     bool borrowed_ = true;
+    theory::BorrowSource borrow_source_ = theory::BorrowSource::Parallel;
+    std::vector<theory::BorrowedChord> lent_;
+    juce::ComboBox borrow_from_;
     /// The chord selected (diatonic or borrowed), or null.
     const theory::Chord* selected_chord_ptr() const;
     void audition(const theory::Chord& chord);

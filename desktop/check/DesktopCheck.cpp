@@ -4246,6 +4246,7 @@ void circle_checks(MainWindow& window, const juce::File& dir)
     panel->set_reference(*theory::Key::parse("G major"));
     panel->set_sevenths(false);
     panel->set_borrowed(true);
+    panel->set_borrow_source(theory::BorrowSource::Parallel);
     pump(40);
     juce::String lent;
     for (const auto& b : panel->borrowed()) lent << (lent.isEmpty() ? "" : " ") << juce::String::fromUTF8(b.roman.c_str()) << "=" << b.chord.name();
@@ -4268,6 +4269,39 @@ void circle_checks(MainWindow& window, const juce::File& dir)
     check(panel->selection_text().contains("V = D (D F") && panel->selection_text().contains("diatonic in G major"),
           "a diatonic chord's line gives its numeral, name and notes: " + panel->selection_text());
     shoot(*panel->getTopLevelComponent(), dir, "42c-circle-borrowed");
+
+    // Borrowing from another scale on the tonic: the "Borrow from" list.
+    auto lent_text = [&] {
+        juce::String t;
+        for (const auto& b : panel->borrowed()) t << (t.isEmpty() ? "" : " ") << juce::String::fromUTF8(b.roman.c_str()) << "=" << b.chord.name();
+        return t;
+    };
+    check(panel->borrow_box().getNumItems() == 8 && panel->borrow_box().getItemText(0).contains("Parallel minor"),
+          "Borrow from lists the parallel minor first, then the modes: " + panel->borrow_box().getItemText(0));
+    panel->borrow_box().setSelectedItemIndex(4, juce::sendNotificationSync);  // Mixolydian
+    pump(40);
+    check(panel->borrow_source() == theory::BorrowSource::Mixolydian &&
+              lent_text() == juce::String::fromUTF8("iii\xC2\xB0=Bdim v=Dm \xE2\x99\xADVII=F") &&
+              panel->borrowed().front().source == "G Mixolydian",
+          "from G Mixolydian: " + lent_text());
+    shoot(*panel->getTopLevelComponent(), dir, "42d-circle-borrowed-mixolydian");
+    // A minor: the parallel major first (I, the Picardy third; ii; IV; V...).
+    panel->set_reference(*theory::Key::parse("A minor"));
+    panel->set_borrow_source(theory::BorrowSource::Parallel);
+    pump(40);
+    check(panel->borrow_box().getItemText(0).contains("Parallel major") &&
+              lent_text().startsWith(juce::String::fromUTF8("I=A \xE2\x99\xADII=Bb ii=Bm")),
+          "in A minor the list starts from the parallel major: " + lent_text());
+    panel->select_borrowed(0, false);
+    pump(30);
+    shoot(*panel->getTopLevelComponent(), dir, "42e-circle-borrowed-minor");
+    panel->set_minor_form(theory::MinorForm::Harmonic);
+    panel->set_borrow_source(theory::BorrowSource::HarmonicMinor);
+    pump(30);
+    check(panel->borrowed().empty(), "a source that adds nothing says so (A harmonic minor from itself)");
+    panel->set_minor_form(theory::MinorForm::Natural);
+    panel->set_borrow_source(theory::BorrowSource::Parallel);
+    panel->set_reference(*theory::Key::parse("G major"));
     panel->set_borrowed(false);
     check(!panel->borrowed_key(0).isVisible(), "the borrowed chords can be hidden");
     panel->set_borrowed(true);

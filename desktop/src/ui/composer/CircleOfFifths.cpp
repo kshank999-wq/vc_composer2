@@ -55,6 +55,8 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
     manual_ = theory::Key::parse(settings.getValue("circle_key", "C major").toStdString()).value_or(theory::Key{});
     sevenths_ = settings.getBoolValue("circle_sevenths", false);
     borrowed_ = settings.getBoolValue("circle_borrowed", true);
+    borrow_source_ = static_cast<theory::BorrowSource>(
+        std::clamp(settings.getIntValue("circle_borrow_from", 0), 0, static_cast<int>(theory::borrow_sources().size()) - 1));
     form_value_ = static_cast<theory::MinorForm>(std::clamp(settings.getIntValue("circle_form", 0), 0, 3));
 
     follow_key_.set_led_dot(true);
@@ -99,6 +101,14 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
                              "Neapolitan. Never labelled diatonic.");
     borrowed_key_.onClick = [this] { set_borrowed(borrowed_key_.getToggleState()); };
     addAndMakeVisible(borrowed_key_);
+    borrow_from_.setComponentID("circle_borrow_from");
+    borrow_from_.setTooltip("Where the borrowed chords come from: the parallel key (with the Neapolitan), or another "
+                            "scale on the same tonic");
+    borrow_from_.onChange = [this] {
+        const int i = borrow_from_.getSelectedItemIndex();
+        if (i >= 0) set_borrow_source(theory::borrow_sources()[static_cast<std::size_t>(i)]);
+    };
+    addAndMakeVisible(borrow_from_);
     for (int i = 0; i < 8; ++i) {
         borrowed_keys_.push_back(std::make_unique<hw::Keycap>("", true));
         auto& k = *borrowed_keys_.back();
@@ -139,6 +149,7 @@ void CircleOfFifthsPanel::remember() const
     settings.setValue("circle_key", juce::String(manual_.name()));
     settings.setValue("circle_sevenths", sevenths_);
     settings.setValue("circle_borrowed", borrowed_);
+    settings.setValue("circle_borrow_from", static_cast<int>(borrow_source_));
     settings.setValue("circle_form", static_cast<int>(form_value_));
 }
 
@@ -189,6 +200,20 @@ void CircleOfFifthsPanel::rebuild()
             k.setTitle(juce::String::fromUTF8(c.roman.c_str()) + " " + juce::String::fromUTF8(c.chord.display_name().c_str()));
         }
         k.setToggleState(static_cast<int>(i) == selected_, juce::dontSendNotification);
+    }
+    lent_ = theory::borrowed_chords(ref_, borrow_source_, sevenths_);
+    if (selected_borrowed_ >= static_cast<int>(lent_.size())) selected_borrowed_ = -1;
+    {
+        // "Borrow from": named for this key ("Parallel minor" in a major key).
+        const bool minor_home = theory::is_minor_family(ref_.key.mode);
+        borrow_from_.clear(juce::dontSendNotification);
+        int n = 0;
+        for (auto src : theory::borrow_sources())
+            borrow_from_.addItem("From " + juce::String(theory::borrow_source_name(src, minor_home)) +
+                                     (src == theory::BorrowSource::Parallel ? " + Neapolitan" : ""),
+                                 ++n);
+        borrow_from_.setSelectedItemIndex(static_cast<int>(borrow_source_), juce::dontSendNotification);
+        borrow_from_.setVisible(borrowed_);
     }
     const auto& lent = borrowed();
     for (std::size_t i = 0; i < borrowed_keys_.size(); ++i) {
@@ -270,6 +295,14 @@ void CircleOfFifthsPanel::set_borrowed(bool on)
     remember();
     rebuild();
     resized();
+}
+
+void CircleOfFifthsPanel::set_borrow_source(theory::BorrowSource source)
+{
+    borrow_source_ = source;
+    selected_borrowed_ = -1;
+    remember();
+    rebuild();
 }
 
 void CircleOfFifthsPanel::set_sevenths(bool on)
@@ -572,6 +605,16 @@ void CircleOfFifthsPanel::paint(juce::Graphics& g)
     g.setFont(hw::fonts::silk(9.5f, 0.08f, true));
     const auto area = chords_area();
     g.drawText("DIATONIC CHORDS", area.withHeight(14).toFloat(), juce::Justification::centredLeft, false);
+    if (borrowed_ && borrowed().empty()) {
+        g.setColour(hw::tok::text);
+        g.setFont(hw::fonts::ui(12.0f, false));
+        const auto b = borrowed_key_.getBounds();
+        g.drawText(juce::String(theory::borrow_source_name(borrow_source_, theory::is_minor_family(ref_.key.mode))) +
+                       " adds nothing beyond the chords of " + key_title(ref_.key),
+                   juce::Rectangle<float>(static_cast<float>(b.getX()), static_cast<float>(b.getBottom() + 12),
+                                          static_cast<float>(info_area().getWidth()), 18.0f),
+                   juce::Justification::centredLeft, true);
+    }
     if (borrowed_) {
         const auto& lent = borrowed();
         for (std::size_t i = 0; i < borrowed_keys_.size() && i < lent.size(); ++i) {
@@ -609,6 +652,8 @@ void CircleOfFifthsPanel::resized()
     r.removeFromTop(48);
     row = r.removeFromTop(26);
     borrowed_key_.setBounds(row.removeFromLeft(170));
+    row.removeFromLeft(8);
+    borrow_from_.setBounds(row.removeFromLeft(260));
     if (borrowed_) {
         r.removeFromTop(4);
         row = r.removeFromTop(34);

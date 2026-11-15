@@ -1400,3 +1400,15 @@ macOS, Linux and Windows. What it took:
       jog grain returning to beat 2, silent while automation is written;
       review mixes A and B rendered, non-silent and different, with the
       notes file. Screenshots `52-comments-ruler`, `53-comments`.
+32. **Circle of Fifths: "Borrow from". Done** (November 15, 2026). Beside
+    the Borrowed chords switch, a list chooses where they come from: the
+    parallel key first ("From Parallel minor + Neapolitan" in a major key,
+    "From Parallel major + Neapolitan" in a minor one), then Dorian,
+    Phrygian, Lydian, Mixolydian, Locrian, harmonic minor and melodic
+    minor on the same tonic. Each shows only what the key shown does not
+    already have, numbered against the home key (G Mixolydian: iii°, v,
+    bVII); a source that adds nothing says so. Remembered.
+    `theory::borrowed_chords(ref, source, sevenths)`; unit tests for
+    Mixolydian, Lydian, Dorian, Locrian (double flats) and an empty source;
+    desktop check and screenshots `42c` (G major), `42d` (Mixolydian),
+    `42e` (A minor from A major).
