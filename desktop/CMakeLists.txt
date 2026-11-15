@@ -64,13 +64,16 @@ juce_add_binary_data(vcc_ui_font_data
 file(GLOB vcc_content_root CONFIGURE_DEPENDS "${VCC_CONTENT_DIR}/*.json")
 file(GLOB vcc_content_instruments CONFIGURE_DEPENDS "${VCC_CONTENT_DIR}/instruments/*.json")
 file(GLOB vcc_content_templates CONFIGURE_DEPENDS "${VCC_CONTENT_DIR}/templates/*.json")
+file(GLOB vcc_content_library CONFIGURE_DEPENDS "${VCC_CONTENT_DIR}/library/*.json")
 juce_add_binary_data(vcc_content_root_data HEADER_NAME "VccContentRoot.h"
     NAMESPACE vcc_content_root SOURCES ${vcc_content_root})
 juce_add_binary_data(vcc_content_instruments_data HEADER_NAME "VccContentInstruments.h"
     NAMESPACE vcc_content_instruments SOURCES ${vcc_content_instruments})
 juce_add_binary_data(vcc_content_templates_data HEADER_NAME "VccContentTemplates.h"
     NAMESPACE vcc_content_templates SOURCES ${vcc_content_templates})
-foreach(t vcc_music_font_data vcc_ui_font_data vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data)
+juce_add_binary_data(vcc_content_library_data HEADER_NAME "VccContentLibrary.h"
+    NAMESPACE vcc_content_library SOURCES ${vcc_content_library})
+foreach(t vcc_music_font_data vcc_ui_font_data vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_content_library_data)
     set_target_properties(${t} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endforeach()
 
@@ -97,8 +100,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(vcc_desktop PRIVATE X11::X11)
 endif()
 target_link_libraries(vcc_desktop
-    PUBLIC vcc_ui_notation vcc_session vcc_media vcc_picture vcc_cues vcc_templates vcc_project vcc_theory vcc_ostinato vcc_engine vcc_audio vcc_juce
-    PRIVATE vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_ui_font_data)
+    PUBLIC vcc_ui_notation vcc_session vcc_library vcc_media vcc_picture vcc_cues vcc_templates vcc_project vcc_theory vcc_ostinato vcc_engine vcc_audio vcc_juce
+    PRIVATE vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_content_library_data vcc_ui_font_data)
 
 juce_add_gui_app(VCComposer2
     PRODUCT_NAME "VC Composer 2"

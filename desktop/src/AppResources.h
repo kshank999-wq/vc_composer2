@@ -13,6 +13,8 @@ namespace vcc::desktop {
 /// Every content pack compiled into the binary, plus the user's own
 /// templates folder (custom templates saved from the app).
 std::unique_ptr<session::Catalogs> load_embedded_catalogs();
+/// content/library/providers.json, the library browser's catalog (Main Spec §10).
+std::string embedded_library_catalog();
 
 /// Bravura (SIL OFL) and its SMuFL glyph table, loaded once.
 struct MusicFontResources {

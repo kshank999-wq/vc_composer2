@@ -58,7 +58,8 @@ public:
             const auto* m = match();
             if (id >= kFirstCandidate && m && id - kFirstCandidate < static_cast<int>(m->candidates.size()))
                 panel_.chosen_[static_cast<std::size_t>(index_)] =
-                    juce::String(m->candidates[static_cast<std::size_t>(id - kFirstCandidate)].path);
+                    juce::File(juce::String(m->candidates[static_cast<std::size_t>(id - kFirstCandidate)].path))
+                        .getFullPathName();
             else if (id == kNotFound)
                 panel_.chosen_[static_cast<std::size_t>(index_)].clear();
             panel_.update_status();
@@ -84,7 +85,7 @@ public:
                 const auto& c = m->candidates[i];
                 const juce::String text = juce::String(c.path) + (c.same_name ? "" : "  (another format)");
                 file_.addItem(text, kFirstCandidate + static_cast<int>(i));
-                if (juce::String(c.path) == chosen) selected = kFirstCandidate + static_cast<int>(i);
+                if (juce::File(juce::String(c.path)) == juce::File(chosen)) selected = kFirstCandidate + static_cast<int>(i);
             }
         }
         if (chosen.isNotEmpty() && selected == kNotFound) {
@@ -258,7 +259,8 @@ void RelinkPanel::finished()
     matches_ = std::move(result_.matches);
     // Keep what the user already picked; else the clear best.
     for (std::size_t i = 0; i < matches_.size() && i < chosen_.size(); ++i)
-        if (chosen_[i].isEmpty()) chosen_[i] = juce::String(matches_[i].chosen);
+        if (chosen_[i].isEmpty() && !matches_[i].chosen.empty())
+            chosen_[i] = juce::File(juce::String(matches_[i].chosen)).getFullPathName();  // native separators
     int ambiguous = 0, none = 0;
     for (std::size_t i = 0; i < matches_.size(); ++i) {
         if (matches_[i].candidates.empty()) ++none;

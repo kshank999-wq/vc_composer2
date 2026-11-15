@@ -208,6 +208,10 @@ struct InstalledPatch {
     std::vector<std::string> articulations;  ///< Intents its articulation map supports.
     bool favorite = false;
     std::string validation_status = "verified";  ///< "verified", "inferred", "user".
+    /// The sound itself, when known (a saved library patch): loaded onto
+    /// the track the patch resolves, with its articulation map.
+    project::PluginRef plugin;
+    std::string expression_map;
 };
 
 struct Resolution {

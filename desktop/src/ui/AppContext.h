@@ -15,6 +15,8 @@
 
 namespace vcc::desktop {
 
+class LibraryService;
+
 struct AppContext {
     session::Catalogs& catalogs;  ///< mutable: user templates are added at run time
     session::Session& session;
@@ -41,6 +43,8 @@ struct AppContext {
     std::function<void()> capture_plugin_states;
     /// Opens the Comments window on a comment (empty: just the window).
     std::function<void(const std::string& comment_id)> show_comment;
+    /// The library browser's library (Main Spec §10; owned by the main window).
+    LibraryService* library = nullptr;
 };
 
 /// Application commands (menus, toolbar buttons and key bindings).

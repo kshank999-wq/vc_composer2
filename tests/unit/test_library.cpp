@@ -1,0 +1,202 @@
+// Library browser and discovery (Main Spec §10, §11).
+#include <filesystem>
+
+#include "vcc/core/Files.h"
+#include "vcc/library/Library.h"
+#include "vcc/session/Session.h"
+#include "vcc_test.h"
+
+using namespace vcc;
+namespace fs = std::filesystem;
+
+namespace {
+const session::Catalogs& catalogs()
+{
+    static auto c = session::Catalogs::load_from_directory(VCC_CONTENT_DIR);
+    return *c;
+}
+library::Library make()
+{
+    library::Library lib(catalogs().instruments);
+    const auto text = files::read_file(std::string(VCC_CONTENT_DIR) + "/library/providers.json");
+    REQUIRE(text.has_value());
+    const auto doc = json::parse(*text);
+    REQUIRE(doc.has_value());
+    std::string err;
+    REQUIRE(lib.load_catalog(*doc, &err));
+    return lib;
+}
+library::InstalledPlugin plug(const std::string& name, const std::string& vendor)
+{
+    return {name, vendor, "VST3", "VST3-" + name + "-id"};
+}
+}  // namespace
+
+TEST_CASE("library: the shipped catalog loads and every patch names a known instrument")
+{
+    auto lib = make();
+    CHECK(lib.players().size() >= 8u);
+    CHECK(lib.libraries().size() >= 5u);
+}
+
+TEST_CASE("library: installed, detected and known are told apart")
+{
+    auto lib = make();
+    lib.set_installed({plug("Kontakt 8", "Native Instruments"), plug("BBC Symphony Orchestra", "Spitfire Audio"),
+                       plug("Opus", "EastWest"), plug("Pianoteq 8", "Modartt"), plug("Solo Cello Legato", "Indie"),
+                       plug("Display Tool", "Nobody")});
+    CHECK(lib.plugin_for_player("kontakt") != nullptr);
+    CHECK(lib.plugin_for_player("play") == nullptr);  // "play" is not a word in "Display Tool"
+    CHECK(lib.plugin_for_player("sine") == nullptr);
+
+    // Opus is here, but Hollywood Orchestra's folders are not: installed, not detected.
+    auto hw = lib.find("catalog:eastwest.hollywood_orchestra/Horns");
+    REQUIRE(hw.has_value());
+    CHECK(hw->player_installed);
+    CHECK(!hw->library_detected);
+    CHECK(hw->metadata_known);
+    CHECK_EQ(library::status_text(*hw), std::string("Player installed - library not detected - metadata known"));
+    // A library with a plug-in of its own is detected by the plug-in.
+    auto bbc = lib.find("catalog:spitfire.bbcso/Horns a4");
+    REQUIRE(bbc.has_value());
+    CHECK(bbc->library_detected);
+    // Not installed at all: Synchron.
+    auto syn = lib.find("catalog:vsl.synchron_strings/Violins I");
+    REQUIRE(syn.has_value());
+    CHECK(!syn->player_installed);
+
+    // Library folders are found on disk.
+    const std::string root = std::string(VCC_TEST_TMP_DIR) + "/libdetect";
+    fs::remove_all(root);
+    fs::create_directories(root + "/Samples/EastWest/Hollywood Orchestra Opus Edition");
+    lib.library_folders().push_back(root);
+    const auto found = lib.detect();
+    CHECK(std::find(found.begin(), found.end(), "eastwest.hollywood_orchestra") != found.end());
+    CHECK(lib.find("catalog:eastwest.hollywood_orchestra/Horns")->library_detected);
+
+    // Plug-ins: the name suggests an instrument (to verify), or nothing.
+    auto cello = lib.find("plugin:VST3-Solo Cello Legato-id");
+    REQUIRE(cello.has_value());
+    CHECK_EQ(cello->instrument_id, std::string("strings.cello"));
+    CHECK_EQ(cello->validation, std::string("inferred"));
+    CHECK(!cello->metadata_known);
+    CHECK_EQ(lib.find("plugin:VST3-Pianoteq 8-id")->instrument_id, std::string());  // a catalog library's plug-in
+    CHECK_EQ(lib.find("plugin:VST3-Display Tool-id")->instrument_id, std::string());
+}
+
+TEST_CASE("library: search filters by words, provider, family, technique, installed and favorites")
+{
+    auto lib = make();
+    lib.set_installed({plug("BBC Symphony Orchestra", "Spitfire Audio"), plug("Opus", "EastWest")});
+    library::Filter f;
+    f.query = "horns";
+    auto r = lib.search(f);
+    CHECK(r.size() >= 2u);
+    f.provider = "Spitfire Audio";
+    r = lib.search(f);
+    REQUIRE(r.size() == 1u);
+    CHECK_EQ(r[0].key, std::string("catalog:spitfire.bbcso/Horns a4"));
+    library::Filter g;
+    g.family = "strings";
+    g.technique = "sul_ponticello";
+    r = lib.search(g);
+    REQUIRE(r.size() == 1u);  // only Synchron lists it
+    g.installed_only = true;
+    CHECK(lib.search(g).empty());
+    lib.set_favorite("catalog:spitfire.bbcso/Celli", true);
+    library::Filter fav;
+    fav.favorites_only = true;
+    r = lib.search(fav);
+    REQUIRE(r.size() == 1u);
+    CHECK(r[0].favorite);
+    lib.set_tags("catalog:spitfire.bbcso/Celli", {"warm"});
+    library::Filter tag;
+    tag.query = "warm";
+    CHECK_EQ(lib.search(tag).size(), 1u);
+}
+
+TEST_CASE("library: candidates for a template track rank saved, catalog, fallback and inferred")
+{
+    auto lib = make();
+    lib.set_installed({plug("BBC Symphony Orchestra", "Spitfire Audio"), plug("Opus", "EastWest"),
+                       plug("Horn Solo", "Indie")});
+    library::UserPatch mine;
+    mine.display = "My Horns";
+    mine.plugin = {"VST3", "VST3-BBC Symphony Orchestra-id", "BBC Symphony Orchestra", "Spitfire Audio", "c3RhdGU="};
+    mine.instrument_id = "brass.horn_section";
+    mine.articulations = {"legato", "marcato"};
+    mine.validation = "verified";
+    const auto id = lib.add_patch(mine);
+    auto c = lib.candidates("brass.horn_section", {"legato", "marcato", "cuivre"}, {"brass.horn_f"});
+    REQUIRE(c.size() >= 3u);
+    CHECK_EQ(c[0].entry.key, "patch:" + id);
+    CHECK(c[0].match == library::Match::Exact);
+    CHECK(c[0].missing_articulations == std::vector<std::string>{"cuivre"});
+    CHECK(c[1].entry.kind == library::EntryKind::CatalogPatch);
+    CHECK(c[1].match == library::Match::Inferred);
+    CHECK(c[1].entry.key == "catalog:spitfire.bbcso/Horns a4");  // detected beats not detected
+    // The plug-in named "Horn Solo" is a fallback's inferred candidate, last.
+    CHECK(c.back().match == library::Match::Inferred);
+    CHECK(c.back().entry.kind == library::EntryKind::Plugin);
+    CHECK(c.back().reason.find("verify") != std::string::npos);
+
+    // An unloadable library never appears: Synchron is not installed.
+    for (const auto& k : lib.candidates("strings.violins_1", {}, {}))
+        CHECK(k.entry.player_installed);
+}
+
+TEST_CASE("library: saved patches persist, travel in mapping packs and drive template instantiation")
+{
+    auto lib = make();
+    lib.set_installed({plug("BBC Symphony Orchestra", "Spitfire Audio")});
+    library::UserPatch p;
+    p.display = "Celli - warm";
+    p.plugin = {"VST3", "VST3-BBC Symphony Orchestra-id", "BBC Symphony Orchestra", "Spitfire Audio", "c3RhdGU="};
+    p.instrument_id = "strings.celli";
+    p.articulations = {"legato", "long", "spiccato"};
+    p.expression_map = "orchestral_cc";
+    p.validation = "verified";
+    const auto id = lib.add_patch(p);
+    lib.set_favorite("patch:" + id, true);
+    lib.library_folders().push_back("/Volumes/Samples");
+
+    library::Library back(catalogs().instruments);
+    back.load_user(lib.user_json());
+    REQUIRE(back.find_patch(id) != nullptr);
+    CHECK_EQ(back.find_patch(id)->plugin.state_base64, std::string("c3RhdGU="));
+    CHECK(back.favorite("patch:" + id));
+    CHECK_EQ(back.library_folders().size(), 1u);
+    CHECK(back.add_patch(p) != id);  // ids keep counting
+
+    // A pack leaves states out unless asked; importing it twice updates, not duplicates.
+    const auto pack = lib.export_pack("Spitfire horns");
+    CHECK(pack["patches"].at(0)["plugin"].get("state") == nullptr);
+    library::Library other(catalogs().instruments);
+    std::vector<std::string> warnings;
+    CHECK_EQ(other.import_pack(pack, &warnings), 1);
+    CHECK_EQ(other.import_pack(pack, &warnings), 1);
+    CHECK_EQ(other.patches().size(), 1u);
+    CHECK(warnings.empty());
+    CHECK_EQ(other.import_pack(json::Value::make_object(), &warnings), 0);
+    CHECK(!warnings.empty());
+
+    // Templates resolve to the saved patch and load its sound.
+    session::Session s(catalogs());
+    s.set_installed_patches(lib.installed_patches());
+    std::string celli;
+    for (const auto* t : catalogs().templates->list())
+        for (const auto& tt : t->tracks)
+            if (tt.instrument_standard_id == "strings.celli" && celli.empty()) celli = t->template_id;
+    REQUIRE(!celli.empty());
+    REQUIRE(s.new_from_template(celli).ok);
+    bool found = false;
+    for (const auto& t : s.data().tracks)
+        if (t.instrument_standard_id == "strings.celli") {
+            found = true;
+            CHECK(t.assignment.status == project::ResolutionStatus::Exact);
+            CHECK_EQ(t.instrument_plugin.name, std::string("BBC Symphony Orchestra"));
+            CHECK_EQ(t.instrument_plugin.state_base64, std::string("c3RhdGU="));
+            CHECK_EQ(t.expression_map, std::string("orchestral_cc"));
+        }
+    CHECK(found);
+}

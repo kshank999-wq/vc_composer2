@@ -86,6 +86,11 @@ public:
     /// document; the caller asks about unsaved changes first.
     templates::InstantiateResult new_from_template(const std::string& template_id,
                                                    const templates::InstantiateOptions& options = {});
+    /// The composer's saved library patches (Main Spec §10): templates
+    /// resolve their tracks to these, and load their sounds, unless the
+    /// options name others.
+    void set_installed_patches(std::vector<templates::InstalledPatch> patches) { installed_patches_ = std::move(patches); }
+    const std::vector<templates::InstalledPatch>& installed_patches() const noexcept { return installed_patches_; }
     /// Adds a template to the open project (merge, never overwriting).
     templates::InstantiateResult add_template(const std::string& template_id,
                                               const templates::InstantiateOptions& options = {});
@@ -136,6 +141,12 @@ public:
     bool set_active_version(const std::string& track_id, const std::string& version_id);
     std::optional<std::string> duplicate_version(const std::string& track_id);
     bool set_instrument_plugin(const std::string& track_id, const project::PluginRef& plugin);
+    /// Assigns a sound from the library browser (Main Spec §10.6): the
+    /// plug-in (with its state), how the track's request was met (shown in
+    /// the inspector; nothing is resolved silently) and, when given, the
+    /// articulation map. One undo step, "Assign <patch>".
+    bool assign_sound(const std::string& track_id, const project::PluginRef& plugin,
+                      const project::InstrumentAssignment& how, const std::string& expression_map = {});
     /// Stores a plug-in's state without an undo step (it changes whenever the
     /// composer touches the plug-in's own window).
     void store_plugin_state(const std::string& track_id, const std::string& state_base64);
@@ -686,6 +697,7 @@ private:
     const Catalogs& catalogs_;
     project::Project project_;
     std::string path_;
+    std::vector<templates::InstalledPatch> installed_patches_;
     bool dirty_ = false;
     Selection selection_;
     std::map<int, Listener> listeners_;

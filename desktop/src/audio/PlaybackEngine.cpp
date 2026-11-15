@@ -238,7 +238,7 @@ struct PlaybackSnapshot {
 };
 
 struct PreviewClip {
-    std::unique_ptr<PlaceholderSynth> synth;
+    std::unique_ptr<Instrument> synth;  ///< The placeholder, or a plug-in being auditioned.
     std::vector<Event> events;
     std::int64_t length = 0;
     bool loop = false;
@@ -1777,6 +1777,28 @@ void PlaybackEngine::preview(const std::vector<NoteEvent>& notes, const std::str
     stop_preview_request_ = false;
     previewing_ = true;
     delete pending_preview_.exchange(clip.release());
+}
+
+bool PlaybackEngine::preview_plugin(const project::PluginRef& plugin, const std::vector<NoteEvent>& notes, double bpm,
+                                    juce::String& error)
+{
+    auto instance = plugins_.create(plugin, sample_rate_, block_size_, error);
+    if (!instance) return false;
+    auto clip = std::make_unique<PreviewClip>();
+    auto instrument = std::make_unique<PluginInstrument>(std::move(instance));
+    instrument->prepare(sample_rate_, block_size_);
+    clip->synth = std::move(instrument);
+    TempoMap tempo(bpm > 0 ? bpm : 100.0);
+    clip->events = to_events(notes, {}, tempo, sample_rate_, 0);
+    Ticks end = 0;
+    for (const auto& n : notes) end = std::max(end, n.end());
+    clip->length = std::max<std::int64_t>(1, static_cast<std::int64_t>(std::llround(tempo.seconds_at(end) * sample_rate_)));
+    clip->midi.ensureSize(4096);
+    clip->buffer.setSize(2, block_size_);
+    stop_preview_request_ = false;
+    previewing_ = true;
+    delete pending_preview_.exchange(clip.release());
+    return true;
 }
 
 void PlaybackEngine::stop_preview()

@@ -1,5 +1,7 @@
 #include "ui/TrackPanel.h"
 
+#include "ui/library/LibraryBrowser.h"
+
 #include "ui/Deferred.h"
 #include "ui/composer/TransposePopover.h"
 
@@ -404,123 +406,12 @@ private:
     juce::TextButton add_{"+ Track"}, add_template_{"+ Template"};
 };
 
-// --- Library -------------------------------------------------------------------------------
-
-class TrackPanel::Library final : public juce::Component, private juce::ListBoxModel {
-public:
-    explicit Library(AppContext& c) : context_(c)
-    {
-        addAndMakeVisible(search_);
-        search_.setTextToShowWhenEmpty("Search instruments, families, regions...", colours::text_dim);
-        search_.onTextChange = [this] { filter(); };
-        addAndMakeVisible(list_);
-        list_.setModel(this);
-        list_.setRowHeight(36);
-        addAndMakeVisible(audition_);
-        addAndMakeVisible(add_);
-        addAndMakeVisible(plugins_);
-        audition_.onClick = [this] { audition(); };
-        add_.onClick = [this] { add(); };
-        plugins_.onClick = [this] { context_.commands.invokeDirectly(cmd::scanPlugins, true); };
-        filter();
-    }
-
-    void resized() override
-    {
-        auto r = getLocalBounds().reduced(6);
-        search_.setBounds(r.removeFromTop(26));
-        r.removeFromTop(6);
-        auto buttons = r.removeFromBottom(28);
-        r.removeFromBottom(6);
-        list_.setBounds(r);
-        const int w = (buttons.getWidth() - 12) / 3;
-        audition_.setBounds(buttons.removeFromLeft(w));
-        buttons.removeFromLeft(6);
-        add_.setBounds(buttons.removeFromLeft(w));
-        buttons.removeFromLeft(6);
-        plugins_.setBounds(buttons);
-    }
-
-private:
-    int getNumRows() override { return static_cast<int>(shown_.size()); }
-
-    void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected) override
-    {
-        if (row < 0 || row >= getNumRows()) return;
-        const auto* def = shown_[static_cast<std::size_t>(row)];
-        g.fillAll(selected ? colours::selection : colours::panel);
-        g.setColour(colour_from_hex(templates::family_color(def->family)));
-        g.fillRect(0, 0, 4, h);
-        g.setColour(colours::text);
-        g.setFont(juce::FontOptions(13.0f));
-        g.drawText(def->name, 10, 2, w - 14, h / 2, juce::Justification::bottomLeft, true);
-        g.setColour(colours::text_dim);
-        g.setFont(juce::FontOptions(11.0f));
-        juce::String sub = templates::family_display(def->family);
-        if (!def->region.empty()) sub << "  -  " << def->region;
-        g.drawText(sub, 10, h / 2, w - 14, h / 2 - 2, juce::Justification::topLeft, true);
-    }
-
-    void listBoxItemDoubleClicked(int, const juce::MouseEvent&) override { add(); }
-
-    void filter()
-    {
-        shown_.clear();
-        const auto q = search_.getText().toLowerCase();
-        for (const auto& i : context_.session.catalogs().instruments.all()) {
-            juce::String hay = juce::String(i.name + " " + i.family + " " + i.region + " " + i.id).toLowerCase();
-            for (const auto& t : i.tags) hay << " " << juce::String(t).toLowerCase();
-            if (q.isEmpty() || hay.contains(q)) shown_.push_back(&i);
-        }
-        list_.updateContent();
-        list_.repaint();
-    }
-
-    const templates::InstrumentDef* chosen() const
-    {
-        const int row = list_.getSelectedRow();
-        return row >= 0 && row < static_cast<int>(shown_.size()) ? shown_[static_cast<std::size_t>(row)] : nullptr;
-    }
-
-    void audition()
-    {
-        const auto* def = chosen();
-        if (!def) return;
-        // A short phrase in the instrument's comfortable middle register.
-        std::vector<NoteEvent> notes;
-        if (def->unpitched) {
-            const int kit[] = {36, 42, 38, 42, 36, 36, 38, 46};
-            for (int i = 0; i < 8; ++i) notes.push_back({i * kTicksPerQuarter / 2, kTicksPerQuarter / 2, kit[i], 100, 9, {}});
-        } else {
-            const int mid = (def->range_low + def->range_high) / 2;
-            const int base = mid - (mid % 12);
-            const int steps[] = {0, 4, 7, 12, 7, 4, 0};
-            for (int i = 0; i < 7; ++i)
-                notes.push_back({i * kTicksPerQuarter / 2, kTicksPerQuarter / 2, base + steps[i], 90, 0, {}});
-            notes.back().duration = kTicksPerQuarter * 2;
-        }
-        context_.engine.preview(notes, def->family, def->unpitched ? -1 : def->gm_program, 110.0, false);
-        context_.status("Auditioning " + juce::String(def->name) + " on the built-in placeholder sound");
-    }
-
-    void add()
-    {
-        if (const auto* def = chosen()) context_.session.add_track(def->name, def->id);
-    }
-
-    AppContext& context_;
-    juce::TextEditor search_;
-    juce::ListBox list_;
-    juce::TextButton audition_{"Audition"}, add_{"Add track"}, plugins_{"Plug-ins..."};
-    std::vector<const templates::InstrumentDef*> shown_;
-};
-
 // --- Panel ------------------------------------------------------------------------------------
 
 TrackPanel::TrackPanel(AppContext& c) : context_(c)
 {
     tracks_ = std::make_unique<TrackList>(c);
-    library_ = std::make_unique<Library>(c);
+    library_ = std::make_unique<LibraryBrowser>(c);
     tabs_.addTab("Tracks", colours::panel, tracks_.get(), false);
     tabs_.addTab("Library", colours::panel, library_.get(), false);
     tabs_.setTabBarDepth(28);

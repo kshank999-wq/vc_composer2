@@ -184,6 +184,7 @@ templates::InstantiateResult Session::new_from_template(const std::string& id, c
     project::Project fresh;
     templates::InstantiateOptions opt = o;
     opt.mode = templates::InstantiateMode::Create;
+    if (opt.installed.empty()) opt.installed = installed_patches_;
     r = templates::instantiate(fresh, *t, catalogs_.instruments, opt);
     if (!r.ok) return r;
     reset(std::move(fresh), {});
@@ -202,6 +203,7 @@ templates::InstantiateResult Session::add_template(const std::string& id, const 
     }
     templates::InstantiateOptions opt = o;
     if (opt.mode == templates::InstantiateMode::Create) opt.mode = templates::InstantiateMode::Merge;
+    if (opt.installed.empty()) opt.installed = installed_patches_;
     r = templates::instantiate(project_, *t, catalogs_.instruments, opt);
     if (r.ok) document_changed();
     return r;
@@ -468,6 +470,17 @@ bool Session::set_instrument_plugin(const std::string& id, const project::Plugin
             t.assignment.patch_display = "GM placeholder";
             t.assignment.message = "Built-in placeholder sound until a library patch or plug-in is assigned.";
         }
+        return true;
+    }));
+}
+
+bool Session::assign_sound(const std::string& id, const project::PluginRef& plugin, const project::InstrumentAssignment& how,
+                           const std::string& expression_map)
+{
+    return edit("Assign " + (how.patch_display.empty() ? plugin.name : how.patch_display), on_track(id, [&](project::Track& t) {
+        t.instrument_plugin = plugin;
+        t.assignment = how;
+        if (!expression_map.empty()) t.expression_map = expression_map;
         return true;
     }));
 }

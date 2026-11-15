@@ -338,6 +338,10 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
             t.assignment.placeholder_program = r.placeholder_program;
             t.assignment.unsupported_articulations = r.unsupported_articulations;
             t.assignment.message = r.message;
+            if (r.patch && !r.patch->plugin.empty()) {
+                t.instrument_plugin = r.patch->plugin;
+                if (!r.patch->expression_map.empty()) t.expression_map = r.patch->expression_map;
+            }
             if (r.status != ResolutionStatus::Exact) warnings.push_back(t.name + ": " + r.message);
             else if (!r.unsupported_articulations.empty()) {
                 std::string list;

@@ -41,6 +41,8 @@
 #include "ui/surface/ControlSurface.h"
 #include "ui/review/Review.h"
 #include "ui/review/Relink.h"
+#include "ui/library/LibraryBrowser.h"
+#include "vcc/library/Library.h"
 #include "ui/composer/TransposePopover.h"
 #include "ui/composer/ComposerRuler.h"
 #include "vcc/theory/Chord.h"
@@ -2243,8 +2245,9 @@ void print_checks(MainWindow& window, const juce::File& dir)
     panel.fx_key().setToggleState(false, juce::dontSendNotification);
     panel.play_audio_key().setToggleState(true, juce::dontSendNotification);
     panel.record_key().triggerClick();
-    pump(120);
-    check(panel.printing() && panel.progress_lcd().text().contains("/ 2"),
+    // A fast machine may finish before the first look: progress or done both count.
+    wait_for([&] { return panel.progress_lcd().text().contains("/ 2") || panel.progress_lcd().text().contains("100%"); }, 3000);
+    check(panel.progress_lcd().text().contains("/ 2") || panel.progress_lcd().text().contains("100%"),
           "Record score to audio starts the print; the LCD follows it (" + panel.progress_lcd().text().replace("\n", " | ") + ")");
     shoot(main, dir, "32-print-progress");
     panel.finish_now();
@@ -5461,6 +5464,125 @@ void package_checks(MainWindow& window, const juce::File& dir)
     root.deleteRecursively();
 }
 
+/// The library browser (Main Spec §10): the scanned instrument plug-in is
+/// listed, a track's sound is saved as a patch, the patch ranks first for its
+/// instrument, auditions through its plug-in, travels in a mapping pack, and a
+/// template builds with it.
+void library_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    auto* service = ctx.library;
+    if (!service) {
+        check(false, "the main window owns a library");
+        return;
+    }
+    const auto folder = dir.getChildFile("library-check");
+    folder.deleteRecursively();
+    folder.createDirectory();
+    service->set_file(folder.getChildFile("Library.json"));  // never the user's own
+    const auto instrument = scan(ctx, VCC_TEST_PLUGIN);
+    service->refresh();
+    const auto& lib = service->lib();
+    const bool listed = instrument && std::any_of(lib.installed().begin(), lib.installed().end(), [&](const auto& p) {
+        return p.identifier == instrument->identifier;
+    });
+    check(listed && lib.libraries().size() >= 5u,
+          "the library lists the scanned instrument plug-in beside the shipped catalog (" +
+              juce::String(static_cast<int>(lib.libraries().size())) + " libraries)");
+    if (!instrument) return;
+
+    // Library folders: a library's folder on disk is detected.
+    const auto samples = folder.getChildFile("Samples/East West/Hollywood Orchestra Opus Edition");
+    samples.createDirectory();
+    service->lib().library_folders().push_back(folder.getChildFile("Samples").getFullPathName().toStdString());
+    service->refresh();
+    const auto hw = service->lib().find("catalog:eastwest.hollywood_orchestra/Horns");
+    check(hw && hw->library_detected && !hw->player_installed &&
+              library::status_text(*hw) == "Player not installed - library detected - metadata known",
+          "a library folder is detected, and the entry says the player is missing: " +
+              juce::String(hw ? library::status_text(*hw) : std::string("(none)")));
+
+    // The browser, on the Library tab.
+    session.new_empty();
+    main.show_workspace(MainComponent::Workspace::Composer);
+    main.track_panel().show_library(true);
+    pump(100);
+    auto& browser = main.track_panel().library();
+    browser.set_view(LibraryBrowser::View::Sounds);
+    browser.search().setText("", juce::sendNotificationSync);
+    const auto keys = browser.listed();
+    const auto plugin_key = "plugin:" + instrument->identifier;
+    check(std::find(keys.begin(), keys.end(), plugin_key) != keys.end(),
+          "All sounds lists the scanned plug-in (" + juce::String(static_cast<int>(keys.size())) + " installed sounds)");
+
+    // A horn track: assign the plug-in from the browser, then save its sound.
+    const auto horn = session.add_track("Horns", "brass.horn_section");
+    session.select_track(horn);
+    pump(50);
+    for (int i = 0; i < static_cast<int>(keys.size()); ++i)
+        if (keys[static_cast<std::size_t>(i)] == plugin_key) browser.select(i);
+    browser.assign_selected();
+    pump(100);
+    const auto* t = session.data().find_track(horn);
+    check(t && t->instrument_plugin.identifier == instrument->identifier &&
+              session.undo_label().rfind("Assign ", 0) == 0,
+          "Assign puts the plug-in on the selected track as one undo step: " + juce::String(session.undo_label()));
+    for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
+        if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);
+    browser.save_track_sound();
+    pump(100);
+    t = session.data().find_track(horn);
+    check(service->lib().patches().size() == 1u && service->lib().patches()[0].instrument_id == "brass.horn_section" &&
+              service->lib().patches()[0].validation == "verified" && t && !t->assignment.patch_id.empty() &&
+              service->file().loadFileAsString().contains("brass.horn_section"),
+          "Save sound keeps the track's plug-in as a verified patch for Horns, saved to the library file");
+
+    // For the selected track: the saved patch first, exact.
+    browser.set_view(LibraryBrowser::View::ForTrack);
+    pump(50);
+    const auto ranked = browser.listed();
+    check(!ranked.empty() && ranked.front() == "patch:" + service->lib().patches()[0].id,
+          "For the selected track ranks the saved patch first (" + juce::String(static_cast<int>(ranked.size())) +
+              " candidates)");
+    browser.select(0);
+    check(browser.detail().contains("Saved patch for Horns"), "the detail says why: " + browser.detail());
+    shoot(main, dir, "58-library");
+    browser.audition_selected();
+    check(wait_for([&] { return ctx.engine.previewing(); }, 3000),
+          "Audition plays the saved patch through its plug-in on a preview channel");
+    ctx.engine.stop_preview();
+
+    // Favorites; a mapping pack round trip.
+    browser.toggle_favorite_selected();
+    check(service->lib().favorite("patch:" + service->lib().patches()[0].id), "Favorite marks the patch");
+    const auto pack = service->lib().export_pack("Check");
+    library::Library other(ctx.catalogs.instruments);
+    check(other.import_pack(pack) == 1 && other.patches().size() == 1u,
+          "a mapping pack carries the patch to another library");
+
+    // A template with horns builds with the saved sound.
+    std::string tpl;
+    for (const auto* x : ctx.catalogs.templates->list())
+        for (const auto& tt : x->tracks)
+            if (tt.instrument_standard_id == "brass.horn_section" && tpl.empty()) tpl = x->template_id;
+    if (!tpl.empty() && session.new_from_template(tpl).ok) {
+        int with = 0;
+        for (const auto& tr : session.data().tracks)
+            if (tr.instrument_standard_id == "brass.horn_section" && tr.instrument_plugin.identifier == instrument->identifier &&
+                tr.assignment.status == project::ResolutionStatus::Exact)
+                ++with;
+        check(with >= 1, "a template's horn track resolves to the saved patch and loads its plug-in (" +
+                             juce::String(tpl) + ")");
+    } else {
+        check(false, "a template with horns exists");
+    }
+    main.track_panel().show_library(false);
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -5553,8 +5675,8 @@ void relink_checks(MainWindow& window, const juce::File& dir)
         const juce::String stored(panel->missing()[static_cast<std::size_t>(i)].stored);
         (stored.endsWith("Pad.wav") ? pad_i : stored.endsWith("Choir.wav") ? choir_i : hit_i) = i;
     }
-    check(!panel->searching() && panel->chosen(pad_i) == project_dir.getChildFile("Bounced/Pad.wav").getFullPathName() &&
-              panel->chosen(choir_i) == drive.getChildFile("Library/Choir.wav").getFullPathName() &&
+    check(!panel->searching() && juce::File(panel->chosen(pad_i)) == project_dir.getChildFile("Bounced/Pad.wav") &&
+              juce::File(panel->chosen(choir_i)) == drive.getChildFile("Library/Choir.wav") &&
               panel->chosen(hit_i).isEmpty() && panel->message().contains("1 to pick"),
           "one search finds both clear matches and leaves the ambiguous Hit.wav to pick: " + panel->message());
     shoot(*panel->getTopLevelComponent(), dir, "57-relink");
@@ -7296,6 +7418,8 @@ int main(int argc, char** argv)
         review_checks(window, dir);
         section("package_checks");
         package_checks(window, dir);
+        section("library_checks");
+        library_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

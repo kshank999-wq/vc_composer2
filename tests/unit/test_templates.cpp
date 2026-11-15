@@ -147,8 +147,8 @@ TEST_CASE("T02 Comedy with only a generic GM synth keeps roles and maps fallback
     REQUIRE(!c.tracks.empty());
     // A composer whose only "library" is a GM string ensemble and a GM piano.
     InstantiateOptions o;
-    o.installed = {{"gm-strings", "GM Strings", "strings.string_ensemble", {"sustain", "pizzicato"}, false, "verified"},
-                   {"gm-piano", "GM Piano", "keys.piano", {}, false, "verified"}};
+    o.installed = {{"gm-strings", "GM Strings", "strings.string_ensemble", {"sustain", "pizzicato"}, false, "verified", {}, {}},
+                   {"gm-piano", "GM Piano", "keys.piano", {}, false, "verified", {}, {}}};
     project::Project p;
     auto r = instantiate(p, c, content().instruments, o);
     REQUIRE(r.ok);
@@ -315,9 +315,9 @@ TEST_CASE("acceptance 15 / merge: existing cues, buses and temp track survive")
 TEST_CASE("resolver prefers favorites, then verified, then articulation coverage")
 {
     std::vector<InstalledPatch> lib = {
-        {"a", "Horns A", "brass.horn_section", {"sustain"}, false, "inferred"},
-        {"b", "Horns B", "brass.horn_section", {"sustain", "marcato"}, false, "verified"},
-        {"c", "Horns C", "brass.horn_section", {}, true, "user"},
+        {"a", "Horns A", "brass.horn_section", {"sustain"}, false, "inferred", {}, {}},
+        {"b", "Horns B", "brass.horn_section", {"sustain", "marcato"}, false, "verified", {}, {}},
+        {"c", "Horns C", "brass.horn_section", {}, true, "user", {}, {}},
     };
     InstrumentResolver r(content().instruments, lib);
     auto res = r.resolve("brass.horn_section", {"marcato"}, {});

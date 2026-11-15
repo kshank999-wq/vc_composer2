@@ -7,6 +7,8 @@
 
 namespace vcc::desktop {
 
+class LibraryBrowser;
+
 class TrackPanel final : public juce::Component {
 public:
     explicit TrackPanel(AppContext& context);
@@ -26,13 +28,16 @@ public:
     /// Popup menu to add a track from the instrument registry.
     static void show_add_track_menu(AppContext& context, juce::Component* target);
 
+    /// The Library tab (Main Spec §10) or the Tracks tab.
+    void show_library(bool library) { tabs_.setCurrentTabIndex(library ? 1 : 0); }
+    LibraryBrowser& library() noexcept { return *library_; }
+
 private:
     class TrackList;
-    class Library;
     AppContext& context_;
     juce::TabbedComponent tabs_{juce::TabbedButtonBar::TabsAtTop};
     std::unique_ptr<TrackList> tracks_;
-    std::unique_ptr<Library> library_;
+    std::unique_ptr<LibraryBrowser> library_;
 };
 
 }  // namespace vcc::desktop

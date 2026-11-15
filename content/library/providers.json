@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "note": "Curated starter catalog (Main Spec §10). It names players and the instruments each library covers so VC Composer can rank candidates for a template track. It holds no samples and no preset files, and the coverage is marked for the user to verify: a host cannot look inside another company's player. Patch names are section names, not the products' preset names.",
+  "players": [
+    {"id": "kontakt", "name": "Kontakt", "vendor": "Native Instruments", "plugin_names": ["kontakt"]},
+    {"id": "opus", "name": "Opus", "vendor": "EastWest", "plugin_names": ["opus"]},
+    {"id": "play", "name": "PLAY", "vendor": "EastWest", "plugin_names": ["play"]},
+    {"id": "synchron", "name": "Synchron Player", "vendor": "Vienna Symphonic Library", "plugin_names": ["synchron player", "vienna synchron"]},
+    {"id": "vienna_instruments", "name": "Vienna Instruments", "vendor": "Vienna Symphonic Library", "plugin_names": ["vienna instruments"]},
+    {"id": "sine", "name": "SINE Player", "vendor": "Orchestral Tools", "plugin_names": ["sine player", "sine"]},
+    {"id": "spitfire", "name": "Spitfire Audio plug-ins", "vendor": "Spitfire Audio", "plugin_names": ["bbc symphony orchestra", "spitfire", "labs"]},
+    {"id": "pianoteq", "name": "Pianoteq", "vendor": "Modartt", "plugin_names": ["pianoteq"]},
+    {"id": "halion", "name": "HALion", "vendor": "Steinberg", "plugin_names": ["halion"]}
+  ],
+  "libraries": [
+    {
+      "id": "spitfire.bbcso",
+      "name": "BBC Symphony Orchestra",
+      "provider": "Spitfire Audio",
+      "player": "spitfire",
+      "plugin_names": ["bbc symphony orchestra"],
+      "folder_names": ["bbc symphony orchestra"],
+      "patches": [
+        {"name": "Violins 1", "instrument": "strings.violins_1", "articulations": ["legato", "long", "spiccato", "staccato", "pizzicato", "tremolo", "con_sordino"]},
+        {"name": "Violins 2", "instrument": "strings.violins_2", "articulations": ["long", "spiccato", "staccato", "pizzicato", "tremolo"]},
+        {"name": "Violas", "instrument": "strings.violas", "articulations": ["legato", "long", "spiccato", "pizzicato", "tremolo"]},
+        {"name": "Celli", "instrument": "strings.celli", "articulations": ["legato", "long", "spiccato", "pizzicato", "tremolo"]},
+        {"name": "Basses", "instrument": "strings.basses", "articulations": ["long", "spiccato", "pizzicato"]},
+        {"name": "Horns a4", "instrument": "brass.horn_section", "articulations": ["legato", "long", "marcato", "short", "cuivre"]},
+        {"name": "Trumpets a2", "instrument": "brass.trumpet_section", "articulations": ["long", "marcato", "short"]},
+        {"name": "Tenor Trombones a2", "instrument": "brass.trombone_section", "articulations": ["long", "marcato", "short"]},
+        {"name": "Tuba", "instrument": "brass.tuba", "articulations": ["long", "short"]},
+        {"name": "Flutes a3", "instrument": "woodwinds.flute", "articulations": ["legato", "long", "staccato"]},
+        {"name": "Oboes a3", "instrument": "woodwinds.oboe", "articulations": ["legato", "long", "staccato"]},
+        {"name": "Clarinets a3", "instrument": "woodwinds.clarinet_bb", "articulations": ["legato", "long", "staccato"]},
+        {"name": "Bassoons a3", "instrument": "woodwinds.bassoon", "articulations": ["legato", "long", "staccato"]},
+        {"name": "Harp", "instrument": "keys.harp", "articulations": ["glissando_harp", "harmonics_plucked"]},
+        {"name": "Timpani", "instrument": "percussion.timpani", "articulations": ["hit", "roll"]},
+        {"name": "Celeste", "instrument": "keys.celesta", "articulations": ["sustain"]}
+      ]
+    },
+    {
+      "id": "spitfire.labs",
+      "name": "LABS",
+      "provider": "Spitfire Audio",
+      "player": "spitfire",
+      "plugin_names": ["labs"],
+      "folder_names": ["labs"],
+      "patches": [
+        {"name": "Soft Piano", "instrument": "keys.felt_piano", "articulations": ["sustain"]},
+        {"name": "Strings", "instrument": "strings.string_ensemble", "articulations": ["long"]}
+      ]
+    },
+    {
+      "id": "eastwest.hollywood_orchestra",
+      "name": "Hollywood Orchestra",
+      "provider": "EastWest",
+      "player": "opus",
+      "folder_names": ["hollywood orchestra", "hollywood strings", "hollywood brass"],
+      "patches": [
+        {"name": "1st Violins", "instrument": "strings.violins_1", "articulations": ["legato", "long", "spiccato", "staccato", "pizzicato", "tremolo", "marcato"]},
+        {"name": "2nd Violins", "instrument": "strings.violins_2", "articulations": ["legato", "long", "spiccato", "pizzicato", "tremolo"]},
+        {"name": "Violas", "instrument": "strings.violas", "articulations": ["legato", "long", "spiccato", "pizzicato"]},
+        {"name": "Cellos", "instrument": "strings.celli", "articulations": ["legato", "long", "spiccato", "pizzicato"]},
+        {"name": "Basses", "instrument": "strings.basses", "articulations": ["long", "spiccato", "pizzicato"]},
+        {"name": "Horns", "instrument": "brass.horn_section", "articulations": ["legato", "long", "marcato", "staccato"]},
+        {"name": "Trumpets", "instrument": "brass.trumpet_section", "articulations": ["legato", "long", "marcato", "staccato"]},
+        {"name": "Trombones", "instrument": "brass.trombone_section", "articulations": ["long", "marcato", "staccato"]}
+      ]
+    },
+    {
+      "id": "vsl.synchron_strings",
+      "name": "Synchron Strings",
+      "provider": "Vienna Symphonic Library",
+      "player": "synchron",
+      "folder_names": ["synchron strings"],
+      "patches": [
+        {"name": "Violins I", "instrument": "strings.violins_1", "articulations": ["legato", "long", "spiccato", "staccato", "pizzicato", "tremolo", "sul_ponticello"]},
+        {"name": "Violins II", "instrument": "strings.violins_2", "articulations": ["legato", "long", "spiccato", "pizzicato", "tremolo"]},
+        {"name": "Violas", "instrument": "strings.violas", "articulations": ["legato", "long", "spiccato", "pizzicato"]},
+        {"name": "Cellos", "instrument": "strings.celli", "articulations": ["legato", "long", "spiccato", "pizzicato"]},
+        {"name": "Basses", "instrument": "strings.basses", "articulations": ["long", "spiccato", "pizzicato"]}
+      ]
+    },
+    {
+      "id": "ot.berlin_strings",
+      "name": "Berlin Strings",
+      "provider": "Orchestral Tools",
+      "player": "sine",
+      "folder_names": ["berlin strings"],
+      "patches": [
+        {"name": "1st Violins", "instrument": "strings.violins_1", "articulations": ["legato", "long", "spiccato", "staccato", "pizzicato", "tremolo"]},
+        {"name": "2nd Violins", "instrument": "strings.violins_2", "articulations": ["long", "spiccato", "pizzicato"]},
+        {"name": "Violas", "instrument": "strings.violas", "articulations": ["long", "spiccato", "pizzicato"]},
+        {"name": "Violoncellos", "instrument": "strings.celli", "articulations": ["legato", "long", "spiccato", "pizzicato"]},
+        {"name": "Basses", "instrument": "strings.basses", "articulations": ["long", "spiccato", "pizzicato"]}
+      ]
+    },
+    {
+      "id": "modartt.pianoteq",
+      "name": "Pianoteq",
+      "provider": "Modartt",
+      "player": "pianoteq",
+      "plugin_names": ["pianoteq"],
+      "patches": [
+        {"name": "Grand piano", "instrument": "keys.piano", "articulations": ["sustain", "sustain_pedal", "una_corda"]},
+        {"name": "Upright piano", "instrument": "keys.upright_piano", "articulations": ["sustain", "sustain_pedal"]},
+        {"name": "Harpsichord", "instrument": "keys.harpsichord", "articulations": ["sustain"]},
+        {"name": "Vibraphone", "instrument": "percussion.vibraphone", "articulations": ["sustain", "damped"]}
+      ]
+    }
+  ]
+}

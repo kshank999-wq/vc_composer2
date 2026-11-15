@@ -3,6 +3,7 @@
 #include "VccContentInstruments.h"
 #include "VccContentRoot.h"
 #include "VccContentTemplates.h"
+#include "VccContentLibrary.h"
 #include "vcc/ui/EmbeddedMusicFont.h"
 
 namespace vcc::desktop {
@@ -45,6 +46,14 @@ std::unique_ptr<session::Catalogs> load_embedded_catalogs()
     for (const auto& f : user.findChildFiles(juce::File::findFiles, false, "*.json"))
         docs["templates/user/" + f.getFileName().toStdString()] = f.loadFileAsString().toStdString();
     return session::Catalogs::load_from_documents(docs);
+}
+
+std::string embedded_library_catalog()
+{
+    int size = 0;
+    if (const char* data = vcc_content_library::getNamedResource("providers_json", size))
+        return std::string(data, static_cast<std::size_t>(size));
+    return {};
 }
 
 MusicFontResources& music_font()

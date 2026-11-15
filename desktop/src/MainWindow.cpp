@@ -14,6 +14,8 @@ MainWindow::MainWindow(const juce::String& file, bool show_welcome)
     engine_ = std::make_unique<PlaybackEngine>(*session_, *plugins_);
     context_ = std::make_unique<AppContext>(AppContext{*catalogs_, *session_, *engine_, *plugins_, commands_,
                                                        composer::make_composer2_profile(), {}, {}, {}});
+    library_ = std::make_unique<LibraryService>(*context_);
+    context_->library = library_.get();
     main_ = std::make_unique<MainComponent>(*context_);
 
     commands_.registerAllCommandsForTarget(main_.get());

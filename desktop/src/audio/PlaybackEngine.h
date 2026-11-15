@@ -137,6 +137,11 @@ public:
     /// and the project: nothing is written (Supplement §9.1, §10.2, T05).
     void preview(const std::vector<NoteEvent>& notes, const std::string& family, int gm_program, double bpm,
                  bool loop, Ticks loop_length = 0);
+    /// The same through a plug-in (the library browser's audition, Main Spec
+    /// §10.5): a temporary instance with the reference's state, outside the
+    /// project's tracks. False, with why, when it cannot be loaded.
+    bool preview_plugin(const project::PluginRef& plugin, const std::vector<NoteEvent>& notes, double bpm,
+                        juce::String& error);
     void stop_preview();
     bool previewing() const noexcept { return previewing_.load(); }
 

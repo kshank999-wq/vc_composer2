@@ -85,6 +85,7 @@ public:
     shell::EditFrame& edit_frame() noexcept { return edit_; }
     shell::MarkersPanel& markers() noexcept { return markers_; }
     shell::NewTrackPanel& new_track_panel() noexcept { return new_track_; }
+    TrackPanel& track_panel() noexcept { return tracks_; }
     shell::SelectionPanel& selection_panel() noexcept { return selection_; }
     composer_ui::Inspector& inspector() noexcept { return inspector_; }
     shell::KeyboardDeck& keyboard() noexcept { return keyboard_; }

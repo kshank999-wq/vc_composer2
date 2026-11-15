@@ -1562,3 +1562,38 @@ macOS, Linux and Windows. What it took:
       formats, hidden folders, one undo step, relative storage, approved
       versions); `relink_checks` in the desktop check (open, search,
       pick the ambiguous file, relink, undo).
+38. **Library browser. Done** (November 15, 2026; Main Spec §10, §11).
+    The Library tab of the left panel (`desktop/src/ui/library/`,
+    `vcc/library/Library.h`):
+    - **What it lists**: the composer's saved patches, the catalog's
+      library sections (`content/library/providers.json`: players such as
+      Kontakt, Opus, Synchron Player, SINE, Spitfire's own plug-ins,
+      Pianoteq, and the instruments and techniques a few libraries cover -
+      section names only, no samples or preset files) and every scanned
+      instrument plug-in. Each entry says separately whether its player is
+      installed, its library detected (by plug-in, or by a folder name in
+      the library folders added under More...) and its metadata known.
+    - **Search and filters**: words, family, technique, installed only,
+      favorites, tags. **For the selected track**: candidates ranked for
+      its instrument, techniques and approved fallbacks - saved patches
+      (exact), catalog sections a player here can load (inferred: verify in
+      the player), fallbacks, then plug-ins whose name suggests the
+      instrument (inferred: verify by ear) - with what each leaves
+      uncovered.
+    - **Audition** plays a phrase in the instrument's register through the
+      sound's own plug-in (a saved patch with its state) on a temporary
+      preview channel outside the project; a catalog section plays the
+      placeholder until it is chosen in its player.
+    - **Assign** puts it on the selected track as one undo step, saying how
+      the request was met (the inspector shows it); a player opens its
+      window to choose the section. **Save sound** keeps the track's
+      plug-in with its state as a verified patch for its instrument.
+    - **Templates** resolve tracks to saved patches and load their sounds
+      and articulation maps (the resolver had no installed patches until
+      now). **Mapping packs** (.vccmap) export and import saved patches,
+      states left out by default.
+    - Saved in `Library.json` in the app's data folder; refreshed when a
+      plug-in scan changes the list.
+    - **Tests**: `test_library` (catalog, installed/detected/known,
+      inference, search, ranking, persistence, packs, template building);
+      `library_checks` in the desktop check.
