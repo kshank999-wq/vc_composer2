@@ -3092,6 +3092,69 @@ void midi_tools_checks(MainWindow& window, const juce::File& dir)
     check(pedal_down && pedal_up, "the sustain pedal is recorded into the region");
     session.set_input_quantize(keys, 0);
 
+    // Pitch bend and aftertouch, played in.
+    session.set_record_armed(keys, true);
+    engine.set_record_enabled(true);
+    engine.locate(0);
+    engine.play();
+    rig.run(0.2);
+    engine.send_live(juce::MidiMessage::noteOn(1, 64, static_cast<juce::uint8>(90)));
+    engine.send_live(juce::MidiMessage::pitchWheel(1, 16383));
+    engine.send_live(juce::MidiMessage::channelPressureChange(1, 90));
+    rig.run(0.3);
+    engine.send_live(juce::MidiMessage::pitchWheel(1, 8192));
+    engine.send_live(juce::MidiMessage::noteOff(1, 64));
+    rig.run(0.2);
+    engine.stop();
+    engine.set_record_enabled(false);
+    session.set_record_armed(keys, false);
+    {
+        int bend_up = 0, bend_back = 0, pressure = 0;
+        for (const auto& x : regions())
+            if (x.lane == 0)
+                for (const auto& e : x.controllers) {
+                    bend_up += e.controller == kPitchBendController && e.value == 16383 ? 1 : 0;
+                    bend_back += e.controller == kPitchBendController && e.value == 8192 ? 1 : 0;
+                    pressure += e.controller == kChannelPressureController && e.value == 90 ? 1 : 0;
+                }
+        check(bend_up == 1 && bend_back == 1 && pressure == 1, "pitch bend and aftertouch are recorded with the notes");
+    }
+
+    // Played back: a held note bent up two semitones halfway through sounds 2^(2/12) higher.
+    {
+        const auto flute = session.add_track("Bend", "woodwinds.flute");
+        project::MidiRegion bent;
+        bent.start = 0;
+        bent.end = session.data().meter.bar_start(3);
+        const Ticks one_second = session.data().tempo.tick_at_seconds(1.0);
+        bent.notes = {{0, 2 * one_second, 69, 100, 0, {}}};
+        bent.controllers = {{0, 0, kPitchBendController, 8192}, {one_second, 0, kPitchBendController, 16383}};
+        session.add_recorded_regions({{flute, bent}}, "Record MIDI");
+        session.set_solo(flute, true);
+        engine.rebuild_now();
+        engine.locate(0);
+        engine.play();
+        std::vector<float> audio;
+        juce::AudioBuffer<float> block(2, 512);
+        for (int b = 0; b < static_cast<int>(2.0 * 48000 / 512); ++b) {
+            engine.render_offline(block, 512);
+            for (int i = 0; i < 512; ++i) audio.push_back(block.getSample(0, i));
+        }
+        engine.stop();
+        session.set_solo(flute, false);
+        auto crossings = [&](double from, double to) {
+            int n = 0;
+            const auto a = static_cast<std::size_t>(from * 48000), b = std::min(audio.size(), static_cast<std::size_t>(to * 48000));
+            for (std::size_t i = a + 1; i < b; ++i) n += audio[i - 1] < 0.0f && audio[i] >= 0.0f ? 1 : 0;
+            return static_cast<double>(n) / (to - from);
+        };
+        const double before = crossings(0.3, 0.9), after = crossings(1.3, 1.9);
+        const double ratio = before > 0 ? after / before : 0.0;
+        check(std::abs(ratio - std::pow(2.0, 2.0 / 12.0)) < 0.03,
+              "pitch bend plays: the note rises two semitones (" + juce::String(before, 1) + " -> " + juce::String(after, 1) +
+                  " Hz, x" + juce::String(ratio, 3) + ")");
+    }
+
     // Off-grid notes, as played without input quantize.
     project::MidiRegion played;
     played.start = 0;

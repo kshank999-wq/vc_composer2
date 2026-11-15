@@ -1087,8 +1087,8 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
                     ControllerEvent e;
                     e.tick = a[0].as_int();
                     e.channel = std::clamp(static_cast<int>(a[1].as_int()), 0, 15);
-                    e.controller = std::clamp(static_cast<int>(a[2].as_int()), 0, 127);
-                    e.value = std::clamp(static_cast<int>(a[3].as_int()), 0, 127);
+                    e.controller = std::clamp(static_cast<int>(a[2].as_int()), 0, kChannelPressureController);
+                    e.value = std::clamp(static_cast<int>(a[3].as_int()), 0, controller_max(e.controller));
                     r.controllers.push_back(e);
                 }
                 v.regions.push_back(std::move(r));

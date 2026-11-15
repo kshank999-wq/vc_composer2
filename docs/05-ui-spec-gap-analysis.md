@@ -703,8 +703,19 @@ and the document model. The work is mostly presentation.
     - **Checks.** Recording with input quantize and the pedal; toolbar
       quantize; the Q key; velocity; a CC1 ramp by call and CC11 by mouse;
       the drawn CC1 in the track's render. Screenshot `midi-tools`.
-    - Not yet: pitch bend and aftertouch, a CC lane in the Composer view,
-      transform tools (legato, humanize for regions, transpose).
+    - **Pitch bend and channel aftertouch** (added November 15): kept in
+      regions with the CCs (controller numbers 128 and 129 past the CCs;
+      pitch bend's full 14 bits, 8192 the centre), recorded with the
+      notes, saved, played (as their own MIDI messages, never CCs),
+      exported to and imported from MIDI files, and drawn in the piano
+      roll's bottom lane (Pitch bend, drawn about its centre line;
+      Aftertouch). The placeholder sound bends +/-2 semitones (the General
+      MIDI default) and swells with aftertouch. Checked: a played-in bend
+      and pressure are recorded; a held A bent up halfway sounds at
+      493 Hz after 440 (x1.121); the unit test round-trips save, MIDI
+      export and import.
+    - Not yet: a CC lane in the Composer view, transform tools (legato,
+      humanize for regions, transpose), polyphonic aftertouch.
 
 **CI on macOS (November 14, 2026).** The desktop check now passes on
 macOS, Linux and Windows. What it took:

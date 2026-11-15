@@ -1391,7 +1391,7 @@ int Session::change_region_velocities(const std::string& track_id, const std::ve
 bool Session::draw_region_controller(const std::string& track_id, const std::string& region_id, int cc, Ticks from,
                                      Ticks to, std::vector<ControllerEvent> points)
 {
-    if (to <= from || cc < 0 || cc > 127) return false;
+    if (to <= from || cc < 0 || cc > kChannelPressureController) return false;
     return edit("Draw CC", [&](project::ProjectData& d) {
         project::Track* t = d.find_track(track_id);
         project::TrackVersion* v = t ? t->active_version() : nullptr;
@@ -1407,7 +1407,7 @@ bool Session::draw_region_controller(const std::string& track_id, const std::str
                 if (p.tick < from || p.tick >= to) continue;
                 p.controller = cc;
                 p.channel = t->midi_channel;
-                p.value = std::clamp(p.value, 0, 127);
+                p.value = std::clamp(p.value, 0, controller_max(cc));
                 r.controllers.push_back(p);
             }
             fit_region(r, d.meter);

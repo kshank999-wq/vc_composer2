@@ -3378,6 +3378,8 @@ public:
             case 10: return "CC10 Pan";
             case 11: return "CC11 Expression";
             case 64: return "CC64 Sustain";
+            case kPitchBendController: return "Pitch bend";
+            case kChannelPressureController: return "Aftertouch";
             default: return "CC" + juce::String(cc);
         }
     }
@@ -3386,7 +3388,7 @@ private:
     void show_lane_menu()
     {
         juce::PopupMenu menu;
-        for (int cc : {-1, 1, 11, 7, 10, 64})
+        for (int cc : {-1, 1, 11, 7, 10, 64, kPitchBendController, kChannelPressureController})
             menu.addItem(lane_name(cc), true, m_.cc_lane == cc, [this, cc] { set_cc_lane(cc); });
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition());
     }
@@ -3395,7 +3397,8 @@ private:
     {
         const auto v = velocity_area();
         const float frac = (static_cast<float>(v.getBottom()) - 4.0f - y) / static_cast<float>(v.getHeight() - 10);
-        return juce::jlimit(0, 127, juce::roundToInt(frac * 127.0f));
+        const int top = controller_max(m_.cc_lane);
+        return juce::jlimit(0, top, juce::roundToInt(frac * static_cast<float>(top)));
     }
 
     void add_cc_point(juce::Point<float> p)
@@ -3449,7 +3452,13 @@ private:
         g.drawHorizontalLine(vel.getY(), static_cast<float>(vel.getX()), static_cast<float>(vel.getRight()));
         const float bottom = static_cast<float>(vel.getBottom()) - 4.0f;
         const float span = static_cast<float>(vel.getHeight() - 10);
-        auto y_of_value = [&](int v) { return bottom - span * static_cast<float>(v) / 127.0f; };
+        const float top_value = static_cast<float>(controller_max(m_.cc_lane));
+        auto y_of_value = [&](int v) { return bottom - span * static_cast<float>(v) / top_value; };
+        if (m_.cc_lane == kPitchBendController) {
+            // Pitch bend: the centre line is "no bend".
+            g.setColour(colours::text_dim.withAlpha(0.6f));
+            g.drawHorizontalLine(juce::roundToInt(y_of_value(8192)), static_cast<float>(vel.getX()), static_cast<float>(vel.getRight()));
+        }
         for (const auto& r : l.regions) {
             if (r.lane != 0) continue;
             std::vector<ControllerEvent> ev;

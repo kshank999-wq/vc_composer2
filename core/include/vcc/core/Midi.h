@@ -32,7 +32,17 @@ bool operator!=(const NoteEvent& a, const NoteEvent& b) noexcept;
 /// Orders by start, then pitch, then duration - a stable canonical order.
 bool operator<(const NoteEvent& a, const NoteEvent& b) noexcept;
 
-/// A control change at a tick (dynamics on CC1/CC11, articulation CCs).
+/// Controller numbers past the 0-127 CCs for the two channel messages that
+/// travel with them: pitch bend (value 0..16383, 8192 the centre) and
+/// channel aftertouch (value 0..127). Writers turn them into their own
+/// MIDI messages, not control changes.
+constexpr int kPitchBendController = 128;
+constexpr int kChannelPressureController = 129;
+/// The largest value a controller number carries.
+constexpr int controller_max(int controller) noexcept { return controller == kPitchBendController ? 16383 : 127; }
+
+/// A control change at a tick (dynamics on CC1/CC11, articulation CCs), or
+/// pitch bend / channel aftertouch (kPitchBendController, kChannelPressureController).
 struct ControllerEvent {
     Ticks tick = 0;
     int channel = 0;

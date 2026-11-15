@@ -338,3 +338,73 @@ TEST_CASE("splitting a MIDI region: notes stay where they start, controllers by 
     s.undo();
     CHECK(s.data().find_track(t)->active_version()->regions.size() == 1);
 }
+
+TEST_CASE("pitch bend and channel aftertouch: kept in regions, saved, exported and imported as their own messages")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Synth", "keys.piano");
+    project::MidiRegion r;
+    r.start = 0;
+    r.end = 4 * Q;
+    r.notes = {{0, 2 * Q, 60, 90, 0, {}}};
+    r.controllers = {{0, 0, kPitchBendController, 8192}, {Q, 0, kPitchBendController, 16383},
+                     {Q, 0, kChannelPressureController, 100}};
+    REQUIRE(s.add_recorded_regions({{t, r}}, "Record MIDI").size() == 1);
+
+    // Saved and read back with the full 14-bit range.
+    const auto file = std::filesystem::temp_directory_path() / "vcc_bend_test.vcc2";
+    std::string error;
+    REQUIRE(s.save_as(file.string(), &error));
+    session::Session back(catalogs());
+    REQUIRE(back.open(file.string(), &error));
+    const auto& cc = back.data().find_track(t)->active_version()->regions[0].controllers;
+    REQUIRE(cc.size() == 3);
+    CHECK(cc[1].controller == kPitchBendController);
+    CHECK(cc[1].value == 16383);
+    std::filesystem::remove(file);
+
+    // Exported as pitch-bend and channel-pressure messages, and imported back.
+    const auto smf = project::export_project_midi(s.project(), false);
+    const auto mid = std::filesystem::temp_directory_path() / "vcc_bend_test.mid";
+    {
+        std::FILE* f = std::fopen(mid.string().c_str(), "wb");
+        REQUIRE(f != nullptr);
+        std::fwrite(smf.data(), 1, smf.size(), f);
+        std::fclose(f);
+    }
+    music::SmfFile read;
+    REQUIRE(music::read_smf_file(mid.string(), read).ok);
+    int bends = 0, pressures = 0, top_bend = 0;
+    for (const auto& tr : read.tracks)
+        for (const auto& e : tr.events) {
+            if (e.event.type == music::MidiEventType::PitchBend) {
+                ++bends;
+                top_bend = std::max(top_bend, static_cast<int>(e.event.bend));
+            }
+            if (e.event.type == music::MidiEventType::ChannelPressure) ++pressures;
+        }
+    CHECK(bends == 2);
+    CHECK(top_bend == 16383);
+    CHECK(pressures == 1);
+    session::Session in(catalogs());
+    in.new_empty();
+    const auto imported = in.import_midi_file(mid.string(), {}, 0);
+    REQUIRE(imported.parts == 1);
+    int in_bends = 0, in_pressure = 0;
+    for (const auto& e : in.data().find_track(imported.track_ids[0])->active_version()->regions[0].controllers) {
+        in_bends += e.controller == kPitchBendController ? 1 : 0;
+        in_pressure += e.controller == kChannelPressureController ? 1 : 0;
+    }
+    CHECK(in_bends == 2);
+    CHECK(in_pressure == 1);
+    std::filesystem::remove(mid);
+
+    // Drawing pitch bend keeps 14-bit values.
+    CHECK(s.draw_region_controller(t, s.data().find_track(t)->active_version()->regions[0].id, kPitchBendController, 2 * Q, 3 * Q,
+                                   {{2 * Q, 0, 0, 0}, {2 * Q + Q / 2, 0, 0, 12000}}));
+    int drawn_max = 0;
+    for (const auto& e : s.data().find_track(t)->active_version()->regions[0].controllers)
+        if (e.controller == kPitchBendController) drawn_max = std::max(drawn_max, e.value);
+    CHECK(drawn_max == 16383);  // the earlier bend at Q; the drawn 12000 is below it
+}

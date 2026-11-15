@@ -132,10 +132,20 @@ std::string write_midi_file(const std::vector<MidiFileTrack>& tracks, const Midi
         for (const auto& c : t.controllers) {
             // Controllers sort before notes at the same tick, so a dynamic
             // is in force when the note it shapes starts.
-            ev.push_back({to_file_ticks(c.tick), 0,
-                          {static_cast<std::uint8_t>(0xB0 | std::clamp(c.channel, 0, 15)),
-                           static_cast<std::uint8_t>(std::clamp(c.controller, 0, 127)),
-                           static_cast<std::uint8_t>(std::clamp(c.value, 0, 127))}});
+            const auto ch = static_cast<std::uint8_t>(std::clamp(c.channel, 0, 15));
+            if (c.controller == kPitchBendController) {
+                const int v = std::clamp(c.value, 0, 16383);
+                ev.push_back({to_file_ticks(c.tick), 0,
+                              {static_cast<std::uint8_t>(0xE0 | ch), static_cast<std::uint8_t>(v & 0x7F),
+                               static_cast<std::uint8_t>((v >> 7) & 0x7F)}});
+            } else if (c.controller == kChannelPressureController) {
+                ev.push_back({to_file_ticks(c.tick), 0,
+                              {static_cast<std::uint8_t>(0xD0 | ch), static_cast<std::uint8_t>(std::clamp(c.value, 0, 127))}});
+            } else {
+                ev.push_back({to_file_ticks(c.tick), 0,
+                              {static_cast<std::uint8_t>(0xB0 | ch), static_cast<std::uint8_t>(std::clamp(c.controller, 0, 127)),
+                               static_cast<std::uint8_t>(std::clamp(c.value, 0, 127))}});
+            }
         }
         for (const auto& n : t.notes) {
             auto ch = static_cast<std::uint8_t>(std::clamp(n.channel, 0, 15));

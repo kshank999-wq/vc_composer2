@@ -272,9 +272,21 @@ std::vector<Event> to_events(const std::vector<NoteEvent>& notes, const std::vec
     for (const auto& c : controllers) {
         Event e;
         e.sample = at(c.tick);
-        e.bytes[0] = static_cast<std::uint8_t>(0xB0 | juce::jlimit(0, 15, c.channel));
-        e.bytes[1] = static_cast<std::uint8_t>(juce::jlimit(0, 127, c.controller));
-        e.bytes[2] = static_cast<std::uint8_t>(juce::jlimit(0, 127, c.value));
+        const auto ch = static_cast<std::uint8_t>(juce::jlimit(0, 15, channel_override >= 0 ? channel_override : c.channel));
+        if (c.controller == kPitchBendController) {
+            const int v = juce::jlimit(0, 16383, c.value);
+            e.bytes[0] = static_cast<std::uint8_t>(0xE0 | ch);
+            e.bytes[1] = static_cast<std::uint8_t>(v & 0x7F);
+            e.bytes[2] = static_cast<std::uint8_t>((v >> 7) & 0x7F);
+        } else if (c.controller == kChannelPressureController) {
+            e.bytes[0] = static_cast<std::uint8_t>(0xD0 | ch);
+            e.bytes[1] = static_cast<std::uint8_t>(juce::jlimit(0, 127, c.value));
+            e.size = 2;
+        } else {
+            e.bytes[0] = static_cast<std::uint8_t>(0xB0 | ch);
+            e.bytes[1] = static_cast<std::uint8_t>(juce::jlimit(0, 127, c.controller));
+            e.bytes[2] = static_cast<std::uint8_t>(juce::jlimit(0, 127, c.value));
+        }
         e.order = 0;
         out.push_back(e);
     }
@@ -2255,6 +2267,14 @@ int PlaybackEngine::place_midi(const RecordPass& pass)
     for (const auto& x : mine) {
         const int status = x.bytes[0] & 0xF0, channel = x.bytes[0] & 0x0F, pitch = x.bytes[1] & 127, velocity = x.bytes[2] & 127;
         const Ticks at = std::max(span_start, tick_at(x.sample));  // a note just early starts the take
+        if (status == 0xE0) {  // pitch bend: 14 bits, low byte first
+            controllers.push_back(ControllerEvent{at, channel, kPitchBendController, (velocity << 7) | pitch});
+            continue;
+        }
+        if (status == 0xD0) {  // channel aftertouch
+            controllers.push_back(ControllerEvent{at, channel, kChannelPressureController, pitch});
+            continue;
+        }
         if (status == 0xB0) {
             controllers.push_back(ControllerEvent{at, channel, pitch, velocity});
             continue;
@@ -2519,10 +2539,11 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
                             if (meta.numBytes > 3 || meta.numBytes < 2) continue;
                             const int status = meta.data[0] & 0xF0;
                             // Notes and controllers (sustain pedal, mod wheel...).
-                            if (status != 0x80 && status != 0x90 && status != 0xB0) continue;
-                            if (status == 0xB0 && meta.numBytes < 3) continue;
+                            // Notes, controllers, pitch bend and channel aftertouch.
+                            if (status != 0x80 && status != 0x90 && status != 0xB0 && status != 0xE0 && status != 0xD0) continue;
+                            if ((status == 0xB0 || status == 0xE0) && meta.numBytes < 3) continue;
                             const std::int64_t at = at0 + meta.samplePosition;
-                            const bool on = (status == 0x90 && meta.data[2] > 0) || status == 0xB0;
+                            const bool on = (status == 0x90 && meta.data[2] > 0) || status == 0xB0 || status == 0xE0 || status == 0xD0;
                             if (on && (at < from || (pass->punch && (at < pass->punch_in || at >= pass->punch_out)))) continue;
                             CapturedMidi e;
                             e.pass = pass->id;

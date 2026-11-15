@@ -128,10 +128,11 @@ public:
 
     bool canPlaySound(juce::SynthesiserSound*) override { return true; }
 
-    void startNote(int note, float velocity, juce::SynthesiserSound*, int) override
+    void startNote(int note, float velocity, juce::SynthesiserSound*, int wheel) override
     {
         const double sr = getSampleRate();
         frequency_ = juce::MidiMessage::getMidiNoteInHertz(note);
+        pitchWheelMoved(wheel);
         phase_a_ = phase_b_ = 0.0;
         velocity_ = velocity;
         age_ = 0.0;
@@ -158,18 +159,21 @@ public:
         }
     }
 
-    void pitchWheelMoved(int) override {}
+    /// Pitch bend: +/-2 semitones, the General MIDI default range.
+    void pitchWheelMoved(int value) override { bend_ = std::pow(2.0, (value - 8192) / 8192.0 * 2.0 / 12.0); }
     void controllerMoved(int, int) override {}
+    /// Channel aftertouch: pressing harder swells the note (up to +6 dB).
+    void channelPressureChanged(int value) override { pressure_ = juce::jlimit(0, 127, value) / 127.0f; }
 
     void renderNextBlock(juce::AudioBuffer<float>& out, int start, int count) override
     {
         if (!isVoiceActive()) return;
         const double sr = getSampleRate();
-        const float gain = patch_.level * (0.25f + 0.75f * velocity_ * velocity_);
+        const float gain = patch_.level * (0.25f + 0.75f * velocity_ * velocity_) * (1.0f + pressure_);
         const double detune = std::pow(2.0, patch_.detune_cents / 1200.0);
         for (int i = 0; i < count; ++i) {
             age_ += 1.0 / sr;
-            double f = frequency_;
+            double f = frequency_ * bend_;
             if (patch_.vibrato_depth > 0 && age_ > patch_.vibrato_delay)
                 f *= 1.0 + patch_.vibrato_depth * std::sin(2.0 * juce::MathConstants<double>::pi * 5.2 * age_);
             phase_a_ += f / sr;
@@ -199,6 +203,8 @@ private:
     Patch patch_;
     juce::ADSR env_;
     double frequency_ = 440.0, phase_a_ = 0.0, phase_b_ = 0.0, age_ = 0.0;
+    double bend_ = 1.0;
+    float pressure_ = 0.0f;
     float velocity_ = 0.8f, lp_coeff_ = 0.5f, lp_state_ = 0.0f;
     Noise noise_;
 };

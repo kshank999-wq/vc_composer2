@@ -98,6 +98,12 @@ Session::MidiImport Session::import_midi_file(const std::string& path, const std
                 case music::MidiEventType::ControlChange:
                     part.controllers.push_back(ControllerEvent{t, ch, e.event.data1, e.event.data2});
                     break;
+                case music::MidiEventType::PitchBend:
+                    part.controllers.push_back(ControllerEvent{t, ch, kPitchBendController, e.event.bend});
+                    break;
+                case music::MidiEventType::ChannelPressure:
+                    part.controllers.push_back(ControllerEvent{t, ch, kChannelPressureController, e.event.data1});
+                    break;
                 case music::MidiEventType::ProgramChange:
                     if (part.program < 0) part.program = e.event.data1;
                     break;
