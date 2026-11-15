@@ -352,17 +352,22 @@ public:
 
     void clear();
 
-    /// Monotonic counter, bumped on every mutation. Lets a UI or a renderer
-    /// skip work when nothing has changed, without comparing the score.
+    /// Bumped on every mutation. Lets a UI or a renderer skip work when
+    /// nothing has changed, without comparing the score. Unique across all
+    /// scores (a process-wide counter): two scores with the same non-zero
+    /// revision are copies of the same state, which lets the undo history
+    /// keep one copy of a score that did not change. 0: never changed.
     std::uint64_t revision() const noexcept { return revision_; }
 
 private:
     EventId next_id() noexcept { return ++last_event_id_; }
-    void touch() noexcept { ++revision_; }
+    void touch() noexcept;
 
     /// Keeps a staff's notes ordered by start tick, then voice, then pitch,
     /// so rendering and range queries never have to sort.
     void sort_staff(std::size_t staff_index);
+    /// Puts a note in a staff at its place in that order.
+    void place_note(std::size_t staff_index, const ScoreNote& note);
 
     /// Raises this staff's bound to cover `note`. Never lowers it.
     void note_reaches(std::size_t staff_index, const ScoreNote& note);

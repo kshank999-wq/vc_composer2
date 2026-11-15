@@ -32,7 +32,7 @@ ComposerRuler::ComposerRuler(AppContext& context, TimelineAccess access) : conte
         if (editor_.isVisible()) commit_chord_edit();
     };
     listener_ = context_.session.add_listener([this](session::Change c) {
-        if (c == session::Change::Document) refresh();
+        if (c == session::Change::Document) deferred_.request();
         if (c == session::Change::Selection) repaint();
     });
     refresh();
@@ -60,6 +60,27 @@ void ComposerRuler::refresh()
 {
     const auto& session = context_.session;
     const auto& d = session.data();
+    // Nothing the chords or the overview read has changed (a mix move, a
+    // marker): no need to read every note again.
+    std::string content = d.key + "|" + std::to_string(song_end()) + "|";
+    for (const auto& c : d.meter.changes()) content += std::to_string(c.bar) + ":" + c.signature.to_string() + ",";
+    for (const auto* t : session.music_tracks()) {
+        const auto* v = t->active_version();
+        content += t->id + "/" + t->color + "/" + std::to_string(t->midi_channel) + "/" + std::to_string(t->effective_transpose());
+        if (v) {
+            std::size_t region_notes = 0;
+            for (const auto& r : v->regions) region_notes += r.notes.size() * 1000003u + static_cast<std::size_t>(r.start) + static_cast<std::size_t>(r.end);
+            content += "/" + v->id + "/" + std::to_string(v->score.revision()) + "/" + std::to_string(v->regions.size()) + "/" +
+                   std::to_string(region_notes) + "/" + std::to_string(v->performance.size()) + "/" + std::to_string(v->phrases.size());
+            for (const auto& p : v->phrases) content += ":" + std::to_string(p.start) + "-" + std::to_string(p.end);
+        }
+        content += ";";
+    }
+    if (content == content_key_) {
+        repaint();
+        return;
+    }
+    content_key_ = content;
     // Chords: every pitched track's sounding notes, bar by bar.
     std::vector<NoteEvent> all;
     lanes_.clear();

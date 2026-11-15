@@ -4,6 +4,8 @@
 // scrolls horizontally. Meters are the only thing repainted at frame rate.
 #pragma once
 
+#include "ui/Deferred.h"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -82,6 +84,7 @@ private:
     int top_h_ = 0, bottom_h_ = 0, bus_gap_x_ = -1;
     int hx_ = 0, vy_ = 0;
     int listener_ = 0;
+    Deferred deferred_{[this] { sync(); }};
     int ticks_ = 0;
 };
 

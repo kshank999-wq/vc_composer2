@@ -442,6 +442,7 @@ MainComponent::MainComponent(AppContext& context)
 MainComponent::~MainComponent()
 {
     stopTimer();
+    if (autosave_thread_.joinable()) autosave_thread_.join();
     surface_.reset();
     close_video_window();
     context_.session.remove_listener(listener_);
@@ -729,9 +730,17 @@ void MainComponent::timerCallback()
     // Crash protection: an autosave every minute while there are unsaved changes.
     if (++ticks_ >= 30 * 60) {
         ticks_ = 0;
-        if (context_.session.dirty()) {
+        if (context_.session.dirty() && !autosave_running_.load()) {
             capture_plugin_states();
-            context_.session.write_autosave(user_data_directory().getFullPathName().toStdString());
+            // The copy now, the writing on its own thread.
+            auto job = std::make_shared<session::Session::AutosaveJob>(
+                context_.session.autosave_job(user_data_directory().getFullPathName().toStdString()));
+            if (autosave_thread_.joinable()) autosave_thread_.join();
+            autosave_running_ = true;
+            autosave_thread_ = std::thread([this, job] {
+                session::Session::write_autosave_job(*job);
+                autosave_running_ = false;
+            });
             status_strip_.set_autosaved(juce::Time::getCurrentTime());
         }
     }

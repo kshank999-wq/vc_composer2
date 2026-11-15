@@ -1,4 +1,6 @@
 #include "ui/TrackPanel.h"
+
+#include "ui/Deferred.h"
 #include "ui/composer/TransposePopover.h"
 
 #include <algorithm>
@@ -332,9 +334,9 @@ public:
         add_.onClick = [this] { TrackPanel::show_add_track_menu(context_, &add_); };
         add_template_.onClick = [this] { context_.commands.invokeDirectly(cmd::addTemplate, true); };
         listener_ = context_.session.add_listener([this](session::Change change) {
-            if (change == session::Change::Document) rebuild();
+            if (change == session::Change::Document) deferred_.request();
             if (change == session::Change::Selection)
-                for (auto& r : rows_) r->repaint();
+                for (auto& r : rows_) r->repaint();  // a stale row repaints harmlessly; the rebuild follows
         });
         rebuild();
         startTimer(1000);  // instrument status can change when plug-ins load
@@ -392,6 +394,7 @@ private:
 
     AppContext& context_;
     int listener_ = 0;
+    Deferred deferred_{[this] { rebuild(); }};
     juce::Viewport viewport_;
     juce::Component content_;
     std::vector<std::unique_ptr<TrackRow>> rows_;

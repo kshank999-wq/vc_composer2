@@ -4,6 +4,8 @@
 #pragma once
 
 #include <map>
+#include <thread>
+#include <atomic>
 #include <set>
 
 #include "ui/AppContext.h"
@@ -191,6 +193,9 @@ private:
     SequencerView sequencer_;
     std::unique_ptr<surface_ui::ControlSurface> surface_;
     std::uint64_t refusals_seen_ = 0;
+    /// The autosave being written (serializing a large project off the message thread).
+    std::thread autosave_thread_;
+    std::atomic<bool> autosave_running_{false};
     Workspace workspace_ = Workspace::Composer;
     std::unique_ptr<MixerWindow> mixer_;
     std::map<std::string, std::unique_ptr<PluginWindow>> plugin_windows_;

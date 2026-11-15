@@ -6,6 +6,8 @@
 // to the keyboard.
 #pragma once
 
+#include "ui/Deferred.h"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -55,6 +57,7 @@ private:
     void rebuild();
     AppContext& context_;
     int listener_ = 0;
+    Deferred deferred_{[this] { rebuild(); }};
     juce::Viewport viewport_;
     std::unique_ptr<Strip> master_;  ///< Pinned at the right, outside the scroller.
     juce::Component holder_;

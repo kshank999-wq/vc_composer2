@@ -95,6 +95,16 @@ public:
     /// Crash protection (Main Spec §12): writes the document beside its file
     /// (or into `fallback_dir` when untitled) without changing path or dirty.
     bool write_autosave(const std::string& fallback_dir, std::string* error = nullptr) const;
+    /// An autosave in two halves: the copy, taken now (about a millisecond
+    /// even for a large project), and the write, which may run on another
+    /// thread - serializing a large project is the slow part, and it must
+    /// not stall the window every minute.
+    struct AutosaveJob {
+        project::Project copy;
+        std::string path;
+    };
+    AutosaveJob autosave_job(const std::string& fallback_dir) const;
+    static bool write_autosave_job(const AutosaveJob& job, std::string* error = nullptr);
     std::string autosave_path(const std::string& fallback_dir) const;
     /// True when an autosave newer than `path` exists (offer to recover it).
     static bool has_newer_autosave(const std::string& path);

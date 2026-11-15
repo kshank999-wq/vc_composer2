@@ -1,5 +1,7 @@
 #include "vcc/notation/Score.h"
 
+#include <atomic>
+
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
@@ -66,6 +68,12 @@ Score::Score()
     longest_note_ticks_.push_back(0);
     time_signatures_.push_back(TimeSignatureChange{0, music::TimeSignature{4, 4}});
     key_signatures_.push_back(KeySignatureChange{0, KeySignature{}});
+}
+
+void Score::touch() noexcept
+{
+    static std::atomic<std::uint64_t> next{0};
+    revision_ = ++next;
 }
 
 Staff& Score::staff(std::size_t index)
@@ -323,6 +331,16 @@ void Score::sort_staff(std::size_t staff_index)
     std::sort(staff_notes_[staff_index].begin(), staff_notes_[staff_index].end(), note_order);
 }
 
+void Score::place_note(std::size_t staff_index, const ScoreNote& note)
+{
+    // In order already (loading, entry left to right): appended. Otherwise
+    // into its place - never a full sort per note, which made loading a
+    // long staff quadratic.
+    auto& notes = staff_notes_[staff_index];
+    if (notes.empty() || !note_order(note, notes.back())) notes.push_back(note);
+    else notes.insert(std::upper_bound(notes.begin(), notes.end(), note, note_order), note);
+}
+
 EventId Score::insert_note(std::size_t staff_index, const ScoreNote& note)
 {
     if (staff_index >= staff_notes_.size())
@@ -332,9 +350,8 @@ EventId Score::insert_note(std::size_t staff_index, const ScoreNote& note)
 
     ScoreNote stored = note;
     stored.id = next_id();
-    staff_notes_[staff_index].push_back(stored);
+    place_note(staff_index, stored);
     note_reaches(staff_index, stored);
-    sort_staff(staff_index);
     touch();
     return stored.id;
 }
@@ -393,12 +410,13 @@ bool Score::restore_note(std::size_t staff_index, const ScoreNote& note)
         return false;
     if (note.id == kInvalidEventId || !note.is_valid())
         return false;
-    if (find_note(note.id) != nullptr)
+    // An id past every id handed out cannot be taken (the usual case when
+    // loading, ids in order); only then is the score searched.
+    if (note.id <= last_event_id_ && find_note(note.id) != nullptr)
         return false;
 
-    staff_notes_[staff_index].push_back(note);
+    place_note(staff_index, note);
     note_reaches(staff_index, note);
-    sort_staff(staff_index);
 
     // Keep the counter ahead of every id in the score, so a later insert
     // cannot hand out an id this note already holds.

@@ -243,7 +243,17 @@ std::string Session::autosave_path(const std::string& fallback_dir) const
 
 bool Session::write_autosave(const std::string& fallback_dir, std::string* error) const
 {
-    return files::write_file_atomic(autosave_path(fallback_dir), json::write(project_.to_json()), error);
+    return write_autosave_job(autosave_job(fallback_dir), error);
+}
+
+Session::AutosaveJob Session::autosave_job(const std::string& fallback_dir) const
+{
+    return {project::Project(project_.data(), project_.ids().peek()), autosave_path(fallback_dir)};
+}
+
+bool Session::write_autosave_job(const AutosaveJob& job, std::string* error)
+{
+    return job.copy.save(job.path, error);
 }
 
 bool Session::has_newer_autosave(const std::string& path)

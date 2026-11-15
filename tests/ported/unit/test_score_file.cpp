@@ -310,10 +310,11 @@ VCC_TEST(a_grace_note_comes_back_as_one_and_an_older_file_reads_as_plain_notes)
     }
     VCC_CHECK(score_to_json(original).to_text(2).find("\"staff_shift\": -1") != std::string::npos);
 
-    // The fields are written for every note, so a file's shape does not
-    // depend on whether it has grace notes.
+    // Fields are written where they differ from a plain note's (the
+    // reader's default), so a plain note carries no grace fields and the
+    // grace note carries its own.
     const std::string text = score_to_json(original).to_text(2);
-    VCC_CHECK(text.find("\"grace\": false") != std::string::npos);
+    VCC_CHECK(text.find("\"grace\": false") == std::string::npos);
     VCC_CHECK(text.find("\"grace\": true") != std::string::npos);
     VCC_CHECK(text.find("\"grace_slashed\": false") != std::string::npos);
 

@@ -4752,7 +4752,10 @@ void staff_tools_checks(MainWindow& window, const juce::File& dir)
     bool marked = false;
     for (const auto& n : session.data().find_track(flute)->active_version()->score.notes(0))
         marked = marked || notation::has_articulation(n.articulations, notation::Articulation::Staccato);
-    check(eighth_on && lit && no_staccato_yet && adapted && marked && fs.notes(0).front().duration.value == notation::NoteValue::Eighth,
+    // (Fetched again: a reference into the document does not outlive an edit.)
+    const auto& fs_now = session.data().find_track(flute)->active_version()->score;
+    check(eighth_on && lit && no_staccato_yet && adapted && marked && !fs_now.notes(0).empty() &&
+              fs_now.notes(0).front().duration.value == notation::NoteValue::Eighth,
           "the tools act on the selected staff: the eighth key sets the value (lit), and with a note selected "
           "the articulations appear and staccato marks it");
 
@@ -5668,6 +5671,131 @@ void scrub_checks(MainWindow& window, const juce::File& dir)
     surface.set_device({}, {});
     surface.set_polling(true);
     project_dir.deleteRecursively();
+}
+
+/// Performance (Main Spec §19 phase 5) in the app: a large project - 48
+/// tracks, 120 bars of eighths each in the score - timed through what a
+/// composer does: the engine taking in an edit, the Composer and Producer
+/// views painting it, save and open. The numbers are printed; the limits
+/// are generous (CI machines vary) and catch only something pathological.
+void perf_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    auto ms_since = [](double t0) { return juce::Time::getMillisecondCounterHiRes() - t0; };
+    double t0 = juce::Time::getMillisecondCounterHiRes();
+    std::vector<std::string> ids;
+    for (int t = 0; t < 48; ++t) ids.push_back(session.add_track("Track " + std::to_string(t + 1), "strings.violins_1"));
+    for (const auto& id : ids) {
+        auto score = session.data().find_track(id)->active_version()->score;
+        notation::Duration eighth;
+        eighth.value = notation::NoteValue::Eighth;
+        for (int b = 0; b < 120; ++b)
+            for (int k = 0; k < 8; ++k) {
+                notation::Pitch p;
+                p.step = static_cast<notation::Step>((b + k) % 7);
+                p.octave = 4;
+                score.insert_chord(0, static_cast<Ticks>(b) * kTicksPerWhole + k * kTicksPerQuarter / 2, eighth, {p});
+            }
+        session.commit_score(id, score, "Fill");
+    }
+    const double build = ms_since(t0);
+    t0 = juce::Time::getMillisecondCounterHiRes();
+    ctx.engine.rebuild_now();
+    const double rebuild_cold = ms_since(t0);
+    // One note on one track, then the engine takes it in.
+    // The median of seven one-note edits (each followed by the message loop,
+    // as between keystrokes).
+    auto median_edit = [&](int base, double& commit_ms, double& edit_ms) {
+        std::vector<double> cs, es;
+        for (int i = 0; i < 7; ++i) {
+            auto sc = session.data().find_track(ids[10])->active_version()->score;
+            notation::Pitch p;
+            p.step = static_cast<notation::Step>(i % 7);
+            p.octave = 5;
+            sc.insert_chord(0, (base + i) * kTicksPerQuarter, notation::Duration{}, {p}, 1);
+            const double s0 = juce::Time::getMillisecondCounterHiRes();
+            session.commit_score(ids[10], sc, "Note");
+            cs.push_back(juce::Time::getMillisecondCounterHiRes() - s0);
+            ctx.engine.rebuild_now();
+            es.push_back(juce::Time::getMillisecondCounterHiRes() - s0);
+            pump(20);
+        }
+        std::sort(cs.begin(), cs.end());
+        std::sort(es.begin(), es.end());
+        commit_ms = cs[3];
+        edit_ms = es[3];
+    };
+    double composer_commit = 0, composer_edit = 0;
+    main.show_workspace(MainComponent::Workspace::Composer);
+    session.select_track(ids[10]);
+    pump(120);
+    median_edit(40, composer_commit, composer_edit);
+    std::printf("  perf: in the Composer view, a note: commit %.1f ms, with the engine's rebuild %.1f ms\n", composer_commit,
+                composer_edit);
+    std::vector<double> commits, edits;
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(120);
+    for (int i = 0; i < 7; ++i) {
+        auto one = session.data().find_track(ids[10])->active_version()->score;
+        notation::Pitch g5;
+        g5.step = static_cast<notation::Step>(i % 7);
+        g5.octave = 5;
+        one.insert_chord(0, i * kTicksPerQuarter, notation::Duration{}, {g5}, 1);
+        t0 = juce::Time::getMillisecondCounterHiRes();
+        session.commit_score(ids[10], one, "Note");
+        commits.push_back(ms_since(t0));
+        ctx.engine.rebuild_now();
+        edits.push_back(ms_since(t0));
+        pump(20);
+    }
+    std::sort(commits.begin(), commits.end());
+    std::sort(edits.begin(), edits.end());
+    const double commit_only = commits[3];
+    const double edit_rebuild = edits[3];
+    std::printf("  perf: in the Producer view, a note: commit %.1f ms\n", commit_only);
+    // The views, painted whole.
+    auto paint_ms = [&](juce::Component& c) {
+        if (c.getWidth() <= 0 || c.getHeight() <= 0) return -1.0;
+        juce::Image img(juce::Image::ARGB, c.getWidth(), c.getHeight(), true);
+        juce::Graphics g(img);
+        const double s0 = juce::Time::getMillisecondCounterHiRes();
+        c.paintEntireComponent(g, true);
+        return juce::Time::getMillisecondCounterHiRes() - s0;
+    };
+    main.show_workspace(MainComponent::Workspace::Composer);
+    session.select_track(ids[10]);
+    pump(150);
+    paint_ms(main.composer());  // warm (layouts cached)
+    const double composer_paint = paint_ms(main.composer());
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(150);
+    paint_ms(main.sequencer());
+    const double producer_paint = paint_ms(main.sequencer());
+    const auto file = dir.getChildFile("perf-check.vcc2");
+    t0 = juce::Time::getMillisecondCounterHiRes();
+    session.save_as(file.getFullPathName().toStdString());
+    const double save = ms_since(t0);
+    t0 = juce::Time::getMillisecondCounterHiRes();
+    session.open(file.getFullPathName().toStdString());
+    const double open = ms_since(t0);
+    pump(150);
+    const juce::String numbers = "build " + juce::String(build, 0) + " ms, engine rebuild " + juce::String(rebuild_cold, 1) +
+                                 " ms, a note entered in the Composer (with the engine's rebuild) " + juce::String(composer_edit, 1) +
+                                 " ms, in the Producer view " + juce::String(edit_rebuild, 1) + " ms, Composer paint " +
+                                 juce::String(composer_paint, 1) + " ms, Producer paint " + juce::String(producer_paint, 1) +
+                                 " ms, save " + juce::String(save, 0) + " ms, open " + juce::String(open, 0) + " ms (" +
+                                 juce::String(file.getSize() / 1024) + " KB)";
+    std::printf("  perf: %s\n", numbers.toRawUTF8());
+    check(rebuild_cold < 3000 && edit_rebuild < 1500 && composer_edit < 1500 && composer_paint < 2000 && producer_paint < 2000 && save < 4000 &&
+              open < 6000,
+          "a 48-track, 46,080-note project stays responsive: " + numbers);
+    file.deleteFile();
+    session.new_empty();
+    pump(60);
 }
 
 void chord_symbol_checks(MainWindow& window, const juce::File& dir)
@@ -6954,6 +7082,8 @@ int main(int argc, char** argv)
         comments_checks(window, dir);
         section("scrub_checks");
         scrub_checks(window, dir);
+        section("perf_checks");
+        perf_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

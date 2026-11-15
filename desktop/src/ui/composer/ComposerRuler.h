@@ -4,6 +4,8 @@
 // line up with the staves below.
 #pragma once
 
+#include "ui/Deferred.h"
+
 #include <functional>
 #include <string>
 #include <vector>
@@ -73,6 +75,8 @@ private:
     TimelineAccess access_;
     int listener_ = 0;
     project::RenderCache render_;
+    Deferred deferred_{[this] { refresh(); }};
+    std::string content_key_;  ///< What the chords and overview were last read from.
     std::vector<std::string> chords_;
     juce::TextEditor editor_;
     Ticks editing_ = -1;

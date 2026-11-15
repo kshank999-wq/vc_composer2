@@ -101,7 +101,7 @@ ConsoleView::ConsoleView(AppContext& context) : context_(context), tip_(std::mak
     update_header_buttons();
 
     listener_ = context_.session.add_listener([this](session::Change change) {
-        if (change == session::Change::Document) sync();
+        if (change == session::Change::Document) deferred_.request();
         if (change == session::Change::Selection)
             for (auto& s : strips_) s->update_selection();
     });

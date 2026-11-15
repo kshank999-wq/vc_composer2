@@ -26,6 +26,8 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <memory>
 #include <vector>
 
 #include "vcc/core/Ids.h"
@@ -586,6 +588,7 @@ public:
 
     const ProjectData& data() const noexcept { return data_; }
     IdAllocator& ids() noexcept { return ids_; }
+    const IdAllocator& ids() const noexcept { return ids_; }
 
     /// Applies `change` to a copy of the document. If it returns true the copy
     /// becomes current and one undo step labelled `label` is recorded; if it
@@ -655,11 +658,24 @@ private:
     IdAllocator ids_;
     std::string refusal_;
     std::uint64_t refusals_ = 0;
+    /// A document kept for undo: its scores held apart and shared, so a
+    /// score no edit touched is stored once however many steps keep it
+    /// (scores are most of a project's memory: a long session of one-note
+    /// edits on a 100,000-note project kept a full copy per edit).
+    struct Kept {
+        ProjectData data;  ///< With every version's score left empty.
+        std::vector<std::shared_ptr<const notation::Score>> scores;  ///< Track by track, version by version.
+    };
     struct Step {
         std::string label;
-        ProjectData before;
-        ProjectData after;
+        Kept before;
+        Kept after;
     };
+    Kept compact(ProjectData&& d);
+    static ProjectData expand(const Kept& s);
+    /// Scores by revision, for sharing (expired entries are swept).
+    std::unordered_map<std::uint64_t, std::weak_ptr<const notation::Score>> score_pool_;
+    static constexpr std::size_t kMaxUndo = 500;
     std::vector<Step> undo_;
     std::vector<Step> redo_;
 };

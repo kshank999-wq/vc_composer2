@@ -307,7 +307,8 @@ bool Project::edit(const std::string& label, const std::function<bool(ProjectDat
     if (!ok) return false;
     working.sync_scores();
     if (breaks_approval(working)) return false;
-    undo_.push_back({label, std::move(data_), {}});
+    undo_.push_back({label, compact(std::move(data_)), {}});
+    if (undo_.size() > kMaxUndo) undo_.erase(undo_.begin());
     data_ = std::move(working);
     redo_.clear();
     return true;
@@ -337,6 +338,40 @@ void Project::modify_unrecorded(const std::function<void(ProjectData&)>& change)
     data_.sync_scores();
 }
 
+Project::Kept Project::compact(ProjectData&& d)
+{
+    Kept snap;
+    for (auto& t : d.tracks)
+        for (auto& v : t.versions) {
+            const auto rev = v.score.revision();
+            std::shared_ptr<const notation::Score> shared;
+            if (rev != 0)
+                if (auto it = score_pool_.find(rev); it != score_pool_.end()) shared = it->second.lock();
+            if (!shared) {
+                shared = std::make_shared<const notation::Score>(std::move(v.score));
+                if (rev != 0) score_pool_[rev] = shared;
+            }
+            snap.scores.push_back(std::move(shared));
+            v.score = notation::Score{};
+        }
+    snap.data = std::move(d);
+    // Sweep scores no step keeps any more.
+    if (score_pool_.size() > 4096)
+        for (auto it = score_pool_.begin(); it != score_pool_.end();)
+            it = it->second.expired() ? score_pool_.erase(it) : std::next(it);
+    return snap;
+}
+
+ProjectData Project::expand(const Kept& s)
+{
+    ProjectData d = s.data;
+    std::size_t i = 0;
+    for (auto& t : d.tracks)
+        for (auto& v : t.versions)
+            if (i < s.scores.size()) v.score = *s.scores[i++];
+    return d;
+}
+
 std::string Project::undo_label() const { return undo_.empty() ? std::string{} : undo_.back().label; }
 
 bool Project::undo()
@@ -344,8 +379,8 @@ bool Project::undo()
     if (undo_.empty()) return false;
     Step s = std::move(undo_.back());
     undo_.pop_back();
-    redo_.push_back({s.label, {}, std::move(data_)});
-    data_ = std::move(s.before);
+    redo_.push_back({s.label, {}, compact(std::move(data_))});
+    data_ = expand(s.before);
     return true;
 }
 
@@ -354,8 +389,8 @@ bool Project::redo()
     if (redo_.empty()) return false;
     Step s = std::move(redo_.back());
     redo_.pop_back();
-    undo_.push_back({s.label, std::move(data_), {}});
-    data_ = std::move(s.after);
+    undo_.push_back({s.label, compact(std::move(data_)), {}});
+    data_ = expand(s.after);
     return true;
 }
 
@@ -1395,7 +1430,10 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
 
 bool Project::save(const std::string& path, std::string* error) const
 {
-    return files::write_file_atomic(path, json::write(to_json()), error);
+    // Compact: a large project's indentation alone was megabytes.
+    json::WriteOptions compact;
+    compact.indent = 0;
+    return files::write_file_atomic(path, json::write(to_json(), compact), error);
 }
 
 std::optional<Project> Project::load(const std::string& path, std::string* error)

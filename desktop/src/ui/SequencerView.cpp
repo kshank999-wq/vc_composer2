@@ -1,5 +1,7 @@
 #include "ui/SequencerView.h"
 
+#include "ui/Deferred.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -4815,21 +4817,14 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
         lanes.setComponentID("sequencer_lanes");
         listener = c.session.add_listener([this](session::Change change) {
             if (change == session::Change::Document) {
-                model.rebuild();
-                // A new document opens with its selected track's piano roll inline.
-                if (model.ctx.session.document_generation() != generation) {
-                    generation = model.ctx.session.document_generation();
-                    const auto* sel = model.selected_lane();
-                    model.expanded = sel && model.has_audio_lane(*sel) ? sel->id : std::string();
-                    model.heights.clear();
-                    toolbar.roll_button().setToggleState(!model.expanded.empty(), juce::dontSendNotification);
-                }
-                lanes.update_scroll();
-                lanes.layout_automation(true);
-                roll.document_changed();
-                update_hscroll();
-                owner.repaint();
+                // Showing: taken in at once (the view's own key and mouse
+                // handlers act on its lanes straight after an edit - a
+                // nudge, then another). Hidden behind the Composer view:
+                // once, when it is shown again.
+                if (owner.isShowing()) document_refresh();
+                else deferred.request();
             } else if (change == session::Change::Selection) {
+                deferred.flush();
                 // An open piano roll follows the selected track.
                 if (!model.expanded.empty()) {
                     const auto* sel = model.selected_lane();
@@ -4897,6 +4892,8 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
 
     void set_playhead(Ticks tick, bool playing)
     {
+        // Called while the view is shown: anything deferred while hidden, now.
+        if (deferred.pending()) deferred.flush();
         // Recording: the pass started record_seconds() before the playhead.
         const bool recording = model.ctx.engine.recording();
         if (recording) {
@@ -4937,6 +4934,25 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
     PianoRoll roll;
     juce::ScrollBar hscroll{false};
     int listener = 0;
+    /// A document change taken in.
+    void document_refresh()
+    {
+        model.rebuild();
+        // A new document opens with its selected track's piano roll inline.
+        if (model.ctx.session.document_generation() != generation) {
+            generation = model.ctx.session.document_generation();
+            const auto* sel = model.selected_lane();
+            model.expanded = sel && model.has_audio_lane(*sel) ? sel->id : std::string();
+            model.heights.clear();
+            toolbar.roll_button().setToggleState(!model.expanded.empty(), juce::dontSendNotification);
+        }
+        lanes.update_scroll();
+        lanes.layout_automation(true);
+        roll.document_changed();
+        update_hscroll();
+        owner.repaint();
+    }
+    Deferred deferred{[this] { document_refresh(); }};
     std::uint64_t generation = 0;
 };
 
@@ -4966,45 +4982,78 @@ SequencerView* SequencerView::find(const AppContext& context)
     return nullptr;
 }
 
-void SequencerView::show_automation(const std::string& owner_id, bool show) { impl_->model.set_automation_shown(owner_id, show); }
+void SequencerView::show_automation(const std::string& owner_id, bool show)
+{
+    impl_->deferred.flush();
+    impl_->model.set_automation_shown(owner_id, show);
+}
 
 bool SequencerView::automation_shown(const std::string& owner_id) const
 {
+    impl_->deferred.flush();
     return impl_->model.show_automation.count(owner_id) > 0;
 }
 
 void SequencerView::hide_all_automation()
 {
+    impl_->deferred.flush();
     impl_->model.show_automation.clear();
     if (impl_->model.automation_layout_changed) impl_->model.automation_layout_changed();
 }
 
-bool SequencerView::pencil_mode() const { return impl_->model.pencil; }
+bool SequencerView::pencil_mode() const
+{
+    impl_->deferred.flush();
+    return impl_->model.pencil;
+}
 
-void SequencerView::set_pencil_mode(bool on) { impl_->model.set_pencil_mode(on); }
+void SequencerView::set_pencil_mode(bool on)
+{
+    impl_->deferred.flush();
+    impl_->model.set_pencil_mode(on);
+}
 
 void SequencerView::zoom(bool in)
 {
+    impl_->deferred.flush();
     auto& m = impl_->model;
     m.zoom_about(in ? 1.25 : 0.8, kHeader + m.timeline_width / 2.0);
 }
 
-void SequencerView::notate_region(const std::string& region_id) { impl_->roll.open_region_notation(region_id); }
+void SequencerView::notate_region(const std::string& region_id)
+{
+    impl_->deferred.flush();
+    impl_->roll.open_region_notation(region_id);
+}
 
 void SequencerView::set_playhead(Ticks tick, bool playing) { impl_->set_playhead(tick, playing); }
 
+void SequencerView::visibilityChanged()
+{
+    // Shown again: whatever changed while it was hidden, now.
+    if (isShowing()) impl_->deferred.flush();
+}
+
+void SequencerView::bring_up_to_date() { impl_->deferred.flush(); }
+
 void SequencerView::reveal(Ticks tick)
 {
+    impl_->deferred.flush();
     auto& model = impl_->model;
     const double x = model.x_of(static_cast<double>(tick));
     if (x > kHeader + model.timeline_width - 24 || x < kHeader)
         model.set_view_start(static_cast<double>(tick) - model.visible_ticks() * 0.08);
 }
 
-std::pair<Ticks, Ticks> SequencerView::range() const { return {impl_->model.range_start, impl_->model.range_end}; }
+std::pair<Ticks, Ticks> SequencerView::range() const
+{
+    impl_->deferred.flush();
+    return {impl_->model.range_start, impl_->model.range_end};
+}
 
 void SequencerView::set_range(Ticks start, Ticks end)
 {
+    impl_->deferred.flush();
     impl_->model.range_start = std::max<Ticks>(0, std::min(start, end));
     impl_->model.range_end = std::max<Ticks>(0, std::max(start, end));
     repaint();
@@ -5013,6 +5062,7 @@ void SequencerView::set_range(Ticks start, Ticks end)
 
 void SequencerView::set_punch_display(bool on)
 {
+    impl_->deferred.flush();
     impl_->model.punch = on;
     repaint();
 }
@@ -5022,18 +5072,55 @@ bool SequencerView::promote_take(session::Session& session, const std::string& t
     return LaneArea::promote_take(session, track_id, clip_id);
 }
 
-bool SequencerView::split_at_playhead() { return impl_->lanes.split_at_playhead(); }
-int SequencerView::quantize_notes(const project::QuantizeSettings& q) { return impl_->roll.quantize(q); }
-int SequencerView::change_velocities(const project::VelocityChange& v) { return impl_->roll.change_velocity(v); }
-void SequencerView::set_cc_lane(int cc) { impl_->roll.set_cc_lane(cc); }
-int SequencerView::cc_lane() const { return impl_->model.cc_lane; }
-bool SequencerView::draw_cc(int cc, Ticks from, Ticks to, int v0, int v1) { return impl_->roll.draw_cc(cc, from, to, v0, v1); }
-bool SequencerView::crossfade_selected(double seconds) { return impl_->lanes.crossfade_selected(seconds); }
-bool SequencerView::consolidate_selected() { return impl_->lanes.consolidate_selected(); }
-bool SequencerView::nudge_selected(double seconds) { return impl_->lanes.nudge_selected(seconds); }
+bool SequencerView::split_at_playhead()
+{
+    impl_->deferred.flush();
+    return impl_->lanes.split_at_playhead();
+}
+int SequencerView::quantize_notes(const project::QuantizeSettings& q)
+{
+    impl_->deferred.flush();
+    return impl_->roll.quantize(q);
+}
+int SequencerView::change_velocities(const project::VelocityChange& v)
+{
+    impl_->deferred.flush();
+    return impl_->roll.change_velocity(v);
+}
+void SequencerView::set_cc_lane(int cc)
+{
+    impl_->deferred.flush();
+    impl_->roll.set_cc_lane(cc);
+}
+int SequencerView::cc_lane() const
+{
+    impl_->deferred.flush();
+    return impl_->model.cc_lane;
+}
+bool SequencerView::draw_cc(int cc, Ticks from, Ticks to, int v0, int v1)
+{
+    impl_->deferred.flush();
+    return impl_->roll.draw_cc(cc, from, to, v0, v1);
+}
+bool SequencerView::crossfade_selected(double seconds)
+{
+    impl_->deferred.flush();
+    return impl_->lanes.crossfade_selected(seconds);
+}
+bool SequencerView::consolidate_selected()
+{
+    impl_->deferred.flush();
+    return impl_->lanes.consolidate_selected();
+}
+bool SequencerView::nudge_selected(double seconds)
+{
+    impl_->deferred.flush();
+    return impl_->lanes.nudge_selected(seconds);
+}
 
 void SequencerView::show_take_lanes(const std::string& track_id, bool show)
 {
+    impl_->deferred.flush();
     auto& m = impl_->model;
     if (show) m.show_takes.insert(track_id);
     else m.show_takes.erase(track_id);
@@ -5041,15 +5128,21 @@ void SequencerView::show_take_lanes(const std::string& track_id, bool show)
     impl_->lanes.repaint();
 }
 
-int SequencerView::selected_clip_count() const { return static_cast<int>(impl_->model.selected_clips().size()); }
+int SequencerView::selected_clip_count() const
+{
+    impl_->deferred.flush();
+    return static_cast<int>(impl_->model.selected_clips().size());
+}
 
 std::pair<std::string, std::string> SequencerView::selected_clip() const
 {
+    impl_->deferred.flush();
     return {impl_->model.clip_track, impl_->model.clip_id};
 }
 
 void SequencerView::select_clip(const std::string& track_id, const std::string& clip_id)
 {
+    impl_->deferred.flush();
     auto& m = impl_->model;
     context_.session.select_track(track_id);
     const LaneView* lane = nullptr;
@@ -5063,24 +5156,35 @@ void SequencerView::select_clip(const std::string& track_id, const std::string& 
     impl_->lanes.repaint();
 }
 
-std::string SequencerView::expanded_track() const { return impl_->model.expanded; }
+std::string SequencerView::expanded_track() const
+{
+    impl_->deferred.flush();
+    return impl_->model.expanded;
+}
 
-double SequencerView::view_start() const { return impl_->model.view_start; }
+double SequencerView::view_start() const
+{
+    impl_->deferred.flush();
+    return impl_->model.view_start;
+}
 
 void SequencerView::set_expanded_track(const std::string& track_id)
 {
+    impl_->deferred.flush();
     if (!track_id.empty()) context_.session.select_track(track_id);
     impl_->model.set_expanded(track_id);
 }
 
 int SequencerView::row_height(const std::string& track_id) const
 {
+    impl_->deferred.flush();
     const auto* l = impl_->model.lane(track_id);
     return l ? impl_->model.base_height(*l) : 0;
 }
 
 void SequencerView::set_row_height(const std::string& track_id, int height)
 {
+    impl_->deferred.flush();
     auto& m = impl_->model;
     const auto* l = m.lane(track_id);
     if (!l) return;
@@ -5089,25 +5193,45 @@ void SequencerView::set_row_height(const std::string& track_id, int height)
     impl_->lanes.repaint();
 }
 
-SequencerView::EditMode SequencerView::edit_mode() const { return impl_->model.edit_mode; }
+SequencerView::EditMode SequencerView::edit_mode() const
+{
+    impl_->deferred.flush();
+    return impl_->model.edit_mode;
+}
 void SequencerView::set_edit_mode(EditMode mode)
 {
+    impl_->deferred.flush();
     impl_->model.set_edit_mode(mode);
     impl_->lanes.repaint();
 }
-bool SequencerView::smart_tool() const { return impl_->model.smart; }
-void SequencerView::set_smart_tool(bool on) { impl_->model.set_smart(on); }
+bool SequencerView::smart_tool() const
+{
+    impl_->deferred.flush();
+    return impl_->model.smart;
+}
+void SequencerView::set_smart_tool(bool on)
+{
+    impl_->deferred.flush();
+    impl_->model.set_smart(on);
+}
 void SequencerView::select_track_range(const std::vector<std::string>& track_ids, Ticks from, Ticks to)
 {
+    impl_->deferred.flush();
     impl_->lanes.set_smart_range({track_ids.begin(), track_ids.end()}, std::min(from, to), std::max(from, to));
 }
-bool SequencerView::delete_selection() { return impl_->lanes.delete_selection(); }
+bool SequencerView::delete_selection()
+{
+    impl_->deferred.flush();
+    return impl_->lanes.delete_selection();
+}
 juce::Rectangle<float> SequencerView::clip_bounds(const std::string& track_id, const std::string& clip_id) const
 {
+    impl_->deferred.flush();
     return impl_->lanes.clip_bounds(track_id, clip_id);
 }
 bool SequencerView::spot_selected(double seconds)
 {
+    impl_->deferred.flush();
     const auto& m = impl_->model;
     return !m.clip_id.empty() && impl_->lanes.spot(m.clip_track, m.clip_id, seconds);
 }

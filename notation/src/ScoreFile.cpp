@@ -38,20 +38,25 @@ json::Value articulations_to_json(ArticulationMask mask)
 
 json::Value note_to_json(const ScoreNote& note)
 {
+    // Position, value and pitch always; every other field only when it
+    // differs from a plain note's, which is what the reader assumes when
+    // one is absent. Most notes are plain, and writing all sixteen fields
+    // for each made a 100,000-note project's file 72 MB.
+    static const ScoreNote plain{};
     json::Value out = json::Value::make_object();
     out.set("id", integer(static_cast<std::int64_t>(note.id)));
     out.set("tick", integer(note.start_tick));
 
     out.set("value", text(to_string(note.duration.value)));
-    out.set("dots", integer(note.duration.dots));
+    if (note.duration.dots != 0) out.set("dots", integer(note.duration.dots));
 
-    json::Value tuplet = json::Value::make_object();
-    tuplet.set("actual", integer(note.duration.tuplet.actual));
-    tuplet.set("normal", integer(note.duration.tuplet.normal));
-    out.set("tuplet", std::move(tuplet));
-
-    // Only for a tuplet inside another, so a file with none reads exactly
-    // as one written before there were any.
+    if (note.duration.tuplet.is_tuplet()) {
+        json::Value tuplet = json::Value::make_object();
+        tuplet.set("actual", integer(note.duration.tuplet.actual));
+        tuplet.set("normal", integer(note.duration.tuplet.normal));
+        out.set("tuplet", std::move(tuplet));
+    }
+    // Only for a tuplet inside another.
     if (note.duration.outer.is_tuplet()) {
         json::Value outer = json::Value::make_object();
         outer.set("actual", integer(note.duration.outer.actual));
@@ -59,23 +64,22 @@ json::Value note_to_json(const ScoreNote& note)
         out.set("outer", std::move(outer));
     }
 
-    out.set("rest", json::Value::make_bool(note.is_rest));
-
-    // Written even for a rest, whose pitch the model calls meaningless. It
-    // is cheaper to write three fields than to reason later about whether a
-    // round trip that dropped them really produced the same score.
+    if (note.is_rest) out.set("rest", json::Value::make_bool(true));
+    // Written even for a rest, whose pitch the model calls meaningless:
+    // cheaper than reasoning later about whether a round trip that dropped
+    // it really produced the same score.
     out.set("step", text(to_string(note.pitch.step)));
     out.set("octave", integer(note.pitch.octave));
-    out.set("alteration", integer(note.pitch.alteration));
+    if (note.pitch.alteration != 0) out.set("alteration", integer(note.pitch.alteration));
 
-    out.set("voice", integer(note.voice));
-    out.set("tied", json::Value::make_bool(note.tied_to_next));
-    out.set("chord", json::Value::make_bool(note.in_chord));
-    out.set("grace", json::Value::make_bool(note.grace));
-    out.set("grace_order", integer(note.grace_order));
-    out.set("grace_slashed", json::Value::make_bool(note.grace_slashed));
-    out.set("staff_shift", integer(note.staff_shift));
-    out.set("articulations", articulations_to_json(note.articulations));
+    if (note.voice != plain.voice) out.set("voice", integer(note.voice));
+    if (note.tied_to_next) out.set("tied", json::Value::make_bool(true));
+    if (note.in_chord) out.set("chord", json::Value::make_bool(true));
+    if (note.grace) out.set("grace", json::Value::make_bool(true));
+    if (note.grace_order != plain.grace_order) out.set("grace_order", integer(note.grace_order));
+    if (note.grace_slashed != plain.grace_slashed) out.set("grace_slashed", json::Value::make_bool(note.grace_slashed));
+    if (note.staff_shift != plain.staff_shift) out.set("staff_shift", integer(note.staff_shift));
+    if (note.articulations != plain.articulations) out.set("articulations", articulations_to_json(note.articulations));
     return out;
 }
 

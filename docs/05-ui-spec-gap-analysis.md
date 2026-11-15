@@ -1474,3 +1474,42 @@ macOS, Linux and Windows. What it took:
       MIDI and notation from bar 3 (no D# or A#), voicing movement 18/8/24,
       an arpeggio written as 32 eighths, save/load/delete. Screenshots
       `42g-circle-progression-options`, `42h-circle-progression-in-score`.
+35. **Performance pass. Done** (November 15, 2026; Main Spec §19 phase 5).
+    Measured first, with `tools/vcc-bench` (64 tracks x 200 bars of eighths
+    in the score, 102,400 notes) and a desktop check section (48 tracks x
+    120 bars, 46,080 notes), then fixed what the numbers showed:
+    - **Undo held a full copy of the project per edit**, with no limit:
+      1.17 GB resident for that project and +581 MB over 300 one-note
+      edits. Undo steps now keep the document without its scores plus
+      shared pointers to them, pooled by revision (`Score::revision()` is
+      now unique process-wide, so equal revisions are copies of one
+      state): an unchanged score is stored once however many steps keep
+      it. 36 MB resident, +0 MB over 300 edits; a history limit of 500.
+      A one-note commit 4.4 -> 0.7 ms.
+    - **Inserting a note re-sorted the staff** (and restoring one searched
+      the whole score for its id): loading was quadratic. Notes are now
+      placed in order (appended when in order, inserted otherwise), and
+      an id past every id handed out skips the search. Building the
+      100,000-note project 2.1 s -> 40 ms.
+    - **Files**: every note wrote all sixteen fields, indented. Fields
+      equal to a plain note's (which the reader already assumed when
+      absent) are left out, and project files are written compact: 72 MB
+      -> 21 MB of JSON (less again without indentation); save 1.27 s ->
+      0.2 s, open 3.4 s -> 0.26 s. Old files read as before.
+    - **Autosave** serialised on the message thread every minute; the copy
+      is now taken there (about a millisecond) and the writing done on a
+      thread of its own.
+    - **Views rebuilt on every edit**: the mixer deck (16 ms), track list
+      (11 ms), Composer ruler (10 ms), console and Producer view rebuilt
+      synchronously for each note. They now refresh once, on the next
+      pass of the message loop (`Deferred`), and the ruler skips its
+      chord reading when no score, region or meter changed; the Producer
+      view refreshes at once while shown (its own handlers act on its
+      lanes straight after an edit) and defers while hidden. A note
+      entered in the Composer with the engine's rebuild: 52 -> 10 ms.
+    - Measured and fine: engine rebuild 16 ms (48 tracks), the Composer
+      and Producer views' full paint 6-10 ms, the render cache's no-change
+      pass 1 ms.
+    - **Checks**: `perf_checks` in the desktop check prints the numbers
+      and fails only past generous limits (CI machines vary); the score
+      file test now checks that plain notes carry no default fields.

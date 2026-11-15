@@ -19,6 +19,9 @@ public:
 
     /// Called by the main window ~30 times a second with the transport position.
     void set_playhead(Ticks tick, bool playing);
+    /// Takes in document changes made while it was hidden (it defers them).
+    void bring_up_to_date();
+    void visibilityChanged() override;
     /// Scrolls so `tick` is in view (a jog or shuttle moved the playhead).
     void reveal(Ticks tick);
 

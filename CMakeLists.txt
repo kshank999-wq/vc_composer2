@@ -74,6 +74,7 @@ add_subdirectory(session)
 
 if(VCC_BUILD_TOOLS)
     add_subdirectory(tools/vcc-cli)
+    add_subdirectory(tools/vcc-bench)
 endif()
 
 if(VCC_BUILD_DESKTOP)

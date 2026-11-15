@@ -203,7 +203,7 @@ MixerDeck::MixerDeck(AppContext& context) : hw::Panel({}, true), context_(contex
         if (on_full) on_full(true);
     };
     listener_ = context_.session.add_listener([this](session::Change c) {
-        if (c == session::Change::Document || c == session::Change::Selection) rebuild();
+        if (c == session::Change::Document || c == session::Change::Selection) deferred_.request();
     });
     rebuild();
     startTimerHz(30);
