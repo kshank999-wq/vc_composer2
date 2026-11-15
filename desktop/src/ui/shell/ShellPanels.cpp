@@ -80,6 +80,10 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
         Group tools{"Tools"};
         add(tools, "Chords", 66).onClick = invoke(cmd::chordExplorer);
         add(tools, "Ostinato", 74).onClick = invoke(cmd::ostinatoCreator);
+        auto& circle = add(tools, "Circle", 60);
+        circle.setComponentID("composer_circle");
+        circle.setTooltip("Circle of Fifths and key reference (never changes the score by itself)");
+        circle.onClick = invoke(cmd::showCircleOfFifths);
         groups_.push_back(tools);
         // The note value keypad, as Finale and Sibelius lay it out: the
         // number rising with the value, 5 the quarter; dot, triplet, rest.

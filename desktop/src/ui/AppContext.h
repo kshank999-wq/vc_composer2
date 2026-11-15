@@ -33,6 +33,9 @@ struct AppContext {
     /// views scroll with the playhead and the keyboard brings lit notes
     /// into view. Remembered between sessions.
     bool follow = true;
+    /// The Circle of Fifths' "Send to Chord Mode": fills the Composer's chord
+    /// palette with a chord and opens it (set by the main window).
+    std::function<void(const std::string& chord_symbol)> send_to_chord_mode;
 };
 
 /// Application commands (menus, toolbar buttons and key bindings).
@@ -92,6 +95,7 @@ enum : juce::CommandID {
     editSpot,
     editGrid,
     toggleSmartTool,
+    showCircleOfFifths,
 };
 }  // namespace cmd
 

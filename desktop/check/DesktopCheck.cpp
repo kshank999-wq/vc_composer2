@@ -30,6 +30,7 @@
 #include "ui/console/ConsoleStrip.h"
 #include "ui/console/ConsoleView.h"
 #include "ui/TrackPanel.h"
+#include "ui/composer/CircleOfFifths.h"
 #include "ui/composer/ComposerRuler.h"
 #include "vcc/theory/Chord.h"
 #include "ui/composer/Inspector.h"
@@ -4092,6 +4093,116 @@ void range_checks(MainWindow& window, const juce::File& dir)
     ctx.status = old_status;
 }
 
+/// The Circle of Fifths (Add-On spec §9): follows the score's key, a click
+/// changes only the reference, minor forms, a later modulation, Send to
+/// Chord Mode, and Apply key to score with confirmation.
+void circle_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    ctx.engine.locate(0);
+    session.new_empty();
+    session.set_key("G major");
+    const auto piano = session.add_track("Piano", "keys.piano");
+    session.select_track(piano);
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(80);
+    hw::ui_settings().setValue("circle_follow", true);
+    if (auto* key = main.toolbar().key("Circle")) key->triggerClick();
+    pump(150);
+    auto* panel = composer_ui::circle_of_fifths_panel();
+    if (!panel) {
+        check(false, "the Circle key opens the Circle of Fifths window");
+        return;
+    }
+    panel->set_following(true);
+    auto scale = [&] {
+        juce::String s;
+        for (const auto& d : panel->reference().scale) s << (s.isEmpty() ? "" : " ") << d.note.name() << (d.altered ? "*" : "");
+        return s;
+    };
+    auto triads = [&] {
+        juce::String s;
+        for (const auto& t : panel->reference().triads) s << (s.isEmpty() ? "" : " ") << t.chord.name();
+        return s;
+    };
+    check(panel->following() && panel->reference().key.name() == "G major" && scale() == "G A B C D E F#" &&
+              panel->reference().fifths == 1 && triads() == "G Am Bm C D Em F#dim",
+          "the Circle key opens the window on the score's key: G major, G A B C D E F#, one sharp, G Am Bm C D Em F#dim");
+    shoot(*panel->getTopLevelComponent(), dir, "42-circle-of-fifths");
+
+    // A click on E-flat: the reference changes, the score does not.
+    const auto history = session.project().history_size();
+    const auto at = panel->segment_centre(9, false);
+    panel->mouseDown(mouse_event(*panel, at, at, false));
+    pump(30);
+    check(!panel->following() && panel->reference().key.name() == "Eb major" && scale() == "Eb F G Ab Bb C D" &&
+              panel->reference().fifths == -3 && session.data().key == "G major" &&
+              session.project().history_size() == history,
+          "a click on Eb shows Eb major (three flats) and changes nothing in the score");
+
+    // A minor, natural and harmonic: G against G#.
+    const auto inner = panel->segment_centre(0, true);
+    panel->mouseDown(mouse_event(*panel, inner, inner, false));
+    pump(30);
+    const auto natural = scale();
+    panel->form_box().setSelectedItemIndex(1, juce::sendNotificationSync);
+    pump(30);
+    const auto harmonic = scale();
+    shoot(*panel->getTopLevelComponent(), dir, "42b-circle-harmonic-minor");
+    check(natural == "A B C D E F G" && harmonic == "A B C D E F G#*" && panel->reference().triads[4].uses_altered,
+          "A minor shows G natural; harmonic minor shows G# marked as altered, and V as using it");
+    panel->form_box().setSelectedItemIndex(0, juce::sendNotificationSync);
+
+    // Follow Score Key: a modulation to D major at bar 3, selected, updates the reference.
+    {
+        const Ticks bar = session.data().meter.at_bar(1).ticks_per_bar();
+        notation::Score score = session.data().find_track(piano)->active_version()->score;
+        score.set_key_signature(2 * bar, notation::KeySignature{2, false});
+        session.commit_score(piano, score, "Key change");
+        panel->follow_key().triggerClick();
+        pump(30);
+        session.set_selection_range(2 * bar, 3 * bar);
+        panel->refresh();
+        pump(30);
+        check(panel->following() && panel->reference().key.name() == "D major" && panel->anchor_text().contains("bar 3"),
+              "following the score, a selection after the modulation shows D major (" + panel->anchor_text() + ")");
+        session.set_selection_range(0, 0);
+        panel->refresh();
+    }
+
+    // Send to Chord Mode: ii (A minor) fills the palette; nothing is inserted.
+    const auto before_send = session.project().history_size();
+    panel->chord_key(1).triggerClick();
+    pump(40);
+    const bool sent = panel->send_to_chord_mode();
+    pump(50);
+    auto& composer = main.composer();
+    check(sent && composer.chord_mode() && composer.chord_state().letter == 5 && composer.chord_state().quality == "m" &&
+              session.project().history_size() == before_send,
+          "Send to Chord Mode puts Am in the chord palette and opens it, entering nothing [sent " + juce::String(sent ? "y" : "n") +
+              ", mode " + (composer.chord_mode() ? "y" : "n") + ", letter " + juce::String(composer.chord_state().letter) +
+              ", quality " + composer.chord_state().quality + ", key " + panel->reference().key.name() + ", steps " +
+              juce::String(static_cast<int>(session.project().history_size() - before_send)) + "]");
+    composer.set_chord_mode(false);
+
+    // Apply key to score: asked first, then one undo step.
+    panel->choose_position(9, false);  // Eb major, manual
+    panel->apply_key_to_score();
+    pump(30);
+    auto* question = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0));
+    const bool asked = question && question->getComponentID() == "circle_apply_question";
+    if (question) question->exitModalState(1);
+    pump(50);
+    check(asked && session.data().key == "Eb major", "Apply key to score asks first, then sets the project to Eb major");
+    session.undo();
+    check(session.data().key == "G major", "and one undo restores G major");
+    panel->set_following(true);
+    if (auto* w = panel->getTopLevelComponent()) w->setVisible(false);
+}
+
 /// Chord symbols: the ruler's suggestion kept with a click, one typed on a
 /// beat, a bad one refused, Escape, editing to empty removes, and the
 /// symbols printed over the full score's top staff in the Page view.
@@ -5327,6 +5438,7 @@ int main(int argc, char** argv)
         chord_symbol_checks(window, dir);
         chord_mode_checks(window, dir);
         range_checks(window, dir);
+        circle_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

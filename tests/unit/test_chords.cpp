@@ -199,3 +199,98 @@ TEST_CASE("chord entry voicing: bass in its octave, spelled as the chord spells 
     // Octave numbers follow the spelling: B#3 is MIDI 60.
     CHECK_EQ(voiced("G#/B#", 3, VoicingStyle::Closed), std::string("B#3=60 D#4=63 G#4=68"));
 }
+
+#include "vcc/theory/KeyReference.h"
+
+TEST_CASE("key reference: the spec's G major, E-flat major and A minor examples")
+{
+    auto names = [](const std::vector<ScaleDegree>& s) {
+        std::string out;
+        for (const auto& d : s) out += (out.empty() ? "" : " ") + d.note.name();
+        return out;
+    };
+    auto chords = [](const std::vector<DiatonicChord>& v, bool roman) {
+        std::string out;
+        for (const auto& c : v) out += (out.empty() ? "" : " ") + (roman ? c.roman : c.chord.name());
+        return out;
+    };
+    const auto g = key_reference(*Key::parse("G major"));
+    CHECK_EQ(names(g.scale), std::string("G A B C D E F#"));
+    CHECK_EQ(g.fifths, 1);
+    REQUIRE(g.signature.size() == 1u);
+    CHECK_EQ(g.signature[0].name(), std::string("F#"));
+    CHECK_EQ(chords(g.triads, false), std::string("G Am Bm C D Em F#dim"));
+    CHECK_EQ(chords(g.triads, true), std::string("I ii iii IV V vi vii\xC2\xB0"));
+    CHECK_EQ(chords(g.sevenths, true), std::string("Imaj7 ii7 iii7 IVmaj7 V7 vi7 vii\xC3\xB8" "7"));
+    CHECK_EQ(g.relative.name(), std::string("E minor"));
+    CHECK_EQ(g.parallel.name(), std::string("G minor"));
+    CHECK_EQ(g.dominant.name(), std::string("D major"));
+    CHECK_EQ(g.subdominant.name(), std::string("C major"));
+    CHECK_EQ(g.scale[6].function, std::string("Leading tone"));
+    CHECK_EQ(signature_text(g.fifths), std::string("1 sharp"));
+
+    const auto eb = key_reference(*Key::parse("Eb major"));
+    CHECK_EQ(names(eb.scale), std::string("Eb F G Ab Bb C D"));
+    CHECK_EQ(signature_text(eb.fifths), std::string("3 flats"));
+    REQUIRE(eb.signature.size() == 3u);
+    CHECK_EQ(eb.signature[2].name(), std::string("Ab"));
+
+    const auto am = key_reference(*Key::parse("A minor"));
+    CHECK_EQ(names(am.scale), std::string("A B C D E F G"));
+    CHECK_EQ(am.scale[6].function, std::string("Subtonic"));
+    CHECK(am.altered_note.empty());
+    const auto harm = key_reference(*Key::parse("A minor"), MinorForm::Harmonic);
+    CHECK_EQ(names(harm.scale), std::string("A B C D E F G#"));
+    CHECK(harm.scale[6].altered);
+    CHECK(!harm.scale[5].altered);
+    CHECK_EQ(harm.scale[6].function, std::string("Leading tone"));
+    CHECK_EQ(harm.triads[4].chord.name(), std::string("E"));  // V, major: uses the raised 7th
+    CHECK(harm.triads[4].uses_altered);
+    CHECK(!harm.triads[3].uses_altered);
+    CHECK_EQ(harm.triads[6].roman, std::string("vii\xC2\xB0"));
+    CHECK(!harm.altered_note.empty());
+    const auto mel = key_reference(*Key::parse("A minor"), MinorForm::MelodicAscending);
+    CHECK_EQ(names(mel.scale), std::string("A B C D E F# G#"));
+    const auto desc = key_reference(*Key::parse("A minor"), MinorForm::MelodicDescending);
+    CHECK_EQ(names(desc.scale), std::string("A B C D E F G"));
+    CHECK_EQ(am.relative.name(), std::string("C major"));
+}
+
+TEST_CASE("key reference: every major and minor key spelled one letter per degree, matching its signature")
+{
+    const auto& circle = circle_of_fifths();
+    REQUIRE(circle.size() == 12u);
+    CHECK_EQ(circle[6].major.name(), std::string("F#"));
+    CHECK_EQ(circle[6].major_enharmonic->name(), std::string("Gb"));
+    CHECK_EQ(circle[6].minor.name(), std::string("D#"));
+    CHECK_EQ(circle[7].major.name(), std::string("Db"));
+    CHECK_EQ(circle[7].major_enharmonic->name(), std::string("C#"));
+    CHECK_EQ(circle[11].major.name(), std::string("F"));
+    CHECK_EQ(circle[11].minor.name(), std::string("D"));
+    // The fifteen major and fifteen minor keys that have key signatures.
+    std::vector<std::string> keys;
+    for (const char* t : {"C", "G", "D", "A", "E", "B", "F#", "C#", "F", "Bb", "Eb", "Ab", "Db", "Gb", "Cb"})
+        keys.push_back(std::string(t) + " major");
+    for (const char* t : {"A", "E", "B", "F#", "C#", "G#", "D#", "A#", "D", "G", "C", "F", "Bb", "Eb", "Ab"})
+        keys.push_back(std::string(t) + " minor");
+    for (const auto& name : keys) {
+        {
+            const auto key = Key::parse(name);
+            REQUIRE(key);
+            const auto r = key_reference(*key);
+            CHECK_EQ(r.scale.size(), 7u);
+            int letters = 0;
+            for (const auto& d : r.scale) letters |= 1 << ((d.note.letter % 7 + 7) % 7);
+            CHECK_EQ(letters, 0x7f);
+            CHECK_EQ(static_cast<int>(r.signature.size()), std::abs(r.fifths));
+            // Every degree carries exactly the signature's accidental for its letter.
+            for (const auto& d : r.scale) {
+                int expected = 0;
+                for (const auto& s : r.signature)
+                    if (s.letter % 7 == d.note.letter % 7) expected = s.alteration;
+                CHECK_EQ(d.note.alteration, expected);
+            }
+            CHECK_EQ(circle_index(*key), circle_index(r.relative));
+        }
+    }
+}

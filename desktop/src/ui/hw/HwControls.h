@@ -84,6 +84,8 @@ public:
     void set_lit_colour(juce::Colour c) { lit_colour_ = c; repaint(); }
     /// The legend as a dynamic marking: bold italic serif, as written (pp, mf).
     void set_dynamic_legend(bool on) { dynamic_ = on; repaint(); }
+    /// The legend as written, not upper-cased (Roman numerals: ii, vii°).
+    void set_keep_case(bool on) { keep_case_ = on; repaint(); }
     /// A small second line under the legend.
     void set_sublegend(const juce::String& s) { sublegend_ = s; repaint(); }
     /// A music symbol (a SMuFL glyph in `font`) as the face, with the legend
@@ -114,6 +116,7 @@ private:
     juce::Colour glyph_lit_;
     juce::Colour lit_colour_;
     bool dynamic_ = false;
+    bool keep_case_ = false;
     Glyph glyph_ = Glyph::None;
     float legend_size_ = 12.0f;
     juce::String sublegend_;

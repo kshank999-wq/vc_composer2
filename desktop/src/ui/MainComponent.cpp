@@ -1,5 +1,8 @@
 #include "ui/MainComponent.h"
 
+#include "ui/composer/CircleOfFifths.h"
+#include "vcc/theory/Chord.h"
+
 #include "ui/hw/HwGallery.h"
 #include "ui/hw/HwTheme.h"
 
@@ -268,6 +271,22 @@ MainComponent::MainComponent(AppContext& context)
     };
     toolbar_.on_smart = [this](bool on) {
         sequencer_.set_smart_tool(on);
+        refresh_tool_keys();
+    };
+    // The Circle of Fifths' Send to Chord Mode: the palette set to the chord, opened.
+    context_.send_to_chord_mode = [this](const std::string& symbol) {
+        const auto chord = theory::parse_chord_symbol(symbol);
+        if (!chord) return;
+        auto& s = composer_.chord_state();
+        s.letter = ((chord->root.letter % 7) + 7) % 7;
+        s.accidental = std::clamp(chord->root.alteration, -1, 1);
+        s.quality = chord->quality.id;
+        s.alterations.clear();
+        s.inversion = chord->bass ? 0 : chord->inversion;
+        s.slash_bass = chord->bass ? chord->bass->name() : std::string();
+        show_workspace(Workspace::Composer);
+        composer_.set_chord_mode(true);
+        composer_.chord_palette().refresh();
         refresh_tool_keys();
     };
     toolbar_.on_chord_mode = [this](bool on) {
@@ -1495,7 +1514,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::showCueManager, cmd::importPicture, cmd::addHit, cmd::chordExplorer,
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
-                cmd::about, cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool});
+                cmd::about, cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool,
+                cmd::showCircleOfFifths});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1576,6 +1596,9 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             break;
         case cmd::showMixer: info.setInfo("Mixer", "", "View", 0); info.addDefaultKeypress('m', cmdKey); break;
         case cmd::showControlGallery: info.setInfo("Control Gallery", "", "View", 0); break;
+        case cmd::showCircleOfFifths:
+            info.setInfo("Circle of Fifths...", "Key reference: scales, diatonic chords, related keys", "View", 0);
+            break;
         case cmd::editShuffle:
         case cmd::editSlip:
         case cmd::editSpot:
@@ -1676,6 +1699,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showSequencer: show_workspace(Workspace::Sequencer); break;
         case cmd::showMixer: show_mixer(); break;
         case cmd::showControlGallery: show_control_gallery(); break;
+        case cmd::showCircleOfFifths: composer_ui::show_circle_of_fifths(context_); break;
         case cmd::editShuffle:
         case cmd::editSlip:
         case cmd::editSpot:
@@ -1785,6 +1809,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
                 m.addCommandItem(c, id);
             m.addSeparator();
             m.addCommandItem(c, cmd::toggleFollow);
+            m.addCommandItem(c, cmd::showCircleOfFifths);
             m.addSeparator();
             m.addCommandItem(c, cmd::zoomIn);
             m.addCommandItem(c, cmd::zoomOut);

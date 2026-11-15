@@ -1032,3 +1032,46 @@ macOS, Linux and Windows. What it took:
       Cancel); Warn flags; Extended takes D7; a new instrument (piccolo)
       re-checks without deleting and is announced; the report and its Move
       into range. Screenshot `41-instrument-range`.
+
+22. **Circle of Fifths and key reference. Done** (November 15, 2026;
+    Add-On spec Feature G).
+    - **KeyTheoryService.** `theory/KeyReference`: circle order with the
+      enharmonic pairs (B/Cb, F#/Gb, Db/C# and their minors), a key
+      signature's accidentals in order, the scale one letter per degree
+      with each degree's function (tonic ... leading tone or subtonic),
+      natural, harmonic and melodic (ascending, descending) minor with the
+      altered degrees marked, diatonic triads and sevenths with Roman
+      numerals (ii, vii°, iiø7, III+), whether a chord uses an altered
+      degree, and the relative, parallel, dominant and subdominant keys.
+      `key_for_signature` reads a key signature back as a key.
+    - **Window** (`ui/composer/CircleOfFifths`): a resizable tool window,
+      opened from the Composer toolbar's Circle key or View > Circle of
+      Fifths. The circle has majors outside and relative minors inside,
+      each with its signature count; the key shown is lit, its relative
+      and its neighbours tinted. Follow Score Key reads the key at the
+      selection (else the playhead) on the selected track's score, naming
+      the bar it reads from; Manual Reference shows whatever is clicked
+      (or reached with the arrow keys; Up/Down for major/minor) and never
+      touches the score. The panel shows the key signature on a small
+      staff, the seven degrees (altered ones marked and explained), the
+      diatonic chords (7ths key for sevenths; 1-7 select), and the related
+      keys as keys to go to. A chord selected is highlighted in the scale
+      and heard; Send to Chord Mode fills and opens the Chord Mode palette,
+      inserting nothing; Apply key to score asks first and sets the
+      project's key as one undo step. Follow/manual, the manual key, the
+      minor form and the 7ths choice are remembered.
+    - Hardware keycaps can keep their legend's case (`set_keep_case`) so
+      Roman numerals read as written.
+    - Not yet: modes beyond major and minor (as the spec defers), a
+      compact touch layout for the iPad companion, and the contextual
+      staff tools' entry point (Feature F).
+    - **Checks.** Unit tests: G major (G A B C D E F#, one sharp, G Am Bm C
+      D Em F#dim, I ii iii IV V vi vii°, relative/parallel/dominant/
+      subdominant), Eb major (three flats), A minor natural, harmonic (G#
+      altered, V uses it) and melodic, and all thirty major and minor keys
+      spelled one letter per degree in agreement with their signatures.
+      Desktop check: the window opens on the score's G major; a click on
+      Eb changes only the reference; A minor's harmonic form; a
+      modulation to D major at bar 3 followed from a selection; Send to
+      Chord Mode; Apply key to score with its question, and undo.
+      Screenshots `42-circle-of-fifths`, `42b-circle-harmonic-minor`.

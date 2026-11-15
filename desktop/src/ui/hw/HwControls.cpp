@@ -317,12 +317,13 @@ void Keycap::paintButton(juce::Graphics& g, bool highlighted, bool down)
         g.drawText(getButtonText(), face, juce::Justification::centred, false);
         return;
     }
-    g.setFont(fonts::silk(legend_size_, 0.06f));
+    g.setFont(keep_case_ ? fonts::ui(legend_size_ + 1.5f, true) : fonts::silk(legend_size_, 0.06f));
+    const juce::String legend = keep_case_ ? getButtonText() : getButtonText().toUpperCase();
     if (sublegend_.isEmpty()) {
-        g.drawText(getButtonText().toUpperCase(), face, juce::Justification::centred, false);
+        g.drawText(legend, face, juce::Justification::centred, false);
     } else {
         auto top = face.removeFromTop(face.getHeight() * 0.55f);
-        g.drawText(getButtonText().toUpperCase(), top, juce::Justification::centredBottom, false);
+        g.drawText(legend, top, juce::Justification::centredBottom, false);
         g.setColour(ink.withAlpha(0.6f));
         g.setFont(fonts::ui(9.5f));
         g.drawFittedText(sublegend_, face.toNearestInt(), juce::Justification::centredTop, 2);
