@@ -812,9 +812,18 @@ void MainComponent::export_full_score_dialog()
     w->addComboBox("pitch", {"Transposed score", "Score in C (concert pitch)"}, "Pitch");
     w->addComboBox("paper", {"A3", "Tabloid", "A4", "Letter"}, "Paper");
     w->addComboBox("bars", {"2", "3", "4", "5", "6", "8"}, "Bars per system");
-    w->getComboBoxComponent("bars")->setSelectedItemIndex(2);
     w->addComboBox("hide", {"Hide staves where a part rests", "Show every staff on every system"}, "Empty staves");
     w->addComboBox("order", {"Orchestral score order", "Track order"}, "Order");
+    {
+        // As last set (here or in the Page view).
+        const auto saved = saved_full_score_settings();
+        w->getComboBoxComponent("pitch")->setSelectedItemIndex(saved.concert_pitch ? 1 : 0);
+        w->getComboBoxComponent("paper")->setText(juce::String(saved.paper));
+        w->getComboBoxComponent("bars")->setText(juce::String(saved.bars_per_system));
+        if (w->getComboBoxComponent("bars")->getSelectedItemIndex() < 0) w->getComboBoxComponent("bars")->setSelectedItemIndex(2);
+        w->getComboBoxComponent("hide")->setSelectedItemIndex(saved.hide_empty_staves ? 0 : 1);
+        w->getComboBoxComponent("order")->setSelectedItemIndex(saved.score_order ? 0 : 1);
+    }
     w->addButton("Export...", 1, juce::KeyPress(juce::KeyPress::returnKey));
     w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
     w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int r) {
@@ -825,6 +834,8 @@ void MainComponent::export_full_score_dialog()
         settings.bars_per_system = w->getComboBoxComponent("bars")->getText().getIntValue();
         settings.hide_empty_staves = w->getComboBoxComponent("hide")->getSelectedItemIndex() == 0;
         settings.score_order = w->getComboBoxComponent("order")->getSelectedItemIndex() == 0;
+        save_full_score_settings(settings);
+        page_view_.relayout();
         const auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
         chooser_ = std::make_unique<juce::FileChooser>(
             "Save the full score as",

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "AppResources.h"
+#include "ui/hw/HwTheme.h"
 #include "vcc/core/Files.h"
 #include "vcc/engraving/PdfRenderer.h"
 #include "vcc/engraving/PrintLayout.h"
@@ -225,6 +226,30 @@ std::string abbreviate(const std::string& name)
 }
 
 }  // namespace
+
+FullScoreSettings saved_full_score_settings()
+{
+    auto& s = hw::ui_settings();
+    FullScoreSettings f;
+    f.concert_pitch = s.getBoolValue("score.concert_pitch", false);
+    const auto paper = s.getValue("score.paper", "A3");
+    f.paper = (paper == "Tabloid" || paper == "A4" || paper == "Letter") ? paper.toStdString() : std::string("A3");
+    f.hide_empty_staves = s.getBoolValue("score.hide_empty", true);
+    f.bars_per_system = juce::jlimit(1, 12, s.getIntValue("score.bars_per_system", 4));
+    f.score_order = s.getBoolValue("score.orchestral_order", true);
+    return f;
+}
+
+void save_full_score_settings(const FullScoreSettings& f)
+{
+    auto& s = hw::ui_settings();
+    s.setValue("score.concert_pitch", f.concert_pitch);
+    s.setValue("score.paper", juce::String(f.paper));
+    s.setValue("score.hide_empty", f.hide_empty_staves);
+    s.setValue("score.bars_per_system", f.bars_per_system);
+    s.setValue("score.orchestral_order", f.score_order);
+    s.saveIfNeeded();
+}
 
 std::unique_ptr<FullScoreLayout> lay_out_full_score(AppContext& context, const FullScoreSettings& settings,
                                                     juce::String& message)

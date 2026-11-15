@@ -41,6 +41,11 @@ struct FullScoreSettings {
     bool score_order = true;
 };
 
+/// The full-score settings last used (the Page view and the export dialog
+/// share them; kept with the app's settings).
+FullScoreSettings saved_full_score_settings();
+void save_full_score_settings(const FullScoreSettings& settings);
+
 /// The full score on pages, as it prints: the Page view draws these, the
 /// PDF export writes them.
 struct FullScoreLayout {

@@ -20,6 +20,53 @@ PageView::PageView(AppContext& context) : context_(context)
     setWantsKeyboardFocus(true);
     addAndMakeVisible(vbar_);
     vbar_.addListener(this);
+    settings_ = saved_full_score_settings();
+    for (auto* k : {&paper_, &concert_, &bars_, &hide_, &order_}) {
+        addAndMakeVisible(*k);
+        k->set_legend_size(10.0f);
+        k->setWantsKeyboardFocus(false);
+    }
+    paper_.setTooltip("Paper size");
+    concert_.setTooltip("Score in C (concert pitch); off: a transposed score");
+    bars_.setTooltip("Bars on a line, at most");
+    hide_.setTooltip("Hide the staves of parts that rest for a whole system");
+    order_.setTooltip("Orchestral score order (woodwinds, brass, percussion, keyboards, voices, strings); off: track order");
+    paper_.onClick = [this] {
+        juce::PopupMenu m;
+        for (const char* p : {"A3", "Tabloid", "A4", "Letter"})
+            m.addItem(p, true, settings_.paper == p, [this, p] {
+                auto s = settings_;
+                s.paper = p;
+                set_settings(s);
+            });
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&paper_));
+    };
+    bars_.onClick = [this] {
+        juce::PopupMenu m;
+        for (int n : {1, 2, 3, 4, 5, 6, 8})
+            m.addItem(juce::String(n) + (n == 1 ? " bar" : " bars") + " per system", true, settings_.bars_per_system == n, [this, n] {
+                auto s = settings_;
+                s.bars_per_system = n;
+                set_settings(s);
+            });
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&bars_));
+    };
+    concert_.onClick = [this] {
+        auto s = settings_;
+        s.concert_pitch = concert_.getToggleState();
+        set_settings(s);
+    };
+    hide_.onClick = [this] {
+        auto s = settings_;
+        s.hide_empty_staves = hide_.getToggleState();
+        set_settings(s);
+    };
+    order_.onClick = [this] {
+        auto s = settings_;
+        s.score_order = order_.getToggleState();
+        set_settings(s);
+    };
+    refresh_keys();
     vbar_.setAutoHide(false);
     listener_ = context_.session.add_listener([this](session::Change c) {
         if (c == session::Change::Document || c == session::Change::File) {
@@ -36,11 +83,30 @@ PageView::~PageView()
     context_.session.remove_listener(listener_);
 }
 
+void PageView::set_settings(const FullScoreSettings& s)
+{
+    settings_ = s;
+    save_full_score_settings(s);
+    refresh_keys();
+    relayout();
+}
+
+void PageView::refresh_keys()
+{
+    paper_.setButtonText("Paper " + juce::String(settings_.paper));
+    bars_.setButtonText(juce::String(settings_.bars_per_system) + (settings_.bars_per_system == 1 ? " bar" : " bars") + " / line");
+    concert_.setToggleState(settings_.concert_pitch, juce::dontSendNotification);
+    hide_.setToggleState(settings_.hide_empty_staves, juce::dontSendNotification);
+    order_.setToggleState(settings_.score_order, juce::dontSendNotification);
+}
+
 void PageView::relayout()
 {
     dirty_ = false;
+    settings_ = saved_full_score_settings();  // the export dialog may have changed them
+    refresh_keys();
     juce::String why;
-    layout_ = lay_out_full_score(context_, FullScoreSettings{}, why);
+    layout_ = lay_out_full_score(context_, settings_, why);
     message_ = layout_ ? juce::String() : why;
     update_scroll();
     repaint();
@@ -84,7 +150,7 @@ juce::Rectangle<float> PageView::page_rect(int i) const
 {
     if (!layout_ || i < 0 || i >= page_count()) return {};
     const double s = px_per_space();
-    float y = static_cast<float>(kGap - scroll_y_);
+    float y = static_cast<float>(bar_top() + kGap - scroll_y_);
     for (int k = 0; k < page_count(); ++k) {
         const auto& extent = layout_->laid.pages[static_cast<std::size_t>(k)].layout.extent;
         const auto w = static_cast<float>(extent.width * s), h = static_cast<float>(extent.height * s);
@@ -99,7 +165,7 @@ int PageView::content_height() const
 {
     if (!layout_) return 0;
     const double s = px_per_space();
-    double h = kGap;
+    double h = bar_top() + kGap;
     for (const auto& p : layout_->laid.pages) h += p.layout.extent.height * s + kGap;
     return static_cast<int>(std::ceil(h));
 }
@@ -172,17 +238,32 @@ void PageView::paint(juce::Graphics& g)
         g.drawText("Page " + juce::String(i + 1) + " of " + juce::String(page_count()),
                    juce::Rectangle<float>(r.getX(), r.getBottom() + 4.0f, r.getWidth(), 14.0f), juce::Justification::centredRight);
     }
-    // What it is.
+    // The settings bar, over the pages, and what it shows.
+    g.setColour(hw::tok::panel_bottom.withAlpha(0.96f));
+    g.fillRect(0, 0, getWidth() - kScroll, bar_top());
+    g.setColour(hw::tok::edge);
+    g.drawHorizontalLine(bar_top() - 1, 0.0f, static_cast<float>(getWidth() - kScroll));
     g.setColour(hw::tok::silk);
     g.setFont(juce::FontOptions(10.5f));
     g.drawText(juce::String(layout_->parts) + " parts  -  " + juce::String(page_count()) + (page_count() == 1 ? " page" : " pages") +
-                   "  -  as printed (File > Export Full Score)  -  " + juce::String(juce::roundToInt(zoom_ * 100.0)) + "%",
-               juce::Rectangle<int>(10, 4, getWidth() - kScroll - 20, 14), juce::Justification::centredLeft);
+                   "  -  " + juce::String(juce::roundToInt(zoom_ * 100.0)) + "%",
+               juce::Rectangle<int>(order_.getRight() + 12, 0, getWidth() - kScroll - order_.getRight() - 20, bar_top()),
+               juce::Justification::centredRight);
 }
 
 void PageView::resized()
 {
     vbar_.setBounds(getWidth() - kScroll, 0, kScroll, getHeight());
+    auto bar = juce::Rectangle<int>(8, 6, getWidth() - kScroll - 16, bar_top() - 12);
+    paper_.setBounds(bar.removeFromLeft(96));
+    bar.removeFromLeft(6);
+    concert_.setBounds(bar.removeFromLeft(110));
+    bar.removeFromLeft(6);
+    bars_.setBounds(bar.removeFromLeft(96));
+    bar.removeFromLeft(6);
+    hide_.setBounds(bar.removeFromLeft(96));
+    bar.removeFromLeft(6);
+    order_.setBounds(bar.removeFromLeft(128));
     update_scroll();
 }
 

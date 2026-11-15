@@ -3545,6 +3545,28 @@ void page_view_checks(MainWindow& window, const juce::File& dir)
     check(pv.page_rect(0).getWidth() > before * 1.2f, "zooming in makes the pages larger");
     pv.zoom(false);
 
+    // Page settings: bars per system, paper, concert pitch - shared with the export and remembered.
+    {
+        const auto original = pv.settings();
+        auto s = original;
+        s.bars_per_system = 2;
+        pv.set_settings(s);
+        const auto systems2 = pv.layout() ? static_cast<int>(pv.layout()->laid.system_count) : 0;
+        s.paper = "A4";
+        pv.set_settings(s);
+        const auto r = pv.page_rect(0);
+        const double a4 = r.getWidth() > 0 ? r.getHeight() / r.getWidth() : 0.0;
+        pv.concert_key().triggerClick();
+        pump(80);
+        const bool concert = pv.settings().concert_pitch && saved_full_score_settings().concert_pitch;
+        check(systems2 == 8 && std::abs(a4 - 297.0 / 210.0) < 0.02 && concert && pv.bars_key().getButtonText().startsWith("2") &&
+                  pv.paper_key().getButtonText() == "Paper A4",
+              "the Page view's settings re-lay the pages: 2 bars a line (" + juce::String(systems2) + " systems), A4 (aspect " +
+                  juce::String(a4, 3) + "), concert pitch - and the export uses them");
+        shoot(main, dir, "36c-page-view-settings");
+        pv.set_settings(original);
+    }
+
     // It follows edits: a new track appears as another part.
     const int parts = pv.layout() ? pv.layout()->parts : 0;
     session.add_track("Felt Piano", "keys.felt_piano");

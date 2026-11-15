@@ -11,6 +11,7 @@
 
 #include "ui/AppContext.h"
 #include "ui/ScoreExchange.h"
+#include "ui/hw/HwControls.h"
 
 namespace vcc::desktop {
 
@@ -33,6 +34,15 @@ public:
     /// The bar a click at `p` would go to (0: none).
     int bar_at(juce::Point<float> p) const;
     const FullScoreLayout* layout() const noexcept { return layout_.get(); }
+    /// The page settings (paper, concert pitch, bars per system, empty
+    /// staves, order), shared with the full-score export and remembered.
+    const FullScoreSettings& settings() const noexcept { return settings_; }
+    void set_settings(const FullScoreSettings& s);
+    hw::Keycap& paper_key() { return paper_; }
+    hw::Keycap& concert_key() { return concert_; }
+    hw::Keycap& bars_key() { return bars_; }
+    hw::Keycap& hide_key() { return hide_; }
+    hw::Keycap& order_key() { return order_; }
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -57,6 +67,11 @@ private:
     int scroll_y_ = 0;
     int playhead_bar_ = 1;
     juce::ScrollBar vbar_{true};
+    FullScoreSettings settings_;
+    hw::Keycap paper_{"Paper"}, concert_{"Concert pitch", true}, bars_{"Bars"}, hide_{"Hide empty", true},
+        order_{"Orchestral order", true};
+    void refresh_keys();
+    int bar_top() const noexcept { return 34; }
 };
 
 }  // namespace vcc::desktop

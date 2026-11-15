@@ -831,6 +831,12 @@ macOS, Linux and Windows. What it took:
       the playhead to its first bar. The pages are re-laid a moment after
       an edit, and only while they are shown.
     - It shows the score; writing and editing stay in the Track view.
+    - **Page settings** (a bar over the pages): Paper (A3, Tabloid, A4,
+      Letter), Concert pitch (a score in C; off: transposed), bars per line
+      (1-8), Hide empty (staves of parts resting a whole system) and
+      Orchestral order (off: track order). They re-lay the pages at once,
+      are remembered, and are the same settings File > Export Full Score
+      starts from (and saves), so the PDF is what the Page view shows.
     - **Checks.** The Page key (enabled, lit, the lanes hidden); the pages
       are the printed A3 score (aspect 1.414, all the parts); notes typed in
       the Track view lay out as 16 bars in 4 systems; a click on a later
