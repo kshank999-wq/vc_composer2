@@ -1201,3 +1201,61 @@ macOS, Linux and Windows. What it took:
       and both edits undoing; an insert reordered by drag; Isolate and
       search; Disconnect back to the master. Screenshots
       `45-routing-refused`, `46-routing-canvas`.
+26. **External jog/shuttle and transport controllers. Done** (November 15,
+    2026; Add-On Features spec §7, Feature E). Tools > Control Surfaces.
+    - **Core.** `project::surface` (JUCE-free, unit-tested): MIDI decoding
+      for relative jogs (two's complement, offset 64, Mackie
+      sign-magnitude), absolute shuttles (CC with 64 at rest, or pitch
+      bend) and keys (presses only); built-in profiles "Mackie Control (jog
+      CC 60)" and "Generic MIDI (CC 16-23)", and Custom; the jog's grid
+      steps (frame, sixteenth, beat, bar - from between two lines, a step
+      lands on the next line), sensitivity (detents per step), reverse and
+      acceleration (up to 4x); the shuttle's dead zone, curve (exponential
+      or linear) and top speed (0.5-32x); markers and cue starts as the
+      locate points; the project's extent.
+    - **Input.** The engine's MIDI callback offers every message to
+      `SurfaceInput` first. From the chosen device, messages the profile
+      maps (or, while learning, any control) are taken off the instrument
+      path - a jog never plays a note or lands in a recording - and queued
+      lock-free for the message thread; the device's other messages (a
+      keyboard with a jog wheel) and every other device play as before.
+      MIDI is not focus-dependent: it works whichever window is in front.
+    - **Transport.** Jog steps the playhead; several detents in one refresh
+      are one locate. The shuttle is a stepped seek, not audio scrub (the
+      engine has no varispeed): it stops playback when it engages, moves
+      at most one locate per refresh, travels speed x time, is held within
+      0 and the project's end, and moves at most 0.25 s worth after a
+      stalled clock. Keys: play/pause, play, stop, next/previous marker,
+      return to start, loop. Recording refuses the jog and shuttle.
+    - **Views.** The Producer view scrolls to the jogged playhead; the
+      Composer view scrolls too, and the entry cursor follows musical steps
+      (beats, bars, sixteenths - not frames or the shuttle). The video
+      window follows the transport as before.
+    - **Devices.** Plugging and unplugging are followed every second (a
+      device that comes back under a new identifier is found by name and
+      re-enabled); an unplugged or changed device brings the shuttle to
+      rest. Device, profile, learned bindings and settings persist.
+      Devices that type keys (most HID shuttles through their vendor's
+      software) drive the Jog Forward / Jog Back commands, assignable in
+      Keyboard Shortcuts.
+    - **Not yet:** native HID (needs the device models to support, spec
+      §14: no universal compatibility claim until tested), audio scrub,
+      per-device profiles beyond one active device, choosing a jog's
+      encoding by hand (Learn infers it from the first value), and a
+      hardware test matrix.
+    - **Checks.** Unit tests: every encoding, presses vs releases, claims
+      on a shared device, learning sources, grid steps across meter
+      changes and in 6/8, frames, sensitivity, reverse, acceleration,
+      dead zone, curves, top speed, bounds, stalled clock, stability at
+      several speeds, markers and the project timeline. Desktop check
+      (MIDI injected as from the device, clock driven by hand): the
+      surface takes its controls and leaves notes and other devices; jog
+      by beats, back, onto bar 2 from beat 3, 39 bars in one refresh;
+      Composer playhead and cursor to beat 3 and the score scrolled;
+      frames; full shuttle stops play at 8x, 4 s in half a second, stable
+      at four speeds forward and back, at rest in the dead zone, a 30 s
+      stall moves at most 2 s, stops at the end and the start, a device
+      change rests it; marker, start, play/pause and loop keys; Learn
+      (CC 33 on channel 3 becomes the jog, the old control stops); Jog
+      Forward; the window's Learn key. Screenshots `47-surface-producer`,
+      `48-surface-composer`, `49-control-surfaces`.

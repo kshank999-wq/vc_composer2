@@ -904,8 +904,10 @@ void PlaybackEngine::service_live_print()
 class LiveMidiCallback final : public juce::MidiInputCallback {
 public:
     LiveMidiCallback(juce::MidiMessageCollector& c, PlaybackEngine& engine) : collector_(c), engine_(engine) {}
-    void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& m) override
+    void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& m) override
     {
+        // A control surface's jog, shuttle and keys never play or record.
+        if (engine_.surface_input().take(source ? source->getIdentifier() : juce::String(), m)) return;
         // The deck's Octave keys shift what a MIDI keyboard plays.
         juce::MidiMessage shifted = m;
         if ((m.isNoteOn() || m.isNoteOff()) && engine_.live_octave() != 0) {

@@ -4979,6 +4979,14 @@ void SequencerView::notate_region(const std::string& region_id) { impl_->roll.op
 
 void SequencerView::set_playhead(Ticks tick, bool playing) { impl_->set_playhead(tick, playing); }
 
+void SequencerView::reveal(Ticks tick)
+{
+    auto& model = impl_->model;
+    const double x = model.x_of(static_cast<double>(tick));
+    if (x > kHeader + model.timeline_width - 24 || x < kHeader)
+        model.set_view_start(static_cast<double>(tick) - model.visible_ticks() * 0.08);
+}
+
 std::pair<Ticks, Ticks> SequencerView::range() const { return {impl_->model.range_start, impl_->model.range_end}; }
 
 void SequencerView::set_range(Ticks start, Ticks end)

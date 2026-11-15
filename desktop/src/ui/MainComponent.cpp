@@ -427,12 +427,19 @@ MainComponent::MainComponent(AppContext& context)
     // The keyboard profile chosen last time.
     if (const auto saved = hw::ui_settings().getValue("shortcut_profile"); saved.isNotEmpty())
         use_shortcut_profile(saved.toStdString());
+    // External jog/shuttle: the views follow where it puts the playhead.
+    surface_ = std::make_unique<surface_ui::ControlSurface>(context_);
+    surface_->on_moved = [this](Ticks tick, bool on_grid) {
+        if (composer_.isVisible()) composer_.follow_jog(tick, on_grid);
+        if (sequencer_.isVisible()) sequencer_.reveal(tick);
+    };
     startTimerHz(30);
 }
 
 MainComponent::~MainComponent()
 {
     stopTimer();
+    surface_.reset();
     close_video_window();
     context_.session.remove_listener(listener_);
     context_.engine.on_transport_changed = nullptr;
@@ -1516,7 +1523,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
                 cmd::about, cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool,
-                cmd::showCircleOfFifths, cmd::toggleStaffTools, cmd::detachStaffTools, cmd::showRouting});
+                cmd::showCircleOfFifths, cmd::toggleStaffTools, cmd::detachStaffTools, cmd::showRouting,
+                cmd::showControlSurfaces, cmd::jogForward, cmd::jogBack});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1597,6 +1605,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             break;
         case cmd::showMixer: info.setInfo("Mixer", "", "View", 0); info.addDefaultKeypress('m', cmdKey); break;
         case cmd::showControlGallery: info.setInfo("Control Gallery", "", "View", 0); break;
+        case cmd::showControlSurfaces:
+            info.setInfo("Control Surfaces...", "Jog/shuttle wheels and transport controllers", "Tools", 0);
+            break;
+        case cmd::jogForward: info.setInfo("Jog Forward", "One jog step forward (for devices that type keys)", "Transport", 0); break;
+        case cmd::jogBack: info.setInfo("Jog Back", "One jog step back (for devices that type keys)", "Transport", 0); break;
         case cmd::showRouting:
             info.setInfo("Visual Routing...", "Tracks, buses, sends and outputs as a signal-flow map", "View", 0);
             info.addDefaultKeypress('r', cmdKey | juce::ModifierKeys::altModifier);
@@ -1715,6 +1728,9 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showControlGallery: show_control_gallery(); break;
         case cmd::showCircleOfFifths: composer_ui::show_circle_of_fifths(context_); break;
         case cmd::showRouting: console::show_routing(context_); break;
+        case cmd::showControlSurfaces: surface_ui::show_control_surfaces(context_, *surface_); break;
+        case cmd::jogForward: surface_->jog(1); break;
+        case cmd::jogBack: surface_->jog(-1); break;
         case cmd::toggleStaffTools:
             composer_.set_staff_tools_collapsed(!composer_.staff_tools_collapsed());
             break;
@@ -1873,7 +1889,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         case 5:
             for (auto id : {cmd::chordExplorer, cmd::ostinatoCreator, cmd::addTemplate}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::audioSettings, cmd::scanPlugins, cmd::reloadCrashedPlugins}) m.addCommandItem(c, id);
+            for (auto id : {cmd::audioSettings, cmd::showControlSurfaces, cmd::scanPlugins, cmd::reloadCrashedPlugins})
+                m.addCommandItem(c, id);
             break;
         case 6: m.addCommandItem(c, cmd::about); break;
         default: break;

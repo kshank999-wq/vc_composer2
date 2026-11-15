@@ -99,6 +99,9 @@ enum : juce::CommandID {
     toggleStaffTools,
     detachStaffTools,
     showRouting,
+    showControlSurfaces,
+    jogForward,
+    jogBack,
 };
 }  // namespace cmd
 

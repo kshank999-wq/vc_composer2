@@ -58,6 +58,8 @@
 #pragma once
 
 #include <array>
+
+#include "audio/SurfaceInput.h"
 #include <atomic>
 #include <functional>
 #include <limits>
@@ -160,6 +162,13 @@ public:
     /// there (through the router) instead of to its instrument, and hears the
     /// hardware on its audio input.
     MidiOutRouter& midi_router() noexcept { return *midi_router_; }
+    /// A control surface's MIDI: offered every incoming message first.
+    SurfaceInput& surface_input() noexcept { return surface_input_; }
+    /// Turns on a MIDI input plugged in after the device was opened.
+    void enable_midi_input(const juce::String& identifier)
+    {
+        if (!devices_.isMidiInputDeviceEnabled(identifier)) devices_.setMidiInputDeviceEnabled(identifier, true);
+    }
     /// Print to audio in real time: the transport plays the range live and
     /// each source is recorded as it plays - an instrument track's
     /// instrument (before the strip, or after its inserts), or a MIDI
@@ -545,6 +554,7 @@ private:
     std::array<std::atomic<int>, 128> live_held_{};
     std::string live_track_;
     std::atomic<int> live_track_index_{-1};
+    SurfaceInput surface_input_;
     std::unique_ptr<juce::MidiInputCallback> midi_callback_;
 };
 

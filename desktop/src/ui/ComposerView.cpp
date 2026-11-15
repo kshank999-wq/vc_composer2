@@ -438,6 +438,18 @@ void ComposerView::set_origin(Ticks tick)
     ruler_->repaint();
 }
 
+void ComposerView::follow_jog(Ticks tick, bool move_cursor)
+{
+    const Ticks visible = visible_ticks();
+    if (tick < origin_ || tick > origin_ + visible * 9 / 10) set_origin(tick - visible / 10);
+    if (!move_cursor || !editor_) return;
+    editing::EditCursor c = editor_->cursor();
+    c.tick = tick;
+    editor_->set_cursor(c);
+    for (auto& s : strips_)
+        if (s->track_id() == editing_track_) s->view().set_cursor(editor_->cursor().tick, editor_->cursor().staff_index, note_entry_);
+}
+
 void ComposerView::zoom(bool larger)
 {
     pixels_per_space_ = juce::jlimit(4.0, 16.0, pixels_per_space_ * (larger ? 1.15 : 1.0 / 1.15));

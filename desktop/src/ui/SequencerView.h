@@ -19,6 +19,8 @@ public:
 
     /// Called by the main window ~30 times a second with the transport position.
     void set_playhead(Ticks tick, bool playing);
+    /// Scrolls so `tick` is in view (a jog or shuttle moved the playhead).
+    void reveal(Ticks tick);
 
     /// The range selected by dragging on the ruler (the punch range); empty
     /// when first == second.

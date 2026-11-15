@@ -20,6 +20,7 @@
 #include "ui/shell/PrintPanel.h"
 #include "ui/shell/ShellPanels.h"
 #include "ui/shell/TopDeck.h"
+#include "ui/surface/ControlSurface.h"
 
 namespace vcc::desktop {
 
@@ -95,6 +96,8 @@ public:
     void show_console_window();
     /// The full-screen mixer (the console, laid out like hardware), or null before it is first shown.
     MixerComponent* full_console() noexcept { return full_console_.get(); }
+    /// The jog/shuttle and transport controller (Tools > Control Surfaces).
+    surface_ui::ControlSurface& surface() noexcept { return *surface_; }
     /// In a short window the Producer column shows Channel (0) or Print (1).
     void show_right_tab(int tab);
     bool right_tabs() const noexcept { return right_tabs_; }
@@ -184,6 +187,7 @@ private:
     std::unique_ptr<juce::StretchableLayoutResizerBar> divider_;
     ComposerView composer_;
     SequencerView sequencer_;
+    std::unique_ptr<surface_ui::ControlSurface> surface_;
     Workspace workspace_ = Workspace::Composer;
     std::unique_ptr<MixerWindow> mixer_;
     std::map<std::string, std::unique_ptr<PluginWindow>> plugin_windows_;

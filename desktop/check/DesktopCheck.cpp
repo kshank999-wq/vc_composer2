@@ -38,6 +38,7 @@
 #include "ui/TrackPanel.h"
 #include "ui/composer/CircleOfFifths.h"
 #include "ui/console/RoutingCanvas.h"
+#include "ui/surface/ControlSurface.h"
 #include "ui/composer/TransposePopover.h"
 #include "ui/composer/ComposerRuler.h"
 #include "vcc/theory/Chord.h"
@@ -4769,6 +4770,244 @@ void routing_checks(MainWindow& window, const juce::File& dir)
     pump(30);
 }
 
+/// External jog/shuttle (Add-On spec §7): MIDI as a device would send it,
+/// with the clock driven by hand, so each step is exact. The jog steps the
+/// playhead onto beats and bars in both views (the score's cursor follows);
+/// the shuttle moves at the speed set by the ring, stops play, stays within
+/// the project and cannot leap on a stalled clock; keys locate markers,
+/// play, stop and loop; a learned control works; the surface's messages
+/// are taken off the instrument path and the keyboard's are not.
+void surface_checks(MainWindow& window, const juce::File& dir)
+{
+    namespace sf = project::surface;
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& surface = main.surface();
+    ctx.engine.stop();
+    session.new_empty();
+    session.set_tempo(120.0);  // a beat is 0.5 s, a 4/4 bar 2 s
+    const auto piano = session.add_track("Piano", "keys.piano");
+    session.select_track(piano);
+    session.add_marker(6.0, "hit");
+    session.add_marker(15.0, "sync");
+    ctx.engine.locate(0);
+    surface.set_polling(false);
+    surface.set_device("vcc-check-surface", "VCC Check Surface");
+    surface.use_profile("Generic MIDI (CC 16-23)");
+    auto& st = surface.settings();
+    st.step = sf::Step::Beat;
+    st.detents_per_step = 1;
+    st.reverse = false;
+    st.acceleration = false;
+    st.dead_zone = 0.08;
+    st.curve = sf::Curve::Linear;
+    st.max_speed = 8.0;
+    double clock = 1000.0;
+    auto send = [&](int status, int d1, int d2) {
+        surface.inject(juce::MidiMessage(status, d1, d2));
+        clock += 1.0;
+        surface.process(clock);
+    };
+    auto seconds = [&] { return ctx.engine.position_seconds(); };
+
+    // Taken off the instrument path: the jog's CC is the surface's, a
+    // keyboard note on the same device is left to play.
+    check(ctx.engine.surface_input().take("vcc-check-surface", juce::MidiMessage::controllerEvent(1, 16, 1)) &&
+              !ctx.engine.surface_input().take("vcc-check-surface", juce::MidiMessage::noteOn(1, 60, 0.8f)) &&
+              !ctx.engine.surface_input().take("another-keyboard", juce::MidiMessage::controllerEvent(1, 16, 1)),
+          "the surface takes its own controls (they never play or record) and leaves notes and other devices alone");
+    surface.process(clock);  // the test message above
+    ctx.engine.locate(0);
+
+    // The jog in the Producer view: beats, then back.
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(60);
+    send(0xB0, 16, 1);
+    send(0xB0, 16, 1);
+    send(0xB0, 16, 1);
+    check(std::abs(seconds() - 1.5) < 1e-3, "three jog detents step three beats (" + juce::String(seconds(), 3) + " s)");
+    send(0xB0, 16, 127);
+    check(std::abs(seconds() - 1.0) < 1e-3, "a detent back steps one beat back");
+    st.step = sf::Step::Bar;
+    send(0xB0, 16, 1);
+    check(std::abs(seconds() - 2.0) < 1e-3, "in bars, from beat 3 the jog lands on bar 2 (onto the grid)");
+    // Far along: the Producer view scrolls to keep the playhead in sight.
+    for (int i = 0; i < 39; ++i) surface.inject(juce::MidiMessage::controllerEvent(1, 16, 1));
+    clock += 1.0;
+    surface.process(clock);
+    pump(60);
+    check(std::abs(seconds() - 80.0) < 1e-3, "39 detents in one refresh move 39 bars with one locate (bar 41 at 80 s)");
+    shoot(main, dir, "47-surface-producer");
+
+    // The Composer view: the playhead and the entry cursor follow the jog.
+    main.show_workspace(MainComponent::Workspace::Composer);
+    session.select_track(piano);
+    pump(120);
+    st.step = sf::Step::Beat;
+    ctx.engine.locate(0);
+    send(0xB0, 16, 1);
+    send(0xB0, 16, 1);
+    pump(60);
+    const auto cursor = main.composer().cursor();
+    check(std::abs(seconds() - 1.0) < 1e-3 && cursor && cursor->tick == 2 * kTicksPerQuarter,
+          "in the Composer view the jog moves the playhead and the entry cursor to beat 3");
+    st.step = sf::Step::Bar;
+    for (int i = 0; i < 30; ++i) surface.inject(juce::MidiMessage::controllerEvent(1, 16, 1));
+    clock += 1.0;
+    surface.process(clock);
+    pump(60);
+    const Ticks at = ctx.engine.position();
+    check(main.composer().origin() <= at && at < main.composer().origin() + main.composer().shown_ticks(),
+          "the score scrolls to keep the jogged playhead in view");
+    shoot(main, dir, "48-surface-composer");
+    st.step = sf::Step::Frame;
+    const double before_frames = seconds();
+    send(0xB0, 16, 1);
+    check(std::abs(seconds() - (before_frames + 1.0 / 24.0)) < 2e-3, "in frames, a detent is one frame (1/24 s)");
+
+    // The shuttle: speed from the ring, stops play, travel = speed x time.
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(60);
+    ctx.engine.locate(session.data().tempo.tick_at_seconds(10.0));
+    ctx.engine.play();
+    surface.inject(juce::MidiMessage::controllerEvent(1, 17, 127));
+    surface.process(clock);
+    check(!ctx.engine.playing() && surface.state().shuttling() && std::abs(surface.state().shuttle_speed() - 8.0) < 1e-6,
+          "a full turn of the shuttle stops play and runs at the top speed (8x)");
+    const double start = seconds();
+    for (int i = 0; i < 10; ++i) {
+        clock += 0.05;
+        surface.process(clock);
+    }
+    check(std::abs(seconds() - (start + 4.0)) < 0.01, "at 8x, half a second of shuttle moves 4 s (" +
+                                                          juce::String(seconds() - start, 3) + " s)");
+    // Slower, and backwards: stable at each speed.
+    bool stable = true;
+    juce::String speeds;
+    for (int value : {80, 100, 40, 20}) {
+        surface.inject(juce::MidiMessage::controllerEvent(1, 17, value));
+        surface.process(clock);
+        const double speed = surface.state().shuttle_speed();
+        const double from = seconds();
+        for (int i = 0; i < 20; ++i) {
+            clock += 1.0 / 60.0;
+            surface.process(clock);
+        }
+        const double moved = seconds() - from;
+        speeds << juce::String(speed, 2) << "x:" << juce::String(moved, 3) << " ";
+        stable = stable && std::abs(moved - speed / 3.0) < 0.01;
+    }
+    check(stable, "the shuttle is stable at several speeds, forward and back (" + speeds.trim() + ")");
+    // Back to rest: it stays put.
+    surface.inject(juce::MidiMessage::controllerEvent(1, 17, 66));  // inside the dead zone
+    surface.process(clock);
+    const double rest = seconds();
+    for (int i = 0; i < 10; ++i) {
+        clock += 0.1;
+        surface.process(clock);
+    }
+    check(!surface.state().shuttling() && std::abs(seconds() - rest) < 1e-6, "inside the dead zone the shuttle is at rest");
+    // Runaway guards: a stalled clock cannot make it leap; it stops at the
+    // project's ends; losing the device stops it.
+    surface.inject(juce::MidiMessage::controllerEvent(1, 17, 127));
+    surface.process(clock);
+    const double before_stall = seconds();
+    clock += 30.0;
+    surface.process(clock);
+    check(seconds() - before_stall <= 2.0 + 1e-3, "after a 30 s stall the shuttle moves at most a quarter second's worth");
+    const auto timeline = sf::timeline_of(session.data());
+    for (int i = 0; i < 200; ++i) {
+        clock += 0.25;
+        surface.process(clock);
+    }
+    check(std::abs(seconds() - timeline.end_seconds) < 0.01, "the shuttle stops at the end of the project");
+    surface.inject(juce::MidiMessage::controllerEvent(1, 17, 0));
+    surface.process(clock);
+    for (int i = 0; i < 400; ++i) {
+        clock += 0.25;
+        surface.process(clock);
+    }
+    check(seconds() < 1e-3, "and at the start, going back");
+    surface.inject(juce::MidiMessage::controllerEvent(1, 17, 127));
+    surface.process(clock);
+    surface.set_device("vcc-check-surface", "VCC Check Surface");  // as an unplug and replug does
+    const double held = seconds();
+    for (int i = 0; i < 10; ++i) {
+        clock += 0.1;
+        surface.process(clock);
+    }
+    check(!surface.state().shuttling() && std::abs(seconds() - held) < 1e-6, "losing the device brings the shuttle to rest");
+
+    // Keys: markers, start, play/pause, stop, loop.
+    ctx.engine.locate(session.data().tempo.tick_at_seconds(1.0));
+    send(0xB0, 21, 127);
+    const double m1 = seconds();
+    send(0xB0, 21, 0);  // the release does nothing
+    send(0xB0, 21, 127);
+    const double m2 = seconds();
+    send(0xB0, 20, 127);
+    const double back = seconds();
+    check(std::abs(m1 - 6.0) < 1e-3 && std::abs(m2 - 15.0) < 1e-3 && std::abs(back - 6.0) < 1e-3,
+          "next and previous marker keys locate 6 s, 15 s and back to 6 s");
+    send(0xB0, 22, 127);
+    check(seconds() < 1e-3, "Return to start");
+    send(0xB0, 18, 127);
+    const bool played = ctx.engine.playing();
+    send(0xB0, 18, 127);
+    check(played && !ctx.engine.playing(), "Play / Pause starts and stops the transport");
+    const bool loop = ctx.engine.loop();
+    send(0xB0, 23, 127);
+    check(ctx.engine.loop() != loop, "the loop key toggles the loop");
+    if (ctx.engine.loop() != loop) send(0xB0, 23, 127);
+
+    // Learning a control: a fader's CC 33 becomes the jog.
+    surface.learn(sf::Action::Jog);
+    send(0xB2, 33, 1);
+    const auto* learned = surface.profile().find(sf::Action::Jog);
+    check(!surface.learning() && surface.profile().name == "Custom" && learned &&
+              learned->source == sf::Source{sf::Source::Kind::Controller, 3, 33},
+          "Learn binds the next control moved (CC 33 on channel 3) and the profile becomes Custom");
+    ctx.engine.locate(0);
+    st.step = sf::Step::Beat;
+    send(0xB2, 33, 1);
+    check(std::abs(seconds() - 0.5) < 1e-3, "the learned control jogs");
+    send(0xB0, 16, 1);
+    check(std::abs(seconds() - 0.5) < 1e-3, "and the old jog control no longer does");
+
+    // Key-typing devices: the Jog commands.
+    ctx.commands.invokeDirectly(cmd::jogForward, false);
+    clock += 1.0;
+    surface.process(clock);
+    check(std::abs(seconds() - 1.0) < 1e-3, "Jog Forward (for devices that type keys) steps a beat");
+
+    // Tools > Control Surfaces.
+    ctx.commands.invokeDirectly(cmd::showControlSurfaces, false);
+    pump(150);
+    auto* panel = surface_ui::control_surfaces_panel();
+    check(panel != nullptr, "Tools > Control Surfaces opens the window");
+    if (panel) {
+        if (auto* learn = dynamic_cast<juce::Button*>(find_by_id(*panel, "surface_learn_shuttle"))) {
+            learn->triggerClick();
+            pump(60);
+            check(surface.learning() && surface.learning_action() == sf::Action::Shuttle,
+                  "the window's Learn key listens for the shuttle");
+            surface.inject(juce::MidiMessage::controllerEvent(1, 17, 100));
+            clock += 1.0;
+            surface.process(clock);
+            pump(60);
+        } else {
+            check(false, "the window has a Learn key for the shuttle");
+        }
+        shoot(*panel->getTopLevelComponent(), dir, "49-control-surfaces");
+        panel->getTopLevelComponent()->setVisible(false);
+    }
+    surface.set_device({}, {});
+    surface.use_profile("Generic MIDI (CC 16-23)");
+    surface.set_polling(true);
+    pump(30);
+}
+
 void chord_symbol_checks(MainWindow& window, const juce::File& dir)
 {
     using composer::Command;
@@ -6043,6 +6282,8 @@ int main(int argc, char** argv)
         staff_tools_checks(window, dir);
         section("routing_checks");
         routing_checks(window, dir);
+        section("surface_checks");
+        surface_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

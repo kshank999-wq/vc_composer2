@@ -88,7 +88,12 @@ public:
     void zoom(bool larger);
     /// Scrolls so `tick` is the left edge of the lanes.
     void set_origin(Ticks tick);
+    /// A jog or shuttle moved the playhead: keep it in view, and (on the
+    /// grid) bring the entry cursor there too.
+    void follow_jog(Ticks tick, bool move_cursor);
     Ticks origin() const noexcept { return origin_; }
+    /// How many ticks the lanes show.
+    Ticks shown_ticks() const { return visible_ticks(); }
 
     // For the checks.
     composer_ui::ComposerRuler& ruler() { return *ruler_; }
