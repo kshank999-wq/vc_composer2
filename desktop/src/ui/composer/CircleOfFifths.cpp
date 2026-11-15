@@ -5,6 +5,7 @@
 #include "AppResources.h"
 #include "ui/Dialogs.h"
 #include "ui/hw/HwTheme.h"
+#include "vcc/theory/Progression.h"
 #include "vcc/theory/Voicing.h"
 
 namespace vcc::desktop::composer_ui {
@@ -44,6 +45,47 @@ CircleOfFifthsPanel*& panel_slot()
 
 }  // namespace
 
+struct CircleOfFifthsPanel::Player final : juce::Timer {
+    Player(CircleOfFifthsPanel& p, std::vector<std::vector<int>> chords, int ms) : panel(p), steps(std::move(chords))
+    {
+        next();
+        startTimer(std::max(120, ms));
+    }
+    void release()
+    {
+        for (int n : sounding) panel.context_.engine.send_live(juce::MidiMessage::noteOff(1, n));
+        sounding.clear();
+    }
+    void next()
+    {
+        release();
+        ++index;
+        panel.playing_step_ = index < static_cast<int>(steps.size()) ? index : -1;
+        if (index >= static_cast<int>(steps.size())) return;
+        for (int n : steps[static_cast<std::size_t>(index)]) {
+            panel.context_.engine.send_live(juce::MidiMessage::noteOn(1, n, static_cast<juce::uint8>(85)));
+            sounding.push_back(n);
+        }
+        panel.repaint();
+    }
+    void timerCallback() override
+    {
+        next();
+        if (index >= static_cast<int>(steps.size())) {
+            stopTimer();
+            // Done: the panel lets go of this player (after this call returns).
+            juce::Component::SafePointer<CircleOfFifthsPanel> safe(&panel);
+            juce::MessageManager::callAsync([safe] {
+                if (safe) safe->stop_progression(false);
+            });
+        }
+    }
+    CircleOfFifthsPanel& panel;
+    std::vector<std::vector<int>> steps;
+    std::vector<int> sounding;
+    int index = -1;
+};
+
 CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context)
 {
     setComponentID("circle_of_fifths");
@@ -54,6 +96,7 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
     follow_ = settings.getBoolValue("circle_follow", true);
     manual_ = theory::Key::parse(settings.getValue("circle_key", "C major").toStdString()).value_or(theory::Key{});
     sevenths_ = settings.getBoolValue("circle_sevenths", false);
+    step_length_ = std::clamp(settings.getIntValue("circle_step_length", 1), 0, 2);
     borrowed_ = settings.getBoolValue("circle_borrowed", true);
     borrow_source_ = static_cast<theory::BorrowSource>(
         std::clamp(settings.getIntValue("circle_borrow_from", 0), 0, static_cast<int>(theory::borrow_sources().size()) - 1));
@@ -83,16 +126,31 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
     send_.setComponentID("circle_send");
     send_.setTooltip("Fill the Chord Mode palette with the selected chord (nothing is inserted)");
     send_.onClick = [this] { send_to_chord_mode(); };
-    audition_.setTooltip("Hear the selected chord, or the scale");
+    audition_.setComponentID("circle_audition");
+    audition_.setTooltip("Play the progression in the order the chords were picked (or the selected chord); again to stop");
     audition_.onClick = [this] {
-        if (const auto* c = selected_chord_ptr()) this->audition(*c);
+        if (player_) stop_progression();
+        else if (!progression_.empty()) play_progression();
+        else if (const auto* c = selected_chord_ptr()) this->audition(*c);
     };
+    put_.setComponentID("circle_put");
+    put_.setTooltip("Write the progression on the selected track at the playhead (on the beat), chord symbols too; one undo step");
+    put_.onClick = [this] { put_on_track(); };
+    clear_.setComponentID("circle_clear");
+    clear_.setTooltip("Start a new progression");
+    clear_.onClick = [this] { clear_progression(); };
+    length_box_.addItem("2 beats each", 1);
+    length_box_.addItem("1 bar each", 2);
+    length_box_.addItem("2 bars each", 3);
+    length_box_.setComponentID("circle_step_length");
+    length_box_.onChange = [this] { set_step_length(std::max(0, length_box_.getSelectedItemIndex())); };
+    for (auto* c : std::initializer_list<juce::Component*>{&put_, &clear_, &length_box_}) addAndMakeVisible(*c);
     for (int i = 0; i < 7; ++i) {
         chord_keys_.push_back(std::make_unique<hw::Keycap>("", true));
         auto& k = *chord_keys_.back();
         k.setComponentID("circle_chord_" + juce::String(i));
         k.set_keep_case(true);
-        k.onClick = [this, i] { select_chord(i, true); };
+        k.onClick = [this, i] { toggle_step(false, i, juce::ModifierKeys::currentModifiers.isShiftDown()); };
         addAndMakeVisible(k);
     }
     borrowed_key_.set_led_dot(true);
@@ -115,7 +173,7 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
         k.setComponentID("circle_borrowed_" + juce::String(i));
         k.set_keep_case(true);
         k.set_led_colour(juce::Colour(0xffe0a040));
-        k.onClick = [this, i] { select_borrowed(i, true); };
+        k.onClick = [this, i] { toggle_step(true, i, juce::ModifierKeys::currentModifiers.isShiftDown()); };
         addChildComponent(k);
     }
     static const char* relations[] = {"Relative", "Parallel", "Dominant", "Subdominant"};
@@ -139,6 +197,7 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
 CircleOfFifthsPanel::~CircleOfFifthsPanel()
 {
     stopTimer();
+    if (player_) player_->stopTimer();  // no note-offs here: the engine may be gone at shutdown
     if (panel_slot() == this) panel_slot() = nullptr;
 }
 
@@ -187,6 +246,14 @@ void CircleOfFifthsPanel::rebuild()
     if (follow_) key = score_key(anchor_);
     else anchor_ = "Manual reference (the score is unchanged)";
     ref_ = theory::key_reference(key, form_value_);
+    // A new key: the progression's numerals belonged to the old one.
+    if (progression_key_ != ref_.key.name()) {
+        if (!progression_.empty()) {
+            stop_progression();
+            progression_.clear();
+        }
+        progression_key_ = ref_.key.name();
+    }
     last_key_ = key.name() + (follow_ ? "/f" : "/m") + std::to_string(static_cast<int>(form_value_)) + (sevenths_ ? "7" : "3");
     const auto& chords = sevenths_ ? ref_.sevenths : ref_.triads;
     for (std::size_t i = 0; i < chord_keys_.size(); ++i) {
@@ -199,7 +266,7 @@ void CircleOfFifthsPanel::rebuild()
                          (c.uses_altered ? " - uses an altered degree of the scale shown, outside the key signature" : ""));
             k.setTitle(juce::String::fromUTF8(c.roman.c_str()) + " " + juce::String::fromUTF8(c.chord.display_name().c_str()));
         }
-        k.setToggleState(static_cast<int>(i) == selected_, juce::dontSendNotification);
+        k.setToggleState(!places(false, static_cast<int>(i)).empty(), juce::dontSendNotification);
     }
     lent_ = theory::borrowed_chords(ref_, borrow_source_, sevenths_);
     if (selected_borrowed_ >= static_cast<int>(lent_.size())) selected_borrowed_ = -1;
@@ -226,7 +293,7 @@ void CircleOfFifthsPanel::rebuild()
         k.setTooltip(chord_label(b.chord) + " (" + chord_notes(b.chord) + "), borrowed from " + juce::String(b.source) +
                      (b.name.empty() ? juce::String() : " - the " + juce::String(b.name)));
         k.setTitle("Borrowed " + juce::String::fromUTF8(b.roman.c_str()) + " " + chord_label(b.chord));
-        k.setToggleState(static_cast<int>(i) == selected_borrowed_, juce::dontSendNotification);
+        k.setToggleState(!places(true, static_cast<int>(i)).empty(), juce::dontSendNotification);
     }
     borrowed_key_.setToggleState(borrowed_, juce::dontSendNotification);
     const theory::Key* keys[] = {&ref_.relative, &ref_.parallel, &ref_.dominant, &ref_.subdominant};
@@ -237,7 +304,11 @@ void CircleOfFifthsPanel::rebuild()
     form_.setSelectedItemIndex(static_cast<int>(form_value_), juce::dontSendNotification);
     form_.setEnabled(theory::is_minor_family(ref_.key.mode));
     send_.setEnabled(selected_chord_ptr() != nullptr);
-    audition_.setEnabled(selected_chord_ptr() != nullptr);
+    audition_.setEnabled(selected_chord_ptr() != nullptr || !progression_.empty());
+    audition_.setButtonText(player_ ? "Stop" : progression_.empty() ? "Audition" : "Audition progression");
+    put_.setEnabled(!progression_.empty());
+    clear_.setEnabled(!progression_.empty());
+    length_box_.setSelectedItemIndex(step_length_, juce::dontSendNotification);
     repaint();
 }
 
@@ -320,6 +391,162 @@ void CircleOfFifthsPanel::select_chord(int index, bool audition)
     selected_borrowed_ = -1;
     rebuild();
     if (audition) this->audition(chords[static_cast<std::size_t>(index)].chord);
+}
+
+// --- Progression ---------------------------------------------------------------------------
+
+std::vector<int> CircleOfFifthsPanel::voiced(const theory::Chord& chord) const
+{
+    std::vector<int> out;
+    for (const auto& v : theory::voice_for_entry(chord, 4, theory::VoicingStyle::Closed)) out.push_back(v.midi);
+    return out;
+}
+
+std::vector<int> CircleOfFifthsPanel::places(bool borrowed_chord, int index) const
+{
+    std::vector<int> out;
+    const theory::Chord* c = nullptr;
+    const auto& chords = sevenths_ ? ref_.sevenths : ref_.triads;
+    if (!borrowed_chord && index >= 0 && index < static_cast<int>(chords.size())) c = &chords[static_cast<std::size_t>(index)].chord;
+    if (borrowed_chord && index >= 0 && index < static_cast<int>(lent_.size())) c = &lent_[static_cast<std::size_t>(index)].chord;
+    if (!c) return out;
+    for (std::size_t i = 0; i < progression_.size(); ++i)
+        if (progression_[i].borrowed == borrowed_chord && progression_[i].chord.name() == c->name()) out.push_back(static_cast<int>(i) + 1);
+    return out;
+}
+
+void CircleOfFifthsPanel::toggle_step(bool borrowed_chord, int index, bool repeat)
+{
+    const auto& chords = sevenths_ ? ref_.sevenths : ref_.triads;
+    Step step;
+    step.borrowed = borrowed_chord;
+    if (!borrowed_chord) {
+        if (index < 0 || index >= static_cast<int>(chords.size())) return;
+        step.chord = chords[static_cast<std::size_t>(index)].chord;
+        step.roman = chords[static_cast<std::size_t>(index)].roman;
+    } else {
+        if (index < 0 || index >= static_cast<int>(lent_.size())) return;
+        step.chord = lent_[static_cast<std::size_t>(index)].chord;
+        step.roman = lent_[static_cast<std::size_t>(index)].roman;
+        step.source = lent_[static_cast<std::size_t>(index)].source;
+    }
+    if (!repeat && !places(borrowed_chord, index).empty()) {
+        // Picked again: out of the progression (every time it was in), the rest renumbered.
+        stop_progression();
+        progression_.erase(std::remove_if(progression_.begin(), progression_.end(),
+                                          [&](const Step& s) { return s.borrowed == borrowed_chord && s.chord.name() == step.chord.name(); }),
+                           progression_.end());
+        if ((borrowed_chord ? selected_borrowed_ : selected_) == index) selected_ = selected_borrowed_ = -1;
+        rebuild();
+        return;
+    }
+    progression_.push_back(step);
+    selected_ = borrowed_chord ? -1 : index;
+    selected_borrowed_ = borrowed_chord ? index : -1;
+    rebuild();
+    audition(step.chord);
+}
+
+void CircleOfFifthsPanel::clear_progression()
+{
+    stop_progression();
+    progression_.clear();
+    rebuild();
+}
+
+void CircleOfFifthsPanel::set_step_length(int which)
+{
+    step_length_ = std::clamp(which, 0, 2);
+    hw::ui_settings().setValue("circle_step_length", step_length_);
+    rebuild();
+}
+
+Ticks CircleOfFifthsPanel::step_ticks(Ticks at) const
+{
+    const auto& d = context_.session.data();
+    const auto sig = d.meter.at_tick(at);
+    if (step_length_ == 0) return 2 * sig.beat_ticks();
+    return sig.ticks_per_bar() * (step_length_ == 2 ? 2 : 1);
+}
+
+void CircleOfFifthsPanel::play_progression()
+{
+    stop_progression();
+    if (progression_.empty()) return;
+    std::vector<std::vector<int>> chords;
+    for (const auto& s : progression_) chords.push_back(voiced(s.chord));
+    const auto& d = context_.session.data();
+    const Ticks at = std::max<Ticks>(0, context_.engine.position());
+    const double seconds = d.tempo.seconds_at(at + step_ticks(at)) - d.tempo.seconds_at(at);
+    player_ = std::make_unique<Player>(*this, std::move(chords), juce::roundToInt(seconds * 1000.0));
+    rebuild();
+}
+
+void CircleOfFifthsPanel::stop_progression(bool send_note_offs)
+{
+    if (!player_) return;
+    player_->stopTimer();
+    if (send_note_offs) player_->release();
+    player_.reset();
+    playing_step_ = -1;
+    if (send_note_offs) rebuild();
+    else {
+        audition_.setButtonText(progression_.empty() ? "Audition" : "Audition progression");
+        repaint();
+    }
+}
+
+juce::String CircleOfFifthsPanel::progression_text() const
+{
+    juce::StringArray parts;
+    for (std::size_t i = 0; i < progression_.size(); ++i)
+        parts.add(juce::String(static_cast<int>(i) + 1) + " " + juce::String::fromUTF8(progression_[i].roman.c_str()) + " " +
+                  chord_label(progression_[i].chord));
+    return parts.joinIntoString("  -  ");
+}
+
+bool CircleOfFifthsPanel::put_on_track(project::CollisionPolicy policy)
+{
+    auto& session = context_.session;
+    const auto& d = session.data();
+    const auto* t = d.find_track(session.selected_track());
+    if (progression_.empty()) return false;
+    if (!t || (t->kind != project::TrackKind::Instrument && t->kind != project::TrackKind::MidiOnly)) {
+        context_.status("Select an instrument track to put the progression on");
+        return false;
+    }
+    // From the playhead, on the beat it is in.
+    const Ticks here = std::max<Ticks>(0, context_.engine.position());
+    const int bar = d.meter.bar_at(here);
+    const Ticks bar_start = d.meter.bar_start(bar);
+    const Ticks beat = std::max<Ticks>(1, d.meter.at_bar(bar).beat_ticks());
+    Ticks at = bar_start + (here - bar_start) / beat * beat;
+    theory::ProgressionRender render;
+    render.start = at;
+    for (const auto& s : progression_) {
+        const Ticks len = step_ticks(at);
+        theory::RealizedChord rc;
+        rc.numeral = s.roman;
+        rc.chord = s.chord;
+        rc.start = at;
+        rc.duration = len;
+        render.chords.push_back(rc);
+        for (int n : voiced(s.chord)) render.notes.push_back({at, len * 95 / 100, n, 80, 0, {}});
+        at += len;
+    }
+    render.end = at;
+    const std::string track = t->id;
+    const juce::String what = "Progression " + progression_text() + " at bar " + juce::String(bar);
+    const auto result = session.send_progression(track, render, "circle_of_fifths", policy);
+    if (result.needs_decision) {
+        juce::Component::SafePointer<CircleOfFifthsPanel> self(this);
+        dialogs::ask_collision(what, [self](project::CollisionPolicy decided) {
+            if (self) self->put_on_track(decided);
+        });
+        return false;
+    }
+    dialogs::report_send(context_, result, what);
+    return result.ok;
 }
 
 void CircleOfFifthsPanel::select_borrowed(int index, bool audition)
@@ -667,9 +894,53 @@ void CircleOfFifthsPanel::resized()
     for (auto& k : relation_keys_) k->setBounds(row.removeFromLeft(w4).reduced(2, 0));
     r.removeFromTop(30);
     row = r.removeFromTop(30);
-    send_.setBounds(row.removeFromLeft(170));
+    send_.setBounds(row.removeFromLeft(160));
     row.removeFromLeft(6);
-    audition_.setBounds(row.removeFromLeft(100));
+    audition_.setBounds(row.removeFromLeft(180));
+    row.removeFromLeft(6);
+    put_.setBounds(row.removeFromLeft(130));
+    // The progression's own row: its length and Clear.
+    r.removeFromTop(6);
+    row = r.removeFromTop(28);
+    length_box_.setBounds(row.removeFromLeft(160).reduced(0, 2));
+    row.removeFromLeft(6);
+    clear_.setBounds(row.removeFromLeft(80));
+}
+
+void CircleOfFifthsPanel::paintOverChildren(juce::Graphics& g)
+{
+    // Each picked chord's place in the progression, on its key; the one
+    // sounding now ringed.
+    auto badge = [&](hw::Keycap& k, const std::vector<int>& at, bool lent) {
+        if (at.empty() || !k.isVisible()) return;
+        juce::StringArray nums;
+        for (int n : at) nums.add(juce::String(n));
+        const juce::String text = nums.joinIntoString(",");
+        g.setFont(hw::fonts::ui(11.0f, true));
+        const float w = std::max(16.0f, juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), text) + 8.0f);
+        const auto b = k.getBounds().toFloat();
+        const juce::Rectangle<float> r(b.getRight() - w + 3.0f, b.getY() - 6.0f, w, 16.0f);
+        g.setColour(lent ? juce::Colour(0xffe0a040) : hw::Theme::get().lcd());
+        g.fillRoundedRectangle(r, 8.0f);
+        g.setColour(juce::Colour(0xff15181b));
+        g.drawText(text, r, juce::Justification::centred, false);
+        if (playing_step_ >= 0 && std::find(at.begin(), at.end(), playing_step_ + 1) != at.end()) {
+            g.setColour(juce::Colours::white);
+            g.drawRoundedRectangle(b.expanded(2.0f), 6.0f, 2.0f);
+        }
+    };
+    for (std::size_t i = 0; i < chord_keys_.size(); ++i) badge(*chord_keys_[i], places(false, static_cast<int>(i)), false);
+    for (std::size_t i = 0; i < borrowed_keys_.size(); ++i) badge(*borrowed_keys_[i], places(true, static_cast<int>(i)), true);
+    // The progression, in order, under the keys.
+    if (!progression_.empty()) {
+        const auto row = clear_.getBounds();
+        g.setColour(hw::tok::text_bright);
+        g.setFont(hw::fonts::ui(12.0f, true));
+        g.drawText("Progression: " + progression_text(),
+                   juce::Rectangle<float>(static_cast<float>(send_.getX()), static_cast<float>(row.getBottom() + 8),
+                                          static_cast<float>(info_area().getWidth()), 18.0f),
+                   juce::Justification::centredLeft, true);
+    }
 }
 
 void CircleOfFifthsPanel::mouseDown(const juce::MouseEvent& e)
@@ -686,14 +957,18 @@ bool CircleOfFifthsPanel::keyPressed(const juce::KeyPress& key)
     if (key.getKeyCode() == juce::KeyPress::rightKey) choose_position(at + 1, minor);
     else if (key.getKeyCode() == juce::KeyPress::leftKey) choose_position(at + 11, minor);
     else if (key.getKeyCode() == juce::KeyPress::upKey || key.getKeyCode() == juce::KeyPress::downKey) choose_position(at, !minor);
-    else if (key.getKeyCode() >= '1' && key.getKeyCode() <= '7') select_chord(key.getKeyCode() - '1', true);
+    else if (key.getKeyCode() >= '1' && key.getKeyCode() <= '7') toggle_step(false, key.getKeyCode() - '1', key.getModifiers().isShiftDown());
     else return false;
     return true;
 }
 
 void show_circle_of_fifths(AppContext& context)
 {
-    dialogs::show_tool(window_slot(), "Circle of Fifths", 1040, 700, [&context] { return new CircleOfFifthsPanel(context); });
+    dialogs::show_tool(window_slot(), "Circle of Fifths", 1040, 720, [&context] { return new CircleOfFifthsPanel(context); },
+                       [] {
+                           // Closing mid-progression: let go of what is sounding.
+                           if (auto* p = panel_slot()) p->stop_progression();
+                       });
 }
 
 CircleOfFifthsPanel* circle_of_fifths_panel() { return panel_slot(); }

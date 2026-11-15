@@ -50,6 +50,41 @@ public:
     int selected_borrowed() const noexcept { return selected_borrowed_; }
     /// The selected chord's line: "bVI = Ab (Ab C Eb), from C minor - Ab and Eb are outside C major".
     juce::String selection_text() const;
+
+    // --- Progression ---------------------------------------------------------------------
+    /// Clicking chords builds a progression in the order clicked (each key
+    /// shows its place: 1, 2, 3...); clicking one again takes it out (the
+    /// rest renumber); Shift-click adds it again (a repeat). Changing key
+    /// clears it - its numerals belong to the key it was built in.
+    struct Step {
+        theory::Chord chord;
+        std::string roman;
+        bool borrowed = false;
+        std::string source;  ///< Borrowed: where from.
+    };
+    const std::vector<Step>& progression() const noexcept { return progression_; }
+    /// Places of a key's chord in the progression (1-based), for its badge.
+    std::vector<int> places(bool borrowed, int index) const;
+    /// Toggles a diatonic (or borrowed) chord in the progression, or with
+    /// `repeat` adds it again.
+    void toggle_step(bool borrowed, int index, bool repeat = false);
+    void clear_progression();
+    /// Each chord's length when played or put on a track: 0 two beats, 1 a bar, 2 two bars.
+    void set_step_length(int which);
+    int step_length() const noexcept { return step_length_; }
+    /// Plays the progression in order (each chord lit as it sounds).
+    void play_progression();
+    void stop_progression(bool send_note_offs = true);
+    bool playing_progression() const noexcept { return player_ != nullptr; }
+    int playing_step() const noexcept { return playing_step_; }
+    /// Writes it on the selected track at the playhead (on the beat), with
+    /// its chord symbols over it, as one undo step (asks before overwriting).
+    bool put_on_track(project::CollisionPolicy policy = project::CollisionPolicy::Ask);
+    /// "1 I G - 2 vi Em - 3 bVI Eb".
+    juce::String progression_text() const;
+    hw::Keycap& play_key() { return audition_; }
+    hw::Keycap& put_key() { return put_; }
+    hw::Keycap& clear_key() { return clear_; }
     /// Fills the Composer's chord palette with the selected chord; inserts nothing.
     bool send_to_chord_mode();
     /// Asks, then sets the project's key to the one shown (one undo step).
@@ -61,6 +96,7 @@ public:
     juce::Point<float> segment_centre(int index, bool minor) const;
 
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
     bool keyPressed(const juce::KeyPress& key) override;
@@ -94,6 +130,16 @@ private:
     theory::BorrowSource borrow_source_ = theory::BorrowSource::Parallel;
     std::vector<theory::BorrowedChord> lent_;
     juce::ComboBox borrow_from_;
+    std::vector<Step> progression_;
+    int step_length_ = 1;
+    int playing_step_ = -1;
+    struct Player;
+    std::unique_ptr<Player> player_;
+    std::string progression_key_;
+    hw::Keycap put_{"Put on track"}, clear_{"Clear"};
+    juce::ComboBox length_box_;
+    Ticks step_ticks(Ticks at) const;
+    std::vector<int> voiced(const theory::Chord& chord) const;
     /// The chord selected (diatonic or borrowed), or null.
     const theory::Chord* selected_chord_ptr() const;
     void audition(const theory::Chord& chord);

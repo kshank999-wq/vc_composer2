@@ -1412,3 +1412,28 @@ macOS, Linux and Windows. What it took:
     Mixolydian, Lydian, Dorian, Locrian (double flats) and an empty source;
     desktop check and screenshots `42c` (G major), `42d` (Mixolydian),
     `42e` (A minor from A major).
+33. **Circle of Fifths: progressions. Done** (November 15, 2026).
+    - Clicking chords - diatonic or borrowed, from any "Borrow from"
+      source - builds a progression in the order picked: each key shows
+      its place (1, 2, 3...; a repeat shows both, "1,4") and plays as it
+      is picked. Clicking a picked chord again takes it out and the rest
+      renumber; Shift-click (or Shift+1-7) adds it again. The progression
+      reads under the keys ("1 I G - 2 vi Em - 3 bVI Eb - 4 V D"). Clear
+      starts over; changing key clears it (its numerals belong to the key).
+    - **Audition progression** plays it in order through the selected
+      track's sound, two beats, a bar or two bars a chord at the project's
+      tempo, ringing each key as it sounds; again to stop; closing the
+      window releases what is sounding.
+    - **Put on track** writes it on the selected track from the beat the
+      playhead is in, at the same lengths, with its chord symbols on the
+      ruler, as one undo step (asks before writing over notes, like the
+      Chord Explorer's Send to Track, whose session path it uses).
+    - **Checks.** Desktop: I-vi-bVI-V picked and numbered (borrowed bVI
+      too), vi taken out and the rest renumbered, a Shift repeat, the
+      audition stepping in order and stopping, Put on track from half a
+      beat into bar 3 writing bars 3-6 (G, Eb, D, G; 12 notes) with chord
+      symbols in one undo step, and undone. Screenshot
+      `42f-circle-progression`.
+    - Also: the desktop check now waits for asynchronous clicks (a
+      `wait_for` helper) where slow CI machines were late: the Circle
+      key, the note-value keypad, Reply then Resolve.

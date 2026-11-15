@@ -140,6 +140,17 @@ void pump(int ms)
     for (int waited = 0; !done->load() && waited < 5000; waited += 10) mm->runDispatchLoopUntil(10);
 }
 
+/// Pumps until `ready` (or `ms` pass): for asynchronous clicks and timers,
+/// which a slow CI machine takes longer to deliver.
+bool wait_for(const std::function<bool()>& ready, int ms = 2000)
+{
+    for (int waited = 0; waited < ms; waited += 25) {
+        if (ready()) return true;
+        pump(25);
+    }
+    return ready();
+}
+
 void shoot(juce::Component& c, const juce::File& dir, const juce::String& name, bool optional = false)
 {
     // The component may go while the queue runs (a call-out closes itself
@@ -1828,7 +1839,10 @@ void composer_lane_checks(MainWindow& window, const juce::File& dir)
     for (const char ch : {'d', 'e', 'f', 'g'}) composer.keyPressed(juce::KeyPress(ch));
     pump(80);
     if (auto* k = main.toolbar().command_key(Command::SelectDurationHalf)) k->triggerClick();
-    pump(150);
+    wait_for([&] {
+        const auto* h = main.toolbar().command_key(Command::SelectDurationHalf);
+        return h && h->getToggleState() && composer.cursor() && composer.cursor()->duration.value == notation::NoteValue::Half;
+    });
     const auto* half = main.toolbar().command_key(Command::SelectDurationHalf);
     const auto* quarter = main.toolbar().command_key(Command::SelectDurationQuarter);
     check(half && quarter && half->getToggleState() && !quarter->getToggleState() &&
@@ -4163,7 +4177,7 @@ void circle_checks(MainWindow& window, const juce::File& dir)
     pump(80);
     hw::ui_settings().setValue("circle_follow", true);
     if (auto* key = main.toolbar().key("Circle")) key->triggerClick();
-    pump(150);
+    wait_for([] { return composer_ui::circle_of_fifths_panel() != nullptr; });
     auto* panel = composer_ui::circle_of_fifths_panel();
     if (!panel) {
         check(false, "the Circle key opens the Circle of Fifths window");
@@ -4302,6 +4316,66 @@ void circle_checks(MainWindow& window, const juce::File& dir)
     panel->set_minor_form(theory::MinorForm::Natural);
     panel->set_borrow_source(theory::BorrowSource::Parallel);
     panel->set_reference(*theory::Key::parse("G major"));
+
+    // A progression: picked in order (numbered on the keys), unpicked,
+    // repeated with Shift, auditioned in order, put on the selected track
+    // at the playhead.
+    panel->clear_progression();
+    panel->set_step_length(1);  // a bar each
+    auto click = [&](hw::Keycap& k) {
+        k.triggerClick();
+        pump(40);
+    };
+    click(panel->chord_key(0));     // I
+    click(panel->chord_key(5));     // vi
+    click(panel->borrowed_key(6));  // bVI (from G minor)
+    click(panel->chord_key(4));     // V
+    const auto picked = panel->progression_text();
+    check(picked == juce::String::fromUTF8("1 I G  -  2 vi Em  -  3 \xE2\x99\xADVI E\xE2\x99\xAD  -  4 V D") &&
+              panel->places(true, 6) == std::vector<int>{3} && panel->chord_key(5).getToggleState(),
+          "chords picked in order are numbered on their keys, borrowed ones too: " + picked);
+    shoot(*panel->getTopLevelComponent(), dir, "42f-circle-progression");
+    click(panel->chord_key(5));  // vi again: out
+    check(panel->progression_text() == juce::String::fromUTF8("1 I G  -  2 \xE2\x99\xADVI E\xE2\x99\xAD  -  3 V D") &&
+              !panel->chord_key(5).getToggleState() && panel->places(false, 4) == std::vector<int>{3},
+          "picking a chord again takes it out and the rest renumber: " + panel->progression_text());
+    panel->toggle_step(false, 0, true);  // Shift: I again, at the end
+    check(panel->places(false, 0) == std::vector<int>{1, 4}, "Shift-click repeats a chord (I is 1 and 4)");
+    // Audition: in the order picked.
+    panel->set_step_length(0);  // two beats: half a second each at 120
+    panel->play_key().triggerClick();
+    const bool started = wait_for([&] { return panel->playing_progression() && panel->playing_step() == 0; }, 1000);
+    const bool advanced = wait_for([&] { return panel->playing_step() == 1; }, 2000);
+    check(started && advanced, "Audition plays the progression in order (step 1, then 2)");
+    panel->play_key().triggerClick();  // stop
+    wait_for([&] { return !panel->playing_progression(); }, 1000);
+    check(!panel->playing_progression(), "Audition again stops it");
+    // Put on track: the selected track, from the beat the playhead is in.
+    panel->set_step_length(1);
+    session.select_track(piano);
+    const Ticks bar3 = session.data().meter.bar_start(3);
+    ctx.engine.locate(bar3 + kTicksPerQuarter / 2);  // half a beat into bar 3
+    const auto steps_before = session.project().history_size();
+    const bool put = panel->put_on_track(project::CollisionPolicy::Replace);
+    pump(60);
+    juce::String symbols;
+    for (const auto& m : session.data().chords)
+        if (m.tick >= bar3) symbols << session.data().meter.bar_at(m.tick) << ":" << m.text << " ";
+    std::size_t notes = 0;
+    Ticks first = -1;
+    for (const auto& r : session.data().find_track(piano)->active_version()->regions)
+        for (const auto& n : r.notes) {
+            ++notes;
+            if (first < 0 || n.start < first) first = n.start;
+        }
+    check(put && session.project().history_size() == steps_before + 1 && first == bar3 && notes == 12 &&
+              symbols.trim() == "3:G 4:Eb 5:D 6:G",
+          "Put on track writes it on the selected track from bar 3 (the playhead's beat), a bar each, with its chord "
+          "symbols, in one undo step [" + symbols.trim() + ", " + juce::String(static_cast<int>(notes)) + " notes]");
+    session.undo();
+    pump(40);
+    check(session.data().find_track(piano)->active_version()->regions.empty(), "and one undo takes it all back");
+    panel->clear_progression();
     panel->set_borrowed(false);
     check(!panel->borrowed_key(0).isVisible(), "the borrowed chords can be hidden");
     panel->set_borrowed(true);
@@ -5367,8 +5441,16 @@ void comments_checks(MainWindow& window, const juce::File& dir)
     // A reply, then resolved; resolved ones can be hidden.
     panel->entry().setText("Pulled back 3 dB", false);
     if (auto* b = panel->reply_button(id)) b->triggerClick();
-    pump(60);
+    wait_for([&] {
+        const auto* cm = session.find_comment(id);
+        return cm && cm->replies.size() == 1;
+    });
+    pump(200);  // the list rebuilds its rows on the change: click the new one
     if (auto* b = panel->resolve_button(id)) b->triggerClick();
+    wait_for([&] {
+        const auto* cm = session.find_comment(id);
+        return cm && cm->resolved;
+    });
     pump(200);
     c = session.find_comment(id);
     check(c && c->resolved && c->replies.size() == 1 && c->replies[0].text == "Pulled back 3 dB" && c->replies[0].author == "Director",
