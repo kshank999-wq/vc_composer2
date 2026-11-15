@@ -869,34 +869,6 @@ void ComposerView::update_staff_tools()
 namespace {
 
 /// Letter steps for `semitones` (a transposition), as an interval spells them.
-int steps_for(int semitones)
-{
-    static const int kSteps[12] = {0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6};
-    const int a = std::abs(semitones);
-    const int s = kSteps[a % 12] + 7 * (a / 12);
-    return semitones < 0 ? -s : s;
-}
-
-/// The chord's notes on a staff: written pitch for a transposing one, each
-/// keeping the chord's spelling.
-std::vector<notation::Pitch> written_chord(const std::vector<theory::VoicedTone>& voiced, const notation::Staff& staff,
-                                          int trans = 0)
-{
-    // Written = sounding less the instrument's transposition and the track's Trans.
-    const int t = staff.transposition_semitones + trans;
-    const int total = staff.total_transposition() + trans;
-    std::vector<notation::Pitch> out;
-    for (const auto& v : voiced) {
-        theory::VoicedTone w{t != 0 ? v.pitch.transposed(steps_for(-t), -t) : v.pitch, v.midi - total};
-        notation::Pitch p;
-        p.step = static_cast<notation::Step>(((w.pitch.letter % 7) + 7) % 7);
-        p.alteration = static_cast<std::int8_t>(w.pitch.alteration);
-        p.octave = static_cast<std::int8_t>(w.octave());
-        out.push_back(p);
-    }
-    return out;
-}
-
 juce::String note_names(const std::vector<theory::VoicedTone>& voiced)
 {
     juce::String s;
@@ -991,7 +963,7 @@ bool ComposerView::enter_chord(bool replace_selection)
     const auto staff_index = std::min(cur.staff_index, working_.staff_count() - 1);
     const auto voiced = theory::voice_for_entry(*chord, chord_state_.octave, chord_state_.style);
     const auto* track = context_.session.data().find_track(editing_track_);
-    const auto pitches = written_chord(voiced, working_.staff(staff_index), track ? track->effective_transpose() : 0);
+    const auto pitches = composer_ui::written_chord(voiced, working_.staff(staff_index), track ? track->effective_transpose() : 0);
     if (pitches.empty()) return false;
     const notation::Score before = working_;
     auto r = editor_->insert_pitch(pitches.front());

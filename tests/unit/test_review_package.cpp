@@ -1,6 +1,7 @@
 // Director review (A/B auditions, version comparison, approval) and project
 // packaging (Main Spec §15, §16).
 #include <filesystem>
+#include <set>
 
 #include "vcc/core/Files.h"
 #include "vcc/editing/ScoreEditor.h"
@@ -326,4 +327,128 @@ TEST_CASE("review: timecode comments are pinned in time, threaded, resolvable, s
     session::package::Options o;
     const auto report = session::package::report_text(r.data(), session::package::inventory(r.data(), r.path()), o);
     CHECK(report.find("Review comments: 1 open, 1 resolved") != std::string::npos);
+}
+
+#include "vcc/theory/Progression.h"
+
+TEST_CASE("progressions: any chord list is voice-led and played in a rhythm")
+{
+    using namespace vcc::theory;
+    MeterMap meter(TimeSignature{4, 4});
+    const Key key = *Key::parse("C major");
+    std::vector<Chord> chords;
+    for (const char* s : {"C", "Am", "Fm", "G"}) chords.push_back(*parse_chord_symbol(s));
+    std::vector<Ticks> starts, lengths;
+    for (int i = 0; i < 4; ++i) {
+        starts.push_back(i * kTicksPerWhole);
+        lengths.push_back(kTicksPerWhole);
+    }
+    ProgressionRenderOptions o;
+    o.key = key;
+    o.voicing.voice_lead = true;
+    auto led = realize_chords(chords, starts, lengths, {"I", "vi", "iv", "V"}, meter, o);
+    REQUIRE(led.chords.size() == 4u);
+    CHECK_EQ(led.start, 0);
+    CHECK_EQ(led.end, 4 * kTicksPerWhole);
+    CHECK_EQ(led.chords[2].numeral, std::string("iv"));
+    // Every voicing holds its chord's notes.
+    for (const auto& rc : led.chords) {
+        std::set<int> want, got;
+        for (const auto& t : rc.chord.tones()) want.insert(t.pitch_class());
+        for (int n : rc.voicing.notes) got.insert(((n % 12) + 12) % 12);
+        CHECK(want == got);
+    }
+    // Voice-led moves less than root position each time.
+    o.voicing.voice_lead = false;
+    auto blocky = realize_chords(chords, starts, lengths, {}, meter, o);
+    int led_moves = 0, block_moves = 0;
+    for (std::size_t i = 1; i < 4; ++i) {
+        led_moves += voice_movement(led.chords[i - 1].voicing, led.chords[i].voicing);
+        block_moves += voice_movement(blocky.chords[i - 1].voicing, blocky.chords[i].voicing);
+    }
+    CHECK(led_moves < block_moves);
+    // Rhythms: block = one note per voice per chord; arpeggio = eighths.
+    o.voicing.voice_lead = true;
+    o.rhythm = ChordRhythm::Block;
+    std::size_t voices = 0;
+    for (const auto& rc : led.chords) voices += rc.voicing.notes.size();
+    CHECK_EQ(realize_chords(chords, starts, lengths, {}, meter, o).notes.size(), voices);
+    o.rhythm = ChordRhythm::Arpeggio;
+    CHECK_EQ(realize_chords(chords, starts, lengths, {}, meter, o).notes.size(), 32u);
+    o.rhythm = ChordRhythm::BeatPulse;
+    CHECK_EQ(realize_chords(chords, starts, lengths, {}, meter, o).notes.size(), 4u * voices);
+}
+
+TEST_CASE("progressions: chords written into the score, split at barlines, tied, with symbols")
+{
+    Session s(catalogs());
+    s.new_empty();
+    const auto piano = s.add_track("Piano", "keys.piano");
+    auto pitch = [](notation::Step st, int oct, int alt = 0) {
+        notation::Pitch p;
+        p.step = st;
+        p.octave = static_cast<std::int8_t>(oct);
+        p.alteration = static_cast<std::int8_t>(alt);
+        return p;
+    };
+    using St = notation::Step;
+    const std::vector<notation::Pitch> c_major{pitch(St::C, 4), pitch(St::E, 4), pitch(St::G, 4)};
+    const std::vector<notation::Pitch> e_flat{pitch(St::E, 4, -1), pitch(St::G, 4), pitch(St::B, 4, -1)};
+    // C for a bar and a half (a whole tied to a half), then Eb for two beats.
+    std::vector<Session::WrittenEvent> ev{{0, 6 * kTicksPerQuarter, c_major}, {6 * kTicksPerQuarter, 2 * kTicksPerQuarter, e_flat}};
+    const auto steps = s.project().history_size();
+    auto r = s.write_events(piano, ev, {{0, "C"}, {6 * kTicksPerQuarter, "Eb"}}, project::CollisionPolicy::Ask, "Put progression");
+    REQUIRE(r.ok);
+    CHECK_EQ(s.project().history_size(), steps + 1);
+    const auto& score = s.data().find_track(piano)->active_version()->score;
+    std::vector<const notation::ScoreNote*> notes;
+    for (const auto& n : score.notes(0))
+        if (!n.is_rest) notes.push_back(&n);
+    REQUIRE(notes.size() == 9u);
+    int tied = 0, whole = 0, half = 0, flats = 0;
+    for (const auto* n : notes) {
+        tied += n->tied_to_next ? 1 : 0;
+        whole += n->duration.value == notation::NoteValue::Whole && n->start_tick == 0 ? 1 : 0;
+        half += n->duration.value == notation::NoteValue::Half ? 1 : 0;
+        flats += n->pitch.alteration == -1 ? 1 : 0;
+    }
+    CHECK_EQ(whole, 3);
+    CHECK_EQ(tied, 3);       // the whole notes tie into bar 2
+    CHECK_EQ(half, 6);       // C's half in bar 2, and the Eb chord
+    CHECK_EQ(flats, 2);      // Eb and Bb spelled as given, not D# and A#
+    REQUIRE(s.data().chords.size() == 2u);
+    CHECK_EQ(s.data().chords[1].text, std::string("Eb"));
+    // Over it again: asked; Merge writes voice 2; Replace replaces.
+    auto again = s.write_events(piano, ev, {}, project::CollisionPolicy::Ask, "Put progression");
+    CHECK(again.needs_decision);
+    CHECK(s.write_events(piano, ev, {}, project::CollisionPolicy::Merge, "Put progression").ok);
+    std::size_t in_voice2 = 0;
+    for (const auto& n : s.data().find_track(piano)->active_version()->score.notes(0))
+        if (n.voice == 1 && !n.is_rest) ++in_voice2;
+    CHECK_EQ(in_voice2, 9u);
+    CHECK(s.undo());
+    CHECK(s.undo());
+    std::size_t left = 0;
+    for (const auto& n : s.data().find_track(piano)->active_version()->score.notes(0)) left += n.is_rest ? 0 : 1;
+    CHECK_EQ(left, 0u);
+    CHECK(s.data().chords.empty());
+    // A piano's grand staff: below middle C goes on the bass staff.
+    if (s.data().find_track(piano)->active_version()->score.staff_count() >= 2) {
+        const std::vector<notation::Pitch> with_bass{pitch(St::C, 3), pitch(St::E, 4), pitch(St::G, 4)};
+        REQUIRE(s.write_events(piano, {{0, 4 * kTicksPerQuarter, with_bass}}, {}, project::CollisionPolicy::Replace, "x").ok);
+        const auto& sc = s.data().find_track(piano)->active_version()->score;
+        std::size_t treble = 0, bass = 0;
+        for (const auto& n : sc.notes(0)) treble += n.is_rest ? 0 : 1;
+        for (const auto& n : sc.notes(1)) bass += n.is_rest ? 0 : 1;
+        CHECK_EQ(treble, 2u);
+        CHECK_EQ(bass, 1u);
+        CHECK(s.undo());
+    }
+    // 3/4: a bar is a dotted half.
+    s.set_meter(TimeSignature{3, 4});
+    REQUIRE(s.write_events(piano, {{0, 3 * kTicksPerQuarter, c_major}}, {}, project::CollisionPolicy::Replace, "x").ok);
+    const auto& n0 = s.data().find_track(piano)->active_version()->score.notes(0);
+    bool dotted_half = false;
+    for (const auto& n : n0) dotted_half = dotted_half || (n.duration.value == notation::NoteValue::Half && n.duration.dots == 1);
+    CHECK(dotted_half);
 }

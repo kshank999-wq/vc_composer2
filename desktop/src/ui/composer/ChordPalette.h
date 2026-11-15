@@ -13,6 +13,7 @@
 
 #include "ui/AppContext.h"
 #include "ui/hw/HwControls.h"
+#include "vcc/notation/Score.h"
 #include "vcc/theory/Voicing.h"
 
 namespace vcc::desktop::composer_ui {
@@ -88,5 +89,10 @@ private:
     juce::ComponentBoundsConstrainer constrainer_;
     bool refreshing_ = false;
 };
+
+/// A chord's notes on a staff: the written pitch for a transposing one (and
+/// a track's Trans), each keeping the chord's spelling.
+std::vector<notation::Pitch> written_chord(const std::vector<theory::VoicedTone>& voiced, const notation::Staff& staff,
+                                          int trans = 0);
 
 }  // namespace vcc::desktop::composer_ui

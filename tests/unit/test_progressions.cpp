@@ -137,3 +137,46 @@ TEST_CASE("search finds progressions by tag")
     CHECK(!cat.search("suspense").empty());
     CHECK(!cat.search("Jazz").empty());
 }
+
+TEST_CASE("voicing: root in the bass, smooth upper voices")
+{
+    using namespace vcc::theory;
+    auto run = [](std::vector<const char*> symbols) {
+        std::vector<Chord> cs;
+        for (auto s : symbols) cs.push_back(*parse_chord_symbol(s));
+        return std::make_pair(cs, voice_root_bass(cs, VoicingOptions{}));
+    };
+    auto [cs, v] = run({"G", "Eb", "D", "G"});
+    REQUIRE(v.size() == 4u);
+    int upper = 0, root_pos = 0;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        // The bass is the root, and everything else is above it and in the chord.
+        CHECK_EQ(((v[i].bass() % 12) + 12) % 12, cs[i].root.pitch_class());
+        std::set<int> want;
+        for (const auto& t : cs[i].tones()) want.insert(t.pitch_class());
+        for (std::size_t k = 1; k < v[i].notes.size(); ++k) {
+            CHECK(v[i].notes[k] > v[i].bass());
+            CHECK(want.count(v[i].notes[k] % 12) == 1u);
+        }
+        if (i > 0) {
+            Voicing a{std::vector<int>(v[i - 1].notes.begin() + 1, v[i - 1].notes.end())};
+            Voicing b{std::vector<int>(v[i].notes.begin() + 1, v[i].notes.end())};
+            upper += voice_movement(a, b);
+        }
+    }
+    // Root position close voicings of the same chords move far more above the bass.
+    VoicingOptions rp;
+    rp.voice_lead = false;
+    const auto stacked = voice_progression(cs, rp);
+    for (std::size_t i = 1; i < stacked.size(); ++i) root_pos += voice_movement(stacked[i - 1], stacked[i]);
+    CHECK(upper < root_pos);
+    CHECK(upper <= 8);
+    // Slash chords and inversions put their bass in the bass.
+    auto [cs2, v2] = run({"C/E", "F", "G/B", "C"});
+    CHECK_EQ(v2[0].bass() % 12, 4);   // E
+    CHECK_EQ(v2[2].bass() % 12, 11);  // B
+    CHECK_EQ(v2[3].bass() % 12, 0);
+    // Each bass moves to the nearest note of its pitch class: E to F and B to C are steps.
+    CHECK(std::abs(v2[1].bass() - v2[0].bass()) <= 2);
+    CHECK(std::abs(v2[3].bass() - v2[2].bass()) <= 2);
+}

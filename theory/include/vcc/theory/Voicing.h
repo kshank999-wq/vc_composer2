@@ -56,6 +56,14 @@ Voicing voice_chord(const Chord& chord, const VoicingOptions& options);
 std::vector<Voicing> voice_progression(const std::vector<Chord>& chords, const VoicingOptions& options,
                                        const std::vector<std::optional<int>>& locked_inversions = {});
 
+/// A keyboard player's voicing of a sequence: the root (or a slash chord's
+/// bass) in the bass, each moving to the nearest root within
+/// [options.low, options.center - 5]; above it the other tones closed and
+/// voice-led through their inversions around options.center, never down
+/// into the bass. The upper voices move as little as they can while the
+/// bass line stays on the roots.
+std::vector<Voicing> voice_root_bass(const std::vector<Chord>& chords, const VoicingOptions& options);
+
 /// One note of a chord voiced for entry: its spelling and its MIDI note.
 struct VoicedTone {
     SpelledPitch pitch;

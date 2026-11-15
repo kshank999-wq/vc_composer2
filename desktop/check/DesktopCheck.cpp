@@ -4352,10 +4352,15 @@ void circle_checks(MainWindow& window, const juce::File& dir)
     check(!panel->playing_progression(), "Audition again stops it");
     // Put on track: the selected track, from the beat the playhead is in.
     panel->set_step_length(1);
+    panel->set_put_as_notation(false);  // MIDI first
+    panel->set_rhythm(theory::ChordRhythm::Block);
+    panel->set_voicing(0);
     session.select_track(piano);
     const Ticks bar3 = session.data().meter.bar_start(3);
     ctx.engine.locate(bar3 + kTicksPerQuarter / 2);  // half a beat into bar 3
     const auto steps_before = session.project().history_size();
+    std::size_t expected_notes = 0;
+    for (const auto& rc : panel->render_from(bar3).chords) expected_notes += rc.voicing.notes.size();
     const bool put = panel->put_on_track(project::CollisionPolicy::Replace);
     pump(60);
     juce::String symbols;
@@ -4368,13 +4373,83 @@ void circle_checks(MainWindow& window, const juce::File& dir)
             ++notes;
             if (first < 0 || n.start < first) first = n.start;
         }
-    check(put && session.project().history_size() == steps_before + 1 && first == bar3 && notes == 12 &&
+    check(put && session.project().history_size() == steps_before + 1 && first == bar3 && notes == expected_notes &&
               symbols.trim() == "3:G 4:Eb 5:D 6:G",
           "Put on track writes it on the selected track from bar 3 (the playhead's beat), a bar each, with its chord "
           "symbols, in one undo step [" + symbols.trim() + ", " + juce::String(static_cast<int>(notes)) + " notes]");
     session.undo();
     pump(40);
     check(session.data().find_track(piano)->active_version()->regions.empty(), "and one undo takes it all back");
+
+    // Voice-led: the chords move less than in root position.
+    auto movement = [&] {
+        const auto r = panel->render_from(0);
+        int moved = 0;
+        for (std::size_t i = 1; i < r.chords.size(); ++i) moved += theory::voice_movement(r.chords[i - 1].voicing, r.chords[i].voicing);
+        return moved;
+    };
+    const int led = movement();
+    panel->set_voicing(1);
+    const int inverted = movement();
+    panel->set_voicing(2);
+    const int rooted = movement();
+    panel->set_voicing(0);
+    check(led < rooted && inverted < rooted,
+          "root bass with smooth upper voices moves " + juce::String(led) + " semitones, smooth with inversions " +
+              juce::String(inverted) + ", root position " + juce::String(rooted));
+    // As notation: in the score, spelled as the chords are (Eb Bb in the bVI).
+    panel->set_put_as_notation(true);
+    ctx.engine.locate(bar3);
+    const bool written = panel->put_on_track(project::CollisionPolicy::Replace);
+    pump(60);
+    const auto& score = session.data().find_track(piano)->active_version()->score;
+    int chord_notes = 0, flats = 0, wrong_sharps = 0;
+    std::set<Ticks> onsets;
+    std::vector<notation::ScoreNote> all_staves;
+    for (std::size_t st = 0; st < score.staff_count(); ++st)
+        for (const auto& n : score.notes(st)) all_staves.push_back(n);
+    for (const auto& n : all_staves) {
+        if (n.is_rest) continue;
+        ++chord_notes;
+        onsets.insert(n.start_tick);
+        if (n.pitch.alteration == -1) ++flats;
+        // D# or A# would be the bVI misspelled.
+        if (n.pitch.alteration == 1 && (n.pitch.step == notation::Step::D || n.pitch.step == notation::Step::A)) ++wrong_sharps;
+    }
+    check(written && static_cast<std::size_t>(chord_notes) == expected_notes && onsets.size() == 4 && *onsets.begin() == bar3 &&
+              flats >= 2 && wrong_sharps == 0 &&
+              session.data().find_track(piano)->active_version()->regions.empty(),
+          "Put as notation writes the four chords in the score from bar 3, Eb and Bb spelled as flats [" +
+              juce::String(chord_notes) + " notes, " + juce::String(flats) + " flats]");
+    shoot(main, dir, "42h-circle-progression-in-score", true);
+    session.undo();
+    // An arpeggio is written as single eighth notes.
+    panel->set_rhythm(theory::ChordRhythm::Arpeggio);
+    panel->put_on_track(project::CollisionPolicy::Replace);
+    pump(60);
+    int eighths = 0;
+    {
+        const auto& sc = session.data().find_track(piano)->active_version()->score;
+        for (std::size_t st = 0; st < sc.staff_count(); ++st)
+            for (const auto& n : sc.notes(st))
+                if (!n.is_rest && n.duration.value == notation::NoteValue::Eighth) ++eighths;
+    }
+    check(eighths == 32, "an arpeggio is written as eighth notes (" + juce::String(eighths) + ")");
+    session.undo();
+    panel->set_rhythm(theory::ChordRhythm::Block);
+    shoot(*panel->getTopLevelComponent(), dir, "42g-circle-progression-options");
+
+    // My progressions: saved, cleared, loaded back, deleted.
+    const auto before_save = panel->progression_text();
+    check(panel->save_progression("Check: borrowed six"), "a progression saves under a name");
+    panel->clear_progression();
+    panel->set_reference(*theory::Key::parse("C major"));
+    const bool loaded = panel->load_progression("Check: borrowed six");
+    check(loaded && panel->progression_text() == before_save && panel->reference().key.name() == "G major" &&
+              panel->saved_progressions().contains("Check: borrowed six"),
+          "loading it brings back the chords and their key (G major): " + panel->progression_text());
+    check(panel->delete_progression("Check: borrowed six") && !panel->saved_progressions().contains("Check: borrowed six"),
+          "and it can be deleted");
     panel->clear_progression();
     panel->set_borrowed(false);
     check(!panel->borrowed_key(0).isVisible(), "the borrowed chords can be hidden");

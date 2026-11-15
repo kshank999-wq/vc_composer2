@@ -200,27 +200,60 @@ std::optional<ProgressionRender> render_progression(const Progression& prog, con
 
     std::vector<Chord> seq;
     std::vector<std::optional<int>> locks;
+    std::vector<std::string> numerals;
     for (const auto& s : slots) {
         seq.push_back((*chords)[s.step]);
         locks.push_back(s.step < opt.locked_inversions.size() ? opt.locked_inversions[s.step] : std::nullopt);
+        numerals.push_back(prog.steps[s.step].numeral);
     }
-    auto voicings = voice_progression(seq, opt.voicing, locks);
-
-    ProgressionRender out;
-    out.start = meter.bar_start(opt.start_bar);
-    out.end = out.start + meter.span(opt.start_bar, opt.length_bars);
+    const Ticks region_start = meter.bar_start(opt.start_bar);
+    const Ticks region_end = region_start + meter.span(opt.start_bar, opt.length_bars);
+    std::vector<Ticks> starts, durations;
     double pos = 0;
     for (std::size_t i = 0; i < slots.size(); ++i) {
-        RealizedChord rc;
-        rc.numeral = prog.steps[slots[i].step].numeral;
-        rc.chord = seq[i];
-        rc.voicing = voicings[i];
-        rc.start = tick_at(meter, opt.start_bar, pos);
+        const Ticks start = tick_at(meter, opt.start_bar, pos);
         pos += slots[i].bars;
         // The last boundary is the region end exactly, so rounding can never
         // leave a gap or overhang.
-        Ticks end = i + 1 == slots.size() ? out.end : tick_at(meter, opt.start_bar, pos);
-        rc.duration = end - rc.start;
+        const Ticks end = i + 1 == slots.size() ? region_end : tick_at(meter, opt.start_bar, pos);
+        starts.push_back(start);
+        durations.push_back(end - start);
+    }
+    auto out = realize_chords(seq, starts, durations, numerals, meter, opt, locks);
+    out.start = region_start;
+    out.end = region_end;
+    return out;
+}
+
+ProgressionRender realize_chords(const std::vector<Chord>& seq, const std::vector<Ticks>& starts,
+                                 const std::vector<Ticks>& durations, const std::vector<std::string>& numerals,
+                                 const MeterMap& meter, const ProgressionRenderOptions& opt,
+                                 const std::vector<std::optional<int>>& locks)
+{
+    const std::size_t count = std::min({seq.size(), starts.size(), durations.size()});
+    const std::vector<Chord> chosen(seq.begin(), seq.begin() + static_cast<std::ptrdiff_t>(count));
+    return realize_voiced(chosen, voice_progression(chosen, opt.voicing, locks), starts, durations, numerals, meter, opt);
+}
+
+ProgressionRender realize_voiced(const std::vector<Chord>& seq, const std::vector<Voicing>& voicings,
+                                 const std::vector<Ticks>& starts, const std::vector<Ticks>& durations,
+                                 const std::vector<std::string>& numerals, const MeterMap& meter,
+                                 const ProgressionRenderOptions& opt)
+{
+    ProgressionRender out;
+    const std::size_t n = std::min({seq.size(), starts.size(), durations.size()});
+    if (n == 0) return out;
+    const std::vector<Chord> chords(seq.begin(), seq.begin() + static_cast<std::ptrdiff_t>(n));
+    out.start = starts.front();
+    out.end = starts.front();
+    for (std::size_t i = 0; i < n; ++i) {
+        RealizedChord rc;
+        rc.numeral = i < numerals.size() ? numerals[i] : std::string();
+        rc.chord = chords[i];
+        rc.voicing = i < voicings.size() ? voicings[i] : Voicing{};
+        rc.start = starts[i];
+        rc.duration = durations[i];
+        out.end = std::max(out.end, rc.start + rc.duration);
         out.chords.push_back(rc);
     }
 

@@ -202,6 +202,61 @@ std::vector<Voicing> voice_progression(const std::vector<Chord>& chords, const V
 }
 
 
+std::vector<Voicing> voice_root_bass(const std::vector<Chord>& chords, const VoicingOptions& options)
+{
+    // The upper structure: the chords without their bass, voice-led with
+    // free inversions above the bass's range.
+    std::vector<Chord> upper_chords;
+    for (const auto& c : chords) {
+        Chord u = c;
+        u.bass.reset();
+        u.inversion = 0;
+        upper_chords.push_back(u);
+    }
+    VoicingOptions up = options;
+    up.style = VoicingStyle::Closed;
+    up.voice_lead = true;
+    up.free_inversions = true;
+    up.double_bass = false;
+    up.low = std::max(options.low, options.center - 7);
+    up.center = options.center + 4;
+    const auto uppers = voice_progression(upper_chords, up);
+    std::vector<Voicing> out;
+    int prev_bass = -1;
+    const int bass_high = std::max(options.low + 11, options.center - 5);
+    for (std::size_t i = 0; i < chords.size(); ++i) {
+        const auto& c = chords[i];
+        // The bass: a slash chord's bass, an inversion's tone, else the root.
+        int pc = c.root.pitch_class();
+        if (c.bass) pc = c.bass->pitch_class();
+        else if (c.inversion > 0) {
+            const auto tones = c.tones();
+            if (static_cast<std::size_t>(c.inversion) < tones.size()) pc = tones[static_cast<std::size_t>(c.inversion)].pitch_class();
+        }
+        pc = ((pc % 12) + 12) % 12;
+        // The bass: that pitch class in range, nearest the last bass (or
+        // the middle of the range for the first chord).
+        const int target = prev_bass < 0 ? (options.low + bass_high) / 2 : prev_bass;
+        int bass = -1;
+        for (int n = options.low; n <= bass_high; ++n)
+            if (((n % 12) + 12) % 12 == pc && (bass < 0 || std::abs(n - target) < std::abs(bass - target))) bass = n;
+        if (bass < 0) bass = options.low + ((pc - options.low % 12) % 12 + 12) % 12;
+        Voicing v;
+        v.notes.push_back(bass);
+        for (int n : uppers[i].notes) {
+            int note = n;
+            while (note <= bass) note += 12;  // the upper voices stay above the bass
+            if (((note % 12) + 12) % 12 == pc && note - bass < 12 && uppers[i].notes.size() > 2) continue;  // no doubled bass right on top of it
+            v.notes.push_back(note);
+        }
+        std::sort(v.notes.begin(), v.notes.end());
+        v.notes.erase(std::unique(v.notes.begin(), v.notes.end()), v.notes.end());
+        out.push_back(v);
+        prev_bass = bass;
+    }
+    return out;
+}
+
 // --- Chord Mode entry voicing --------------------------------------------------
 
 int VoicedTone::octave() const noexcept

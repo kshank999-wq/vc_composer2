@@ -1437,3 +1437,40 @@ macOS, Linux and Windows. What it took:
     - Also: the desktop check now waits for asynchronous clicks (a
       `wait_for` helper) where slow CI machines were late: the Circle
       key, the note-value keypad, Reply then Resolve.
+34. **Circle of Fifths progressions: notation, voicing, rhythm, saving.
+    Done** (November 15, 2026).
+    - **Put as notation** (the default; "Put as MIDI" keeps the region
+      path): the progression is written into the selected track's score,
+      every chord spelled as named (the borrowed bVI's Eb and Bb, never D#
+      and A#), split at the barlines into note values (dotted where they
+      fit) and tied, below middle C on the bass staff of a grand staff,
+      written pitch for transposing instruments; chord symbols over it;
+      one undo step; asks before writing over voice 1 (Merge writes voice
+      2). `Session::write_events`.
+    - **Voicing**: "Root bass, smooth upper" (the default: the root - or
+      a slash chord's bass - in the bass moving to the nearest root, the
+      other voices led through their inversions above it,
+      `theory::voice_root_bass`), "Smooth, with inversions" (the voice
+      leader may invert the bass too), "Root position" (stacked). Kept
+      within the selected track's range.
+    - **Rhythm**: block chords, a pulse on the beat, arpeggio in eighths,
+      strum - heard in the audition (which now plays the real render,
+      each chord's key ringing as it sounds) and written to the track (a
+      strum is written as the chord).
+    - **My progressions**: Save... keeps the progression by name with its
+      key, lengths, voicing and rhythm, across projects; choosing one
+      loads it and shows its key; delete removes it.
+    - The voicing and rhythm code is shared with the Chord Explorer
+      (`theory::realize_chords` / `realize_voiced`); its renders are
+      unchanged (its tests pass as before).
+    - Not yet: showing saved progressions in the Chord Explorer, writing
+      a strum's roll as an arpeggio sign, per-chord lengths.
+    - **Checks.** Unit tests: any chord list voice-led (less movement than
+      root position) and in each rhythm; root-bass voicing (root in the
+      bass, upper voices above it moving at most 8 semitones through
+      G-Eb-D-G, slash basses); writing into the score (a bar and a half as
+      a whole tied to a half, Eb/Bb spelled, symbols, Ask/Merge/Replace,
+      undo, a dotted half in 3/4, the grand staff split). Desktop check:
+      MIDI and notation from bar 3 (no D# or A#), voicing movement 18/8/24,
+      an arpeggio written as 32 eighths, save/load/delete. Screenshots
+      `42g-circle-progression-options`, `42h-circle-progression-in-score`.

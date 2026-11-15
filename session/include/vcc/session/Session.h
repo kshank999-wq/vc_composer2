@@ -156,6 +156,22 @@ public:
     /// Chord Explorer "Send to Track" (Supplement §9.1): one undo step.
     project::InsertResult send_progression(const std::string& track_id, const theory::ProgressionRender& render,
                                            const std::string& progression_id, project::CollisionPolicy policy);
+    /// One chord (or single note) to write into a score: written pitches,
+    /// spelled as they are to appear, from `start` for `duration` ticks.
+    struct WrittenEvent {
+        Ticks start = 0;
+        Ticks duration = 0;
+        std::vector<notation::Pitch> pitches;
+    };
+    /// Writes `events` into the track's score (first staff; on a grand staff
+    /// what is below middle C goes on the bass staff), each split at
+    /// the barlines into note values (dotted where they fit) and tied, with
+    /// `symbols` over them: one undo step. Ask: needs a decision when voice
+    /// 1 has notes in the span; Replace: they go; Merge or NewLane: the
+    /// events go in voice 2 instead.
+    project::InsertResult write_events(const std::string& track_id, const std::vector<WrittenEvent>& events,
+                                       const std::vector<project::ChordMark>& symbols, project::CollisionPolicy policy,
+                                       const std::string& label);
     /// Ostinato Creator "Send to Track" (Supplement §10.1): one undo step.
     project::InsertResult send_ostinato(const std::string& track_id, const ostinato::Variant& variant,
                                         const std::string& preset_id, project::CollisionPolicy policy);

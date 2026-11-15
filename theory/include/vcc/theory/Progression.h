@@ -107,6 +107,22 @@ struct ProgressionRender {
     Ticks end = 0;  ///< Exactly start + span(length_bars).
 };
 
+/// Voices and plays any chord sequence (the Circle of Fifths' progressions,
+/// and the catalog's after expansion): chord i from `starts[i]` for
+/// `durations[i]` ticks, voiced as `options.voicing` says (voice-led,
+/// inversions) and played in `options.rhythm`. `numerals` label the chords
+/// (may be empty). The render's span is the first start to the last end.
+ProgressionRender realize_chords(const std::vector<Chord>& chords, const std::vector<Ticks>& starts,
+                                 const std::vector<Ticks>& durations, const std::vector<std::string>& numerals,
+                                 const MeterMap& meter, const ProgressionRenderOptions& options,
+                                 const std::vector<std::optional<int>>& locked_inversions = {});
+
+/// The same with the voicings given (one per chord), e.g. voice_root_bass's.
+ProgressionRender realize_voiced(const std::vector<Chord>& chords, const std::vector<Voicing>& voicings,
+                                 const std::vector<Ticks>& starts, const std::vector<Ticks>& durations,
+                                 const std::vector<std::string>& numerals, const MeterMap& meter,
+                                 const ProgressionRenderOptions& options);
+
 /// Renders. Returns nullopt with a reason when the request is impossible -
 /// for example 4 bars of a 12-bar blues, which spec §9.2 says must never be
 /// truncated silently.

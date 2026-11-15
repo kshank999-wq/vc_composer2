@@ -11,6 +11,7 @@
 #include "ui/AppContext.h"
 #include "ui/hw/HwControls.h"
 #include "vcc/theory/KeyReference.h"
+#include "vcc/theory/Progression.h"
 
 namespace vcc::desktop::composer_ui {
 
@@ -78,8 +79,29 @@ public:
     bool playing_progression() const noexcept { return player_ != nullptr; }
     int playing_step() const noexcept { return playing_step_; }
     /// Writes it on the selected track at the playhead (on the beat), with
-    /// its chord symbols over it, as one undo step (asks before overwriting).
+    /// its chord symbols over it, as one undo step (asks before overwriting):
+    /// as notation in the score (spelled as the chords are, split at
+    /// barlines and tied) or as MIDI, as "Put as" says.
     bool put_on_track(project::CollisionPolicy policy = project::CollisionPolicy::Ask);
+    /// Notation (true, the default) or MIDI.
+    void set_put_as_notation(bool on);
+    bool put_as_notation() const noexcept { return as_notation_; }
+    /// Voicing: 0 root in the bass with smooth upper voices, 1 smooth with
+    /// free inversions, 2 root position (stacked).
+    void set_voicing(int which);
+    int voicing() const noexcept { return voicing_; }
+    /// Rhythm: block, pulse on the beat, arpeggio in eighths, strum.
+    void set_rhythm(theory::ChordRhythm rhythm);
+    theory::ChordRhythm rhythm() const noexcept { return rhythm_; }
+    /// The progression as it plays and is written from `start`.
+    theory::ProgressionRender render_from(Ticks start) const;
+
+    /// My progressions: saved by name (with their key, lengths, voicing
+    /// and rhythm), for any project; loading one shows its key.
+    bool save_progression(const juce::String& name);
+    bool load_progression(const juce::String& name);
+    bool delete_progression(const juce::String& name);
+    juce::StringArray saved_progressions() const;
     /// "1 I G - 2 vi Em - 3 bVI Eb".
     juce::String progression_text() const;
     hw::Keycap& play_key() { return audition_; }
@@ -136,8 +158,12 @@ private:
     struct Player;
     std::unique_ptr<Player> player_;
     std::string progression_key_;
-    hw::Keycap put_{"Put on track"}, clear_{"Clear"};
-    juce::ComboBox length_box_;
+    hw::Keycap put_{"Put on track"}, clear_{"Clear"}, save_{"Save..."};
+    juce::ComboBox length_box_, output_box_, voicing_box_, rhythm_box_, saved_box_;
+    bool as_notation_ = true;
+    int voicing_ = 0;
+    theory::ChordRhythm rhythm_ = theory::ChordRhythm::Block;
+    void refresh_saved();
     Ticks step_ticks(Ticks at) const;
     std::vector<int> voiced(const theory::Chord& chord) const;
     /// The chord selected (diatonic or borrowed), or null.

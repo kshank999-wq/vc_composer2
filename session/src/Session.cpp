@@ -2927,3 +2927,130 @@ const project::Comment* Session::find_comment(const std::string& comment_id) con
 }
 
 }  // namespace vcc::session
+
+// --- Writing chords into a score ---------------------------------------------------------------
+
+namespace vcc::session {
+
+namespace {
+/// A span within one bar as note values, longest first.
+std::vector<notation::Duration> note_values_for(Ticks length)
+{
+    using NV = notation::NoteValue;
+    struct V {
+        NV value;
+        std::uint8_t dots;
+        Ticks ticks;
+    };
+    static const V kValues[] = {{NV::Whole, 0, 4 * kTicksPerQuarter},     {NV::Half, 1, 3 * kTicksPerQuarter},
+                                {NV::Half, 0, 2 * kTicksPerQuarter},      {NV::Quarter, 1, 3 * kTicksPerQuarter / 2},
+                                {NV::Quarter, 0, kTicksPerQuarter},       {NV::Eighth, 1, 3 * kTicksPerQuarter / 4},
+                                {NV::Eighth, 0, kTicksPerQuarter / 2},    {NV::Sixteenth, 1, 3 * kTicksPerQuarter / 8},
+                                {NV::Sixteenth, 0, kTicksPerQuarter / 4}, {NV::ThirtySecond, 0, kTicksPerQuarter / 8}};
+    std::vector<notation::Duration> out;
+    for (const auto& v : kValues)
+        while (length >= v.ticks) {
+            notation::Duration d;
+            d.value = v.value;
+            d.dots = v.dots;
+            out.push_back(d);
+            length -= v.ticks;
+        }
+    return out;
+}
+}  // namespace
+
+project::InsertResult Session::write_events(const std::string& track_id, const std::vector<WrittenEvent>& events,
+                                            const std::vector<project::ChordMark>& symbols, project::CollisionPolicy policy,
+                                            const std::string& label)
+{
+    project::InsertResult r;
+    const project::Track* t = data().find_track(track_id);
+    const project::TrackVersion* v = t ? t->active_version() : nullptr;
+    if (!v || v->score.staff_count() == 0) {
+        r.error = "the track has no score to write on";
+        return r;
+    }
+    if (events.empty()) {
+        r.error = "nothing to write";
+        return r;
+    }
+    Ticks from = events.front().start, to = events.front().start;
+    for (const auto& e : events) {
+        from = std::min(from, e.start);
+        to = std::max(to, e.start + e.duration);
+    }
+    const std::uint8_t voice = policy == project::CollisionPolicy::Merge || policy == project::CollisionPolicy::NewLane ? 1 : 0;
+    // A grand staff (treble over bass): what is below middle C goes on the bass staff.
+    const bool grand = v->score.staff_count() >= 2 && v->score.staff(0).clef == notation::Clef::Treble &&
+                       v->score.staff(1).clef == notation::Clef::Bass;
+    const std::size_t staves = grand ? 2 : 1;
+    bool occupied = false;
+    for (std::size_t st = 0; st < staves; ++st)
+        for (const auto& n : v->score.notes(st))
+            if (n.voice == voice && !n.is_rest && n.start_tick < to && n.end_tick() > from) occupied = true;
+    if (occupied && policy == project::CollisionPolicy::Ask) {
+        r.needs_decision = true;
+        return r;
+    }
+    const bool ok = edit(label, [&](project::ProjectData& d) {
+        project::Track* tr = d.find_track(track_id);
+        project::TrackVersion* ver = tr ? tr->active_version() : nullptr;
+        if (!ver) return false;
+        auto& score = ver->score;
+        // What was in this voice over the span goes (rests too: the new
+        // notes fill it).
+        std::vector<notation::EventId> gone;
+        for (std::size_t st = 0; st < staves; ++st)
+            for (const auto& n : score.notes(st))
+                if (n.voice == voice && n.start_tick < to && n.end_tick() > from) gone.push_back(n.id);
+        for (auto id : gone) score.remove_note(id);
+        for (const auto& whole : events) {
+          for (std::size_t st = 0; st < staves; ++st) {
+            WrittenEvent e = whole;
+            if (grand) {
+                e.pitches.clear();
+                for (const auto& p : whole.pitches)
+                    if ((notation::midi_note_number(p) < 60) == (st == 1)) e.pitches.push_back(p);
+            }
+            if (e.pitches.empty() || e.duration <= 0) continue;
+            // Split at the barlines, then into note values; every piece but
+            // the last ties on.
+            std::vector<std::pair<Ticks, notation::Duration>> pieces;
+            const Ticks end = e.start + e.duration;
+            for (Ticks at = e.start; at < end;) {
+                const Ticks bar_end = d.meter.bar_start(d.meter.bar_at(at) + 1);
+                const Ticks seg_end = std::min(end, bar_end);
+                for (const auto& dur : note_values_for(seg_end - at)) {
+                    pieces.emplace_back(at, dur);
+                    at += dur.ticks();
+                }
+                at = seg_end;
+            }
+            for (std::size_t i = 0; i < pieces.size(); ++i) {
+                const auto ids = score.insert_chord(st, pieces[i].first, pieces[i].second, e.pitches, voice);
+                if (i + 1 < pieces.size())
+                    for (auto id : ids)
+                        if (const auto* n = score.find_note(id)) {
+                            auto tied = *n;
+                            tied.tied_to_next = true;
+                            score.modify_note(id, tied);
+                        }
+            }
+          }
+        }
+        // The chord symbols over the span, as Send to Track does.
+        auto& marks = d.chords;
+        marks.erase(std::remove_if(marks.begin(), marks.end(), [&](const project::ChordMark& m) { return m.tick >= from && m.tick < to; }),
+                    marks.end());
+        for (const auto& m : symbols)
+            if (theory::parse_chord_symbol(m.text)) marks.push_back(m);
+        std::sort(marks.begin(), marks.end(), [](const auto& a, const auto& b) { return a.tick < b.tick; });
+        return true;
+    });
+    r.ok = ok;
+    if (!ok) r.error = last_refusal().empty() ? std::string("nothing was written") : last_refusal();
+    return r;
+}
+
+}  // namespace vcc::session
