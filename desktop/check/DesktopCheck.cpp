@@ -4701,10 +4701,14 @@ void routing_checks(MainWindow& window, const juce::File& dir)
 
     // Edits from the mixer side show on the canvas.
     session.update_send(strings, 0, "Send level", [](project::Send& s) { s.level_db = -6.0; });
-    pump(120);
+    // The canvas re-reads the project on its own timer (no refresh() here):
+    // wait for it, as long as a slow machine needs.
     bool level_shown = false;
-    for (const auto& e : canvas->graph().edges)
-        if (e.from == strings && e.kind == EK::Send) level_shown = std::abs(e.level_db + 6.0) < 0.05;
+    for (int i = 0; i < 40 && !level_shown; ++i) {
+        pump(50);
+        for (const auto& e : canvas->graph().edges)
+            if (e.from == strings && e.kind == EK::Send) level_shown = std::abs(e.level_db + 6.0) < 0.05;
+    }
     check(level_shown, "a send level changed on the mixer shows on the canvas");
 
     // The inspector edits the line it was clicked on.
