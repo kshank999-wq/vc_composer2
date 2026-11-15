@@ -63,6 +63,8 @@ struct UserPatch {
     std::string instrument_id;
     std::vector<std::string> articulations;
     std::string expression_map = "default";
+    /// The patch's own articulation map (keyswitches etc.), when it has one.
+    std::optional<notation::ExpressionMap> articulation_map;
     /// "verified" (the composer confirmed it), "user" (saved, not checked)
     /// or "inferred" (proposed by VC Composer).
     std::string validation = "user";

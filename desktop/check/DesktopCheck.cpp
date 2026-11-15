@@ -41,7 +41,9 @@
 #include "ui/surface/ControlSurface.h"
 #include "ui/review/Review.h"
 #include "ui/review/Relink.h"
+#include "ui/library/ArticulationMapWindow.h"
 #include "ui/library/LibraryBrowser.h"
+#include "vcc/project/ArticulationMap.h"
 #include "vcc/library/Library.h"
 #include "ui/composer/TransposePopover.h"
 #include "ui/composer/ComposerRuler.h"
@@ -5583,6 +5585,86 @@ void library_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// Articulation maps (Main Spec §8, §11): the window edits a track's map -
+/// a natural keyswitch, a staccato keyswitch learned from a MIDI key - and
+/// Apply is one undo step that playback hears; a project whose plug-in is
+/// missing opens with the Missing Instruments window offering substitutes.
+void articulation_map_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto vln = session.add_track("Violins", "strings.violins_1");
+    session.select_track(vln);
+    session.edit("Write", [&](project::ProjectData& d) {
+        auto* t = d.find_track(vln);
+        auto& sc = t->active_version()->score;
+        for (int i = 0; i < 4; ++i) {
+            notation::ScoreNote n;
+            n.start_tick = i * kTicksPerQuarter;
+            n.duration = notation::quarter();
+            n.pitch.step = notation::Step::G;
+            n.pitch.octave = 4;
+            if (i == 1) n.articulations = notation::to_mask(notation::Articulation::Staccato);
+            if (i == 3) n.articulations = notation::to_mask(notation::Articulation::Harmonic);
+            sc.insert_note(0, n);
+        }
+        return true;
+    });
+    ctx.commands.invokeDirectly(cmd::articulationMap, false);
+    ArticulationMapPanel* panel = nullptr;
+    wait_for([&] { return (panel = articulation_map_panel()) != nullptr; });
+    if (!panel) {
+        check(false, "Track > Articulation Map opens the window");
+        return;
+    }
+    panel->set_action(0, 1);  // natural: keyswitch
+    panel->set_values(0, 24, 100);
+    int stac = -1;
+    for (int r = 1; r < panel->rows(); ++r)
+        if (panel->row_name(r) == "Staccato") stac = r;
+    panel->learn(stac);
+    ctx.engine.offer_learn(juce::MidiMessage::noteOn(1, 25, 0.8f));  // the composer presses C#1
+    wait_for([&] { return panel->learning_row() < 0; });
+    const auto* rule = panel->map().rule_for(notation::Articulation::Staccato);
+    check(rule && rule->action == notation::ArticulationAction::Keyswitch && rule->keyswitch_note == 25,
+          "Learn takes the next key from the MIDI keyboard as the staccato keyswitch");
+    check(panel->health().contains("harmonic"), "the health line names what is written but not heard: " + panel->health());
+    shoot(*panel->getTopLevelComponent(), dir, "59-articulation-map");
+    check(panel->apply() && session.undo_label() == "Articulation map", "Apply is one undo step");
+    const auto* t = session.data().find_track(vln);
+    const auto r = project::render_track(*t);
+    std::vector<int> ks;
+    for (const auto& k : r.keyswitches) ks.push_back(k.pitch);
+    check(ks == std::vector<int>({24, 25, 24, 24}),
+          "playback sends the natural switch before plain notes and the learned one before the staccato");
+    panel->getTopLevelComponent()->setVisible(false);
+
+    // A plug-in this machine does not have: the project opens and says so.
+    project::PluginRef ghost{"VST3", "VST3-Ghost Strings-0000", "Ghost Strings", "Nobody", "c3RhdGU="};
+    session.set_instrument_plugin(vln, ghost);
+    const auto file = dir.getChildFile("missing-instrument.vcc2");
+    session.save_as(file.getFullPathName().toStdString());
+    session.new_empty();
+    main.open_file(file);
+    juce::Component* missing = nullptr;
+    wait_for([&] { return (missing = missing_instruments_panel()) != nullptr; });
+    check(missing != nullptr && missing_instruments(ctx).size() == 1u &&
+              session.data().find_track(vln)->instrument_plugin.state_base64 == "c3RhdGU=",
+          "opening a project whose plug-in is missing lists it, and keeps its state for when it is back");
+    if (missing) {
+        if (auto* b = dynamic_cast<juce::Button*>(find_named(*missing, "Find substitute"))) b->triggerClick();
+        wait_for([&] { return main.track_panel().library().view() == LibraryBrowser::View::ForTrack; });
+        check(session.selected_track() == vln && main.track_panel().library().view() == LibraryBrowser::View::ForTrack,
+              "Find substitute shows the library's candidates for that track");
+        missing->getTopLevelComponent()->setVisible(false);
+    }
+    main.track_panel().show_library(false);
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -6096,7 +6178,7 @@ void accessibility_checks(MainWindow& window, const juce::File& dir)
     pump(150);
     report("Producer view", main);
     for (auto id : {cmd::showCircleOfFifths, cmd::showRouting, cmd::showReview, cmd::showComments, cmd::collectPackage,
-                    cmd::showControlSurfaces, cmd::relinkMedia}) {
+                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap}) {
         ctx.commands.invokeDirectly(id, false);
         pump(200);
     }
@@ -7420,6 +7502,8 @@ int main(int argc, char** argv)
         package_checks(window, dir);
         section("library_checks");
         library_checks(window, dir);
+        section("articulation_map_checks");
+        articulation_map_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

@@ -1,5 +1,7 @@
 #include "vcc/project/RenderCache.h"
 
+#include "vcc/project/ArticulationMap.h"
+
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -198,13 +200,14 @@ const RenderedTrack& RenderCache::render(const Track& track, bool performance)
         entries_.erase(track.id);
         return kNothing;
     }
-    const auto map = expression_map_named(track.expression_map);
+    const auto map = expression_map_for(track);
+    const auto map_key = expression_map_key(track);
     const int channel = std::clamp(track.midi_channel, 0, 15);
     Entry& e = entries_[track.id];
     const nt::Score& now = v->score;
 
     bool raw_changed = true;
-    const bool fresh = e.channel < 0 || e.version_id != v->id || e.map_name != track.expression_map ||
+    const bool fresh = e.channel < 0 || e.version_id != v->id || e.map_name != map_key ||
                        e.channel != channel || staves_differ(e.score, now);
     if (fresh) {
         e.raw = render_score_events(track, map);
@@ -330,7 +333,7 @@ const RenderedTrack& RenderCache::render(const Track& track, bool performance)
     }
     if (raw_changed || fresh) e.score = now;
     e.version_id = v->id;
-    e.map_name = track.expression_map;
+    e.map_name = map_key;
     e.channel = channel;
     if (around_changed || fresh) {
         e.regions = v->regions;

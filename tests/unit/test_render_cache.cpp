@@ -279,3 +279,104 @@ TEST_CASE("random edits: the cache always equals a whole render")
         CHECK(partial > 50);
     }
 }
+
+#include "vcc/project/ArticulationMap.h"
+
+TEST_CASE("articulation maps: natural switch, program, channel and velocity layers, chased on every note")
+{
+    auto t = make_track(1);
+    using A = notation::Articulation;
+    auto stac = note_at(Q, notation::quarter(), 0, 4);
+    stac.articulations = notation::to_mask(A::Staccato);
+    auto pizz = note_at(3 * Q, notation::quarter(), 2, 4);
+    pizz.articulations = notation::to_mask(A::Pizzicato);
+    auto acc = note_at(4 * Q, notation::quarter(), 3, 4);
+    acc.articulations = notation::to_mask(A::Accent);
+    score(t).insert_note(0, note_at(0, notation::quarter(), 0, 4));
+    score(t).insert_note(0, stac);
+    score(t).insert_note(0, note_at(2 * Q, notation::quarter(), 1, 4));
+    score(t).insert_note(0, pizz);
+    score(t).insert_note(0, acc);
+
+    notation::ExpressionMap m = notation::make_default_expression_map();
+    m.name = "Strings KS";
+    notation::ArticulationRule ks;
+    ks.articulation = A::Staccato;
+    ks.action = notation::ArticulationAction::Keyswitch;
+    ks.keyswitch_note = 25;
+    m.set_rule(ks);
+    notation::ArticulationRule prog;
+    prog.articulation = A::Pizzicato;
+    prog.action = notation::ArticulationAction::ProgramChange;
+    prog.program = 45;
+    m.set_rule(prog);
+    notation::ArticulationRule chan;
+    chan.articulation = A::Accent;
+    chan.action = notation::ArticulationAction::Channel;
+    chan.channel = 5;
+    m.set_rule(chan);
+    m.has_natural = true;
+    m.natural.action = notation::ArticulationAction::Keyswitch;
+    m.natural.keyswitch_note = 24;
+    t.articulation_map = m;
+    t.expression_map = m.name;
+
+    const auto r = project::render_track(t);
+    // Every note carries its own switch: natural (24), staccato (25), natural, then pizzicato's program.
+    std::vector<int> switches;
+    for (const auto& k : r.keyswitches) switches.push_back(k.pitch);
+    CHECK(switches == (std::vector<int>{24, 25, 24}));
+    int programs = 0;
+    for (const auto& c : r.controllers)
+        if (c.controller == kProgramChangeController) {
+            ++programs;
+            CHECK_EQ(c.value, 45);
+            CHECK(c.tick <= 3 * Q);
+        }
+    CHECK_EQ(programs, 1);
+    // The accented note plays on channel 5 (index 4); the others on the track's.
+    REQUIRE(r.notes.size() == 5u);
+    CHECK_EQ(r.notes[4].channel, 4);
+    CHECK_EQ(r.notes[0].channel, 0);
+
+    // Velocity layer: squeezed into 100..127.
+    notation::ArticulationRule layer;
+    layer.articulation = A::Accent;
+    layer.action = notation::ArticulationAction::VelocityRange;
+    layer.velocity_min = 100;
+    layer.velocity_max = 127;
+    t.articulation_map->set_rule(layer);
+    const auto r2 = project::render_track(t);
+    CHECK(r2.notes[4].velocity >= 100);
+    CHECK_EQ(r2.notes[4].channel, 0);
+
+    // The cache re-renders when the map's contents change, not only its name.
+    project::RenderCache cache;
+    cache.render(t);
+    t.articulation_map->natural.keyswitch_note = 23;
+    const auto r3 = cache.render(t);
+    CHECK(cache.last().kind == RenderStats::Kind::Full);
+    CHECK_EQ(r3.keyswitches.front().pitch, 23);
+
+    // JSON round trip; invalid documents refused.
+    const auto doc = project::expression_map_to_json(*t.articulation_map);
+    const auto back = project::expression_map_from_json(doc);
+    REQUIRE(back.has_value());
+    CHECK(project::expression_map_to_json(*back) == doc);
+    auto bad = doc;
+    bad.set("dynamic_target", "loudly");
+    CHECK(!project::expression_map_from_json(bad).has_value());
+
+    // Health: a harmonic written and not mapped; a template intent unmapped.
+    auto ten = note_at(5 * Q, notation::quarter(), 4, 4);
+    ten.articulations = notation::to_mask(A::Harmonic);
+    score(t).insert_note(0, ten);
+    t.articulation_intents = {"tremolo", "pizzicato", "growl"};
+    auto h = project::map_health(t);
+    CHECK(h.unheard == std::vector<std::string>{"harmonic"});
+    CHECK(h.unmapped_intents == std::vector<std::string>{"tremolo"});  // growl is not a notated articulation
+    CHECK(!h.missing_natural);
+    t.articulation_map->has_natural = false;
+    CHECK(project::map_health(t).missing_natural);
+    CHECK(project::map_health(t).summary().find("natural") != std::string::npos);
+}

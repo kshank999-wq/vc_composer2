@@ -153,6 +153,9 @@ juce::String LibraryService::assign(const library::Entry& e, const std::string& 
     }
     if (!same && !fallback) how.message += " (it was made for another instrument)";
     if (!context_.session.assign_sound(track_id, ref, how, map)) return "The track is locked (approved)";
+    if (e.kind == library::EntryKind::UserPatch)
+        if (const auto* p = lib_.find_patch(e.key.substr(6)); p && p->articulation_map)
+            context_.session.set_articulation_map(track_id, p->articulation_map);
     if (e.kind != library::EntryKind::UserPatch && context_.show_plugin_window) context_.show_plugin_window(track_id);
     return "Assigned " + juce::String(e.display) + " to " + juce::String(t->name);
 }
@@ -173,6 +176,7 @@ std::string LibraryService::save_track_sound(const std::string& track_id, const 
     p.instrument_id = t->instrument_standard_id;
     p.articulations = t->articulation_intents;
     p.expression_map = t->expression_map;
+    p.articulation_map = t->articulation_map;
     p.validation = "verified";
     const auto id = lib_.add_patch(p);
     changed();

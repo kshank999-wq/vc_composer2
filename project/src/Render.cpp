@@ -5,6 +5,7 @@
 #include <map>
 
 #include "vcc/notation/MidiRenderer.h"
+#include "vcc/project/ArticulationMap.h"
 
 namespace vcc::project {
 
@@ -16,7 +17,7 @@ notation::ExpressionMap expression_map_named(const std::string& name)
 
 RenderedTrack render_track(const Track& track, bool performance)
 {
-    return render_track(track, expression_map_named(track.expression_map), performance);
+    return render_track(track, expression_map_for(track), performance);
 }
 
 NoteEvent apply_override(NoteEvent note, const NoteOverride& o) noexcept
@@ -130,6 +131,11 @@ RenderedTrack finish_render(const Track& track, const notation::ExpressionMap& m
                 }
                 notes.emplace_back(n, start->source_id);
             }
+        } else if (m.type == music::MidiEventType::ProgramChange) {
+            // An articulation map's program switch: it leads its note.
+            ControllerEvent c{e.tick, static_cast<int>(m.channel), kProgramChangeController, m.data1};
+            if (o) c.tick = std::max<Ticks>(0, c.tick + o->onset);
+            out.controllers.push_back(c);
         } else if (m.type == music::MidiEventType::ControlChange) {
             ControllerEvent c{e.tick, static_cast<int>(m.channel), m.data1, m.data2};
             if (o) {  // a controller the note itself sends (an articulation CC)

@@ -38,6 +38,8 @@ bool operator<(const NoteEvent& a, const NoteEvent& b) noexcept;
 /// MIDI messages, not control changes.
 constexpr int kPitchBendController = 128;
 constexpr int kChannelPressureController = 129;
+/// A program change (value 0..127): an articulation map's program switch.
+constexpr int kProgramChangeController = 130;
 /// The largest value a controller number carries.
 constexpr int controller_max(int controller) noexcept { return controller == kPitchBendController ? 16383 : 127; }
 

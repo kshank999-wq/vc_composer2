@@ -145,6 +145,11 @@ public:
     /// plug-in (with its state), how the track's request was met (shown in
     /// the inspector; nothing is resolved silently) and, when given, the
     /// articulation map. One undo step, "Assign <patch>".
+    /// Gives a track its own articulation map (Main Spec §11), or - with no
+    /// map - plays it through a built-in one by name. One undo step,
+    /// "Articulation map".
+    bool set_articulation_map(const std::string& track_id, const std::optional<notation::ExpressionMap>& map,
+                              const std::string& builtin = "default");
     bool assign_sound(const std::string& track_id, const project::PluginRef& plugin,
                       const project::InstrumentAssignment& how, const std::string& expression_map = {});
     /// Stores a plug-in's state without an undo step (it changes whenever the

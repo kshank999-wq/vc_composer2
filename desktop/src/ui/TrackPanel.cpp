@@ -1,5 +1,6 @@
 #include "ui/TrackPanel.h"
 
+#include "ui/library/ArticulationMapWindow.h"
 #include "ui/library/LibraryBrowser.h"
 
 #include "ui/Deferred.h"
@@ -456,6 +457,7 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
     m.addSubMenu("Instrument", instruments);
     m.addItem("Open instrument window", !t->instrument_plugin.empty(),
               false, [&c, id] { if (c.show_plugin_window) c.show_plugin_window(id); });
+    m.addItem("Articulation map...", [&c, id] { show_articulation_map(c, id); });
     // Trans (Add-On spec §10): the popover, at the pointer.
     {
         std::string why;

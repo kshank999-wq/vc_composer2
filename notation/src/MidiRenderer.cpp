@@ -222,15 +222,46 @@ void MidiRenderer::render_note(const Score& score, const Staff& staff, std::size
         length = kGraceTicks - kGraceTicks / 8;
     }
 
-    // Keyswitches and per-articulation controllers, ahead of the note.
-    for (const ArticulationRule& rule : map_.articulations) {
-        if (!has_articulation(note.articulations, rule.articulation))
+    // The rules that select this note's sound: its articulations' - or the
+    // map's natural switch when none of them selects one, so a keyswitch
+    // library comes back to its sustain after a staccato.
+    std::vector<const ArticulationRule*> switches;
+    for (const ArticulationRule& rule : map_.articulations)
+        if (has_articulation(note.articulations, rule.articulation) && selects_sound(rule.action))
+            switches.push_back(&rule);
+    if (switches.empty() && map_.has_natural && selects_sound(map_.natural.action))
+        switches.push_back(&map_.natural);
+
+    // Channel switching and velocity layers change the note itself.
+    std::uint8_t channel = options_.channel;
+    std::uint8_t note_velocity = velocity;
+    for (const ArticulationRule* rule : switches) {
+        if (rule->action == ArticulationAction::Channel)
+            channel = static_cast<std::uint8_t>(std::clamp<int>(rule->channel, 1, 16) - 1);
+        else if (rule->action == ArticulationAction::VelocityRange) {
+            const int lo = rule->velocity_min, hi = std::max<int>(rule->velocity_min, rule->velocity_max);
+            note_velocity = static_cast<std::uint8_t>(lo + ((velocity - 1) * (hi - lo) + 63) / 126);
+        }
+    }
+
+    // Keyswitches, controllers and program changes, ahead of the note.
+    for (const ArticulationRule* rule_ptr : switches) {
+        const ArticulationRule& rule = *rule_ptr;
+        if (rule.action == ArticulationAction::ProgramChange) {
+            TimedMidiEvent program;
+            program.tick = std::max<Ticks>(0, sounding_start - options_.keyswitch_lead_ticks);
+            program.event = music::make_program_change(channel, rule.program);
+            program.source_id = note.id;
+            program.role = EventRole::Keyswitch;
+            result.events.push_back(program);
+            ++result.keyswitch_count;
             continue;
+        }
 
         if (rule.action == ArticulationAction::Keyswitch && options_.render_keyswitches) {
             TimedMidiEvent keyswitch;
             keyswitch.tick = std::max<Ticks>(0, sounding_start - options_.keyswitch_lead_ticks);
-            keyswitch.event = music::make_note_on(options_.channel, rule.keyswitch_note,
+            keyswitch.event = music::make_note_on(channel, rule.keyswitch_note,
                                                   rule.keyswitch_velocity);
             keyswitch.source_id = note.id;
             keyswitch.role = EventRole::Keyswitch;
@@ -241,14 +272,14 @@ void MidiRenderer::render_note(const Score& score, const Staff& staff, std::size
             // or latch the wrong articulation in some instruments.
             TimedMidiEvent release;
             release.tick = keyswitch.tick + 1;
-            release.event = music::make_note_off(options_.channel, rule.keyswitch_note, 0);
+            release.event = music::make_note_off(channel, rule.keyswitch_note, 0);
             release.source_id = note.id;
             release.role = EventRole::Keyswitch;
             result.events.push_back(release);
         } else if (rule.action == ArticulationAction::ControlChange) {
             TimedMidiEvent controller;
             controller.tick = std::max<Ticks>(0, sounding_start - 1);
-            controller.event = music::make_control_change(options_.channel, rule.cc_number,
+            controller.event = music::make_control_change(channel, rule.cc_number,
                                                           rule.cc_value);
             controller.source_id = note.id;
             controller.role = EventRole::Controller;
@@ -279,14 +310,14 @@ void MidiRenderer::render_note(const Score& score, const Staff& staff, std::size
 
     TimedMidiEvent note_on;
     note_on.tick = sounding_start;
-    note_on.event = music::make_note_on(options_.channel, static_cast<std::uint8_t>(sounding),
-                                        velocity);
+    note_on.event = music::make_note_on(channel, static_cast<std::uint8_t>(sounding),
+                                        note_velocity);
     note_on.source_id = note.id;
     result.events.push_back(note_on);
 
     TimedMidiEvent note_off;
     note_off.tick = sounding_start + length;
-    note_off.event = music::make_note_off(options_.channel, static_cast<std::uint8_t>(sounding), 0);
+    note_off.event = music::make_note_off(channel, static_cast<std::uint8_t>(sounding), 0);
     note_off.source_id = note.id;
     result.events.push_back(note_off);
 

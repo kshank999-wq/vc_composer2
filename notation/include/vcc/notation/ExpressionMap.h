@@ -55,7 +55,20 @@ enum class ArticulationAction : std::uint8_t {
     ControlChange,
     /// Both a velocity and a length change, for combinations like marcato.
     ScaleVelocityAndLength,
+    /// A program change before the note, for libraries that load each
+    /// articulation as a program.
+    ProgramChange,
+    /// Play the note on another MIDI channel, for multis that hold one
+    /// articulation per channel (Main Spec §11 "channel switching").
+    Channel,
+    /// Squeeze the note's velocity into a range, for libraries that pick
+    /// the articulation by velocity layer.
+    VelocityRange,
 };
+
+/// True for actions that select a sound (keyswitch, controller, program,
+/// channel, velocity layer) rather than shape the note.
+bool selects_sound(ArticulationAction action) noexcept;
 
 const char* to_string(ArticulationAction action) noexcept;
 
@@ -81,6 +94,15 @@ struct ArticulationRule {
     /// Controller and value, for `ControlChange`.
     std::uint8_t cc_number = 0;
     std::uint8_t cc_value = 0;
+
+    /// Program number (0-127), for `ProgramChange`.
+    std::uint8_t program = 0;
+    /// MIDI channel 1-16, for `Channel`.
+    std::uint8_t channel = 1;
+    /// Velocity layer, for `VelocityRange`: velocities 1-127 are scaled into
+    /// velocity_min..velocity_max.
+    std::uint8_t velocity_min = 1;
+    std::uint8_t velocity_max = 127;
 
     bool is_valid() const noexcept;
 };
@@ -122,6 +144,14 @@ struct ExpressionMap {
     // --- Articulations ------------------------------------------------------
 
     std::vector<ArticulationRule> articulations;
+
+    /// The "natural" switch: sent before a note none of whose articulations
+    /// select a sound, so a library returns to its sustain after a
+    /// staccato. Without it a keyswitch library would stay on the last
+    /// articulation (and playback started mid-way would depend on what was
+    /// sent before). Its `articulation` is not used.
+    bool has_natural = false;
+    ArticulationRule natural;
 
     // --- Note length --------------------------------------------------------
 

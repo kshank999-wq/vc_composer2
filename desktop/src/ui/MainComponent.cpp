@@ -4,6 +4,8 @@
 #include "ui/console/RoutingCanvas.h"
 #include "ui/review/Review.h"
 #include "ui/review/Relink.h"
+#include "ui/library/ArticulationMapWindow.h"
+#include "ui/library/LibraryBrowser.h"
 #include "vcc/theory/Chord.h"
 
 #include "ui/hw/HwGallery.h"
@@ -336,6 +338,10 @@ MainComponent::MainComponent(AppContext& context)
     context_.show_insert_window = [this](const std::string& owner, int slot) { show_insert_window(owner, slot); };
     context_.capture_plugin_states = [this] { capture_plugin_states(); };
     context_.show_comment = [this](const std::string& id) { review::show_comments(context_, id); };
+    context_.show_library_for_track = [this] {
+        tracks_.show_library(true);
+        tracks_.library().set_view(LibraryBrowser::View::ForTrack);
+    };
 
     listener_ = context_.session.add_listener([this](session::Change c) {
         // A MIDI keyboard plays whichever track is selected.
@@ -454,6 +460,7 @@ MainComponent::~MainComponent()
     context_.show_insert_window = nullptr;
     context_.capture_plugin_states = nullptr;
     context_.show_comment = nullptr;
+    context_.show_library_for_track = nullptr;
 }
 
 void MainComponent::paint(juce::Graphics& g) { g.fillAll(hw::tok::chassis); }
@@ -800,6 +807,8 @@ void MainComponent::open_file(const juce::File& file)
                     (missing > 0 ? " - " + juce::String(static_cast<int>(missing)) +
                                        " media file(s) missing: File > Relink Missing Media... finds them"
                                  : juce::String()));
+    // Plug-ins not installed here: say which, and offer substitutes (never silently).
+    show_missing_instruments(context_);
 }
 
 void MainComponent::capture_plugin_states()
@@ -1566,7 +1575,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::about, cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool,
                 cmd::showCircleOfFifths, cmd::toggleStaffTools, cmd::detachStaffTools, cmd::showRouting,
                 cmd::showControlSurfaces, cmd::jogForward, cmd::jogBack, cmd::showReview,
-                cmd::collectPackage, cmd::openPackage, cmd::showComments, cmd::addComment, cmd::relinkMedia});
+                cmd::collectPackage, cmd::openPackage, cmd::showComments, cmd::addComment, cmd::relinkMedia,
+                cmd::articulationMap, cmd::missingInstruments});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1723,6 +1733,13 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::removeTrack: info.setInfo("Remove Track", "", "Track", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); break;
         case cmd::loadInstrument: info.setInfo("Instrument...", "", "Track", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); break;
         case cmd::openInstrumentWindow: info.setInfo("Open Instrument Window", "", "Track", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); break;
+        case cmd::articulationMap:
+            info.setInfo("Articulation Map...", "How written articulations reach the instrument: keyswitches, controllers...",
+                         "Track", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            break;
+        case cmd::missingInstruments:
+            info.setInfo("Missing Instruments...", "Plug-ins this project uses that are not installed here", "Track", 0);
+            break;
         case cmd::audioSettings: info.setInfo("Audio and MIDI Settings...", "", "Tools", 0); info.addDefaultKeypress(',', cmdKey); break;
         case cmd::scanPlugins: info.setInfo("Plug-ins...", "", "Tools", 0); break;
         case cmd::reloadCrashedPlugins:
@@ -1794,6 +1811,12 @@ bool MainComponent::perform(const InvocationInfo& info)
             break;
         case cmd::collectPackage: review::show_package(context_); break;
         case cmd::relinkMedia: review::show_relink(context_); break;
+        case cmd::articulationMap:
+            if (!s.selected_track().empty()) show_articulation_map(context_, s.selected_track());
+            break;
+        case cmd::missingInstruments:
+            if (show_missing_instruments(context_) == 0) context_.status("Every instrument plug-in this project uses is installed");
+            break;
         case cmd::openPackage:
             if (!confirm_discard()) break;
             chooser_ = std::make_unique<juce::FileChooser>("Open package", juce::File(), "*.zip");
@@ -1942,7 +1965,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             for (auto id : {cmd::addTrack, cmd::addAudioTrack}) m.addCommandItem(c, id);
             for (auto id : {cmd::addAuxBus, cmd::addGroupBus}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::duplicateVersion, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::removeTrack})
+            for (auto id : {cmd::duplicateVersion, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::articulationMap,
+                            cmd::missingInstruments, cmd::removeTrack})
                 m.addCommandItem(c, id);
             m.addSeparator();
             m.addItem("Check Instrument Ranges...", [this] { TrackPanel::show_range_report(context_, {}); });

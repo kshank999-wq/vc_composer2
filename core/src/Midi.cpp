@@ -141,6 +141,9 @@ std::string write_midi_file(const std::vector<MidiFileTrack>& tracks, const Midi
             } else if (c.controller == kChannelPressureController) {
                 ev.push_back({to_file_ticks(c.tick), 0,
                               {static_cast<std::uint8_t>(0xD0 | ch), static_cast<std::uint8_t>(std::clamp(c.value, 0, 127))}});
+            } else if (c.controller == kProgramChangeController) {
+                ev.push_back({to_file_ticks(c.tick), 0,
+                              {static_cast<std::uint8_t>(0xC0 | ch), static_cast<std::uint8_t>(std::clamp(c.value, 0, 127))}});
             } else {
                 ev.push_back({to_file_ticks(c.tick), 0,
                               {static_cast<std::uint8_t>(0xB0 | ch), static_cast<std::uint8_t>(std::clamp(c.controller, 0, 127)),

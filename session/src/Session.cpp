@@ -474,6 +474,17 @@ bool Session::set_instrument_plugin(const std::string& id, const project::Plugin
     }));
 }
 
+bool Session::set_articulation_map(const std::string& id, const std::optional<notation::ExpressionMap>& map,
+                                   const std::string& builtin)
+{
+    if (map && !map->is_valid()) return false;
+    return edit("Articulation map", on_track(id, [&](project::Track& t) {
+        t.articulation_map = map;
+        t.expression_map = map ? map->name : builtin;
+        return true;
+    }));
+}
+
 bool Session::assign_sound(const std::string& id, const project::PluginRef& plugin, const project::InstrumentAssignment& how,
                            const std::string& expression_map)
 {

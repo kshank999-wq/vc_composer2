@@ -156,6 +156,12 @@ TEST_CASE("library: saved patches persist, travel in mapping packs and drive tem
     p.articulations = {"legato", "long", "spiccato"};
     p.expression_map = "orchestral_cc";
     p.validation = "verified";
+    notation::ExpressionMap ks = notation::make_default_expression_map();
+    ks.name = "BBC celli KS";
+    ks.has_natural = true;
+    ks.natural.action = notation::ArticulationAction::Keyswitch;
+    ks.natural.keyswitch_note = 24;
+    p.articulation_map = ks;
     const auto id = lib.add_patch(p);
     lib.set_favorite("patch:" + id, true);
     lib.library_folders().push_back("/Volumes/Samples");
@@ -196,7 +202,24 @@ TEST_CASE("library: saved patches persist, travel in mapping packs and drive tem
             CHECK(t.assignment.status == project::ResolutionStatus::Exact);
             CHECK_EQ(t.instrument_plugin.name, std::string("BBC Symphony Orchestra"));
             CHECK_EQ(t.instrument_plugin.state_base64, std::string("c3RhdGU="));
-            CHECK_EQ(t.expression_map, std::string("orchestral_cc"));
+            REQUIRE(t.articulation_map.has_value());
+            CHECK_EQ(t.articulation_map->name, std::string("BBC celli KS"));
         }
     CHECK(found);
+    // The map is saved with the project and played after reopening.
+    const std::string path = std::string(VCC_TEST_TMP_DIR) + "/map-project.vcc2";
+    REQUIRE(s.save_as(path));
+    session::Session r(catalogs());
+    REQUIRE(r.open(path));
+    for (const auto& t : r.data().tracks)
+        if (t.instrument_standard_id == "strings.celli") {
+            REQUIRE(t.articulation_map.has_value());
+            CHECK(t.articulation_map->has_natural);
+            CHECK_EQ(static_cast<int>(t.articulation_map->natural.keyswitch_note), 24);
+        }
+    // And through a mapping pack.
+    library::Library packed(catalogs().instruments);
+    packed.import_pack(lib.export_pack("with map"));
+    REQUIRE(packed.patches().size() == 1u);
+    CHECK(packed.patches()[0].articulation_map.has_value());
 }

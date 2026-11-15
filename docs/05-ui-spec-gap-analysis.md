@@ -1597,3 +1597,34 @@ macOS, Linux and Windows. What it took:
     - **Tests**: `test_library` (catalog, installed/detected/known,
       inference, search, ranking, persistence, packs, template building);
       `library_checks` in the desktop check.
+39. **Articulation mapping. Done** (November 15, 2026; Main Spec §8, §11).
+    - **The map model** (`vcc/notation/ExpressionMap.h`) gains program
+      change, MIDI channel switching and velocity layers beside
+      keyswitches, controllers and velocity/length shaping, and a
+      **natural** switch sent before plain notes - without it a keyswitch
+      library stayed on the last articulation after a staccato. Every
+      switch is sent before each note, so playback started anywhere chases
+      the right sound. Program changes reach the engine and MIDI files.
+    - **A track's own map** (`Track::articulation_map`,
+      `vcc/project/ArticulationMap.h`) is saved in the project (JSON), so it
+      plays the same on any machine; the render cache keys on its contents.
+      Saved library patches carry their map, mapping packs too, and
+      templates resolved to a patch get it.
+    - **Track > Articulation Map...**: a row per articulation plus Natural;
+      each picks keyswitch, controller, program change, MIDI channel,
+      velocity layer or a velocity/length shape, with its values. **Learn**
+      takes the next key, controller or program from a MIDI keyboard (the
+      engine captures it instead of playing it). Start from a built-in
+      map; dynamics on velocity, a controller or both. **Health**: what is
+      written but not heard, template techniques without a rule, a missing
+      natural switch. Apply is one undo step; Apply + save to patch also
+      keeps it with the track's saved library patch.
+    - **Missing instruments**: a project whose plug-ins are not installed
+      here opens with Track > Missing Instruments listing them, the
+      placeholder playing and the plug-in states kept; Find substitute
+      shows the library browser's candidates for that track. Nothing is
+      remapped silently.
+    - **Tests**: `test_render_cache` (natural, program, channel, velocity
+      layers, cache keying, JSON, health), `test_library` (maps through
+      patches, templates, saving, packs); `articulation_map_checks` in the
+      desktop check.

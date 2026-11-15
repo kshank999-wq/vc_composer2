@@ -212,6 +212,7 @@ struct InstalledPatch {
     /// the track the patch resolves, with its articulation map.
     project::PluginRef plugin;
     std::string expression_map;
+    std::optional<notation::ExpressionMap> articulation_map;
 };
 
 struct Resolution {

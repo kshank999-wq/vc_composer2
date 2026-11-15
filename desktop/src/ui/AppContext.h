@@ -45,6 +45,9 @@ struct AppContext {
     std::function<void(const std::string& comment_id)> show_comment;
     /// The library browser's library (Main Spec §10; owned by the main window).
     LibraryService* library = nullptr;
+    /// Shows the library browser's candidates for the selected track (set
+    /// by the main window).
+    std::function<void()> show_library_for_track;
 };
 
 /// Application commands (menus, toolbar buttons and key bindings).
@@ -118,6 +121,8 @@ enum : juce::CommandID {
     addComment,
     exportReviewMixes,
     relinkMedia,
+    articulationMap,
+    missingInstruments,
 };
 }  // namespace cmd
 

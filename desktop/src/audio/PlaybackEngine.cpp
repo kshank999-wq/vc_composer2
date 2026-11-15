@@ -281,6 +281,10 @@ std::vector<Event> to_events(const std::vector<NoteEvent>& notes, const std::vec
             e.bytes[0] = static_cast<std::uint8_t>(0xE0 | ch);
             e.bytes[1] = static_cast<std::uint8_t>(v & 0x7F);
             e.bytes[2] = static_cast<std::uint8_t>((v >> 7) & 0x7F);
+        } else if (c.controller == kProgramChangeController) {
+            e.bytes[0] = static_cast<std::uint8_t>(0xC0 | ch);
+            e.bytes[1] = static_cast<std::uint8_t>(juce::jlimit(0, 127, c.value));
+            e.size = 2;
         } else if (c.controller == kChannelPressureController) {
             e.bytes[0] = static_cast<std::uint8_t>(0xD0 | ch);
             e.bytes[1] = static_cast<std::uint8_t>(juce::jlimit(0, 127, c.value));
@@ -908,6 +912,8 @@ public:
     {
         // A control surface's jog, shuttle and keys never play or record.
         if (engine_.surface_input().take(source ? source->getIdentifier() : juce::String(), m)) return;
+        // The Articulation Map window learning a keyswitch, controller or program.
+        if (engine_.offer_learn(m)) return;
         // The deck's Octave keys shift what a MIDI keyboard plays.
         juce::MidiMessage shifted = m;
         if ((m.isNoteOn() || m.isNoteOff()) && engine_.live_octave() != 0) {

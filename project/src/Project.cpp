@@ -1,5 +1,7 @@
 #include "vcc/project/Project.h"
 
+#include "vcc/project/ArticulationMap.h"
+
 #include "vcc/project/Automation.h"
 
 #include <algorithm>
@@ -866,6 +868,7 @@ json::Value Project::to_json() const
                                          {"unsupported_articulations", string_array(a.unsupported_articulations)},
                                          {"message", a.message}});
         o.set("expression_map", t.expression_map);
+        if (t.articulation_map) o.set("articulation_map", expression_map_to_json(*t.articulation_map));
         if (!t.instrument_plugin.empty())
             o.set("instrument_plugin", json::Object{{"format", t.instrument_plugin.format},
                                                     {"identifier", t.instrument_plugin.identifier},
@@ -1149,6 +1152,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
             t.assignment.message = a->get_string("message");
         }
         t.expression_map = j.get_string("expression_map", "default");
+        if (const auto* am = j.get("articulation_map")) t.articulation_map = expression_map_from_json(*am);
         if (const auto* pj = j.get("instrument_plugin")) t.instrument_plugin = plugin_from_json(*pj);
         t.output_bus_id = j.get_string("output_bus_id");
         t.sends = sends_from_json(j.get("sends"));
@@ -1225,7 +1229,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
                     ControllerEvent e;
                     e.tick = a[0].as_int();
                     e.channel = std::clamp(static_cast<int>(a[1].as_int()), 0, 15);
-                    e.controller = std::clamp(static_cast<int>(a[2].as_int()), 0, kChannelPressureController);
+                    e.controller = std::clamp(static_cast<int>(a[2].as_int()), 0, kProgramChangeController);
                     e.value = std::clamp(static_cast<int>(a[3].as_int()), 0, controller_max(e.controller));
                     r.controllers.push_back(e);
                 }

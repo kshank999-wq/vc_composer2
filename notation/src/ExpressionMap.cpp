@@ -22,9 +22,19 @@ const char* to_string(ArticulationAction action) noexcept
         case ArticulationAction::ScaleLength:            return "scale length";
         case ArticulationAction::Keyswitch:              return "keyswitch";
         case ArticulationAction::ControlChange:          return "control change";
+        case ArticulationAction::ProgramChange:          return "program change";
+        case ArticulationAction::Channel:                return "channel";
+        case ArticulationAction::VelocityRange:          return "velocity range";
         case ArticulationAction::ScaleVelocityAndLength: break;
     }
     return "scale velocity + length";
+}
+
+bool selects_sound(ArticulationAction action) noexcept
+{
+    return action == ArticulationAction::Keyswitch || action == ArticulationAction::ControlChange ||
+           action == ArticulationAction::ProgramChange || action == ArticulationAction::Channel ||
+           action == ArticulationAction::VelocityRange;
 }
 
 bool dynamic_target_from_string(const std::string& text, DynamicTarget& out) noexcept
@@ -45,7 +55,8 @@ bool articulation_action_from_string(const std::string& text, ArticulationAction
     static const ArticulationAction actions[] = {
         ArticulationAction::ScaleVelocity, ArticulationAction::ScaleLength,
         ArticulationAction::Keyswitch, ArticulationAction::ControlChange,
-        ArticulationAction::ScaleVelocityAndLength};
+        ArticulationAction::ScaleVelocityAndLength, ArticulationAction::ProgramChange,
+        ArticulationAction::Channel, ArticulationAction::VelocityRange};
     for (const ArticulationAction action : actions) {
         if (text == to_string(action)) {
             out = action;
@@ -69,6 +80,12 @@ bool ArticulationRule::is_valid() const noexcept
     // A keyswitch rule with velocity 0 would send a note-off, which selects
     // nothing and silently does the opposite of what was intended.
     if (action == ArticulationAction::Keyswitch && keyswitch_velocity == 0)
+        return false;
+    if (program > 127)
+        return false;
+    if (action == ArticulationAction::Channel && (channel < 1 || channel > 16))
+        return false;
+    if (velocity_min < 1 || velocity_max > 127 || velocity_min > velocity_max)
         return false;
 
     return true;
@@ -137,6 +154,8 @@ bool ExpressionMap::is_valid() const noexcept
         if (!rule.is_valid())
             return false;
     }
+    if (has_natural && !natural.is_valid())
+        return false;
     return true;
 }
 

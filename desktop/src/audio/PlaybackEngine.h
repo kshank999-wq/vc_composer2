@@ -179,6 +179,33 @@ public:
     MidiOutRouter& midi_router() noexcept { return *midi_router_; }
     /// A control surface's MIDI: offered every incoming message first.
     SurfaceInput& surface_input() noexcept { return surface_input_; }
+
+    // --- Learn (Articulation Map window) -----------------------------------------
+    /// The next note-on, controller or program change from any MIDI input is
+    /// captured (not played) and handed to take_learned().
+    void arm_learn() noexcept { learned_.store(0, std::memory_order_relaxed); learn_armed_.store(true); }
+    void cancel_learn() noexcept { learn_armed_.store(false); }
+    bool learning() const noexcept { return learn_armed_.load(); }
+    /// MIDI thread (or a check): true when the message was taken.
+    bool offer_learn(const juce::MidiMessage& m) noexcept
+    {
+        if (!learn_armed_.load(std::memory_order_acquire)) return false;
+        if (!(m.isNoteOn() || m.isController() || m.isProgramChange())) return m.isNoteOff();
+        const auto* d = m.getRawData();
+        const std::uint32_t packed = 0x1000000u | (std::uint32_t(d[0]) << 16) | (std::uint32_t(d[1]) << 8) |
+                                     (m.getRawDataSize() > 2 ? d[2] : 0u);
+        learned_.store(packed, std::memory_order_release);
+        learn_armed_.store(false, std::memory_order_release);
+        return true;
+    }
+    /// Message thread: the captured message's three bytes, once.
+    std::optional<std::array<std::uint8_t, 3>> take_learned() noexcept
+    {
+        const std::uint32_t v = learned_.exchange(0, std::memory_order_acq_rel);
+        if (!(v & 0x1000000u)) return std::nullopt;
+        return std::array<std::uint8_t, 3>{std::uint8_t((v >> 16) & 0xFF), std::uint8_t((v >> 8) & 0xFF),
+                                           std::uint8_t(v & 0xFF)};
+    }
     /// Turns on a MIDI input plugged in after the device was opened.
     void enable_midi_input(const juce::String& identifier)
     {
@@ -570,6 +597,8 @@ private:
     std::string live_track_;
     std::atomic<int> live_track_index_{-1};
     SurfaceInput surface_input_;
+    std::atomic<bool> learn_armed_{false};
+    std::atomic<std::uint32_t> learned_{0};
     // Varispeed: the mix rendered into this at rate x the block, then resampled.
     void process_varispeed(float* const* outputs, int num_outputs, int num_samples) noexcept;
     std::atomic<double> varispeed_{1.0};

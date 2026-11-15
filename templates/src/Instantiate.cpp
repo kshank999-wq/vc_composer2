@@ -341,6 +341,7 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
             if (r.patch && !r.patch->plugin.empty()) {
                 t.instrument_plugin = r.patch->plugin;
                 if (!r.patch->expression_map.empty()) t.expression_map = r.patch->expression_map;
+                if (r.patch->articulation_map) t.articulation_map = r.patch->articulation_map;
             }
             if (r.status != ResolutionStatus::Exact) warnings.push_back(t.name + ": " + r.message);
             else if (!r.unsupported_articulations.empty()) {

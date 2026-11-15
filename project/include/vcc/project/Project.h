@@ -34,6 +34,7 @@
 #include "vcc/core/Json.h"
 #include "vcc/core/Midi.h"
 #include "vcc/core/Time.h"
+#include "vcc/notation/ExpressionMap.h"
 #include "vcc/notation/Score.h"
 
 namespace vcc::project {
@@ -295,6 +296,11 @@ struct Track {
     /// How notation becomes MIDI for this track's patch: "default" or
     /// "orchestral_cc" (built in), or a user map by name.
     std::string expression_map = "default";
+    /// The track's own articulation map (Main Spec §11), edited in the
+    /// Articulation Map window or brought by a library patch; saved with the
+    /// project so it plays the same anywhere. When set, `expression_map`
+    /// is its name and this is what plays.
+    std::optional<notation::ExpressionMap> articulation_map;
     /// Instrument plug-in; empty means the built-in placeholder plays.
     PluginRef instrument_plugin;
     std::string output_bus_id;

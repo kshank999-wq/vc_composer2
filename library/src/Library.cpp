@@ -6,6 +6,8 @@
 #include <map>
 #include <system_error>
 
+#include "vcc/project/ArticulationMap.h"
+
 namespace vcc::library {
 
 namespace fs = std::filesystem;
@@ -90,6 +92,7 @@ json::Value patch_json(const UserPatch& p, bool with_state)
     o.set("instrument", p.instrument_id);
     o.set("articulations", strings(p.articulations));
     o.set("expression_map", p.expression_map);
+    if (p.articulation_map) o.set("articulation_map", project::expression_map_to_json(*p.articulation_map));
     o.set("validation", p.validation);
     o.set("tags", strings(p.tags));
     return o;
@@ -107,6 +110,7 @@ UserPatch patch_from(const json::Value& o)
     p.instrument_id = o.get_string("instrument");
     p.articulations = o.get_string_array("articulations");
     p.expression_map = o.get_string("expression_map", "default");
+    if (const auto* am = o.get("articulation_map")) p.articulation_map = project::expression_map_from_json(*am);
     p.validation = o.get_string("validation", "user");
     p.tags = o.get_string_array("tags");
     return p;
@@ -551,6 +555,7 @@ std::vector<templates::InstalledPatch> Library::installed_patches() const
         if (const auto* up = find_patch(p.patch_id)) {
             p.plugin = up->plugin;
             p.expression_map = up->expression_map;
+            p.articulation_map = up->articulation_map;
         }
         out.push_back(std::move(p));
     }
