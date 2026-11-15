@@ -67,9 +67,11 @@ public:
             const auto* t = context_.session.data().find_track(id_);
             if (t) context_.session.set_record_armed(id_, !t->record_armed);
         };
+        input_.setTitle("Input");
         input_.setTooltip("Input: the device channel(s) this track records");
         input_.setComponentID("input_" + juce::String(id_));
         input_.onChange = [this] { input_chosen(input_.getSelectedId()); };
+        monitor_.setTitle("Monitoring");
         monitor_.setTooltip("Monitoring: Auto hears the input while armed (stopped or recording); Input always; Off never");
         monitor_.setComponentID("monitor_" + juce::String(id_));
         monitor_.addItem("Auto", 1);
@@ -91,6 +93,7 @@ public:
         solo_.setTooltip("Solo");
         mute_.onClick = [this] { context_.session.set_mute(id_, mute_.getToggleState()); };
         solo_.onClick = [this] { context_.session.set_solo(id_, solo_.getToggleState()); };
+        version_.setTitle("Track version");
         version_.setTooltip("Track version (Main Spec 15): switch, or duplicate to try an alternative");
         version_.onChange = [this] {
             const int sel = version_.getSelectedId();

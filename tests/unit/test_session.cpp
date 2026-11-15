@@ -65,10 +65,11 @@ TEST_CASE("fader moves coalesce into one undo step; mute/solo decide audibility"
     auto tracks = s.music_tracks();
     REQUIRE(tracks.size() >= 2);
     std::string a = tracks[0]->id, b = tracks[1]->id;
+    const double gain_before = tracks[0]->gain_db;  // (pointers into the document do not outlive an edit)
     for (int i = 0; i < 50; ++i) s.set_gain(a, -0.2 * i);
     CHECK_NEAR(s.data().find_track(a)->gain_db, -9.8, 1e-9);
     REQUIRE(s.undo());
-    CHECK_NEAR(s.data().find_track(a)->gain_db, tracks[0]->gain_db, 1e-9);
+    CHECK_NEAR(s.data().find_track(a)->gain_db, gain_before, 1e-9);
     s.set_solo(b, true);
     CHECK(!s.audible(*s.data().find_track(a)));
     CHECK(s.audible(*s.data().find_track(b)));

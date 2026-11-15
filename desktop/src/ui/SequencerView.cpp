@@ -3024,6 +3024,7 @@ public:
     RegionNotatePanel(AppContext& ctx, std::string track, std::string region)
         : ctx_(ctx), track_(std::move(track)), region_(std::move(region))
     {
+        grid_.setTitle("Grid");
         grid_.addItem("Eighth notes", 1);
         grid_.addItem("Sixteenth notes", 2);
         grid_.addItem("32nd notes", 3);
@@ -3142,6 +3143,7 @@ public:
         style_scrollbar(vscroll_);
         vscroll_.addListener(this);
         addAndMakeVisible(snap_);
+        snap_.setTitle("Snap");
         snap_.addItem("Grid 1/4", 1);
         snap_.addItem("Grid 1/8", 2);
         snap_.addItem("Grid 1/16", 3);

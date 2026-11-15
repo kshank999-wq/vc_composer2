@@ -161,6 +161,7 @@ OstinatoCreator::OstinatoCreator(AppContext& c) : context_(c), target_(c, "New O
     preset_ids_ = presets.ids();
     for (std::size_t i = 0; i < preset_ids_.size(); ++i) {
         const auto* p = presets.find(preset_ids_[i]);
+        preset_.setTitle("Pattern preset");
         preset_.addItem(p ? utf8(p->get_string("name", preset_ids_[i])) : pretty(preset_ids_[i]), static_cast<int>(i) + 1);
     }
     // A sensible first preset for the target track's family.
@@ -181,7 +182,10 @@ OstinatoCreator::OstinatoCreator(AppContext& c) : context_(c), target_(c, "New O
     preset_.onChange = [this] { preset_changed(); };
 
     dialogs::fill_key_combos(tonic_, mode_, dialogs::project_key(c), false);
+    tonic_.setTitle("Key");
+    mode_.setTitle("Mode");
     tonic_.setTooltip("Key for the ostinato (the project key is not changed)");
+    follow_.setTitle("Follow progression");
     follow_.addItem("None (key only)", 1);
     const auto& progs = c.session.catalogs().progressions.all();
     for (std::size_t i = 0; i < progs.size(); ++i) follow_.addItem(utf8(progs[i].name), static_cast<int>(i) + 2);
@@ -198,9 +202,11 @@ OstinatoCreator::OstinatoCreator(AppContext& c) : context_(c), target_(c, "New O
         s->setIncDecButtonsMode(juce::Slider::incDecButtonsNotDraggable);
         addAndMakeVisible(*s);
     }
+    length_.setTitle("Length in bars");
     length_.setRange(1.0, 64.0, 1.0);
     length_.setValue(16.0, juce::dontSendNotification);
     length_.setTooltip("Length in bars");
+    start_.setTitle("Start bar");
     start_.setRange(1.0, 999.0, 1.0);
     start_.setValue(1.0, juce::dontSendNotification);
     start_.setTooltip("Bar the ostinato starts at");
@@ -212,6 +218,7 @@ OstinatoCreator::OstinatoCreator(AppContext& c) : context_(c), target_(c, "New O
     meter_.setTooltip("The project's meter at the start bar");
 
     addAndMakeVisible(seed_);
+    seed_.setTitle("Seed");
     seed_.setInputRestrictions(12, "0123456789");
     seed_.setText("1", false);
     seed_.setIndents(8, 5);
@@ -232,7 +239,9 @@ OstinatoCreator::OstinatoCreator(AppContext& c) : context_(c), target_(c, "New O
             if (!s->isMouseButtonDown()) generate();
         };
     }
+    density_.setTitle("Density");
     density_.setRange(5.0, 100.0, 1.0);
+    swing_.setTitle("Swing");
     swing_.setRange(0.0, 50.0, 1.0);
     density_.setTooltip("How many grid steps sound");
     swing_.setTooltip("Delay of every other grid step");

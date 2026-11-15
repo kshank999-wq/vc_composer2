@@ -169,6 +169,7 @@ bool natural_less(const std::string& a, const std::string& b)
 void style_editor(juce::TextEditor& e, const juce::String& id, const juce::String& hint = {})
 {
     e.setComponentID(id);
+    if (e.getTitle().isEmpty()) e.setTitle(hint.isNotEmpty() ? hint : id.replaceCharacter('_', ' '));
     e.setFont(juce::FontOptions(14.0f));
     e.setIndents(7, 5);
     e.setColour(juce::TextEditor::backgroundColourId, colours::panel_raised);
@@ -182,6 +183,7 @@ void style_editor(juce::TextEditor& e, const juce::String& id, const juce::Strin
 void style_combo(juce::ComboBox& c, const juce::String& id)
 {
     c.setComponentID(id);
+    if (c.getTitle().isEmpty()) c.setTitle(id.replaceCharacter('_', ' '));
     c.setColour(juce::ComboBox::backgroundColourId, colours::panel_raised);
     c.setColour(juce::ComboBox::outlineColourId, colours::outline);
     c.setColour(juce::ComboBox::textColourId, colours::text);

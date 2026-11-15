@@ -229,6 +229,7 @@ public:
         fullscreen_.onClick = [this] {
             if (auto* w = findParentComponentOfClass<juce::ResizableWindow>()) w->setFullScreen(!w->isFullScreen());
         };
+        cut_.setTitle("Picture cut");
         cut_.onChange = [this] {
             const int i = cut_.getSelectedItemIndex();
             const auto& pics = context_.session.data().pictures;

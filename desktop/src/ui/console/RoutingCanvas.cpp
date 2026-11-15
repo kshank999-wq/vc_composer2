@@ -45,6 +45,7 @@ RoutingCanvas::RoutingCanvas(AppContext& context) : context_(context)
     setTitle("Visual routing");
     setWantsKeyboardFocus(true);
     canvas_slot() = this;
+    search_.setTitle("Search tracks and buses");
     search_.setTextToShowWhenEmpty("Search tracks and buses", hw::tok::text.withAlpha(0.5f));
     search_.onReturnKey = [this] { search(search_.getText()); };
     search_.onTextChange = [this] { search(search_.getText()); };
@@ -58,8 +59,10 @@ RoutingCanvas::RoutingCanvas(AppContext& context) : context_(context)
 
     // The inspector: what the selected line carries.
     title_.setColour(juce::Label::textColourId, hw::tok::text_bright);
+    level_.setTitle("Send level");
     level_.setRange(-60.0, 12.0, 0.1);
     level_.setTextValueSuffix(" dB");
+    pan_slider_.setTitle("Send pan");
     pan_slider_.setRange(-1.0, 1.0, 0.01);
     pan_slider_.textFromValueFunction = [](double v) {
         const int p = juce::roundToInt(std::abs(v) * 100.0);

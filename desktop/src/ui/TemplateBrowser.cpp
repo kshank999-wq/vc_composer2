@@ -327,20 +327,24 @@ private:
 TemplateBrowser::TemplateBrowser(AppContext& c, bool for_new_project) : context_(c), for_new_project_(for_new_project)
 {
     addAndMakeVisible(search_);
+    search_.setTitle("Search templates");
     search_.setIndents(8, 8);
     search_.setTextToShowWhenEmpty("Search name, mood, region, composer, era...", colours::text_dim);
     search_.onTextChange = [this] { filter(); };
     search_.onReturnKey = [this] { list_.grabKeyboardFocus(); };
 
+    category_.setTitle("Category");
     for (std::size_t i = 0; i < categories().size(); ++i) category_.addItem(categories()[i].second, static_cast<int>(i) + 1);
     category_.setSelectedId(1, juce::dontSendNotification);
     std::set<std::string> variants;
     for (const auto& t : context_.session.catalogs().templates->all())
         if (!t.variant.empty()) variants.insert(t.variant);
     variants_.assign(variants.begin(), variants.end());
+    variant_.setTitle("Variant");
     variant_.addItem("Any variant", 1);
     for (std::size_t i = 0; i < variants_.size(); ++i) variant_.addItem(pretty(variants_[i]), static_cast<int>(i) + 2);
     variant_.setSelectedId(1, juce::dontSendNotification);
+    size_.setTitle("Ensemble size");
     size_.addItem("Any ensemble size", 1);
     size_.addItem("Small", 2);
     size_.addItem("Medium", 3);

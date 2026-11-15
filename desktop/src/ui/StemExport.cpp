@@ -42,6 +42,7 @@ public:
         sources_box_.setColour(juce::ListBox::backgroundColourId, colours::panel);
         addAndMakeVisible(sources_box_);
 
+        name_.setTitle("Stem name");
         name_.setTextToShowWhenEmpty("Stem name", colours::text_dim);
         name_.onReturnKey = name_.onFocusLost = [this] {
             if (auto* st = current(); st && name_.getText().trim().isNotEmpty() && st->name != name_.getText().trim().toStdString()) {
@@ -83,18 +84,23 @@ public:
         };
         for (auto* b : {&add_, &remove_, &defaults_}) addAndMakeVisible(b);
 
+        range_.setTitle("Range");
         range_.addItem("Whole project", 1);
         range_.addItem("Every cue", 2);
         range_.setSelectedId(context_.session.data().cues.empty() ? 1 : 2, juce::dontSendNotification);
         range_.onChange = [this] { update_preview(); };
+        rate_.setTitle("Sample rate");
         rate_.addItemList({"44100", "48000", "96000"}, 1);
         rate_.setSelectedId(2, juce::dontSendNotification);
+        depth_.setTitle("Bit depth");
         depth_.addItemList({"16-bit", "24-bit"}, 1);
         depth_.setSelectedId(2, juce::dontSendNotification);
+        tail_.setTitle("Tail in seconds");
         tail_.setText("3", juce::dontSendNotification);
         tail_.setInputRestrictions(4, "0123456789.");
         mix_.setButtonText("Print the full mix too");
         mix_.setToggleState(true, juce::dontSendNotification);
+        preset_.setTitle("File naming pattern");
         preset_.setText("{production}_{code}_{stem}_v{rev}", juce::dontSendNotification);
         preset_.onTextChange = [this] { update_preview(); };
         preview_.setColour(juce::Label::textColourId, colours::accent);

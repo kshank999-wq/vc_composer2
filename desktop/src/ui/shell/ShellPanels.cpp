@@ -902,6 +902,7 @@ void ChannelPanel::refresh()
         for (const auto& id : fx) {
             auto k = std::make_unique<hw::SmallKnob>();
             k->setRange(-60.0, 6.0, 0.1);
+            k->setTitle("Send to " + fx_names[sends_.size()]);
             k->setDoubleClickReturnValue(true, 0.0);
             k->setWantsKeyboardFocus(false);
             const std::string param = "send:" + id;

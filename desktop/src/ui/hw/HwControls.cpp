@@ -703,6 +703,7 @@ Wheel::Wheel(bool springs_back)
     : juce::Slider(juce::Slider::LinearVertical, juce::Slider::NoTextBox), springs_(springs_back)
 {
     setRange(springs_back ? -1.0 : 0.0, 1.0);
+    setTitle(springs_back ? "Pitch bend wheel" : "Modulation wheel");
     setValue(springs_back ? 0.0 : 0.0, juce::dontSendNotification);
     setSliderSnapsToMousePosition(false);
 }

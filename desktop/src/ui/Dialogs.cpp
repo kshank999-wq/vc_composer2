@@ -284,6 +284,7 @@ void style_caption(juce::Label& label, const juce::String& text)
 TrackSelector::TrackSelector(AppContext& context, juce::String new_track_label)
     : context_(context), new_label_(std::move(new_track_label))
 {
+    setTitle("Target track");
     refresh();
 }
 

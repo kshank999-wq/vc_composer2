@@ -140,6 +140,7 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
     sevenths_key_.set_led_dot(true);
     sevenths_key_.setTooltip("Diatonic seventh chords instead of triads");
     sevenths_key_.onClick = [this] { set_sevenths(sevenths_key_.getToggleState()); };
+    form_.setTitle("Minor form");
     form_.addItem("Natural minor", 1);
     form_.addItem("Harmonic minor", 2);
     form_.addItem("Melodic minor (ascending)", 3);
@@ -166,16 +167,19 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
     clear_.setComponentID("circle_clear");
     clear_.setTooltip("Start a new progression");
     clear_.onClick = [this] { clear_progression(); };
+    length_box_.setTitle("Chord length");
     length_box_.addItem("2 beats each", 1);
     length_box_.addItem("1 bar each", 2);
     length_box_.addItem("2 bars each", 3);
     length_box_.setComponentID("circle_step_length");
     length_box_.onChange = [this] { set_step_length(std::max(0, length_box_.getSelectedItemIndex())); };
+    output_box_.setTitle("Put as");
     output_box_.addItem("Put as notation", 1);
     output_box_.addItem("Put as MIDI", 2);
     output_box_.setComponentID("circle_put_as");
     output_box_.setTooltip("Notation writes the chords in the score, spelled as named; MIDI writes a region");
     output_box_.onChange = [this] { set_put_as_notation(output_box_.getSelectedId() != 2); };
+    voicing_box_.setTitle("Voicing");
     voicing_box_.addItem("Root bass, smooth upper", 1);
     voicing_box_.addItem("Smooth, with inversions", 2);
     voicing_box_.addItem("Root position", 3);
@@ -184,6 +188,7 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
                             "above it; with inversions the bass may move to an inversion too; root position stacks each "
                             "chord straight up from its root");
     voicing_box_.onChange = [this] { set_voicing(std::max(0, voicing_box_.getSelectedItemIndex())); };
+    rhythm_box_.setTitle("Rhythm");
     rhythm_box_.addItem("Block chords", 1);
     rhythm_box_.addItem("Pulse on the beat", 2);
     rhythm_box_.addItem("Arpeggio", 3);
@@ -206,6 +211,7 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
             if (self && r == 1) self->save_progression(w->getTextEditorContents("name"));
         }), true);
     };
+    saved_box_.setTitle("Saved progressions");
     saved_box_.setComponentID("circle_saved");
     saved_box_.onChange = [this] {
         const auto name = saved_box_.getText();
@@ -236,6 +242,7 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
                              "Neapolitan. Never labelled diatonic.");
     borrowed_key_.onClick = [this] { set_borrowed(borrowed_key_.getToggleState()); };
     addAndMakeVisible(borrowed_key_);
+    borrow_from_.setTitle("Borrow from");
     borrow_from_.setComponentID("circle_borrow_from");
     borrow_from_.setTooltip("Where the borrowed chords come from: the parallel key (with the Neapolitan), or another "
                             "scale on the same tonic");

@@ -467,16 +467,19 @@ public:
                       juce::dontSendNotification);
         addAndMakeVisible(note_);
 
+        device_.setTitle("MIDI device");
         device_.onChange = [this] {
             const int i = device_.getSelectedItemIndex();
             if (i <= 0) surface_.set_device({}, {});
             else if (i - 1 < devices_.size()) surface_.set_device(devices_[i - 1].identifier, devices_[i - 1].name);
         };
         addAndMakeVisible(device_);
+        profile_.setTitle("Profile");
         for (const auto& p : sf::builtin_profiles()) profile_.addItem(p.name, profile_.getNumItems() + 1);
         profile_.onChange = [this] { surface_.use_profile(profile_.getText()); };
         addAndMakeVisible(profile_);
 
+        step_.setTitle("Jog step");
         for (auto s : {sf::Step::Frame, sf::Step::Sixteenth, sf::Step::Beat, sf::Step::Bar})
             step_.addItem(s == sf::Step::Frame ? "Frame" : s == sf::Step::Sixteenth ? "Sixteenth" : s == sf::Step::Beat ? "Beat" : "Bar",
                           static_cast<int>(s) + 1);
@@ -485,16 +488,19 @@ public:
             surface_.save();
         };
         addAndMakeVisible(step_);
+        sens_.setTitle("Jog sensitivity");
         sens_.setRange(1, 8, 1);
         sens_.onValueChange = [this] {
             surface_.settings().detents_per_step = static_cast<int>(sens_.getValue());
             surface_.save();
         };
+        dead_.setTitle("Shuttle dead zone");
         dead_.setRange(0.0, 0.5, 0.01);
         dead_.onValueChange = [this] {
             surface_.settings().dead_zone = dead_.getValue();
             surface_.save();
         };
+        speed_.setTitle("Shuttle top speed");
         speed_.setRange(0.5, 32.0, 0.5);
         speed_.setTextValueSuffix("x");
         speed_.onValueChange = [this] {
@@ -502,6 +508,7 @@ public:
             surface_.save();
         };
         for (auto* s : {&sens_, &dead_, &speed_}) addAndMakeVisible(*s);
+        curve_.setTitle("Shuttle curve");
         curve_.addItem("Exponential", 1);
         curve_.addItem("Linear", 2);
         curve_.onChange = [this] {

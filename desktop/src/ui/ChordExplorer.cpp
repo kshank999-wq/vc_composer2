@@ -212,7 +212,9 @@ ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmo
         addAndMakeVisible(*l);
 
     dialogs::fill_key_combos(tonic_, mode_, dialogs::project_key(c), true);
+    tonic_.setTitle("Key");
     tonic_.setTooltip("Preview key (the project key is not changed)");
+    mode_.setTitle("Mode");
     mode_.setTooltip("Mode");
     for (auto* cb : {&tonic_, &mode_}) {
         addAndMakeVisible(*cb);
@@ -222,12 +224,14 @@ ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmo
         };
     }
 
+    length_.setTitle("Length");
     length_.addItem("4 bars", 4);
     length_.addItem("8 bars", 8);
     length_.setSelectedId(4, juce::dontSendNotification);
     addAndMakeVisible(length_);
     length_.onChange = [this] { rerender(); };
 
+    start_.setTitle("Start bar");
     start_.setSliderStyle(juce::Slider::IncDecButtons);
     start_.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 44, 24);
     start_.setRange(1.0, 999.0, 1.0);
@@ -237,12 +241,14 @@ ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmo
     addAndMakeVisible(start_);
     start_.onValueChange = [this] { rerender(); };
 
+    voicing_.setTitle("Voicing");
     voicing_.addItem("Closed", 1);
     voicing_.addItem("Open", 2);
     voicing_.addItem("Drop 2", 3);
     voicing_.addItem("Drop 3", 4);
     voicing_.addItem("Spread", 5);
     voicing_.setSelectedId(1, juce::dontSendNotification);
+    rhythm_.setTitle("Rhythm");
     rhythm_.addItem("Block", 1);
     rhythm_.addItem("Pulse", 2);
     rhythm_.addItem("Arpeggio", 3);
@@ -258,6 +264,7 @@ ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmo
     voice_lead_.onClick = [this] { rerender(); };
 
     addAndMakeVisible(search_);
+    search_.setTitle("Search progressions");
     search_.setIndents(8, 7);
     search_.setTextToShowWhenEmpty("Search progressions (pop, jazz, minor...)", colours::text_dim);
     search_.onTextChange = [this] { filter(); };
