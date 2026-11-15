@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <cmath>
+#include <set>
 
 #include "AppResources.h"
 #include "ui/Theme.h"
@@ -67,10 +68,62 @@ public:
 
     void paintOverChildren(juce::Graphics& g) override
     {
+        paint_range(g);
         // The selected track's lane is outlined in the LED colour.
         if (owner_.context_.session.selected_track() != track_id_) return;
         g.setColour(hw::Theme::get().led().withAlpha(0.55f));
         g.drawRect(getLocalBounds().withTrimmedLeft(composer_ui::TrackHeader::kWidth), 1);
+    }
+
+    /// Instrument range (Add-On spec §4): on the track being written, the
+    /// staff above its highest and below its lowest note shaded, with the
+    /// limits written in it; on every track, notes outside it ringed.
+    void paint_range(juce::Graphics& g)
+    {
+        auto& session = owner_.context_.session;
+        const auto* t = session.data().find_track(track_id_);
+        const auto* score = view_.score();
+        if (!t || !score || score->staff_count() == 0) return;
+        const auto limits = session.range_limits(*t);
+        if (limits.policy == session::Session::RangePolicy::Off) return;
+        const auto vb = view_.getBounds().toFloat();
+        juce::Graphics::ScopedSaveState state(g);
+        g.reduceClipRegion(view_.getBounds());
+        const bool strict = limits.policy == session::Session::RangePolicy::Strict;
+        if (session.selected_track() == track_id_) {
+            auto position_of = [&](int sounding, std::size_t s) {
+                const auto& staff = score->staff(s);
+                const auto key = interchange::written_key(score->key_signature_at(view_.origin_tick()), staff.transposition_semitones);
+                return notation::staff_position(notation::spell_midi_note(sounding - staff.total_transposition(), key), staff.clef);
+            };
+            const std::size_t last = score->staff_count() - 1;
+            if (score->staff(0).clef != notation::Clef::Percussion) {
+                const float y_hi = vb.getY() + view_.y_of_staff_position(0, position_of(limits.high, 0) + 0.75);
+                const float y_lo = vb.getY() + view_.y_of_staff_position(last, position_of(limits.low, last) - 0.75);
+                const juce::Colour shade = (strict ? juce::Colour(0xff7a2e2e) : juce::Colour(0xff6e6a5a)).withAlpha(0.22f);
+                g.setColour(shade);
+                if (y_hi > vb.getY()) g.fillRect(juce::Rectangle<float>(vb.getX(), vb.getY(), vb.getWidth(), y_hi - vb.getY()));
+                if (y_lo < vb.getBottom()) g.fillRect(juce::Rectangle<float>(vb.getX(), y_lo, vb.getWidth(), vb.getBottom() - y_lo));
+                g.setColour(shade.withAlpha(0.7f));
+                g.drawHorizontalLine(juce::roundToInt(y_hi), vb.getX(), vb.getRight());
+                g.drawHorizontalLine(juce::roundToInt(y_lo), vb.getX(), vb.getRight());
+                // The limits, where the shading starts.
+                const juce::String label = juce::String(limits.instrument).toUpperCase() + "  " +
+                                           juce::MidiMessage::getMidiNoteName(limits.low, true, true, 4) + "-" +
+                                           juce::MidiMessage::getMidiNoteName(limits.high, true, true, 4) + "  " +
+                                           juce::String(session::Session::range_policy_name(limits.policy)).toUpperCase();
+                g.setFont(hw::fonts::silk(9.5f, 0.08f, true));
+                g.setColour(hw::tok::text.withAlpha(0.75f));
+                g.drawText(label, juce::Rectangle<float>(vb.getRight() - 260.0f, std::max(vb.getY() + 2.0f, y_hi - 13.0f), 252.0f, 12.0f),
+                           juce::Justification::centredRight, false);
+            }
+        }
+        for (const auto& issue : session.range_issues(*t, *score)) {
+            const auto r = view_.notehead_bounds(issue.id);
+            if (r.isEmpty()) continue;
+            g.setColour(juce::Colour(strict ? 0xffe0553a : 0xffe0a040));
+            g.drawEllipse(r.translated(vb.getX(), vb.getY()).expanded(3.5f), 1.6f);
+        }
     }
 
     void resized() override
@@ -414,14 +467,79 @@ void ComposerView::set_playhead(Ticks tick, bool playing)
     }
 }
 
+bool ComposerView::range_ok(bool single_entry, std::function<void()> commit)
+{
+    auto& session = context_.session;
+    const auto* t = session.data().find_track(editing_track_);
+    if (!t) return true;
+    const auto limits = session.range_limits(*t);
+    if (limits.policy == session::Session::RangePolicy::Off) return true;
+    std::set<notation::EventId> before;
+    for (const auto& i : session.range_issues(*t)) before.insert(i.id);
+    std::vector<session::Session::RangeIssue> added;
+    for (const auto& i : session.range_issues(*t, working_))
+        if (!before.count(i.id)) added.push_back(i);
+    if (added.empty()) return true;
+    const juce::String range = juce::MidiMessage::getMidiNoteName(limits.low, true, true, 4) + "-" +
+                               juce::MidiMessage::getMidiNoteName(limits.high, true, true, 4);
+    const auto& first = added.front();
+    const juce::String what = juce::MidiMessage::getMidiNoteName(first.sounding, true, true, 4) +
+                              (first.above ? " is above" : " is below") + " the " + juce::String(limits.instrument) +
+                              "'s range (" + range + ")";
+    if (limits.policy != session::Session::RangePolicy::Strict) {
+        range_message_ = "Flagged: " + what + (added.size() > 1 ? " (" + juce::String(static_cast<int>(added.size())) + " notes)" : "");
+        return true;
+    }
+    if (single_entry && added.size() == 1) {
+        reload_working_copy(false);
+        context_.status("Not entered: " + what + ". The range is Strict for this track (Track menu > Range).");
+        return false;
+    }
+    // Several notes (a chord, a paste, a transposition): ask.
+    auto* w = new juce::AlertWindow("Outside the " + juce::String(limits.instrument) + "'s range",
+                                    juce::String(static_cast<int>(added.size())) + " of these notes would be outside " + range +
+                                        " (" + what + ").",
+                                    juce::MessageBoxIconType::WarningIcon);
+    w->setComponentID("range_question");
+    w->addButton("Move into range", 1);
+    w->addButton("Keep, flagged", 2);
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<ComposerView> self(this);
+    w->enterModalState(true, juce::ModalCallbackFunction::create([self, added, limits, commit](int r) {
+        if (!self) return;
+        if (r == 0) {
+            self->reload_working_copy(false);
+            self->context_.status("Cancelled: nothing entered");
+        } else {
+            if (r == 1) session::Session::fit_into_range(self->working_, added, limits);
+            commit();
+        }
+        self->apply_view_settings();
+        self->repaint();
+    }), true);
+    return false;
+}
+
 void ComposerView::handle(const editing::EditResult& result)
 {
     if (result.score_changed && !editing_track_.empty()) {
-        committing_ = true;
-        context_.session.commit_score(editing_track_, working_, result.message);
-        committing_ = false;
+        const std::string label = result.message;
+        auto commit = [this, label] {
+            committing_ = true;
+            context_.session.commit_score(editing_track_, working_, label);
+            committing_ = false;
+        };
+        if (!range_ok(result.notes_changed <= 1, commit)) {
+            apply_view_settings();
+            repaint();
+            return;
+        }
+        commit();
     }
-    if (result.status == editing::EditStatus::Refused || result.status == editing::EditStatus::NotHandled)
+    if (range_message_.isNotEmpty()) {
+        context_.status(range_message_);  // the range's word over the edit's
+        range_message_.clear();
+    } else if (result.status == editing::EditStatus::Refused || result.status == editing::EditStatus::NotHandled)
         context_.status(result.message);
     else if (*result.message)
         context_.status(result.message);
@@ -650,12 +768,21 @@ bool ComposerView::enter_chord(bool replace_selection)
         editor_->set_cursor(c);
     }
     const std::string label = "Enter chord " + chord->name();
-    committing_ = true;
-    if (chord_state_.write_symbol)
-        context_.session.commit_score_with_chord(editing_track_, working_, label, cur.tick, chord->name());
-    else
-        context_.session.commit_score(editing_track_, working_, label);
-    committing_ = false;
+    const bool symbol = chord_state_.write_symbol;
+    const std::string name = chord->name();
+    const Ticks at = cur.tick;
+    auto commit = [this, label, symbol, name, at] {
+        committing_ = true;
+        if (symbol) context_.session.commit_score_with_chord(editing_track_, working_, label, at, name);
+        else context_.session.commit_score(editing_track_, working_, label);
+        committing_ = false;
+    };
+    if (!range_ok(false, commit)) {
+        apply_view_settings();
+        repaint();
+        return false;
+    }
+    commit();
     just_entered_ = true;
     apply_view_settings();
     repaint();

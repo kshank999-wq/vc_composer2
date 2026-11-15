@@ -29,6 +29,7 @@
 #include "ui/console/MixActions.h"
 #include "ui/console/ConsoleStrip.h"
 #include "ui/console/ConsoleView.h"
+#include "ui/TrackPanel.h"
 #include "ui/composer/ComposerRuler.h"
 #include "vcc/theory/Chord.h"
 #include "ui/composer/Inspector.h"
@@ -3976,6 +3977,119 @@ void chord_mode_checks(MainWindow& window, const juce::File& dir)
     check(!palette.isVisible() && !composer.chord_mode(), "turning Chord mode off hides the palette");
 }
 
+/// Instrument range guardrails (Add-On spec §4): Strict refuses a note
+/// outside and asks about a chord, Warn and Extended allow with a ring, a
+/// new instrument re-checks without deleting, the report and Move into range.
+void range_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    juce::String last_status;
+    const auto old_status = ctx.status;
+    ctx.status = [&](const juce::String& s) {
+        last_status = s;
+        if (old_status) old_status(s);
+    };
+    const auto flute = session.add_track("Flute", "woodwinds.flute");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
+    pump(100);
+    auto& composer = main.composer();
+    session.select_track(flute);
+    pump(50);
+    composer.grabKeyboardFocus();
+    composer.keyPressed(juce::KeyPress('5'));
+    const Ticks Q = kTicksPerQuarter;
+    auto click = [&](Ticks tick, notation::Step step, int octave) {
+        engraving::InsertionPoint p;
+        p.valid = true;
+        p.staff_index = 0;
+        p.tick = tick;
+        p.pitch = notation::Pitch{step, static_cast<std::int8_t>(octave), 0};
+        if (composer.lane(0).on_staff_clicked) composer.lane(0).on_staff_clicked(p);
+        pump(40);
+    };
+    auto count = [&] { return session.data().find_track(flute)->active_version()->score.total_note_count(); };
+    auto issues = [&] { return session.range_issues(*session.data().find_track(flute)).size(); };
+
+    // Strict (the default for a flute): D7 above its C7 is refused; C5 goes in.
+    check(session.range_limits(*session.data().find_track(flute)).policy == session::Session::RangePolicy::Strict,
+          "a flute's range is Strict by default (B3-C7)");
+    click(0, notation::Step::D, 7);
+    const bool refused = count() == 0 && last_status.startsWith("Not entered") && last_status.contains("above");
+    click(0, notation::Step::C, 5);
+    check(refused && count() == 1, "Strict: a click above the flute's range enters nothing and says why; C5 goes in (" +
+                                       last_status.upToFirstOccurrenceOf(".", false, false) + ")");
+
+    // A chord partly outside: asked. Move into range brings the notes in by octaves.
+    composer.set_chord_mode(true);
+    composer.chord_state().octave = 6;  // C6 E6 G6 ... G6 fine; take C7 E7 G7
+    composer.chord_state().octave = 7;
+    composer.chord_palette().refresh();
+    composer.chord_palette().insert_key().triggerClick();
+    pump(50);
+    auto* question = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0));
+    const bool asked = question && question->getComponentID() == "range_question";
+    shoot(main, dir, "41a-range-question");
+    if (question) question->exitModalState(1);
+    pump(60);
+    check(asked && issues() == 0 && count() == 4 && session.undo_label() == "Enter chord C",
+          "Strict: a chord outside the range asks, and Move into range enters it with every note inside");
+    // Keep, flagged: entered as is, ringed.
+    composer.chord_palette().insert_key().triggerClick();
+    pump(50);
+    question = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0));
+    if (question) question->exitModalState(2);
+    pump(60);
+    const auto kept = issues();
+    // Cancel: nothing.
+    const auto before_cancel = count();
+    composer.chord_palette().insert_key().triggerClick();
+    pump(50);
+    question = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0));
+    if (question) question->exitModalState(0);
+    pump(60);
+    check(kept == 2 && count() == before_cancel, "Keep, flagged enters the chord with its two high notes flagged; Cancel enters nothing");
+    composer.set_chord_mode(false);
+
+    // Warn: allowed and ringed. Extended: the flute's extended range takes D7.
+    session.set_range_policy(flute, "warn");
+    click(8 * Q, notation::Step::D, 7);
+    check(count() == before_cancel + 1 && issues() == 3 && last_status.startsWith("Flagged"),
+          "Warn: D7 goes in and is flagged (" + last_status.upToFirstOccurrenceOf("(", false, false).trim() + ")");
+    session.set_range_policy(flute, "extended");
+    check(issues() == 2, "Extended: the flute's extended range (to D7) takes the D7; the E7 and G7 stay flagged");
+    session.set_range_policy(flute, "");
+    shoot(main, dir, "41-instrument-range");
+
+    // A new instrument re-checks without deleting a note, and says so.
+    last_status.clear();
+    const auto notes = count();
+    session.update_track_mix(flute, "Instrument", [](project::Track& t) { t.instrument_standard_id = "woodwinds.piccolo"; });
+    pump(50);
+    check(count() == notes && issues() == 1 && last_status.contains("outside the Piccolo's range"),
+          "changing the instrument (to piccolo) re-checks: nothing deleted, the new notes outside are announced (" +
+              juce::String(static_cast<int>(issues())) + ")");
+    session.undo();
+    pump(30);
+
+    // The report, and Move into range from it.
+    const auto report = TrackPanel::range_report(ctx, {});
+    check(report.contains("Flute") && report.contains("above"), "the range report lists each note outside: " +
+                                                                     report.upToFirstOccurrenceOf("\n", false, false));
+    TrackPanel::show_range_report(ctx, flute);
+    pump(30);
+    auto* report_window = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0));
+    if (report_window) report_window->exitModalState(1);
+    pump(60);
+    check(report_window && issues() == 0 && count() == notes && session.undo_label() == "Move into range",
+          "the report's Move into range brings every note inside by octaves, as one undo step");
+    ctx.status = old_status;
+}
+
 /// Chord symbols: the ruler's suggestion kept with a click, one typed on a
 /// beat, a bad one refused, Escape, editing to empty removes, and the
 /// symbols printed over the full score's top staff in the Page view.
@@ -5210,6 +5324,7 @@ int main(int argc, char** argv)
         page_view_checks(window, dir);
         chord_symbol_checks(window, dir);
         chord_mode_checks(window, dir);
+        range_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

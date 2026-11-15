@@ -17,6 +17,12 @@ public:
 
     /// Popup menu of track actions (also used by other views).
     static void show_track_menu(AppContext& context, const std::string& track_id);
+    /// The instrument range report (Add-On spec §4): the notes outside each
+    /// track's range (one track, or every track when `track_id` is empty),
+    /// with Move into range. Non-modal; returns the text it shows.
+    static juce::String show_range_report(AppContext& context, const std::string& track_id);
+    /// The report's text alone.
+    static juce::String range_report(AppContext& context, const std::string& track_id);
     /// Popup menu to add a track from the instrument registry.
     static void show_add_track_menu(AppContext& context, juce::Component* target);
 

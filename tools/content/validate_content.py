@@ -50,6 +50,12 @@ def main():
             if i.get("lower_clef","bass") not in CLEFS: err(w, f"bad lower_clef")
             r = i.get("range", [0, 0])
             if not (isinstance(r, list) and len(r) == 2 and 0 <= r[0] <= r[1] <= 127): err(w, f"bad range {r}")
+            for key in ("comfortable", "extended"):
+                if key not in i: continue
+                x = i[key]
+                if not (isinstance(x, list) and len(x) == 2 and 0 <= x[0] <= x[1] <= 127): err(w, f"bad {key} range {x}")
+                elif key == "comfortable" and not (r[0] <= x[0] and x[1] <= r[1]): err(w, "comfortable range outside the range")
+                elif key == "extended" and not (x[0] <= r[0] and r[1] <= x[1]): err(w, "extended range inside the range")
             gm = i.get("gm_program", 0)
             if not (-1 <= gm <= 127): err(w, "bad gm_program")
             if gm == -1 and not i.get("unpitched"): err(w, "gm_program -1 requires unpitched: true")

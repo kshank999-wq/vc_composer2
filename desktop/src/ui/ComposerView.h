@@ -130,6 +130,12 @@ private:
     composer_ui::ChordModeState chord_state_;
     std::unique_ptr<composer_ui::ChordPalette> palette_;
     void audition_chord();
+    /// The range guardrail before a commit of the working copy: true to
+    /// commit now. Strict refuses a single note outside the range and asks
+    /// about several (move them into range, keep them flagged, or cancel),
+    /// calling `commit` itself when the answer is to go ahead.
+    bool range_ok(bool single_entry, std::function<void()> commit);
+    juce::String range_message_;  ///< A Warn-policy flag, shown instead of the edit's message.
     /// Publishes the editor's selection to the session's shared selection.
     void publish_selection();
 };

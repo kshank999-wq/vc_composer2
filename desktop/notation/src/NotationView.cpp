@@ -216,6 +216,26 @@ notation::Ticks NotationView::tick_at_x(float x)
     return timeline_.tick_for_x((static_cast<double>(x) - settings_.origin.x) / settings_.pixels_per_staff_space);
 }
 
+float NotationView::y_of_staff_position(std::size_t staff_index, double position)
+{
+    relayout_if_needed();
+    if (staff_index >= layout_.staff_top_y.size()) return 0.0f;
+    const double spaces = layout_.staff_top_y[staff_index] + (8.0 - position) * 0.5;
+    return static_cast<float>(settings_.origin.y + spaces * settings_.pixels_per_staff_space);
+}
+
+juce::Rectangle<float> NotationView::notehead_bounds(notation::EventId id)
+{
+    relayout_if_needed();
+    const double scale = settings_.pixels_per_staff_space;
+    for (const auto& n : layout_.notes)
+        if (n.id == id)
+            return {static_cast<float>(settings_.origin.x + n.notehead_bounds.x * scale),
+                    static_cast<float>(settings_.origin.y + n.notehead_bounds.y * scale),
+                    static_cast<float>(n.notehead_bounds.width * scale), static_cast<float>(n.notehead_bounds.height * scale)};
+    return {};
+}
+
 engraving::Point NotationView::to_staff_spaces(juce::Point<int> position) const
 {
     const double scale = settings_.pixels_per_staff_space;

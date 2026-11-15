@@ -1360,3 +1360,80 @@ TEST_CASE("chord symbols: session edits, save and reopen, MusicXML round trip th
             CHECK_EQ(vcc::theory::parse_chord_symbol(imp.chords[i].text)->name(), forms[i]);
     }
 }
+
+TEST_CASE("instrument ranges: policies, issues at sounding pitch, moving into range, saved")
+{
+    using RP = session::Session::RangePolicy;
+    session::Session s(catalogs());
+    s.new_empty();
+    const std::string fl = s.add_track("Flute", "woodwinds.flute");
+    const std::string cl = s.add_track("Clarinet in Bb", "woodwinds.clarinet_bb");
+    const std::string pad = s.add_track("Pad", "synth.pad_warm");
+    const std::string timp = s.add_track("Timpani", "percussion.timpani");
+    const std::string snare = s.add_track("Snare", "percussion.snare_drum");
+    auto track = [&](const std::string& id) { return s.data().find_track(id); };
+
+    // Defaults: Strict for acoustic and pitched percussion, Off for synths and unpitched.
+    auto lf = s.range_limits(*track(fl));
+    CHECK(lf.policy == RP::Strict && lf.policy_is_default);
+    CHECK_EQ(lf.low, 59);
+    CHECK_EQ(lf.high, 96);
+    CHECK_EQ(lf.comfortable_low, 62);
+    CHECK(lf.has_extended);
+    CHECK(s.range_limits(*track(timp)).policy == RP::Strict);
+    CHECK(s.range_limits(*track(pad)).policy == RP::Off);
+    CHECK(s.range_limits(*track(snare)).policy == RP::Off);
+
+    // Flute: A3 (57) below, C4 fine, D7 (98) above.
+    nt::Score fs = track(fl)->active_version()->score;
+    fs.insert_note(0, note(0, nt::quarter(), P(nt::Step::A, 3)));
+    fs.insert_note(0, note(Q, nt::quarter(), P(nt::Step::C, 4)));
+    fs.insert_note(0, note(2 * Q, nt::quarter(), P(nt::Step::D, 7)));
+    REQUIRE(s.commit_score(fl, fs, "notes"));
+    auto issues = s.range_issues(*track(fl));
+    REQUIRE(issues.size() == 2u);
+    CHECK(!issues[0].above);
+    CHECK_EQ(issues[0].sounding, 57);
+    CHECK(issues[1].above);
+    CHECK_EQ(issues[1].sounding, 98);
+    // Extended takes the flute to D7; Off checks nothing; the policy is one undo step and saved.
+    CHECK(s.set_range_policy(fl, "extended"));
+    CHECK_EQ(s.undo_label(), std::string("Range policy"));
+    CHECK_EQ(s.range_issues(*track(fl)).size(), 1u);
+    CHECK(s.set_range_policy(fl, "off"));
+    CHECK(s.range_issues(*track(fl)).empty());
+    CHECK(!s.set_range_policy(fl, "loose"));
+    s.undo();
+    s.undo();
+    CHECK(s.range_limits(*track(fl)).policy == RP::Strict);
+    // Move into range: by octaves, one undo step.
+    CHECK_EQ(s.move_into_range(fl), 2);
+    CHECK_EQ(s.undo_label(), std::string("Move into range"));
+    CHECK(s.range_issues(*track(fl)).empty());
+    {
+        std::vector<int> midi;
+        for (const auto& n : track(fl)->active_version()->score.notes(0)) midi.push_back(nt::midi_note_number(n.pitch));
+        std::sort(midi.begin(), midi.end());
+        CHECK(midi == std::vector<int>({60, 69, 86}));  // C4, A4, D6
+    }
+    s.undo();
+    CHECK_EQ(s.range_issues(*track(fl)).size(), 2u);
+
+    // Clarinet: written D3 sounds C3 (48), under its low D (50).
+    nt::Score cs = track(cl)->active_version()->score;
+    cs.insert_note(0, note(0, nt::quarter(), P(nt::Step::D, 3)));
+    cs.insert_note(0, note(Q, nt::quarter(), P(nt::Step::E, 3)));  // sounds D3: the lowest note
+    REQUIRE(s.commit_score(cl, cs, "notes"));
+    issues = s.range_issues(*track(cl));
+    REQUIRE(issues.size() == 1u);
+    CHECK_EQ(issues[0].sounding, 48);
+
+    // Saved and reopened.
+    REQUIRE(s.set_range_policy(cl, "warn"));
+    const std::string path = std::string(VCC_TEST_TMP_DIR) + "/ranges.vcc2";
+    REQUIRE(s.save_as(path));
+    session::Session again(catalogs());
+    REQUIRE(again.open(path));
+    CHECK(again.range_limits(*again.data().find_track(cl)).policy == RP::Warn);
+    CHECK(again.range_limits(*again.data().find_track(fl)).policy_is_default);
+}

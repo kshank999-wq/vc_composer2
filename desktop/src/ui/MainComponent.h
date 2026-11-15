@@ -4,6 +4,7 @@
 #pragma once
 
 #include <map>
+#include <set>
 
 #include "ui/AppContext.h"
 #include "ui/ComposerView.h"
@@ -150,6 +151,9 @@ private:
     int listener_ = 0;
     shell::TopDeck deck_;
     shell::Toolbar toolbar_;
+    /// Notes outside each track's range, last counted (for the warning).
+    std::map<std::string, std::set<notation::EventId>> range_counts_;
+    bool range_counted_ = false;
     shell::EditFrame edit_;
     shell::MarkersPanel markers_;
     shell::NewTrackPanel new_track_;

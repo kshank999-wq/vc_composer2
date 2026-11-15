@@ -518,6 +518,42 @@ public:
     /// Sounding range for a track (instrument range, or full piano).
     std::pair<int, int> range_for(const project::Track& track) const;
 
+    // --- Instrument range guardrails (Add-On Features spec §4) ------------------------
+    enum class RangePolicy { Strict, Warn, Extended, Off };
+    struct RangeLimits {
+        RangePolicy policy = RangePolicy::Off;
+        bool policy_is_default = true;
+        int low = 0, high = 127;  ///< What is enforced or flagged, sounding (the extended range under Extended).
+        int playable_low = 0, playable_high = 127;
+        int comfortable_low = 0, comfortable_high = 127;
+        bool has_extended = false;
+        std::string instrument;   ///< Its name, for messages.
+    };
+    /// The limits and policy of a track. The default policy is Strict for an
+    /// acoustic instrument, Off for synths, percussion, unpitched and tracks
+    /// with no instrument profile.
+    RangeLimits range_limits(const project::Track& track) const;
+    static const char* range_policy_name(RangePolicy policy) noexcept;
+    /// "strict", "warn", "extended", "off", or empty for the default ("Range policy").
+    bool set_range_policy(const std::string& track_id, const std::string& policy);
+    /// A note outside the limits: where, and which way.
+    struct RangeIssue {
+        notation::EventId id = notation::kInvalidEventId;
+        std::size_t staff = 0;
+        Ticks tick = 0;
+        int sounding = 0;  ///< MIDI note number as it sounds.
+        bool above = false;
+    };
+    /// The notes of `score` (the track's when omitted) outside the track's
+    /// limits, in time order. None under the Off policy.
+    std::vector<RangeIssue> range_issues(const project::Track& track, const notation::Score& score) const;
+    std::vector<RangeIssue> range_issues(const project::Track& track) const;
+    /// Moves notes by whole octaves into the limits (those that cannot fit
+    /// are left), in `score`. Returns how many moved.
+    static int fit_into_range(notation::Score& score, const std::vector<RangeIssue>& issues, const RangeLimits& limits);
+    /// The same on the track's score, as one undo step ("Move into range").
+    int move_into_range(const std::string& track_id);
+
 private:
     void notify(Change change);
     void document_changed();

@@ -785,6 +785,7 @@ json::Value Project::to_json() const
         if (t.record_source != "midi") o.set("record_source", t.record_source);
         if (!t.sidechain.empty()) o.set("sidechain", t.sidechain);
         if (t.input_quantize > 0) o.set("input_quantize", t.input_quantize);
+        if (!t.range_policy.empty()) o.set("range_policy", t.range_policy);
         if (!t.automation.empty()) o.set("automation", automation_to_json(t.automation));
         o.set("automation_mode", t.automation_mode);
         o.set("include_in_export", t.include_in_export);
@@ -1042,6 +1043,9 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.record_source = j.get_string("record_source", "midi") == "audio" ? "audio" : "midi";
         t.sidechain = j.get_string("sidechain", "");
         t.input_quantize = std::max<Ticks>(0, j.get_int("input_quantize", 0));
+        t.range_policy = j.get_string("range_policy", "");
+        if (t.range_policy != "strict" && t.range_policy != "warn" && t.range_policy != "extended" && t.range_policy != "off")
+            t.range_policy.clear();
         if (t.playback != "midi" && t.playback != "audio") t.playback = "both";
         if (t.monitor != "auto" && t.monitor != "input" && t.monitor != "off")
             return fail("track " + t.id + ": unknown monitor mode '" + t.monitor + "'");

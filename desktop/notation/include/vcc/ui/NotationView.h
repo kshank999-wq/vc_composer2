@@ -135,6 +135,11 @@ public:
     /// pixel: for rulers and overlays that line up with the notes.
     float x_of_tick(notation::Ticks tick);
     notation::Ticks tick_at_x(float x);
+    /// Where a staff position is drawn (0 the bottom line, 8 the top), in
+    /// this view's pixels; for overlays such as range shading.
+    float y_of_staff_position(std::size_t staff_index, double position);
+    /// A laid-out note's head, in this view's pixels (empty when not shown).
+    juce::Rectangle<float> notehead_bounds(notation::EventId id);
 
     /// The layout currently on screen. Exposed for testing, and for a
     /// container that needs the extent to size a scrollbar.

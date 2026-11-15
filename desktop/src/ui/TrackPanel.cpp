@@ -550,6 +550,39 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
     m.addSubMenu("Instrument", instruments);
     m.addItem("Open instrument window", !t->instrument_plugin.empty(),
               false, [&c, id] { if (c.show_plugin_window) c.show_plugin_window(id); });
+    // Instrument range (Add-On spec §4).
+    if (t->kind == project::TrackKind::Instrument || t->kind == project::TrackKind::MidiOnly) {
+        using RP = session::Session::RangePolicy;
+        const auto limits = c.session.range_limits(*t);
+        auto name = [](int n) { return juce::MidiMessage::getMidiNoteName(n, true, true, 4); };
+        juce::PopupMenu range;
+        if (!limits.instrument.empty()) {
+            range.addSectionHeader(juce::String(limits.instrument) + ": " + name(limits.playable_low) + "-" + name(limits.playable_high) +
+                                   " sounding");
+            range.addItem("Comfortable " + name(limits.comfortable_low) + "-" + name(limits.comfortable_high) +
+                              (limits.has_extended ? juce::String() : juce::String("; no extended range")),
+                          false, false, [] {});
+        }
+        auto policy = [&](const char* label, const std::string& value, bool on, bool enabled) {
+            range.addItem(label, enabled, on, [&c, id, value] { c.session.set_range_policy(id, value); });
+        };
+        const bool def = limits.policy_is_default;
+        policy("Default for the instrument", "", def, true);
+        policy("Strict: refuse notes outside", "strict", !def && limits.policy == RP::Strict, !limits.instrument.empty());
+        policy("Warn: allow, ringed", "warn", !def && limits.policy == RP::Warn, !limits.instrument.empty());
+        policy("Extended range", "extended", !def && limits.policy == RP::Extended, limits.has_extended);
+        policy("Off (synths, experiments)", "off", !def && limits.policy == RP::Off, true);
+        range.addSeparator();
+        const auto issues = c.session.range_issues(*t);
+        range.addItem("Check range...", [&c, id] { show_range_report(c, id); });
+        range.addItem("Move " + juce::String(static_cast<int>(issues.size())) + " notes into range", !issues.empty(), false,
+                      [&c, id] {
+                          const int moved = c.session.move_into_range(id);
+                          c.status("Moved " + juce::String(moved) + " notes into range by octaves");
+                      });
+        m.addSubMenu("Range" + juce::String(issues.empty() ? "" : " (" + juce::String(static_cast<int>(issues.size())) + " outside)"),
+                     range);
+    }
     m.addSeparator();
     m.addItem("Include in deliverable export", true, t->include_in_export,
               [&c, id, inc = t->include_in_export] { c.session.set_include_in_export(id, !inc); });
@@ -579,6 +612,55 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
     }
     m.addItem("Remove track", [&c, id] { c.session.remove_track(id); });
     m.showMenuAsync({});
+}
+
+juce::String TrackPanel::range_report(AppContext& c, const std::string& track_id)
+{
+    const auto& d = c.session.data();
+    juce::String text;
+    auto name = [](int n) { return juce::MidiMessage::getMidiNoteName(n, true, true, 4); };
+    for (const auto& t : d.tracks) {
+        if (!track_id.empty() && t.id != track_id) continue;
+        const auto issues = c.session.range_issues(t);
+        if (issues.empty()) continue;
+        const auto limits = c.session.range_limits(t);
+        text << t.name << " (" << name(limits.low) << "-" << name(limits.high) << ", "
+             << session::Session::range_policy_name(limits.policy) << "): " << static_cast<int>(issues.size())
+             << (issues.size() == 1 ? " note" : " notes") << "\n";
+        int shown = 0;
+        for (const auto& i : issues) {
+            if (++shown > 8) {
+                text << "   ...\n";
+                break;
+            }
+            const int bar = d.meter.bar_at(i.tick);
+            const auto sig = d.meter.at_bar(bar);
+            const int beat = static_cast<int>((i.tick - d.meter.bar_start(bar)) / std::max<Ticks>(1, sig.beat_ticks())) + 1;
+            text << "   bar " << bar << " beat " << beat << ": " << name(i.sounding) << (i.above ? " above" : " below") << "\n";
+        }
+    }
+    return text.isEmpty() ? juce::String("Every note is inside its instrument's range.") : text.trimEnd();
+}
+
+juce::String TrackPanel::show_range_report(AppContext& c, const std::string& track_id)
+{
+    const auto text = range_report(c, track_id);
+    auto* w = new juce::AlertWindow("Instrument ranges", "Notes outside their instrument's range (sounding pitch).",
+                                    juce::MessageBoxIconType::NoIcon);
+    w->setComponentID("range_report");
+    w->addTextBlock(text);
+    w->addButton("Move into range", 1);
+    w->addButton("Close", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    w->enterModalState(true, juce::ModalCallbackFunction::create([&c, track_id](int r) {
+        if (r != 1) return;
+        std::vector<std::string> ids;
+        for (const auto& t : c.session.data().tracks)
+            if (track_id.empty() || t.id == track_id) ids.push_back(t.id);
+        int moved = 0;
+        for (const auto& id : ids) moved += c.session.move_into_range(id);
+        c.status("Moved " + juce::String(moved) + " notes into range by octaves");
+    }), true);
+    return text;
 }
 
 void TrackPanel::show_add_track_menu(AppContext& c, juce::Component* target)

@@ -326,6 +326,35 @@ MainComponent::MainComponent(AppContext& context)
             }
         }
         if (c == session::Change::Document) {
+            // Instrument ranges: say so when notes land outside one (an
+            // import, a new instrument, material pasted or moved), without
+            // touching them.
+            {
+                int added = 0;
+                juce::String where;
+                std::map<std::string, std::set<notation::EventId>> flagged;
+                for (const auto& t : context_.session.data().tracks) {
+                    auto& now = flagged[t.id];
+                    for (const auto& i : context_.session.range_issues(t)) now.insert(i.id);
+                    const auto it = range_counts_.find(t.id);
+                    int fresh = 0;
+                    for (auto id : now)
+                        if (it == range_counts_.end() || !it->second.count(id)) ++fresh;
+                    if (fresh > 0 && range_counted_) {
+                        added += fresh;
+                        if (where.isEmpty()) {
+                            const auto limits = context_.session.range_limits(t);
+                            where = juce::String(limits.instrument.empty() ? t.name : limits.instrument) + "'s range (" +
+                                    juce::String(t.name) + ")";
+                        }
+                    }
+                }
+                range_counts_ = std::move(flagged);
+                range_counted_ = true;
+                if (added > 0)
+                    context_.status(juce::String(added) + (added == 1 ? " note is" : " notes are") + " outside the " + where +
+                                    ", ringed. Track > Check Instrument Ranges to fix.");
+            }
             // Close plug-in windows whose plug-in changed or went away.
             for (auto it = plugin_windows_.begin(); it != plugin_windows_.end();) {
                 const auto& w = *it->second;
@@ -1760,6 +1789,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             for (auto id : {cmd::duplicateVersion, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::removeTrack})
                 m.addCommandItem(c, id);
+            m.addSeparator();
+            m.addItem("Check Instrument Ranges...", [this] { TrackPanel::show_range_report(context_, {}); });
             m.addSeparator();
             {
                 const std::string track = context_.session.selected_track();

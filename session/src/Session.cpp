@@ -1043,6 +1043,119 @@ std::pair<int, int> Session::range_for(const project::Track& track) const
     return {21, 108};
 }
 
+// --- Instrument range guardrails -------------------------------------------------------
+
+const char* Session::range_policy_name(RangePolicy policy) noexcept
+{
+    switch (policy) {
+        case RangePolicy::Strict: return "strict";
+        case RangePolicy::Warn: return "warn";
+        case RangePolicy::Extended: return "extended";
+        case RangePolicy::Off: return "off";
+    }
+    return "off";
+}
+
+Session::RangeLimits Session::range_limits(const project::Track& track) const
+{
+    RangeLimits r;
+    const auto* def = instrument_for(track);
+    const bool pitched = track.kind == project::TrackKind::Instrument || track.kind == project::TrackKind::MidiOnly;
+    if (def) {
+        r.playable_low = def->range_low;
+        r.playable_high = def->range_high;
+        r.comfortable_low = def->comfortable_low;
+        r.comfortable_high = def->comfortable_high;
+        r.has_extended = def->has_extended;
+        r.instrument = def->name;
+    }
+    RangePolicy fallback = RangePolicy::Off;
+    if (def && pitched && !def->unpitched && def->family != "synth" &&
+        track.midi_channel != 9)
+        fallback = RangePolicy::Strict;
+    r.policy = fallback;
+    if (track.range_policy == "strict") r.policy = RangePolicy::Strict;
+    else if (track.range_policy == "warn") r.policy = RangePolicy::Warn;
+    else if (track.range_policy == "extended") r.policy = RangePolicy::Extended;
+    else if (track.range_policy == "off") r.policy = RangePolicy::Off;
+    r.policy_is_default = track.range_policy.empty();
+    if (!def && r.policy != RangePolicy::Off) r.policy = RangePolicy::Off;  // nothing to check against
+    r.low = r.playable_low;
+    r.high = r.playable_high;
+    if (r.policy == RangePolicy::Extended && def) {
+        r.low = def->extended_low;
+        r.high = def->extended_high;
+    }
+    return r;
+}
+
+bool Session::set_range_policy(const std::string& track_id, const std::string& policy)
+{
+    if (!policy.empty() && policy != "strict" && policy != "warn" && policy != "extended" && policy != "off") return false;
+    return edit("Range policy", on_track(track_id, [&](project::Track& t) {
+        if (t.range_policy == policy) return false;
+        t.range_policy = policy;
+        return true;
+    }));
+}
+
+std::vector<Session::RangeIssue> Session::range_issues(const project::Track& track, const notation::Score& score) const
+{
+    std::vector<RangeIssue> out;
+    const auto limits = range_limits(track);
+    if (limits.policy == RangePolicy::Off) return out;
+    for (std::size_t s = 0; s < score.staff_count(); ++s) {
+        const auto& staff = score.staff(s);
+        if (staff.clef == notation::Clef::Percussion) continue;
+        for (const auto& n : score.notes(s)) {
+            if (n.is_rest) continue;
+            const int sounding = notation::midi_note_number(n.pitch) + staff.total_transposition();
+            if (sounding >= limits.low && sounding <= limits.high) continue;
+            out.push_back({n.id, s, n.start_tick, sounding, sounding > limits.high});
+        }
+    }
+    std::stable_sort(out.begin(), out.end(), [](const RangeIssue& a, const RangeIssue& b) { return a.tick < b.tick; });
+    return out;
+}
+
+std::vector<Session::RangeIssue> Session::range_issues(const project::Track& track) const
+{
+    const auto* v = track.active_version();
+    return v ? range_issues(track, v->score) : std::vector<RangeIssue>{};
+}
+
+int Session::fit_into_range(notation::Score& score, const std::vector<RangeIssue>& issues, const RangeLimits& limits)
+{
+    int moved = 0;
+    for (const auto& issue : issues) {
+        const auto* n = score.find_note(issue.id);
+        if (!n) continue;
+        int shift = 0;
+        int s = issue.sounding;
+        while (s > limits.high && s - 12 >= limits.low) { s -= 12; shift -= 1; }
+        while (s < limits.low && s + 12 <= limits.high) { s += 12; shift += 1; }
+        if (shift == 0 || s < limits.low || s > limits.high) continue;
+        notation::ScoreNote copy = *n;
+        copy.pitch.octave = static_cast<std::int8_t>(copy.pitch.octave + shift);
+        const std::size_t staff = score.staff_index_of(issue.id);
+        score.remove_note(issue.id);
+        if (score.insert_note(staff, copy) != notation::kInvalidEventId) ++moved;
+    }
+    return moved;
+}
+
+int Session::move_into_range(const std::string& track_id)
+{
+    const auto* t = data().find_track(track_id);
+    if (!t || !t->active_version()) return 0;
+    const auto issues = range_issues(*t);
+    if (issues.empty()) return 0;
+    notation::Score score = t->active_version()->score;
+    const int moved = fit_into_range(score, issues, range_limits(*t));
+    if (moved == 0) return 0;
+    return commit_score(track_id, score, "Move into range") ? moved : 0;
+}
+
 // --- Console and recording ---------------------------------------------------------------
 
 bool Session::update_track_mix(const std::string& id, const std::string& label,

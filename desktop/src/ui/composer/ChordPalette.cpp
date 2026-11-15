@@ -275,15 +275,12 @@ void ChordPalette::refresh()
         warning_ = problem;
     }
     refreshing_ = false;
+    // The owner previews the notes on the staff being written.
+    if (chord && on_changed) on_changed();
     repaint();
 }
 
-void ChordPalette::changed()
-{
-    refresh();
-    if (on_changed) on_changed();
-    repaint();
-}
+void ChordPalette::changed() { refresh(); }
 
 void ChordPalette::set_preview(const juce::String& notes, const juce::String& warning)
 {

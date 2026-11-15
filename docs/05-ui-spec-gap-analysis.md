@@ -992,3 +992,43 @@ macOS, Linux and Windows. What it took:
       C7(b5,b9) entered as specified; the contradiction refused; a click on
       a staff enters the chord in the octave clicked; Replace sel.; a
       B-flat clarinet written D4 F#4 A4. Screenshot `40-chord-mode`.
+
+21. **Instrument range guardrails. Done** (November 15, 2026; Add-On spec
+    Feature B).
+    - **Profiles.** Instruments keep their playable range (sounding) and
+      may give a `comfortable` and an `extended` range
+      (`docs/04`); the core pack gives both for the main orchestral winds,
+      brass and strings.
+    - **Policy per track** (`Track::range_policy`, saved; Track menu >
+      Range): Strict (refuse), Warn (allow, ringed), Extended (the extended
+      range, where the profile has one), Off. Default: Strict for acoustic
+      and pitched-percussion instruments, Off for synths, unpitched
+      percussion and tracks with no profile.
+    - **Session.** `range_limits`, `range_issues` (at sounding pitch:
+      written pitch plus the staff's transposition and octave clef),
+      `fit_into_range` (by whole octaves) and `move_into_range` (one undo
+      step).
+    - **Composer.** On the track being written the staff above its highest
+      and below its lowest note is shaded (red under Strict), with the
+      instrument and its limits written where the shading starts; notes
+      outside are ringed on every track. Every commit of the working copy
+      passes the guardrail: under Strict a single note outside (click,
+      letter, MIDI step) is refused with the reason on the status line,
+      and several (a chord, a paste, a transposition) ask: Move into range,
+      Keep flagged, or Cancel. Warn and Extended commit and say what was
+      flagged. Chord Mode goes through the same gate.
+    - **Imports and instrument changes.** When notes come to lie outside a
+      range by any other change, the status line says how many, never
+      moving or deleting them. Track > Check Instrument Ranges lists them
+      (bar, beat, pitch, above or below) with Move into range.
+    - Not yet: shading in the Producer piano roll, sample-library
+      articulation zones (as distinct from the physical range), and
+      revoicing as an alternative to moving by octaves.
+    - **Checks.** Unit tests: defaults (flute Strict, timpani Strict, pad
+      and snare Off), issues at sounding pitch (a B-flat clarinet's written
+      D3 sounds C3, under its range), Extended, Off, octave moves, one undo
+      step, saved policy. Desktop check: D7 refused on a flute and C5
+      entered; a chord over the top asks (Move into range, Keep flagged,
+      Cancel); Warn flags; Extended takes D7; a new instrument (piccolo)
+      re-checks without deleting and is announced; the report and its Move
+      into range. Screenshot `41-instrument-range`.

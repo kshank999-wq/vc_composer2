@@ -133,6 +133,22 @@ bool InstrumentRegistry::load(const json::Value& doc, const std::string& source,
         i.range_low = static_cast<int>(r->as_array()[0].as_int(-1));
         i.range_high = static_cast<int>(r->as_array()[1].as_int(-1));
         if (i.range_low < 0 || i.range_high > 127 || i.range_low > i.range_high) { err(i.id, "bad range"); continue; }
+        // Optional comfortable and extended ranges, inside and around the playable one.
+        auto pair = [&](const char* key, int& lo, int& hi) {
+            lo = i.range_low;
+            hi = i.range_high;
+            const auto* p = j.get(key);
+            if (!p) return true;
+            if (p->as_array().size() != 2) return false;
+            lo = static_cast<int>(p->as_array()[0].as_int(-1));
+            hi = static_cast<int>(p->as_array()[1].as_int(-1));
+            return lo >= 0 && hi <= 127 && lo <= hi;
+        };
+        if (!pair("comfortable", i.comfortable_low, i.comfortable_high) ||
+            i.comfortable_low < i.range_low || i.comfortable_high > i.range_high) { err(i.id, "bad comfortable range"); continue; }
+        if (!pair("extended", i.extended_low, i.extended_high) ||
+            i.extended_low > i.range_low || i.extended_high < i.range_high) { err(i.id, "bad extended range"); continue; }
+        i.has_extended = j.get("extended") != nullptr;
         if (i.name.empty() || i.short_name.empty()) { err(i.id, "missing name/short_name"); continue; }
         if (!contains(family_order(), i.family)) { err(i.id, "unknown family '" + i.family + "'"); continue; }
         if (!contains(kClefs, i.clef) || !contains(kClefs, i.lower_clef)) { err(i.id, "unknown clef"); continue; }

@@ -60,6 +60,8 @@ placeholder.
 | `grand_staff`, `lower_clef` | Optional; for piano, harp, organ and similar. |
 | `transposition` | Written → sounding semitones (Bb clarinet = -2, horn in F = -7, double bass = -12, piccolo = +12). Default 0. Octave clefs add their own octave: an instrument reading `treble_8vb` (guitar, tenor voice) keeps `transposition` 0 and sounds an octave lower through the clef. |
 | `range` | Sounding MIDI range `[low, high]`, 0–127. Required. |
+| `comfortable` | Optional practical range `[low, high]` inside `range`, sounding. Shown in the track's Range menu. |
+| `extended` | Optional extended range `[low, high]` around `range` (extensions, special techniques), sounding. Enforced under a track's Extended range policy. |
 | `score_order` | Integer; lower values print higher in the score. Default 1000. |
 | `gm_program` | 0–127 General MIDI program used for the built-in placeholder and preview sound. Use -1 with `unpitched: true` for GM drum-channel instruments. |
 | `unpitched` | True for percussion that uses drum mapping instead of pitched keys. |

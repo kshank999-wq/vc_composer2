@@ -326,6 +326,9 @@ struct Track {
     /// Input quantize: MIDI recorded onto this track lands on this grid
     /// (0: as played).
     Ticks input_quantize = 0;
+    /// Instrument range policy (Add-On spec §4): "strict", "warn",
+    /// "extended" or "off"; empty uses the default for the instrument.
+    std::string range_policy;
     std::vector<AutomationLane> automation;
     std::string automation_mode = "read";
     bool include_in_export = true;  ///< False for Reference tracks unless the user opts in.

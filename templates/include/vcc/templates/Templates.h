@@ -32,8 +32,15 @@ struct InstrumentDef {
     bool grand_staff = false;
     std::string lower_clef = "bass";
     int transposition = 0;
-    int range_low = 0;
+    int range_low = 0;   ///< Playable range, sounding MIDI notes.
     int range_high = 127;
+    /// Comfortable (practical) range, sounding; the playable range when the
+    /// profile gives none.
+    int comfortable_low = 0, comfortable_high = 127;
+    /// Extended range (special techniques, extensions), sounding; the
+    /// playable range when the profile gives none.
+    int extended_low = 0, extended_high = 127;
+    bool has_extended = false;
     int score_order = 1000;
     int gm_program = 0;
     bool unpitched = false;
