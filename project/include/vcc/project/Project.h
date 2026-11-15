@@ -329,6 +329,15 @@ struct Track {
     /// Instrument range policy (Add-On spec §4): "strict", "warn",
     /// "extended" or "off"; empty uses the default for the instrument.
     std::string range_policy;
+    /// Track Trans (Add-On spec §10): a non-destructive pitch shift in
+    /// semitones, separate from the instrument's own transposition, applied
+    /// once to what is heard and (mode "notation") to what is shown;
+    /// "playback" leaves the notation as written. Bypass is the A/B switch.
+    int transpose = 0;
+    std::string transpose_mode = "notation";
+    bool transpose_bypass = false;
+    /// The shift in force: 0 while bypassed.
+    int effective_transpose() const noexcept { return transpose_bypass ? 0 : transpose; }
     std::vector<AutomationLane> automation;
     std::string automation_mode = "read";
     bool include_in_export = true;  ///< False for Reference tracks unless the user opts in.

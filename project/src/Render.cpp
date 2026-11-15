@@ -198,6 +198,18 @@ RenderedTrack finish_render(const Track& track, const notation::ExpressionMap& m
         out.note_ids.push_back(id);
     }
     std::sort(out.keyswitches.begin(), out.keyswitches.end());
+    // Track Trans: the shift heard, once, on every note (keyswitches are
+    // instructions to the sampler, not pitches, and stay where they are).
+    if (performance && track.effective_transpose() != 0) {
+        const int by = track.effective_transpose();
+        int dropped = 0;
+        for (auto& n : out.notes) {
+            const int p = n.pitch + by;
+            if (p < 0 || p > 127) ++dropped;
+            n.pitch = std::clamp(p, 0, 127);
+        }
+        if (dropped > 0) out.warnings.push_back(std::to_string(dropped) + " note(s) pinned at the MIDI range by the track's transpose");
+    }
     return out;
 }
 

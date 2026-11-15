@@ -9,6 +9,7 @@
 
 #include "vcc/core/Files.h"
 #include "vcc/cues/Cues.h"
+#include "vcc/interchange/Transposition.h"
 #include "vcc/picture/Picture.h"
 #include "vcc/project/Automation.h"
 #include "vcc/project/Performance.h"
@@ -1043,6 +1044,122 @@ std::pair<int, int> Session::range_for(const project::Track& track) const
     return {21, 108};
 }
 
+// --- Track Trans ---------------------------------------------------------------------------
+
+bool Session::can_transpose(const project::Track& t, std::string* why) const
+{
+    auto no = [&](const char* reason) {
+        if (why) *why = reason;
+        return false;
+    };
+    if (t.kind != project::TrackKind::Instrument && t.kind != project::TrackKind::MidiOnly)
+        return no("Only instrument and MIDI tracks transpose; audio is never repitched");
+    if (t.midi_channel == 9) return no("The drum channel plays drum sounds, not pitches");
+    if (const auto* def = instrument_for(t); def && def->unpitched) return no("Unpitched percussion has no pitch to transpose");
+    return true;
+}
+
+bool Session::set_track_transpose(const std::string& track_id, int semitones)
+{
+    const auto* t = data().find_track(track_id);
+    if (!t || !can_transpose(*t)) return false;
+    semitones = std::clamp(semitones, -48, 48);
+    if (!project_.edit_coalescing("Transpose " + t->name, on_track(track_id, [&](project::Track& tr) {
+            if (tr.transpose == semitones) return false;
+            tr.transpose = semitones;
+            return true;
+        })))
+        return false;
+    document_changed();
+    return true;
+}
+
+bool Session::set_tracks_transpose(const std::vector<std::string>& track_ids, int semitones)
+{
+    semitones = std::clamp(semitones, -48, 48);
+    return edit("Transpose tracks", [&](project::ProjectData& d) {
+        bool any = false;
+        for (const auto& id : track_ids) {
+            auto* t = d.find_track(id);
+            if (!t || !can_transpose(*t) || t->transpose == semitones) continue;
+            t->transpose = semitones;
+            any = true;
+        }
+        return any;
+    });
+}
+
+bool Session::set_transpose_mode(const std::string& track_id, const std::string& mode)
+{
+    if (mode != "notation" && mode != "playback") return false;
+    return edit("Transpose mode", on_track(track_id, [&](project::Track& t) {
+        if (t.transpose_mode == mode) return false;
+        t.transpose_mode = mode;
+        return true;
+    }));
+}
+
+bool Session::set_transpose_bypass(const std::string& track_id, bool bypass)
+{
+    return edit(bypass ? "Bypass transpose" : "Transpose on", on_track(track_id, [&](project::Track& t) {
+        if (t.transpose_bypass == bypass) return false;
+        t.transpose_bypass = bypass;
+        return true;
+    }));
+}
+
+bool Session::commit_track_transpose(const std::string& track_id)
+{
+    const auto* t0 = data().find_track(track_id);
+    if (!t0 || t0->transpose == 0) return false;
+    return edit("Apply transpose to notes", on_track(track_id, [&](project::Track& t) {
+        const int by = t.transpose;
+        for (auto& v : t.versions) {
+            v.score = transposed_score(v.score, by);
+            for (auto& r : v.regions)
+                for (auto& n : r.notes) n.pitch = std::clamp(n.pitch + by, 0, 127);
+        }
+        t.transpose = 0;
+        return true;
+    }));
+}
+
+notation::Score Session::transposed_score(const notation::Score& score, int semitones)
+{
+    notation::Score out = score;
+    if (semitones == 0) return out;
+    for (std::size_t s = 0; s < score.staff_count(); ++s) {
+        const auto& staff = score.staff(s);
+        if (staff.clef == notation::Clef::Percussion) continue;
+        for (const auto& n : score.notes(s)) {
+            if (n.is_rest) continue;
+            const int midi = notation::midi_note_number(n.pitch) + semitones;
+            if (midi < 0 || midi > 127) continue;
+            // Respelled as the written key at that point spells it.
+            const auto key = interchange::written_key(score.key_signature_at(n.start_tick), staff.transposition_semitones);
+            notation::ScoreNote moved = n;
+            moved.pitch = notation::spell_midi_note(midi, key);
+            out.modify_note(n.id, moved);
+        }
+    }
+    return out;
+}
+
+std::string Session::interval_name(int semitones)
+{
+    if (semitones == 0) return "no transposition";
+    static const char* names[] = {"unison", "minor 2nd", "major 2nd", "minor 3rd", "major 3rd", "perfect 4th", "tritone",
+                                  "perfect 5th", "minor 6th", "major 6th", "minor 7th", "major 7th"};
+    const int a = std::abs(semitones);
+    std::string name;
+    if (a % 12 == 0) name = a == 12 ? "octave" : std::to_string(a / 12) + " octaves";
+    else {
+        name = names[a % 12];
+        if (a > 12) name += " + " + std::string(a / 12 == 1 ? "an octave" : std::to_string(a / 12) + " octaves");
+    }
+    return name + (semitones > 0 ? " up" : " down");
+}
+
 // --- Instrument range guardrails -------------------------------------------------------
 
 const char* Session::range_policy_name(RangePolicy policy) noexcept
@@ -1109,7 +1226,8 @@ std::vector<Session::RangeIssue> Session::range_issues(const project::Track& tra
         if (staff.clef == notation::Clef::Percussion) continue;
         for (const auto& n : score.notes(s)) {
             if (n.is_rest) continue;
-            const int sounding = notation::midi_note_number(n.pitch) + staff.total_transposition();
+            // Heard pitch: written + the instrument's transposition + the track's Trans.
+            const int sounding = notation::midi_note_number(n.pitch) + staff.total_transposition() + track.effective_transpose();
             if (sounding >= limits.low && sounding <= limits.high) continue;
             out.push_back({n.id, s, n.start_tick, sounding, sounding > limits.high});
         }

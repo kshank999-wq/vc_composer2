@@ -1075,3 +1075,54 @@ macOS, Linux and Windows. What it took:
       modulation to D major at bar 3 followed from a selection; Send to
       Chord Mode; Apply key to score with its question, and undo.
       Screenshots `42-circle-of-fifths`, `42b-circle-harmonic-minor`.
+
+23. **Track Trans. Done** (November 15, 2026; Add-On spec Feature H).
+    - **Model.** `Track::transpose` (semitones, -48..48),
+      `transpose_mode` ("notation": heard and shown; "playback": heard
+      only), `transpose_bypass` (A/B), all saved; old projects read 0. It is
+      separate from the instrument's written-to-concert transposition and
+      is applied once, after it: render adds it to every performed note
+      (score and MIDI regions; keyswitches untouched), so playback, MIDI
+      export, stems and bounces all hear it; the render cache refinishes
+      when it changes. Range checks count it.
+    - **Session.** `can_transpose` (instrument and MIDI tracks; not audio,
+      unpitched percussion or the drum channel, with the reason),
+      `set_track_transpose` (a run of +1 presses is one undo step),
+      `set_tracks_transpose` (explicit multi-track), `set_transpose_mode`,
+      `set_transpose_bypass`, `commit_track_transpose` (Apply to notes:
+      every version's score notes respelled in the written key, MIDI
+      regions moved, the shift back to 0, one undo step),
+      `transposed_score`, `interval_name`.
+    - **Composer.** Each track header has a Trans key showing the shift
+      (+2 st, lit unless bypassed; disabled with the reason where it does
+      not apply); it opens a popover anchored to the track: -1/+1, octave
+      keys, Reset, the readout and interval name, To key (the nearer shift
+      from the project's key), Notation + playback / Playback only, A/B
+      bypass, Apply to notes (asks). The track menu (both views) opens the
+      same popover. In notation mode the lane shows a transposed copy with
+      the same note ids, so selection and editing work; a note entered
+      there (click, letter, MIDI step, Chord Mode) is stored a shift lower
+      and sounds once transposed. Range shading and rings account for the
+      shift; the popover says when notes now lie outside the range and
+      never moves them.
+    - **Live changes.** When a track's shift changes while it plays, the
+      engine releases what that track holds as it adopts the new snapshot
+      (all notes off, sustain with them; MIDI out too) and the next notes
+      sound at the new pitch: no retrigger, nothing stuck.
+    - Not yet: a diatonic (in-key) transposition choice beside the
+      chromatic one, a per-track spelling preference, and choosing written
+      or sounding pitch at MusicXML/PDF export (they print the notes as
+      written).
+    - **Checks.** Unit tests: one track only, a run of presses as one undo
+      step, bypass, playback mode, the written notes untouched, a B-flat
+      clarinet +2 sounding D4 (transposed once), -12, saved and reopened,
+      Apply to notes (once, back to 0, one undo; the clarinet's written D4
+      becomes E4), the render cache following the shift, range flags,
+      audio and snare refused, several tracks at once, interval names.
+      Desktop check: the header key and popover (+2 st shown and heard on
+      one track), entry while shifted (E4 clicked sounds E4), bypass and
+      playback only, a bowed note held while the shift changes five times
+      then silence after its end (and, with the release disabled, the
+      check fails: the old pitch hangs), Apply to notes with its question
+      and undo, a flute's range flagged, audio refused. Screenshots
+      `43-trans`, `43b-trans-popover`.

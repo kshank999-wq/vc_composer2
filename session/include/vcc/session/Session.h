@@ -518,6 +518,30 @@ public:
     /// Sounding range for a track (instrument range, or full piano).
     std::pair<int, int> range_for(const project::Track& track) const;
 
+    // --- Track Trans (Add-On Features spec §10) ----------------------------------------
+    /// Whether a track can be transposed: pitched notes only (not audio,
+    /// buses, unpitched percussion or the drum channel). False with why.
+    bool can_transpose(const project::Track& track, std::string* why = nullptr) const;
+    /// Sets the shift in semitones (-48..48). Coalesces as "Transpose <name>",
+    /// so a run of +1 presses is one undo step.
+    bool set_track_transpose(const std::string& track_id, int semitones);
+    /// The same shift on several tracks, explicitly chosen, as one step.
+    bool set_tracks_transpose(const std::vector<std::string>& track_ids, int semitones);
+    /// "notation" (heard and shown) or "playback" (heard only).
+    bool set_transpose_mode(const std::string& track_id, const std::string& mode);
+    /// The A/B switch: true plays and shows the track untransposed.
+    bool set_transpose_bypass(const std::string& track_id, bool bypass);
+    /// Writes the shift into the notes - score notes respelled in the key,
+    /// played-in MIDI notes moved - and sets the shift back to 0, as one
+    /// undo step ("Apply transpose to notes"). False when there is none.
+    bool commit_track_transpose(const std::string& track_id);
+    /// `score` with every pitched note moved `semitones`, respelled as the
+    /// written key at that point spells it; note ids are kept (the Composer
+    /// shows a transposed track this way, and Apply to notes writes it).
+    static notation::Score transposed_score(const notation::Score& score, int semitones);
+    /// The interval a shift names: "major 2nd up", "octave down".
+    static std::string interval_name(int semitones);
+
     // --- Instrument range guardrails (Add-On Features spec §4) ------------------------
     enum class RangePolicy { Strict, Warn, Extended, Off };
     struct RangeLimits {

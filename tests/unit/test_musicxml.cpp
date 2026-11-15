@@ -7,6 +7,8 @@
 
 #include "vcc/interchange/MusicXml.h"
 #include "vcc/interchange/Xml.h"
+#include "vcc/project/Render.h"
+#include "vcc/project/RenderCache.h"
 #include "vcc/session/Session.h"
 #include "vcc/theory/Chord.h"
 #include "vcc_test.h"
@@ -1436,4 +1438,115 @@ TEST_CASE("instrument ranges: policies, issues at sounding pitch, moving into ra
     REQUIRE(again.open(path));
     CHECK(again.range_limits(*again.data().find_track(cl)).policy == RP::Warn);
     CHECK(again.range_limits(*again.data().find_track(fl)).policy_is_default);
+}
+
+TEST_CASE("track Trans: one track, heard once, reset, bypass, saved, applied to notes")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const std::string a = s.add_track("Piano A", "keys.piano");
+    const std::string b = s.add_track("Piano B", "keys.piano");
+    const std::string cl = s.add_track("Clarinet in Bb", "woodwinds.clarinet_bb");
+    const std::string audio = s.add_audio_track("Vox", false);
+    for (const auto& id : {a, b}) {
+        nt::Score sc = s.data().find_track(id)->active_version()->score;
+        sc.insert_note(0, note(0, nt::quarter(), P(nt::Step::C, 4)));
+        REQUIRE(s.commit_score(id, sc, "C4"));
+    }
+    {
+        nt::Score sc = s.data().find_track(cl)->active_version()->score;
+        sc.insert_note(0, note(0, nt::quarter(), P(nt::Step::D, 4)));  // written D4 sounds C4
+        REQUIRE(s.commit_score(cl, sc, "D4"));
+    }
+    auto heard = [&](const std::string& id) {
+        const auto r = project::render_track(*s.data().find_track(id));
+        return r.notes.empty() ? -1 : r.notes.front().pitch;
+    };
+    CHECK_EQ(heard(a), 60);
+    CHECK_EQ(heard(cl), 60);
+    // What playback renders through (the cache) follows the shift too.
+    project::RenderCache cache;
+    CHECK_EQ(cache.render(*s.data().find_track(a)).notes.front().pitch, 60);
+
+    // +2 on A: A plays D4, B stays C4; two presses are one undo step.
+    CHECK(s.set_track_transpose(a, 1));
+    CHECK(s.set_track_transpose(a, 2));
+    CHECK_EQ(heard(a), 62);
+    CHECK_EQ(heard(b), 60);
+    CHECK_EQ(cache.render(*s.data().find_track(a)).notes.front().pitch, 62);
+    CHECK_EQ(s.undo_label(), std::string("Transpose Piano A"));
+    s.undo();
+    CHECK_EQ(heard(a), 60);
+    s.redo();
+    CHECK_EQ(heard(a), 62);
+    // Bypass (A/B) and playback-only mode.
+    CHECK(s.set_transpose_bypass(a, true));
+    CHECK_EQ(heard(a), 60);
+    CHECK(s.set_transpose_bypass(a, false));
+    CHECK(s.set_transpose_mode(a, "playback"));
+    CHECK_EQ(heard(a), 62);
+    CHECK(!s.set_transpose_mode(a, "sideways"));
+    CHECK(s.set_transpose_mode(a, "notation"));
+    // The written notes never change by themselves.
+    CHECK_EQ(nt::midi_note_number(s.data().find_track(a)->active_version()->score.notes(0).front().pitch), 60);
+
+    // The clarinet: +2 sounds D4, transposed once (written D4 -> concert C4 -> +2).
+    CHECK(s.set_track_transpose(cl, 2));
+    CHECK_EQ(heard(cl), 62);
+    // Octave down, and saved.
+    CHECK(s.set_track_transpose(b, -12));
+    CHECK_EQ(heard(b), 48);
+    const std::string path = std::string(VCC_TEST_TMP_DIR) + "/trans.vcc2";
+    REQUIRE(s.save_as(path));
+    session::Session again(catalogs());
+    REQUIRE(again.open(path));
+    CHECK_EQ(again.data().find_track(a)->transpose, 2);
+    CHECK_EQ(again.data().find_track(b)->transpose, -12);
+
+    // Apply to notes: written once, the shift back to 0, one undo step.
+    CHECK(s.commit_track_transpose(a));
+    CHECK_EQ(s.undo_label(), std::string("Apply transpose to notes"));
+    CHECK_EQ(s.data().find_track(a)->transpose, 0);
+    const auto& written = s.data().find_track(a)->active_version()->score.notes(0).front().pitch;
+    CHECK_EQ(nt::midi_note_number(written), 62);
+    CHECK(written.step == nt::Step::D);
+    CHECK_EQ(heard(a), 62);
+    s.undo();
+    CHECK_EQ(s.data().find_track(a)->transpose, 2);
+    CHECK_EQ(heard(a), 62);
+    CHECK_EQ(nt::midi_note_number(s.data().find_track(a)->active_version()->score.notes(0).front().pitch), 60);
+    // The clarinet's written D4 becomes written E4.
+    CHECK(s.commit_track_transpose(cl));
+    const auto& cw = s.data().find_track(cl)->active_version()->score.notes(0).front().pitch;
+    CHECK(cw.step == nt::Step::E);
+    CHECK_EQ(cw.alteration, 0);
+    CHECK_EQ(heard(cl), 62);
+
+    // Ranges count the shift: a flute's C7 up a tone is above its top.
+    const std::string fl = s.add_track("Flute", "woodwinds.flute");
+    {
+        nt::Score sc = s.data().find_track(fl)->active_version()->score;
+        sc.insert_note(0, note(0, nt::quarter(), P(nt::Step::C, 7)));
+        REQUIRE(s.commit_score(fl, sc, "C7"));
+    }
+    CHECK(s.range_issues(*s.data().find_track(fl)).empty());
+    CHECK(s.set_track_transpose(fl, 2));
+    CHECK_EQ(s.range_issues(*s.data().find_track(fl)).size(), 1u);
+
+    // Not every track transposes; several at once when chosen.
+    std::string why;
+    CHECK(!s.can_transpose(*s.data().find_track(audio), &why));
+    CHECK(!why.empty());
+    CHECK(!s.set_track_transpose(audio, 2));
+    const std::string snare = s.add_track("Snare", "percussion.snare_drum");
+    CHECK(!s.can_transpose(*s.data().find_track(snare)));
+    CHECK(s.set_tracks_transpose({a, b, audio}, 5));
+    CHECK_EQ(s.data().find_track(a)->transpose, 5);
+    CHECK_EQ(s.data().find_track(b)->transpose, 5);
+    CHECK_EQ(s.undo_label(), std::string("Transpose tracks"));
+
+    CHECK_EQ(session::Session::interval_name(2), std::string("major 2nd up"));
+    CHECK_EQ(session::Session::interval_name(-12), std::string("octave down"));
+    CHECK_EQ(session::Session::interval_name(7), std::string("perfect 5th up"));
+    CHECK_EQ(session::Session::interval_name(-14), std::string("major 2nd + an octave down"));
 }

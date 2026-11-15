@@ -191,6 +191,9 @@ struct PlaybackSnapshot {
         /// External MIDI: the router's sink (-1 none) and the channel for
         /// notes off. `external`: the notes go to hardware, never the instrument.
         int midi_out = -1;
+        /// The track's Trans when this snapshot was built: a change between
+        /// snapshots releases the notes it held (they would end at the new pitch).
+        int transpose = 0;
         int midi_channel = 0;
         bool external = false;
         int print_slot = -1;  ///< Real-time print: this track's take, or -1.
@@ -1243,6 +1246,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         const project::Track* t = plan.tracks[k];
         PlaybackSnapshot::Track st;
         st.id = t->id;
+        st.transpose = t->effective_transpose();
         st.strip = make_strip(t->id, plan.track_sends[k], plan.track_output[k]);
         st.strip.fx_bypassed = t->printed_fx && t->playback == "audio" && has_instrument(*t);
         // A real-time print of this track: its MIDI always, its own clips never.
@@ -2387,6 +2391,19 @@ void PlaybackEngine::process(const float* const* inputs, int num_inputs, float* 
     live_rt_ = live_ptr_.load(std::memory_order_acquire);
     if (spill_ == nullptr) {
         if (PlaybackSnapshot* incoming = pending_.exchange(nullptr)) {
+            // Trans changed on a track: what it holds is released now, and
+            // the next notes sound at the new pitch (no note-off goes astray,
+            // nothing retriggers; the sustain pedal is let go with them).
+            if (current_)
+                for (auto& t : incoming->tracks)
+                    for (const auto& old : current_->tracks)
+                        if (old.id == t.id && old.transpose != t.transpose) {
+                            if (t.instrument) t.instrument->all_notes_off();
+                            if (t.midi_out >= 0)
+                                midi_router_->push(t.midi_out, juce::MidiMessage::allNotesOff(t.midi_channel + 1),
+                                                   juce::Time::getMillisecondCounterHiRes());
+                            break;
+                        }
             if (current_ && !retired_.push(current_)) spill_ = current_;  // queue full: hand back next block
             current_ = incoming;
             current_->seek(position_samples_.load());

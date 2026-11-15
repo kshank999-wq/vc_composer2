@@ -1,4 +1,5 @@
 #include "ui/TrackPanel.h"
+#include "ui/composer/TransposePopover.h"
 
 #include <algorithm>
 
@@ -550,6 +551,17 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
     m.addSubMenu("Instrument", instruments);
     m.addItem("Open instrument window", !t->instrument_plugin.empty(),
               false, [&c, id] { if (c.show_plugin_window) c.show_plugin_window(id); });
+    // Trans (Add-On spec §10): the popover, at the pointer.
+    {
+        std::string why;
+        const bool can = c.session.can_transpose(*t, &why);
+        const int s = t->transpose;
+        m.addItem("Trans (transpose)" + juce::String(s != 0 ? "  " + juce::String(s > 0 ? "+" : "") + juce::String(s) + " st" : "") + "...",
+                  can, false, [&c, id] {
+                      const auto at = juce::Desktop::getMousePosition();
+                      composer_ui::TransposePopover::show(c, id, juce::Rectangle<int>(at.x, at.y, 1, 1));
+                  });
+    }
     // Instrument range (Add-On spec §4).
     if (t->kind == project::TrackKind::Instrument || t->kind == project::TrackKind::MidiOnly) {
         using RP = session::Session::RangePolicy;

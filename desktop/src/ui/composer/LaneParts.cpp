@@ -1,4 +1,5 @@
 #include "ui/composer/LaneParts.h"
+#include "ui/composer/TransposePopover.h"
 
 #include <cmath>
 
@@ -13,9 +14,17 @@ namespace vcc::desktop::composer_ui {
 
 TrackHeader::TrackHeader(AppContext& context, std::string track_id) : context_(context), track_(std::move(track_id))
 {
-    for (auto* c : std::initializer_list<juce::Component*>{&number_, &scribble_, &rec_, &solo_, &mute_, &tag_, &vol_, &pan_,
+    for (auto* c : std::initializer_list<juce::Component*>{&number_, &scribble_, &rec_, &solo_, &mute_, &tag_, &trans_, &vol_, &pan_,
                                                            &vol_lcd_, &pan_lcd_, &meter_})
         addAndMakeVisible(c);
+    // Trans (Add-On spec §10): the track's transpose, at hand.
+    trans_.set_legend_size(9.0f);
+    trans_.setWantsKeyboardFocus(false);
+    trans_.setComponentID("track_trans");
+    trans_.onClick = [this] {
+        context_.session.select_track(track_);
+        TransposePopover::show(context_, track_, trans_.getScreenBounds());
+    };
     number_.set_justification(juce::Justification::centred);
     vol_lcd_.set_justification(juce::Justification::centred);
     pan_lcd_.set_justification(juce::Justification::centred);
@@ -72,6 +81,18 @@ void TrackHeader::refresh()
     vol_lcd_.set_text(t->gain_db <= -59.95 ? juce::String("-INF") : juce::String(t->gain_db, 1));
     const int pv = juce::roundToInt(t->pan * 100.0);
     pan_lcd_.set_text(pv == 0 ? juce::String("C") : (pv < 0 ? "L" : "R") + juce::String(std::abs(pv)));
+    // Trans: its shift as a badge (+2 st), dimmed while bypassed.
+    {
+        std::string why;
+        const bool can = context_.session.can_transpose(*t, &why);
+        const int s = t->transpose;
+        trans_.setButtonText(s == 0 ? juce::String("Trans") : (s > 0 ? "+" : "") + juce::String(s) + " st");
+        trans_.setToggleState(s != 0 && !t->transpose_bypass, juce::dontSendNotification);
+        trans_.setEnabled(can);
+        trans_.setTooltip(can ? "Trans: transpose this track without changing its notes (" +
+                                    juce::String(session::Session::interval_name(s)) + (t->transpose_bypass ? ", bypassed)" : ")")
+                              : juce::String(why));
+    }
     // The staff tag: what the staff reads.
     juce::String tag = "Treble";
     if (const auto* v = t->active_version()) {
@@ -138,7 +159,8 @@ void TrackHeader::resized()
     rec_.setBounds(11, 44, 24, 22);
     solo_.setBounds(38, 44, 24, 22);
     mute_.setBounds(65, 44, 24, 22);
-    tag_.setBounds(11, 70, 78, 20);
+    tag_.setBounds(11, 70, 50, 20);
+    trans_.setBounds(63, 70, 42, 20);
     vol_.setBounds(112, 52, 28, 28);
     pan_.setBounds(150, 52, 28, 28);
     vol_lcd_.setBounds(106, 82, 40, 15);

@@ -47,6 +47,8 @@ public:
 
     const std::string& track_id() const noexcept { return track_id_; }
     ui::NotationView& view() noexcept { return view_; }
+    /// The transposed copy the lane shows while the track has a Trans shift.
+    notation::Score& shown() noexcept { return shown_; }
     composer_ui::TrackHeader& header() noexcept { return header_; }
     composer_ui::PhraseLayer& phrases() noexcept { return phrases_; }
 
@@ -90,11 +92,15 @@ public:
         juce::Graphics::ScopedSaveState state(g);
         g.reduceClipRegion(view_.getBounds());
         const bool strict = limits.policy == session::Session::RangePolicy::Strict;
+        // What the lane shows already carries the Trans shift in notation
+        // mode; in playback mode the shift is still to come.
+        const int unshown = t->transpose_mode == "notation" ? 0 : t->effective_transpose();
         if (session.selected_track() == track_id_) {
             auto position_of = [&](int sounding, std::size_t s) {
                 const auto& staff = score->staff(s);
                 const auto key = interchange::written_key(score->key_signature_at(view_.origin_tick()), staff.transposition_semitones);
-                return notation::staff_position(notation::spell_midi_note(sounding - staff.total_transposition(), key), staff.clef);
+                return notation::staff_position(
+                    notation::spell_midi_note(sounding - staff.total_transposition() - unshown, key), staff.clef);
             };
             const std::size_t last = score->staff_count() - 1;
             if (score->staff(0).clef != notation::Clef::Percussion) {
@@ -118,7 +124,9 @@ public:
                            juce::Justification::centredRight, false);
             }
         }
-        for (const auto& issue : session.range_issues(*t, *score)) {
+        // Issues from the notes as stored (the ids are the lane's).
+        const notation::Score& own = track_id_ == owner_.editing_track_ && owner_.editor_ ? owner_.working_ : t->active_version()->score;
+        for (const auto& issue : session.range_issues(*t, own)) {
             const auto r = view_.notehead_bounds(issue.id);
             if (r.isEmpty()) continue;
             g.setColour(juce::Colour(strict ? 0xffe0553a : 0xffe0a040));
@@ -146,6 +154,7 @@ private:
     composer_ui::TrackHeader header_;
     ui::NotationView view_;
     composer_ui::PhraseLayer phrases_;
+    notation::Score shown_;
 };
 
 // --- ComposerView -----------------------------------------------------------------------------
@@ -359,12 +368,20 @@ void ComposerView::apply_view_settings()
         const auto* v = t ? t->active_version() : nullptr;
         auto& view = s->view();
         view.set_layout_options(options);
+        // Track Trans in notation mode: the lane shows the notes as heard,
+        // on a copy with the same note ids (selection and editing still work).
+        const int shown_shift = t && t->transpose_mode == "notation" ? t->effective_transpose() : 0;
+        auto shown = [&](const notation::Score* score) -> const notation::Score* {
+            if (!score || shown_shift == 0) return score;
+            s->shown() = session::Session::transposed_score(*score, shown_shift);
+            return &s->shown();
+        };
         if (s->track_id() == editing_track_ && editor_) {
-            view.set_score(&working_);
+            view.set_score(shown(&working_));
             view.set_cursor(editor_->cursor().tick, editor_->cursor().staff_index, note_entry_);
             view.set_selection(editor_->selection());
         } else {
-            view.set_score(v ? &v->score : nullptr);
+            view.set_score(shown(v ? &v->score : nullptr));
             view.set_cursor(0, 0, false);
             view.set_selection({});
         }
@@ -522,6 +539,22 @@ bool ComposerView::range_ok(bool single_entry, std::function<void()> commit)
 
 void ComposerView::handle(const editing::EditResult& result)
 {
+    // Entered on a lane showing a Trans shift: the note was entered as
+    // shown, so it is stored a shift lower and sounds once transposed.
+    if (result.score_changed && result.new_event != notation::kInvalidEventId && !editing_track_.empty())
+        if (const auto* t = context_.session.data().find_track(editing_track_);
+            t && t->transpose_mode == "notation" && t->effective_transpose() != 0)
+            if (const auto* n = working_.find_note(result.new_event); n && !n->is_rest) {
+                const auto staff = working_.staff_index_of(n->id);
+                const auto& st = working_.staff(staff);
+                const int midi = notation::midi_note_number(n->pitch) - t->effective_transpose();
+                if (midi >= 0 && midi <= 127) {
+                    notation::ScoreNote moved = *n;
+                    moved.pitch = notation::spell_midi_note(
+                        midi, interchange::written_key(working_.key_signature_at(n->start_tick), st.transposition_semitones));
+                    working_.modify_note(n->id, moved);
+                }
+            }
     if (result.score_changed && !editing_track_.empty()) {
         const std::string label = result.message;
         auto commit = [this, label] {
@@ -632,10 +665,12 @@ int steps_for(int semitones)
 
 /// The chord's notes on a staff: written pitch for a transposing one, each
 /// keeping the chord's spelling.
-std::vector<notation::Pitch> written_chord(const std::vector<theory::VoicedTone>& voiced, const notation::Staff& staff)
+std::vector<notation::Pitch> written_chord(const std::vector<theory::VoicedTone>& voiced, const notation::Staff& staff,
+                                          int trans = 0)
 {
-    const int t = staff.transposition_semitones;
-    const int total = staff.total_transposition();
+    // Written = sounding less the instrument's transposition and the track's Trans.
+    const int t = staff.transposition_semitones + trans;
+    const int total = staff.total_transposition() + trans;
     std::vector<notation::Pitch> out;
     for (const auto& v : voiced) {
         theory::VoicedTone w{t != 0 ? v.pitch.transposed(steps_for(-t), -t) : v.pitch, v.midi - total};
@@ -741,7 +776,8 @@ bool ComposerView::enter_chord(bool replace_selection)
     const auto cur = editor_->cursor();
     const auto staff_index = std::min(cur.staff_index, working_.staff_count() - 1);
     const auto voiced = theory::voice_for_entry(*chord, chord_state_.octave, chord_state_.style);
-    const auto pitches = written_chord(voiced, working_.staff(staff_index));
+    const auto* track = context_.session.data().find_track(editing_track_);
+    const auto pitches = written_chord(voiced, working_.staff(staff_index), track ? track->effective_transpose() : 0);
     if (pitches.empty()) return false;
     const notation::Score before = working_;
     auto r = editor_->insert_pitch(pitches.front());

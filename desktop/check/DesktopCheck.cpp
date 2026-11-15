@@ -31,6 +31,7 @@
 #include "ui/console/ConsoleView.h"
 #include "ui/TrackPanel.h"
 #include "ui/composer/CircleOfFifths.h"
+#include "ui/composer/TransposePopover.h"
 #include "ui/composer/ComposerRuler.h"
 #include "vcc/theory/Chord.h"
 #include "ui/composer/Inspector.h"
@@ -4203,6 +4204,182 @@ void circle_checks(MainWindow& window, const juce::File& dir)
     if (auto* w = panel->getTopLevelComponent()) w->setVisible(false);
 }
 
+/// Track Trans (Add-On spec §10): the header key's popover, one track only,
+/// shown and heard once, entry while shifted, bypass, playback only, Apply
+/// to notes, range flags, audio refused, and no stuck note when the shift
+/// changes under a held note.
+void trans_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& engine = ctx.engine;
+    engine.stop();
+    session.new_empty();
+    const auto a = session.add_track("Piano A", "keys.piano");
+    const auto b = session.add_track("Piano B", "keys.piano");
+    const Ticks Q = kTicksPerQuarter;
+    for (const auto& id : {a, b}) {
+        notation::Score sc = session.data().find_track(id)->active_version()->score;
+        notation::ScoreNote n;
+        n.start_tick = 0;
+        n.duration = notation::quarter();
+        n.pitch = notation::Pitch{notation::Step::C, 4, 0};
+        sc.insert_note(0, n);
+        session.commit_score(id, sc, "C4");
+    }
+    main.show_workspace(MainComponent::Workspace::Composer);
+    if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
+    pump(100);
+    auto& composer = main.composer();
+    session.select_track(a);
+    pump(50);
+    auto heard = [&](const std::string& id) {
+        const auto r = project::render_track(*session.data().find_track(id));
+        return r.notes.empty() ? -1 : r.notes.front().pitch;
+    };
+    auto shown = [&](int lane, Ticks tick) {
+        const auto* sc = composer.lane(lane).score();
+        if (!sc) return -1;
+        for (const auto& n : sc->notes(0))
+            if (n.start_tick == tick && !n.is_rest) return notation::midi_note_number(n.pitch);
+        return -1;
+    };
+    auto stored = [&](const std::string& id, Ticks tick) {
+        for (const auto& n : session.data().find_track(id)->active_version()->score.notes(0))
+            if (n.start_tick == tick && !n.is_rest) return notation::midi_note_number(n.pitch);
+        return -1;
+    };
+
+    // The header's Trans key opens the popover; +1 twice: +2 st on A only.
+    composer.header(0).trans_key().triggerClick();
+    pump(120);
+    auto* pop = composer_ui::TransposePopover::current();
+    if (!pop) {
+        check(false, "the track header's Trans key opens the transpose popover");
+        return;
+    }
+    pop->up_key().triggerClick();
+    pump(30);
+    pop->up_key().triggerClick();
+    pump(80);
+    check(pop->readout() == "+2 st" && heard(a) == 62 && heard(b) == 60 && shown(0, 0) == 62 && shown(1, 0) == 60 &&
+              stored(a, 0) == 60 && composer.header(0).trans_key().getButtonText() == "+2 st" &&
+              session.undo_label() == "Transpose Piano A",
+          "Trans +2 on Piano A: it plays and shows D4, the written C4 is kept, Piano B stays on C4, the header says +2 st");
+    shoot(main, dir, "43-trans");
+    if (auto* box = pop->findParentComponentOfClass<juce::CallOutBox>()) shoot(*box, dir, "43b-trans-popover");
+
+    // Entered while shifted: a note clicked as E4 is heard as E4, stored a tone lower.
+    {
+        engraving::InsertionPoint p;
+        p.valid = true;
+        p.staff_index = 0;
+        p.tick = Q;
+        p.pitch = notation::Pitch{notation::Step::E, 4, 0};
+        composer.lane(0).on_staff_clicked(p);
+        pump(50);
+    }
+    check(stored(a, Q) == 62 && shown(0, Q) == 64, "a note entered on the shifted staff as E4 sounds E4 - stored D4, transposed once");
+    const auto heard_q = [&] {
+        for (const auto& n : project::render_track(*session.data().find_track(a)).notes)
+            if (n.start == Q) return n.pitch;
+        return -1;
+    }();
+    check(heard_q == 64, "and it plays E4 (" + juce::String(heard_q) + ")");
+
+    // A/B bypass, then playback only.
+    pop->bypass_key().triggerClick();
+    pump(60);
+    const bool bypassed = heard(a) == 60 && shown(0, 0) == 60;
+    pop->bypass_key().triggerClick();
+    pump(30);
+    pop->set_playback_only(true);
+    pump(60);
+    const bool playback_only = heard(a) == 62 && shown(0, 0) == 60;
+    pop->set_playback_only(false);
+    pump(60);
+    check(bypassed && playback_only && heard(a) == 62,
+          "A/B bypass plays and shows C4; Playback only plays D4 and leaves the staff at C4");
+
+    // No stuck note: a held whole note on a sustaining (bowed) sound, the
+    // shift changed under it, then silence after its end.
+    {
+        const auto strings = session.add_track("Strings", "strings.violin");
+        session.select_track(a);
+        notation::Score sc = session.data().find_track(strings)->active_version()->score;
+        notation::ScoreNote n;
+        n.start_tick = 4 * Q;
+        n.duration = notation::whole();
+        n.pitch = notation::Pitch{notation::Step::G, 4, 0};
+        sc.insert_note(0, n);
+        session.commit_score(strings, sc, "G4");
+        session.set_mute(a, true);
+        session.set_mute(b, true);
+        engine.prepare_offline(48000.0, 512);
+        Rig rig(engine);
+        engine.locate(4 * Q);
+        engine.play();
+        const double before = rig.run(0.6).rms;
+        session.set_track_transpose(strings, 1);  // under the held note
+        rig.run(0.2);
+        for (int i = 0; i < 4; ++i) {            // round and round, as a user might
+            session.set_track_transpose(strings, i % 2 == 0 ? -1 : 1);
+            rig.run(0.15);
+        }
+        rig.run(2.2);                        // well past the note's end
+        const double after = rig.run(0.5).rms;
+        engine.stop();
+        session.set_mute(a, false);
+        session.set_mute(b, false);
+        session.remove_track(strings);
+        check(before > 0.01 && after < 1.0e-4,
+              "changing Trans under a held note leaves nothing hanging (rms " + juce::String(before, 3) + " while held, " +
+                  juce::String(after, 6) + " after its end)");
+    }
+
+    // Apply to notes: asked, written once, back to 0, one undo step.
+    pop->apply_to_notes();
+    pump(30);
+    auto* question = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0));
+    const bool asked = question && question->getComponentID() == "trans_apply_question";
+    if (question) question->exitModalState(1);
+    pump(60);
+    check(asked && session.data().find_track(a)->transpose == 0 && stored(a, 0) == 62 && heard(a) == 62 &&
+              session.undo_label() == "Apply transpose to notes",
+          "Apply to notes asks, writes D4 into the score once and sets Trans back to 0");
+    session.undo();
+    pump(30);
+    check(session.data().find_track(a)->transpose == 2 && stored(a, 0) == 60, "one undo brings back C4 with +2 st");
+
+    // Range after a shift is flagged, not fixed; audio cannot transpose.
+    const auto flute = session.add_track("Flute", "woodwinds.flute");
+    {
+        notation::Score sc = session.data().find_track(flute)->active_version()->score;
+        notation::ScoreNote n;
+        n.start_tick = 0;
+        n.duration = notation::quarter();
+        n.pitch = notation::Pitch{notation::Step::C, 7, 0};
+        sc.insert_note(0, n);
+        session.commit_score(flute, sc, "C7");
+    }
+    if (auto* box = pop->findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
+    pump(80);
+    auto* fpop = composer_ui::TransposePopover::show(ctx, flute, {200, 200, 10, 10});
+    pump(80);
+    fpop->set(2);
+    pump(300);
+    check(fpop->warning().contains("outside") && session.range_issues(*session.data().find_track(flute)).size() == 1 &&
+              stored(flute, 0) == 96,
+          "the flute's C7 up a tone is flagged as outside its range, never moved: " + fpop->warning());
+    if (auto* box = fpop->findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
+    pump(60);
+    const auto vox = session.add_audio_track("Vox", false);
+    std::string why;
+    check(!session.can_transpose(*session.data().find_track(vox), &why) && !session.set_track_transpose(vox, 2),
+          "an audio track cannot be transposed (" + juce::String(why) + ")");
+}
+
 /// Chord symbols: the ruler's suggestion kept with a click, one typed on a
 /// beat, a bad one refused, Escape, editing to empty removes, and the
 /// symbols printed over the full score's top staff in the Page view.
@@ -5442,6 +5619,7 @@ int main(int argc, char** argv)
         chord_mode_checks(window, dir);
         range_checks(window, dir);
         circle_checks(window, dir);
+        trans_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

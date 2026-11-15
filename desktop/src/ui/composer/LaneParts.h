@@ -30,6 +30,7 @@ public:
     hw::Keycap& record_key() { return rec_; }
     hw::Keycap& solo_key() { return solo_; }
     hw::Keycap& mute_key() { return mute_; }
+    hw::Keycap& trans_key() { return trans_; }
     hw::SmallKnob& volume() { return vol_; }
     const hw::Lcd& scribble() const { return scribble_; }
 
@@ -38,7 +39,7 @@ private:
     AppContext& context_;
     std::string track_;
     hw::Lcd number_{{}, 11.0f}, scribble_{{}, 12.0f}, vol_lcd_{{}, 9.5f}, pan_lcd_{{}, 9.5f};
-    hw::Keycap rec_{"R", true}, solo_{"S", true}, mute_{"M", true}, tag_{"Treble"};
+    hw::Keycap rec_{"R", true}, solo_{"S", true}, mute_{"M", true}, tag_{"Treble"}, trans_{"Trans"};
     hw::SmallKnob vol_, pan_;
     hw::Meter meter_{hw::Meter::Orientation::Vertical, 12};
 };

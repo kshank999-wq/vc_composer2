@@ -70,6 +70,7 @@ private:
         notation::RenderResult raw;
         std::vector<MidiRegion> regions;
         std::map<notation::EventId, NoteOverride> performance;
+        int transpose = 0;  ///< The track's Trans when finished (a change refinishes).
         std::optional<RenderedTrack> finished[2];  ///< [0] as written, [1] performed.
     };
     std::map<std::string, Entry> entries_;

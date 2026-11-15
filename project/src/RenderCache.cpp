@@ -316,7 +316,8 @@ const RenderedTrack& RenderCache::render(const Track& track, bool performance)
         }
     }
 
-    const bool around_changed = !same_regions(e.regions, v->regions) || e.performance != v->performance;
+    const bool around_changed = !same_regions(e.regions, v->regions) || e.performance != v->performance ||
+                                e.transpose != track.effective_transpose();
     if (raw_changed || around_changed || fresh) {
         e.finished[0].reset();
         e.finished[1].reset();
@@ -334,6 +335,7 @@ const RenderedTrack& RenderCache::render(const Track& track, bool performance)
     if (around_changed || fresh) {
         e.regions = v->regions;
         e.performance = v->performance;
+        e.transpose = track.effective_transpose();
     }
     last_.events_total = e.raw.events.size();
     return *slot;

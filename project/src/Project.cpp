@@ -786,6 +786,9 @@ json::Value Project::to_json() const
         if (!t.sidechain.empty()) o.set("sidechain", t.sidechain);
         if (t.input_quantize > 0) o.set("input_quantize", t.input_quantize);
         if (!t.range_policy.empty()) o.set("range_policy", t.range_policy);
+        if (t.transpose != 0) o.set("transpose", t.transpose);
+        if (t.transpose_mode != "notation") o.set("transpose_mode", t.transpose_mode);
+        if (t.transpose_bypass) o.set("transpose_bypass", true);
         if (!t.automation.empty()) o.set("automation", automation_to_json(t.automation));
         o.set("automation_mode", t.automation_mode);
         o.set("include_in_export", t.include_in_export);
@@ -1046,6 +1049,9 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.range_policy = j.get_string("range_policy", "");
         if (t.range_policy != "strict" && t.range_policy != "warn" && t.range_policy != "extended" && t.range_policy != "off")
             t.range_policy.clear();
+        t.transpose = static_cast<int>(std::clamp<long long>(j.get_int("transpose", 0), -48, 48));
+        t.transpose_mode = j.get_string("transpose_mode", "notation") == "playback" ? "playback" : "notation";
+        t.transpose_bypass = j.get_bool("transpose_bypass", false);
         if (t.playback != "midi" && t.playback != "audio") t.playback = "both";
         if (t.monitor != "auto" && t.monitor != "input" && t.monitor != "off")
             return fail("track " + t.id + ": unknown monitor mode '" + t.monitor + "'");
