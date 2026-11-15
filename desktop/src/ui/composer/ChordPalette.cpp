@@ -1,0 +1,367 @@
+#include "ui/composer/ChordPalette.h"
+
+#include <algorithm>
+
+#include "ui/hw/HwTheme.h"
+
+namespace vcc::desktop::composer_ui {
+
+namespace {
+
+const char* const kLetters = "CDEFGAB";
+const char* const kAlterations[] = {"b5", "#5", "b9", "#9", "#11", "b13", "no3", "no5"};
+const char* const kSlashNames[] = {"C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Gb", "G", "G#", "Ab", "A", "A#", "Bb", "B"};
+
+juce::String quality_label(const theory::ChordQuality& q)
+{
+    static const std::map<std::string, const char*> names = {
+        {"maj", "Major"}, {"m", "Minor"}, {"dim", "Diminished"}, {"aug", "Augmented"}, {"sus2", "Suspended 2"},
+        {"sus4", "Suspended 4"}, {"5", "Power chord (5)"}, {"6", "Added 6"}, {"m6", "Minor added 6"}, {"69", "6/9"},
+        {"7", "Dominant 7"}, {"maj7", "Major 7"}, {"m7", "Minor 7"}, {"m7b5", "Half-diminished 7"},
+        {"dim7", "Diminished 7"}, {"mmaj7", "Minor-major 7"}, {"aug7", "Augmented 7"}, {"augmaj7", "Augmented major 7"},
+        {"7sus4", "7 suspended 4"}, {"add9", "Add 9 (no 7th)"}, {"madd9", "Minor add 9 (no 7th)"},
+        {"9", "Dominant 9 (stacked)"}, {"maj9", "Major 9"}, {"m9", "Minor 9"}, {"7b9", "7 flat 9"}, {"7#9", "7 sharp 9"},
+        {"11", "Dominant 11"}, {"m11", "Minor 11"}, {"maj7#11", "Major 7 sharp 11"}, {"13", "Dominant 13"},
+        {"maj13", "Major 13"}, {"m13", "Minor 13"}, {"7alt", "Altered dominant"},
+    };
+    const auto it = names.find(q.id);
+    const juce::String name = it != names.end() ? juce::String(it->second) : juce::String(q.id);
+    return q.symbol.empty() ? name : name + "   (" + juce::String(q.symbol) + ")";
+}
+
+void style_combo(juce::ComboBox& c, const juce::String& id)
+{
+    c.setComponentID(id);
+    c.setColour(juce::ComboBox::backgroundColourId, hw::tok::panel_bottom);
+    c.setColour(juce::ComboBox::outlineColourId, hw::tok::edge);
+    c.setColour(juce::ComboBox::textColourId, hw::tok::text_bright);
+    c.setColour(juce::ComboBox::arrowColourId, hw::tok::text);
+}
+
+}  // namespace
+
+std::optional<theory::Chord> chord_for(const ChordModeState& s, std::string* problem)
+{
+    auto fail = [&](const std::string& why) -> std::optional<theory::Chord> {
+        if (problem) *problem = why;
+        return std::nullopt;
+    };
+    const auto* q = theory::find_quality(s.quality);
+    if (!q) return fail("Choose a chord quality");
+    std::string text(1, kLetters[std::clamp(s.letter, 0, 6)]);
+    if (s.accidental < 0) text += "b";
+    if (s.accidental > 0) text += "#";
+    text += q->symbol;
+    if (!s.alterations.empty()) {
+        std::string mods;
+        for (const char* a : kAlterations)
+            if (s.alterations.count(a)) mods += (mods.empty() ? "" : ",") + std::string(a);
+        text += "(" + mods + ")";
+    }
+    auto chord = theory::parse_chord_symbol(text);
+    if (!chord) return fail("Those alterations contradict the chord (" + text + ")");
+    if (!s.slash_bass.empty()) {
+        const auto bass = theory::SpelledPitch::parse(s.slash_bass);
+        if (!bass) return fail("Choose a bass note");
+        const auto tones = chord->tones();
+        const auto pos = std::find(tones.begin(), tones.end(), *bass);
+        if (pos != tones.end() && pos - tones.begin() <= 3) chord->inversion = static_cast<int>(pos - tones.begin());
+        else chord->bass = *bass;
+    } else {
+        std::size_t core = 0;
+        for (const auto& t : chord->intervals()) core += t.degree <= 7 ? 1 : 0;
+        if (s.inversion >= static_cast<int>(core)) return fail("This chord has no such inversion");
+        chord->inversion = s.inversion;
+    }
+    if (problem) problem->clear();
+    return chord;
+}
+
+ChordPalette::ChordPalette(ChordModeState& state) : hw::Panel("Chord mode", false), state_(state)
+{
+    setComponentID("chord_palette");
+    for (int i = 0; i < 7; ++i) {
+        roots_.push_back(std::make_unique<hw::Keycap>(juce::String::charToString(kLetters[i]), false));
+        auto& k = *roots_.back();
+        k.setComponentID("chord_root_" + juce::String::charToString(kLetters[i]));
+        k.onClick = [this, i] {
+            state_.letter = i;
+            changed();
+        };
+        addAndMakeVisible(k);
+    }
+    const char* acc[] = {"\xE2\x99\xAD", "\xE2\x99\xAE", "\xE2\x99\xAF"};
+    for (int i = 0; i < 3; ++i) {
+        accidentals_.push_back(std::make_unique<hw::Keycap>(juce::String::fromUTF8(acc[i]), false));
+        auto& k = *accidentals_.back();
+        k.setComponentID("chord_accidental_" + juce::String(i - 1));
+        k.onClick = [this, i] {
+            state_.accidental = i - 1;
+            changed();
+        };
+        addAndMakeVisible(k);
+    }
+    for (const char* a : kAlterations) {
+        juce::String legend = juce::String(a).replace("b", juce::String::fromUTF8("\xE2\x99\xAD")).replace("#", juce::String::fromUTF8("\xE2\x99\xAF"));
+        if (juce::String(a).startsWith("no")) legend = juce::String(a);
+        alterations_.push_back(std::make_unique<hw::Keycap>(legend, false));
+        auto& k = *alterations_.back();
+        k.setComponentID("chord_alt_" + juce::String(a));
+        k.set_led_dot(true);
+        const std::string name = a;
+        k.onClick = [this, name] {
+            if (state_.alterations.count(name)) state_.alterations.erase(name);
+            else state_.alterations.insert(name);
+            changed();
+        };
+        addAndMakeVisible(k);
+    }
+    style_combo(quality_, "chord_quality");
+    int qid = 1;
+    for (const auto& q : theory::chord_qualities()) quality_.addItem(quality_label(q), qid++);
+    quality_.onChange = [this] {
+        if (refreshing_) return;
+        const int i = quality_.getSelectedItemIndex();
+        const auto& all = theory::chord_qualities();
+        if (i >= 0 && i < static_cast<int>(all.size())) state_.quality = all[static_cast<std::size_t>(i)].id;
+        changed();
+    };
+    style_combo(bass_, "chord_bass");
+    bass_.onChange = [this] {
+        if (refreshing_) return;
+        const int id = bass_.getSelectedId();
+        if (id >= 1 && id <= 4) {
+            state_.inversion = id - 1;
+            state_.slash_bass.clear();
+        } else if (id >= 10) {
+            state_.inversion = 0;
+            state_.slash_bass = kSlashNames[id - 10];
+        }
+        changed();
+    };
+    style_combo(voicing_, "chord_voicing");
+    voicing_.addItem("Close position", 1);
+    voicing_.addItem("Open position", 2);
+    voicing_.addItem("Drop 2", 3);
+    voicing_.addItem("Spread (bass an octave down)", 4);
+    voicing_.onChange = [this] {
+        if (refreshing_) return;
+        static const theory::VoicingStyle styles[] = {theory::VoicingStyle::Closed, theory::VoicingStyle::Open,
+                                                      theory::VoicingStyle::Drop2, theory::VoicingStyle::Spread};
+        const int i = voicing_.getSelectedItemIndex();
+        if (i >= 0 && i < 4) state_.style = styles[i];
+        changed();
+    };
+    style_combo(then_, "chord_then");
+    then_.addItem("After chord", 1);
+    then_.addItem("Next beat", 2);
+    then_.addItem("Next bar", 3);
+    then_.setTooltip("Where the cursor goes after an entry");
+    then_.onChange = [this] {
+        if (refreshing_) return;
+        state_.then = std::max(0, then_.getSelectedItemIndex());
+        changed();
+    };
+    for (auto* c : {&quality_, &bass_, &voicing_, &then_}) addAndMakeVisible(*c);
+
+    octave_down_.setComponentID("chord_octave_down");
+    octave_up_.setComponentID("chord_octave_up");
+    octave_down_.onClick = [this] {
+        state_.octave = std::max(0, state_.octave - 1);
+        changed();
+    };
+    octave_up_.onClick = [this] {
+        state_.octave = std::min(8, state_.octave + 1);
+        changed();
+    };
+    symbol_.set_led_dot(true);
+    symbol_.setComponentID("chord_symbol");
+    symbol_.setTooltip("Also write the chord symbol on the ruler's Chords row");
+    symbol_.onClick = [this] {
+        state_.write_symbol = symbol_.getToggleState();
+        changed();
+    };
+    close_.setComponentID("chord_close");
+    close_.setTooltip("Close Chord Mode");
+    close_.onClick = [this] {
+        if (on_close) on_close();
+    };
+    insert_.setComponentID("chord_insert");
+    insert_.setTooltip("Enter the chord at the cursor (or click a staff while Chord Mode is on)");
+    insert_.onClick = [this] {
+        if (on_insert) on_insert(false);
+    };
+    replace_.setComponentID("chord_replace");
+    replace_.setTooltip("Replace the selected notes with the chord, at their place and value");
+    replace_.onClick = [this] {
+        if (on_insert) on_insert(true);
+    };
+    audition_.setComponentID("chord_audition");
+    audition_.setTooltip("Hear the chord on the selected track");
+    audition_.onClick = [this] {
+        if (on_audition) on_audition();
+    };
+    for (auto* c : std::initializer_list<juce::Component*>{&octave_down_, &octave_up_, &symbol_, &close_, &insert_, &replace_,
+                                                            &audition_, &octave_lcd_, &name_lcd_})
+        addAndMakeVisible(*c);
+    name_lcd_.setComponentID("chord_name");
+    octave_lcd_.set_justification(juce::Justification::centred);
+    constrainer_.setMinimumOnscreenAmounts(40, 80, 40, 80);
+    setSize(kWidth, kHeight);
+    refresh();
+}
+
+hw::Keycap* ChordPalette::alteration_key(const std::string& name)
+{
+    for (std::size_t i = 0; i < alterations_.size(); ++i)
+        if (name == kAlterations[i]) return alterations_[i].get();
+    return nullptr;
+}
+
+void ChordPalette::fill_bass_box()
+{
+    bass_.clear(juce::dontSendNotification);
+    std::string problem;
+    ChordModeState plain = state_;
+    plain.slash_bass.clear();
+    plain.inversion = 0;
+    const auto chord = chord_for(plain);
+    const auto tones = chord ? chord->tones() : std::vector<theory::SpelledPitch>{};
+    std::size_t core = 0;
+    if (chord)
+        for (const auto& t : chord->intervals()) core += t.degree <= 7 ? 1 : 0;
+    static const char* inv[] = {"Root position", "1st inversion", "2nd inversion", "3rd inversion"};
+    for (std::size_t i = 0; i < 4; ++i) {
+        juce::String label = inv[i];
+        if (i < tones.size()) label << " (" << juce::String::fromUTF8(tones[i].display_name().c_str()) << ")";
+        bass_.addItem(label, static_cast<int>(i) + 1);
+        bass_.setItemEnabled(static_cast<int>(i) + 1, i < std::max<std::size_t>(core, 1));
+    }
+    bass_.addSeparator();
+    for (int i = 0; i < 17; ++i) bass_.addItem("Over " + juce::String(kSlashNames[i]), 10 + i);
+    int id = state_.inversion + 1;
+    for (int i = 0; i < 17; ++i)
+        if (state_.slash_bass == kSlashNames[i]) id = 10 + i;
+    bass_.setSelectedId(id, juce::dontSendNotification);
+}
+
+void ChordPalette::refresh()
+{
+    refreshing_ = true;
+    for (int i = 0; i < 7; ++i) roots_[static_cast<std::size_t>(i)]->setToggleState(state_.letter == i, juce::dontSendNotification);
+    for (int i = 0; i < 3; ++i)
+        accidentals_[static_cast<std::size_t>(i)]->setToggleState(state_.accidental == i - 1, juce::dontSendNotification);
+    for (std::size_t i = 0; i < alterations_.size(); ++i)
+        alterations_[i]->setToggleState(state_.alterations.count(kAlterations[i]) > 0, juce::dontSendNotification);
+    const auto& all = theory::chord_qualities();
+    for (std::size_t i = 0; i < all.size(); ++i)
+        if (all[i].id == state_.quality) quality_.setSelectedItemIndex(static_cast<int>(i), juce::dontSendNotification);
+    fill_bass_box();
+    static const theory::VoicingStyle styles[] = {theory::VoicingStyle::Closed, theory::VoicingStyle::Open,
+                                                  theory::VoicingStyle::Drop2, theory::VoicingStyle::Spread};
+    for (int i = 0; i < 4; ++i)
+        if (styles[i] == state_.style) voicing_.setSelectedItemIndex(i, juce::dontSendNotification);
+    then_.setSelectedItemIndex(std::clamp(state_.then, 0, 2), juce::dontSendNotification);
+    symbol_.setToggleState(state_.write_symbol, juce::dontSendNotification);
+    octave_lcd_.set_text("BASS OCT " + juce::String(state_.octave));
+    std::string problem;
+    const auto chord = chord_for(state_, &problem);
+    name_lcd_.set_text(chord ? juce::String::fromUTF8(chord->display_name().c_str()) : juce::String("--"));
+    insert_.setEnabled(chord.has_value());
+    replace_.setEnabled(chord.has_value());
+    audition_.setEnabled(chord.has_value());
+    if (!chord) {
+        notes_.clear();
+        warning_ = problem;
+    }
+    refreshing_ = false;
+    repaint();
+}
+
+void ChordPalette::changed()
+{
+    refresh();
+    if (on_changed) on_changed();
+    repaint();
+}
+
+void ChordPalette::set_preview(const juce::String& notes, const juce::String& warning)
+{
+    std::string problem;
+    if (!chord_for(state_, &problem)) return;  // the problem stays shown
+    notes_ = notes;
+    warning_ = warning;
+    repaint();
+}
+
+void ChordPalette::paint(juce::Graphics& g)
+{
+    hw::Panel::paint(g);
+    auto r = content().reduced(10, 4);
+    auto silk = [&](const juce::String& t, int y) {
+        hw::paint::silk(g, t, juce::Rectangle<float>(static_cast<float>(r.getX()), static_cast<float>(y), 120.0f, 12.0f), 9.5f);
+    };
+    silk("Root", r.getY());
+    silk("Quality", r.getY() + 46);
+    silk("Alter / omit", r.getY() + 92);
+    silk("Bass and voicing", r.getY() + 138);
+    // The notes and any warning, under the controls.
+    const auto preview = juce::Rectangle<float>(static_cast<float>(r.getX()), static_cast<float>(getHeight() - 82),
+                                                static_cast<float>(r.getWidth()), 34.0f);
+    g.setFont(hw::fonts::ui(11.5f, false));
+    g.setColour(hw::tok::text_bright);
+    g.drawText(notes_, preview.withHeight(17.0f), juce::Justification::centredLeft, true);
+    g.setColour(juce::Colour(0xffe0a040));
+    g.drawText(warning_, preview.withTrimmedTop(17.0f), juce::Justification::centredLeft, true);
+}
+
+void ChordPalette::resized()
+{
+    close_.setBounds(getWidth() - 34, 6, 24, 20);
+    auto r = content().reduced(10, 4);
+    auto line = [&](int y, int h) { return juce::Rectangle<int>(r.getX(), r.getY() + y, r.getWidth(), h); };
+    // Root: seven letters and three accidentals.
+    auto row = line(14, 26);
+    for (auto& k : roots_) k->setBounds(row.removeFromLeft(28).withTrimmedRight(3));
+    row.removeFromLeft(8);
+    for (auto& k : accidentals_) k->setBounds(row.removeFromLeft(30).withTrimmedRight(3));
+    row = line(60, 26);
+    name_lcd_.setBounds(row.removeFromRight(124));
+    row.removeFromRight(6);
+    quality_.setBounds(row.withSizeKeepingCentre(row.getWidth(), 24));
+    row = line(106, 26);
+    const int w = r.getWidth() / static_cast<int>(alterations_.size());
+    for (auto& k : alterations_) k->setBounds(row.removeFromLeft(w).withTrimmedRight(3));
+    row = line(152, 24);
+    bass_.setBounds(row.removeFromLeft(r.getWidth() / 2 - 3));
+    row.removeFromLeft(6);
+    voicing_.setBounds(row);
+    row = line(182, 24);
+    octave_down_.setBounds(row.removeFromLeft(28));
+    row.removeFromLeft(3);
+    octave_lcd_.setBounds(row.removeFromLeft(86));
+    row.removeFromLeft(3);
+    octave_up_.setBounds(row.removeFromLeft(28));
+    row.removeFromLeft(8);
+    symbol_.setBounds(row.removeFromLeft(76));
+    row.removeFromLeft(6);
+    then_.setBounds(row);
+    row = juce::Rectangle<int>(r.getX(), getHeight() - 42, r.getWidth(), 30);
+    insert_.setBounds(row.removeFromLeft(110));
+    row.removeFromLeft(6);
+    replace_.setBounds(row.removeFromLeft(120));
+    row.removeFromLeft(6);
+    audition_.setBounds(row);
+}
+
+void ChordPalette::mouseDown(const juce::MouseEvent& e)
+{
+    if (e.y < 30) dragger_.startDraggingComponent(this, e);
+}
+
+void ChordPalette::mouseDrag(const juce::MouseEvent& e)
+{
+    if (e.mouseDownPosition.y < 30) dragger_.dragComponent(this, e, &constrainer_);
+}
+
+}  // namespace vcc::desktop::composer_ui

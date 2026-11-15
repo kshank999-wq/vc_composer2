@@ -8,6 +8,7 @@
 #include "vcc/interchange/MusicXml.h"
 #include "vcc/interchange/Xml.h"
 #include "vcc/session/Session.h"
+#include "vcc/theory/Chord.h"
 #include "vcc_test.h"
 
 using namespace vcc;
@@ -1344,5 +1345,18 @@ TEST_CASE("chord symbols: session edits, save and reopen, MusicXML round trip th
         CHECK(imp.chords[0].text == "Eb7b9");
         CHECK(imp.chords[1].tick == 2 * Q);
         CHECK(imp.chords[1].text == "Am7/G");
+    }
+    // The new forms survive export and import: altered, added, omitted, power.
+    {
+        session::Session s3(catalogs());
+        s3.new_empty();
+        s3.add_track("Piano", "keys.piano");
+        const std::vector<std::string> forms = {"C7(b5,b9)", "Eb7(#9,b13)", "D(add9)", "G5", "A7(no3)"};
+        for (std::size_t i = 0; i < forms.size(); ++i) REQUIRE(s3.set_chord_symbol(static_cast<Ticks>(i) * bar, forms[i]));
+        auto imp = ix::import_musicxml(s3.export_musicxml(dated()));
+        REQUIRE(imp.ok);
+        REQUIRE(imp.chords.size() == forms.size());
+        for (std::size_t i = 0; i < forms.size(); ++i)
+            CHECK_EQ(vcc::theory::parse_chord_symbol(imp.chords[i].text)->name(), forms[i]);
     }
 }

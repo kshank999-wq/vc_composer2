@@ -56,6 +56,23 @@ Voicing voice_chord(const Chord& chord, const VoicingOptions& options);
 std::vector<Voicing> voice_progression(const std::vector<Chord>& chords, const VoicingOptions& options,
                                        const std::vector<std::optional<int>>& locked_inversions = {});
 
+/// One note of a chord voiced for entry: its spelling and its MIDI note.
+struct VoicedTone {
+    SpelledPitch pitch;
+    int midi = 60;
+    /// Scientific octave of the spelled note (B#3 is MIDI 60, Cb5 is 71).
+    int octave() const noexcept;
+};
+
+/// Chord Mode (Add-On spec §3): the chord as written notes. The bass - the
+/// root, the inverted tone or the slash bass - sits in `bass_octave` (C4 is
+/// middle C); the other tones stack above it in `style`: Closed stacks each
+/// tone just above the last; Open lifts the second voice an octave; Drop2
+/// drops the second voice from the top of the upper structure an octave;
+/// Spread puts the bass an octave under a closed upper structure. Every
+/// tone is spelled as the chord spells it. Ascending.
+std::vector<VoicedTone> voice_for_entry(const Chord& chord, int bass_octave, VoicingStyle style);
+
 /// Total semitone movement between two voicings, matching voices in order
 /// (and nearest-note for unequal sizes).
 int voice_movement(const Voicing& from, const Voicing& to);

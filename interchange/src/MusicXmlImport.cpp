@@ -892,9 +892,22 @@ std::optional<std::string> Importer::harmony_text(const RawHarmony& h, int diato
         tries.push_back(*root + symbol + extra + slash);
         tries.push_back(*root + symbol + slash);
     }
-    for (const auto& t : tries)
-        if (theory::parse_chord_symbol(t)) return t;
-    return std::nullopt;
+    // The text, unless the kind and degrees say other notes than it does.
+    auto pcs = [](const theory::Chord& ch) {
+        std::vector<int> v;
+        for (const auto& t : ch.tones()) v.push_back(t.pitch_class());
+        std::sort(v.begin(), v.end());
+        return v;
+    };
+    std::optional<std::string> from_text, from_kind;
+    if (!h.text.empty() && theory::parse_chord_symbol(tries.front())) from_text = tries.front();
+    for (std::size_t i = h.text.empty() ? 0 : 1; i < tries.size() && !from_kind; ++i)
+        if (theory::parse_chord_symbol(tries[i])) from_kind = tries[i];
+    if (from_text && from_kind && !h.degrees.empty() &&
+        pcs(*theory::parse_chord_symbol(*from_text)) != pcs(*theory::parse_chord_symbol(*from_kind)))
+        return from_kind;
+    if (from_text) return from_text;
+    return from_kind;
 }
 
 ImportedPart Importer::build(const RawPart& part, bool first)

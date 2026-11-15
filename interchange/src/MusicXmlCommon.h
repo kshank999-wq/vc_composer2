@@ -171,7 +171,7 @@ inline const HarmonyKind* harmony_kinds(std::size_t* count) noexcept
 {
     static const HarmonyKind k[] = {
         {"maj", "major"}, {"m", "minor"}, {"dim", "diminished"}, {"aug", "augmented"},
-        {"sus2", "suspended-second"}, {"sus4", "suspended-fourth"}, {"6", "major-sixth"}, {"m6", "minor-sixth"},
+        {"sus2", "suspended-second"}, {"sus4", "suspended-fourth"}, {"5", "power"}, {"6", "major-sixth"}, {"m6", "minor-sixth"},
         {"69", "major-sixth"}, {"7", "dominant"}, {"maj7", "major-seventh"}, {"m7", "minor-seventh"},
         {"m7b5", "half-diminished"}, {"dim7", "diminished-seventh"}, {"mmaj7", "major-minor"},
         {"aug7", "augmented-seventh"}, {"augmaj7", "major-seventh"}, {"7sus4", "suspended-fourth"},

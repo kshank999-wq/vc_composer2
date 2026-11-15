@@ -30,6 +30,7 @@
 #include "ui/console/ConsoleStrip.h"
 #include "ui/console/ConsoleView.h"
 #include "ui/composer/ComposerRuler.h"
+#include "vcc/theory/Chord.h"
 #include "ui/composer/Inspector.h"
 #include "ui/composer/LaneParts.h"
 #include "ui/VideoWindow.h"
@@ -3817,6 +3818,164 @@ void sidechain_checks(MainWindow& window, const juce::File& dir)
 
 /// The Composer view's Page view: the full score on pages as it prints,
 /// switched with the toolbar's Track | Page keys (and the Score stage).
+/// Chord Mode (Add-On spec §3): the palette, one-step entry at the cursor
+/// and by a click on a staff, inversions, alterations, a contradiction
+/// refused, a transposing staff, Replace Selected, and one undo step.
+void chord_mode_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto piano = session.add_track("Piano", "keys.piano");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
+    pump(100);
+    auto& composer = main.composer();
+    session.select_track(piano);
+    pump(50);
+    composer.grabKeyboardFocus();
+    composer.keyPressed(juce::KeyPress('5'));  // quarter notes
+    auto* chord_key = main.toolbar().key("Chord mode");
+    if (chord_key) chord_key->triggerClick();
+    pump(80);
+    auto& palette = composer.chord_palette();
+    check(chord_key && palette.isVisible() && composer.chord_mode() && chord_key->getToggleState(),
+          "the Chord mode key opens the floating chord palette and lights");
+    const Ticks Q = kTicksPerQuarter;
+    auto notes_at = [&](const std::string& track, Ticks tick) {
+        std::vector<std::string> out;
+        const auto& score = session.data().find_track(track)->active_version()->score;
+        for (std::size_t s = 0; s < score.staff_count(); ++s)
+            for (const auto& n : score.notes(s))
+                if (n.start_tick == tick && !n.is_rest)
+                    out.push_back(std::string(1, "CDEFGAB"[static_cast<int>(n.pitch.step)]) +
+                                  (n.pitch.alteration > 0 ? "#" : n.pitch.alteration < 0 ? "b" : "") +
+                                  std::to_string(n.pitch.octave));
+        std::sort(out.begin(), out.end(), [](const std::string& a, const std::string& b) {
+            const int oa = a.back() - '0', ob = b.back() - '0';
+            if (oa != ob) return oa < ob;
+            return std::string("CDEFGAB").find(a[0]) < std::string("CDEFGAB").find(b[0]);
+        });
+        juce::String s;
+        for (const auto& n : out) s << (s.isEmpty() ? "" : " ") << n;
+        return s;
+    };
+
+    // C major, root position, at the cursor: C4 E4 G4 as one action.
+    const auto history = session.project().history_size();
+    palette.insert_key().triggerClick();
+    pump(50);
+    const auto c_major = notes_at(piano, 0);
+    check(c_major == "C4 E4 G4" && session.project().history_size() == history + 1 &&
+              session.undo_label() == "Enter chord C" && !session.data().chords.empty() && session.data().chords[0].text == "C",
+          "Insert enters C major as C4 E4 G4 in one undo step, with its chord symbol (" + c_major + ")");
+    session.undo();
+    pump(30);
+    check(notes_at(piano, 0).isEmpty() && session.data().chords.empty(), "one undo takes the whole chord and its symbol away");
+
+    // G7/B: G, dominant 7, first inversion, bass octave 3 (the cursor
+    // stayed on beat 2 after the undo).
+    palette.root_key(4).triggerClick();
+    const auto& qualities = theory::chord_qualities();
+    for (std::size_t i = 0; i < qualities.size(); ++i)
+        if (qualities[i].id == "7") palette.quality_box().setSelectedItemIndex(static_cast<int>(i), juce::sendNotificationSync);
+    palette.bass_box().setSelectedId(2, juce::sendNotificationSync);  // 1st inversion
+    composer.chord_state().octave = 3;
+    palette.refresh();
+    composer.grabKeyboardFocus();
+    palette.insert_key().triggerClick();
+    pump(50);
+    const auto g7 = notes_at(piano, Q);
+    check(g7 == "B3 D4 F4 G4" && session.data().chords.size() == 1 && session.data().chords[0].text == "G7/B",
+          "G7/B enters a first-inversion dominant seventh with B in the bass (" + g7 + ")");
+
+    // C7(b5,b9): every requested tone, spelled; shown before it is entered.
+    palette.root_key(0).triggerClick();
+    if (auto* k = palette.alteration_key("b5")) k->triggerClick();
+    if (auto* k = palette.alteration_key("b9")) k->triggerClick();
+    palette.bass_box().setSelectedId(1, juce::sendNotificationSync);
+    pump(30);
+    const auto preview = palette.preview_notes();
+    check(preview == juce::String::fromUTF8("C3 E3 B\xE2\x99\xAD" "3 G\xE2\x99\xAD" "4 D\xE2\x99\xAD" "5"),
+          "the palette previews C7(b5,b9) as C3 E3 Bb3 Gb4 Db5 (" + preview + ")");
+    palette.insert_key().triggerClick();
+    pump(50);
+    const auto c7 = notes_at(piano, 2 * Q);
+    check(c7 == "C3 E3 Bb3 Gb4 Db5" && session.data().chords.size() == 2 && session.data().chords[1].text == "C7(b5,b9)",
+          "C7(b5,b9) is entered spelled as asked, on the next beat (" + c7 + ")");
+    shoot(main, dir, "40-chord-mode");
+
+    // A contradiction is refused: half-diminished with another flat five.
+    for (std::size_t i = 0; i < qualities.size(); ++i)
+        if (qualities[i].id == "m7b5") palette.quality_box().setSelectedItemIndex(static_cast<int>(i), juce::sendNotificationSync);
+    if (auto* k = palette.alteration_key("b9")) k->triggerClick();  // leave b5 on
+    pump(30);
+    check(!palette.insert_key().isEnabled() && palette.preview_warning().contains("contradict"),
+          "a contradiction (m7b5 with b5) disables Insert and says why: " + palette.preview_warning());
+    if (auto* k = palette.alteration_key("b5")) k->triggerClick();
+    for (std::size_t i = 0; i < qualities.size(); ++i)
+        if (qualities[i].id == "maj") palette.quality_box().setSelectedItemIndex(static_cast<int>(i), juce::sendNotificationSync);
+    pump(30);
+
+    // A click on a staff in Chord Mode: the chord there, the bass in the octave clicked.
+    {
+        engraving::InsertionPoint p;
+        p.valid = true;
+        p.staff_index = 0;
+        p.tick = 3 * Q;
+        p.pitch = notation::Pitch{notation::Step::E, 5, 0};
+        if (composer.lane(0).on_staff_clicked) composer.lane(0).on_staff_clicked(p);
+        pump(50);
+    }
+    const auto clicked = notes_at(piano, 3 * Q);
+    check(clicked == "C5 E5 G5" && session.undo_label() == "Enter chord C",
+          "a click on the staff in Chord Mode enters the chord there, the bass in the octave clicked (" + clicked + ")");
+
+    // Replace Selected: a note typed, then replaced by the chord at its place and value.
+    composer.chord_state().octave = 4;
+    palette.refresh();
+    {
+        engraving::InsertionPoint p;
+        p.valid = true;
+        p.staff_index = 0;
+        p.tick = 5 * Q;
+        p.pitch = notation::Pitch{notation::Step::A, 4, 0};
+        composer.set_chord_mode(false);
+        if (composer.lane(0).on_staff_clicked) composer.lane(0).on_staff_clicked(p);  // a plain A4
+        pump(50);
+        composer.set_chord_mode(true);
+    }
+    const bool had_a = notes_at(piano, 5 * Q) == "A4";
+    const auto selected = composer.selected_notes().size();
+    palette.replace_key().triggerClick();
+    pump(50);
+    const auto replaced = notes_at(piano, 5 * Q);
+    check(had_a && selected == 1 && replaced == "C4 E4 G4" && session.undo_label() == "Enter chord C",
+          "Replace sel. puts the chord in place of the selected note, as one step (" + replaced + ")");
+
+    // A B-flat clarinet: the chord sounds C E G and is written a tone up, transposed once.
+    const auto clarinet = session.add_track("Clarinet in Bb", "woodwinds.clarinet_bb");
+    session.select_track(clarinet);
+    pump(80);
+    {
+        auto cur = composer.cursor();
+        composer.chord_state().octave = 4;
+        palette.refresh();
+        palette.insert_key().triggerClick();
+        pump(50);
+        juce::ignoreUnused(cur);
+    }
+    const auto written = notes_at(clarinet, 0);
+    check(written == "D4 F#4 A4", "on a B-flat clarinet the chord is written a tone up, once (" + written + ")");
+    check(palette.preview_warning().isEmpty() || palette.preview_warning().contains("range"),
+          "the palette names any notes outside the instrument's range");
+    composer.set_chord_mode(false);
+    pump(30);
+    check(!palette.isVisible() && !composer.chord_mode(), "turning Chord mode off hides the palette");
+}
+
 /// Chord symbols: the ruler's suggestion kept with a click, one typed on a
 /// beat, a bad one refused, Escape, editing to empty removes, and the
 /// symbols printed over the full score's top staff in the Page view.
@@ -5050,6 +5209,7 @@ int main(int argc, char** argv)
         sidechain_checks(window, dir);
         page_view_checks(window, dir);
         chord_symbol_checks(window, dir);
+        chord_mode_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

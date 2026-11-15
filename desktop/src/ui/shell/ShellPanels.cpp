@@ -53,6 +53,13 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
             if (on_command) on_command(composer::Command::ToggleKeyboardEntryMode);
         };
         command_keys_.emplace_back(&note, composer::Command::ToggleKeyboardEntryMode);
+        auto& chord = add(entry, "Chord mode", 104, false);
+        chord.set_led_dot(true);
+        chord.setComponentID("composer_chord_mode");
+        chord.setTooltip("Chord mode: a palette of chords; a click on a staff enters the whole chord");
+        chord.onClick = [this, &chord] {
+            if (on_chord_mode) on_chord_mode(!chord.getToggleState());
+        };
         groups_.push_back(entry);
         Group view{"View"};
         auto& track = add(view, "Track", 58, true);

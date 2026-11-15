@@ -33,6 +33,8 @@ public:
     /// The Edit keys: Shuffle, Slip, Spot, Grid (0-3), and the Smart tool.
     std::function<void(int mode)> on_edit_mode;
     std::function<void(bool on)> on_smart;
+    /// The Entry group's Chord mode key.
+    std::function<void(bool on)> on_chord_mode;
     /// A Composer key (note entry, value, dot, accidental) ran a notation command.
     std::function<void(composer::Command)> on_command;
     /// The View keys: Track (false) or Page (true).

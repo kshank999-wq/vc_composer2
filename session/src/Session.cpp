@@ -572,6 +572,26 @@ bool Session::commit_score(const std::string& id, const notation::Score& score, 
     }));
 }
 
+bool Session::commit_score_with_chord(const std::string& id, const notation::Score& score, const std::string& label,
+                                      Ticks tick, const std::string& symbol)
+{
+    const bool chord = !symbol.empty() && tick >= 0 && theory::parse_chord_symbol(symbol);
+    return edit(label.empty() ? "Edit notation" : label, [&](project::ProjectData& d) {
+        project::Track* t = d.find_track(id);
+        project::TrackVersion* v = t ? t->active_version() : nullptr;
+        if (!v) return false;
+        v->score = score;
+        if (chord) {
+            auto& marks = d.chords;
+            auto it = std::lower_bound(marks.begin(), marks.end(), tick,
+                                       [](const project::ChordMark& m, Ticks at) { return m.tick < at; });
+            if (it != marks.end() && it->tick == tick) it->text = symbol;
+            else marks.insert(it, project::ChordMark{tick, symbol});
+        }
+        return true;
+    });
+}
+
 project::InsertResult Session::insert_notes(const std::string& id, Ticks start, Ticks end, std::vector<NoteEvent> notes,
                                             project::CollisionPolicy policy, const std::string& source)
 {

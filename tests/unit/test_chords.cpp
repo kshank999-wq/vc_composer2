@@ -140,3 +140,62 @@ TEST_CASE("voice leading moves less than independent voicing and is deterministi
     auto locked = voice_progression(seq, lead, {std::nullopt, std::nullopt, std::nullopt, 1});
     CHECK_EQ(locked[3].bass() % 12, 11);
 }
+
+TEST_CASE("chord symbols: alterations, additions, omissions and power chords; contradictions refused")
+{
+    auto names = [](const char* text) {
+        std::string out;
+        auto c = vcc::theory::parse_chord_symbol(text);
+        if (!c) return std::string("FAIL");
+        for (const auto& t : c->tones()) out += (out.empty() ? "" : " ") + t.name();
+        return c->name() + ": " + out;
+    };
+    CHECK_EQ(names("C7(b5,b9)"), std::string("C7(b5,b9): C E Bb Gb Db"));
+    CHECK_EQ(names("C7b5b9"), std::string("C7(b5,b9): C E Bb Gb Db"));
+    CHECK_EQ(names("C7#11"), std::string("C7(#11): C E G Bb F#"));
+    CHECK_EQ(names("C7(#9,b13)"), std::string("C7(#9,b13): C E G Bb D# Ab"));
+    CHECK_EQ(names("C(add9)"), std::string("C(add9): C E G D"));
+    CHECK_EQ(names("C7(no3)"), std::string("C7(no3): C G Bb"));
+    CHECK_EQ(names("C5"), std::string("C5: C G"));
+    CHECK_EQ(names("F#m7(b13)/A"), std::string("F#m7(b13)/A: F# A C# E D"));
+    // Round trip through the name.
+    for (const char* s : {"C7(b5,b9)", "Eb7(#9,b13)", "Bbmaj7(#11)", "D(add9)", "G5", "A7(no3)"})
+        CHECK_EQ(vcc::theory::parse_chord_symbol(s)->name(), std::string(s));
+    // Contradictions: the same tone twice, an omitted fifth altered, nonsense.
+    CHECK(!vcc::theory::parse_chord_symbol("C9(add9)"));
+    CHECK(!vcc::theory::parse_chord_symbol("C7(b9,b9)"));
+    CHECK(!vcc::theory::parse_chord_symbol("C7(no5,b5)"));
+    CHECK(!vcc::theory::parse_chord_symbol("Cm7b5(b5)"));
+    CHECK(!vcc::theory::parse_chord_symbol("Caug(#5)"));
+    CHECK(!vcc::theory::parse_chord_symbol("C7(no7)"));
+    CHECK(!vcc::theory::parse_chord_symbol("C7(b8)"));
+    CHECK(!vcc::theory::parse_chord_symbol("C7xyz"));
+}
+
+TEST_CASE("chord entry voicing: bass in its octave, spelled as the chord spells it")
+{
+    using vcc::theory::VoicingStyle;
+    auto voiced = [](const char* text, int octave, VoicingStyle style) {
+        std::string out;
+        auto c = vcc::theory::parse_chord_symbol(text);
+        if (!c) return std::string("FAIL");
+        for (const auto& t : vcc::theory::voice_for_entry(*c, octave, style))
+            out += (out.empty() ? "" : " ") + t.pitch.name() + std::to_string(t.octave()) + "=" + std::to_string(t.midi);
+        return out;
+    };
+    // Spec 3.4: C major, root position: C4 E4 G4.
+    CHECK_EQ(voiced("C", 4, VoicingStyle::Closed), std::string("C4=60 E4=64 G4=67"));
+    // G7/B: first inversion, B in the bass.
+    CHECK_EQ(voiced("G7/B", 3, VoicingStyle::Closed), std::string("B3=59 D4=62 F4=65 G4=67"));
+    // C7(b5,b9): every requested tone, spelled.
+    CHECK_EQ(voiced("C7(b5,b9)", 3, VoicingStyle::Closed), std::string("C3=48 E3=52 Bb3=58 Gb4=66 Db5=73"));
+    // Second inversion, open, drop 2, spread.
+    CHECK_EQ(voiced("C/G", 3, VoicingStyle::Closed), std::string("G3=55 C4=60 E4=64"));
+    CHECK_EQ(voiced("C", 4, VoicingStyle::Open), std::string("C4=60 G4=67 E5=76"));
+    CHECK_EQ(voiced("Cmaj7", 4, VoicingStyle::Drop2), std::string("C3=48 G3=55 E4=64 B4=71"));
+    CHECK_EQ(voiced("Cmaj7", 4, VoicingStyle::Spread), std::string("C3=48 E4=64 G4=67 B4=71"));
+    // A slash bass that is not a chord tone sits under the chord.
+    CHECK_EQ(voiced("D/C", 3, VoicingStyle::Closed), std::string("C3=48 D3=50 F#3=54 A3=57"));
+    // Octave numbers follow the spelling: B#3 is MIDI 60.
+    CHECK_EQ(voiced("G#/B#", 3, VoicingStyle::Closed), std::string("B#3=60 D#4=63 G#4=68"));
+}

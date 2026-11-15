@@ -270,7 +270,13 @@ std::vector<ComposerRuler::Pill> ComposerRuler::chord_pills() const
         if (ch.tick > last) break;
         const auto parsed = theory::parse_chord_symbol(ch.text);
         const juce::String text = parsed ? juce::String::fromUTF8(parsed->display_name().c_str()) : juce::String(ch.text);
-        if (ch.tick >= first - 4 * kTicksPerWhole) pill(ch.tick, text, false, 3.0f);
+        if (ch.tick < first - 4 * kTicksPerWhole) continue;
+        pill(ch.tick, text, false, 3.0f);
+        // Close together: each starts after the one before (never over it).
+        if (out.size() >= 2 && !out[out.size() - 2].suggestion) {
+            const float after = out[out.size() - 2].bounds.getRight() + 2.0f;
+            if (out.back().bounds.getX() < after) out.back().bounds.setX(after);
+        }
     }
     const int bar0 = d.meter.bar_at(first), bar1 = d.meter.bar_at(std::max(first, last)) + 1;
     for (int bar = std::max(1, bar0); bar <= bar1 && bar <= static_cast<int>(chords_.size()); ++bar) {

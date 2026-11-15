@@ -30,6 +30,7 @@ const std::vector<ChordQuality>& chord_qualities()
         {"aug", "aug", {R, M3, A5}},
         {"sus2", "sus2", {R, M2, P5}},
         {"sus4", "sus4", {R, P4, P5}},
+        {"5", "5", {R, P5}},
         {"6", "6", {R, M3, P5, M6}},
         {"m6", "m6", {R, m3, P5, M6}},
         {"69", "6/9", {R, M3, P5, M6, M9}},
@@ -95,16 +96,50 @@ SpelledPitch Chord::bass_note() const
     return t[std::min(idx, t.size() - 1)];
 }
 
+namespace {
+
+/// Semitones of a degree as written without an accidental: the major
+/// scale's, with the 7th the dominant (minor) seventh, as chord symbols read.
+int natural_semitones(int degree) noexcept
+{
+    switch (degree) {
+        case 1: return 0;
+        case 2: return 2;
+        case 3: return 4;
+        case 4: return 5;
+        case 5: return 7;
+        case 6: return 9;
+        case 7: return 10;
+        case 9: return 14;
+        case 11: return 17;
+        case 13: return 21;
+        default: return -1;
+    }
+}
+
+/// "(b5,b9)", "(add9)", "(no3)": what the chord adds to or takes from its quality.
+std::string modifiers(const Chord& c)
+{
+    std::vector<std::string> parts;
+    const bool altered_fifth = std::any_of(c.added.begin(), c.added.end(), [](const ChordInterval& a) { return a.degree == 5; });
+    for (const auto& a : c.added) {
+        const int diff = a.semitones - natural_semitones(a.degree);
+        if (diff == 0) parts.push_back((a.degree == 9 || a.degree == 11 || a.degree == 13 ? "add" : "add") + std::to_string(a.degree));
+        else parts.push_back(std::string(diff < 0 ? "b" : "#") + std::to_string(a.degree));
+    }
+    for (int d : c.omit_degrees)
+        if (d != 1 && !(d == 5 && altered_fifth)) parts.push_back("no" + std::to_string(d));
+    if (parts.empty()) return {};
+    std::string s = "(";
+    for (std::size_t i = 0; i < parts.size(); ++i) s += (i ? "," : "") + parts[i];
+    return s + ")";
+}
+
+}  // namespace
+
 std::string Chord::name() const
 {
-    std::string s = root.name() + quality.symbol;
-    for (const auto& a : added) {
-        if (a.degree == 9) s += "(add9)";
-        else if (a.degree == 6) s += "(add6)";
-        else s += "(add" + std::to_string(a.degree) + ")";
-    }
-    for (int d : omit_degrees)
-        if (d != 1) s += "(no" + std::to_string(d) + ")";
+    std::string s = root.name() + quality.symbol + modifiers(*this);
     SpelledPitch b = bass_note();
     if (b != root) s += "/" + b.name();
     return s;
@@ -117,6 +152,7 @@ std::string Chord::display_name() const
     else if (quality.id == "dim") sym = "\xC2\xB0";
     else if (quality.id == "dim7") sym = "\xC2\xB0" "7";
     else if (quality.id == "aug") sym = "+";
+    sym += modifiers(*this);
     std::string out = root.display_name();
     for (char c : sym) {
         if (c == 'b') out += "\xE2\x99\xAD";
@@ -160,11 +196,96 @@ std::optional<Chord> parse_chord_symbol(const std::string& text)
         {"maj7#11", "maj7#11"}, {"13", "13"}, {"maj13", "maj13"}, {"m13", "m13"}, {"7alt", "7alt"},
         {"alt", "7alt"},
     };
+    const bool power = suffix == "5" || suffix == "(5)";
+    if (power) suffix = "";
+    // The longest quality the suffix starts with; the rest are alterations,
+    // additions and omissions: "7(b5,b9)", "7b9b5", "7#11", "(add9)", "(no3)".
     auto it = aliases.find(suffix);
-    if (it == aliases.end()) return std::nullopt;
+    std::string rest;
+    if (it == aliases.end()) {
+        for (std::size_t len = suffix.size(); len-- > 0;) {
+            auto at = aliases.find(suffix.substr(0, len));
+            if (at == aliases.end()) continue;
+            const std::string tail = suffix.substr(len);
+            // A quality must end where a modifier starts.
+            if (tail.empty() || !(tail[0] == '(' || tail[0] == 'b' || tail[0] == '#' || tail.rfind("add", 0) == 0 ||
+                                  tail.rfind("no", 0) == 0 || tail.rfind("omit", 0) == 0))
+                continue;
+            it = at;
+            rest = tail;
+            break;
+        }
+        if (it == aliases.end()) return std::nullopt;
+    }
     Chord c;
     c.root = *root;
-    c.quality = *find_quality(it->second);
+    c.quality = power ? *find_quality("5") : *find_quality(it->second);
+    if (!rest.empty()) {
+        // Tokens: (add|no|omit)?[b#]?digits, separated by parentheses, commas or spaces.
+        std::size_t k = 0;
+        auto pcs = [&] {
+            std::vector<int> v;
+            for (const auto& t : c.intervals()) v.push_back(((t.semitones % 12) + 12) % 12);
+            return v;
+        };
+        while (k < rest.size()) {
+            const char ch = rest[k];
+            if (ch == '(' || ch == ')' || ch == ',' || ch == ' ') {
+                ++k;
+                continue;
+            }
+            enum { Alter, Add, Omit } kind = Alter;
+            if (rest.compare(k, 3, "add") == 0) {
+                kind = Add;
+                k += 3;
+            } else if (rest.compare(k, 4, "omit") == 0) {
+                kind = Omit;
+                k += 4;
+            } else if (rest.compare(k, 2, "no") == 0) {
+                kind = Omit;
+                k += 2;
+            }
+            int accidental = 0;
+            while (k < rest.size() && (rest[k] == 'b' || rest[k] == '#')) accidental += rest[k++] == '#' ? 1 : -1;
+            int degree = 0;
+            const std::size_t digits = k;
+            while (k < rest.size() && std::isdigit(static_cast<unsigned char>(rest[k]))) degree = degree * 10 + (rest[k++] - '0');
+            if (k == digits || degree <= 1 || degree > 13) return std::nullopt;
+            const int natural = natural_semitones(degree);
+            if (natural < 0) return std::nullopt;
+            if (kind == Omit) {
+                if (accidental != 0 || (degree != 3 && degree != 5)) return std::nullopt;
+                if (std::find(c.omit_degrees.begin(), c.omit_degrees.end(), degree) != c.omit_degrees.end()) return std::nullopt;
+                c.omit_degrees.push_back(degree);
+                continue;
+            }
+            if (kind == Add && accidental != 0) return std::nullopt;
+            // Contradictions: the same degree twice, or a tone already there.
+            if (std::any_of(c.added.begin(), c.added.end(), [&](const ChordInterval& a) { return a.degree == degree; }) &&
+                !(degree == 9 && accidental != 0))
+                return std::nullopt;
+            if (degree == 5) {
+                // An altered fifth replaces a perfect fifth (m7b5 with b5 again,
+                // or aug with #5, says it twice).
+                if (accidental == 0) return std::nullopt;
+                for (const auto& t : c.quality.tones)
+                    if (t.degree == 5 && t.semitones != 7) return std::nullopt;
+                if (std::find(c.omit_degrees.begin(), c.omit_degrees.end(), 5) != c.omit_degrees.end() &&
+                    std::none_of(c.added.begin(), c.added.end(), [](const ChordInterval& a) { return a.degree == 5; }))
+                    return std::nullopt;
+                if (std::find(c.omit_degrees.begin(), c.omit_degrees.end(), 5) == c.omit_degrees.end()) c.omit_degrees.push_back(5);
+            }
+            const ChordInterval tone{degree, natural + accidental};
+            const auto have = pcs();
+            if (degree != 5 && std::find(have.begin(), have.end(), ((tone.semitones % 12) + 12) % 12) != have.end())
+                return std::nullopt;
+            c.added.push_back(tone);
+        }
+        // Omitting what an alteration replaced, or omitting a tone and adding it.
+        for (int d : c.omit_degrees)
+            if (d == 3 && std::any_of(c.added.begin(), c.added.end(), [](const ChordInterval& a) { return a.degree == 3; }))
+                return std::nullopt;
+    }
     if (!bass_text.empty()) {
         auto b = SpelledPitch::parse(bass_text);
         if (!b) return std::nullopt;

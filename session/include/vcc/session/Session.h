@@ -145,6 +145,10 @@ public:
     /// Replaces the active version's score with an edited copy (the Composer
     /// view edits a working copy and commits each change here).
     bool commit_score(const std::string& track_id, const notation::Score& score, const std::string& label);
+    /// The same, also setting the chord symbol at `tick` (Chord Mode writes
+    /// the chord it entered), as one undo step. An empty symbol sets none.
+    bool commit_score_with_chord(const std::string& track_id, const notation::Score& score, const std::string& label,
+                                 Ticks tick, const std::string& symbol);
 
     project::InsertResult insert_notes(const std::string& track_id, Ticks start, Ticks end,
                                        std::vector<NoteEvent> notes, project::CollisionPolicy policy,

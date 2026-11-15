@@ -14,6 +14,7 @@
 #include <optional>
 
 #include "ui/AppContext.h"
+#include "ui/composer/ChordPalette.h"
 #include "vcc/editing/ScoreEditor.h"
 #include "vcc/ui/NotationView.h"
 
@@ -51,6 +52,22 @@ public:
     /// transposing staff, spelt in its key), or adds it to the chord just
     /// entered. False when no instrument track is being written on.
     bool enter_midi(int midi, bool chord);
+    // --- Chord Mode (Add-On Features spec §3) -------------------------------
+    /// On: the palette floats over the lanes, and a click on a staff enters
+    /// its chord there, the bass in the octave clicked.
+    bool chord_mode() const noexcept { return chord_mode_; }
+    void set_chord_mode(bool on);
+    composer_ui::ChordModeState& chord_state() noexcept { return chord_state_; }
+    composer_ui::ChordPalette& chord_palette();
+    /// Enters the palette's chord at the cursor, or in place of the selected
+    /// notes (at the first one's place and value), as one undo step - with
+    /// its chord symbol when the palette says so. False with the reason on
+    /// the status line.
+    bool enter_chord(bool replace_selection);
+    /// The palette's chord as the notes it would write on the edited staff
+    /// ("B3 D4 F4 G4"), and a warning when any lies outside the instrument.
+    std::pair<juce::String, juce::String> chord_preview() const;
+
     /// Larger or smaller staves (the toolbar's Zoom keys).
     void zoom(bool larger);
     /// Scrolls so `tick` is the left edge of the lanes.
@@ -109,6 +126,10 @@ private:
     /// the next note's value (as in Finale and Sibelius) rather than
     /// re-timing that note.
     bool just_entered_ = false;
+    bool chord_mode_ = false;
+    composer_ui::ChordModeState chord_state_;
+    std::unique_ptr<composer_ui::ChordPalette> palette_;
+    void audition_chord();
     /// Publishes the editor's selection to the session's shared selection.
     void publish_selection();
 };

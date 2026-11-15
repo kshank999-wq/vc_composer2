@@ -1056,7 +1056,11 @@ void Exporter::write_harmony(xml::Writer& w, const PartCtx& part, const Directio
     w.open("root");
     write_step("root-step", "root-alter", spelled(chord->root));
     w.close();
-    w.leaf("kind", kind, {{"text", chord->quality.symbol}});
+    // The kind's text is the whole suffix as we write it: "7(b5,b9)".
+    std::string suffix = chord->name().substr(chord->root.name().size());
+    if (const auto slash = suffix.rfind('/'); slash != std::string::npos && suffix.compare(0, 3, "6/9") != 0)
+        suffix = suffix.substr(0, slash);
+    w.leaf("kind", kind, {{"text", suffix}});
     if (chord->bass || chord->inversion > 0) {  // "G7/B" parses as an inversion
         w.open("bass");
         write_step("bass-step", "bass-alter", spelled(chord->bass_note()));
@@ -1082,10 +1086,16 @@ void Exporter::write_harmony(xml::Writer& w, const PartCtx& part, const Directio
         degree(9, 1, "add");
         degree(13, -1, "add");
     }
-    static const int natural[] = {0, 0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21};
-    for (const auto& a : chord->added)
-        if (a.degree >= 1 && a.degree <= 13) degree(a.degree, a.semitones - natural[a.degree], "add");
-    for (int o : chord->omit_degrees) degree(o, 0, "subtract");
+    // Added and altered tones (an altered fifth replaces the fifth: "alter").
+    static const int natural[] = {0, 0, 2, 4, 5, 7, 9, 10, 12, 14, 16, 17, 19, 21};
+    bool altered_fifth = false;
+    for (const auto& a : chord->added) {
+        if (a.degree < 1 || a.degree > 13) continue;
+        altered_fifth = altered_fifth || a.degree == 5;
+        degree(a.degree, a.semitones - natural[a.degree], a.degree == 5 ? "alter" : "add");
+    }
+    for (int o : chord->omit_degrees)
+        if (!(o == 5 && altered_fifth)) degree(o, 0, "subtract");
     w.close();
 }
 

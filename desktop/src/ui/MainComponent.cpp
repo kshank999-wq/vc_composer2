@@ -264,6 +264,10 @@ MainComponent::MainComponent(AppContext& context)
     toolbar_.on_pencil = [this](bool on) { sequencer_.set_pencil_mode(on); };
     toolbar_.on_edit_mode = [this](int mode) { sequencer_.set_edit_mode(static_cast<SequencerView::EditMode>(mode)); };
     toolbar_.on_smart = [this](bool on) { sequencer_.set_smart_tool(on); };
+    toolbar_.on_chord_mode = [this](bool on) {
+        composer_.set_chord_mode(on);
+        composer_.grabKeyboardFocus();
+    };
     // The Composer keys and the inspector run notation commands on the
     // score being written, and hand the keyboard back to it.
     auto run = [this](composer::Command c) {
@@ -613,6 +617,7 @@ void MainComponent::timerCallback()
     const auto& sel = context_.session.selection();
     deck_.set_range(sel.from, sel.to);
     toolbar_.update(punch_, sequencer_.pencil_mode(), static_cast<int>(sequencer_.edit_mode()), sequencer_.smart_tool());
+    if (auto* k = toolbar_.key("Chord mode")) k->setToggleState(composer_.chord_mode(), juce::dontSendNotification);
     if (page_view_.isVisible()) page_view_.set_playhead(tick);
     if (composer_.isVisible()) {
         composer_.set_playhead(tick, playing);

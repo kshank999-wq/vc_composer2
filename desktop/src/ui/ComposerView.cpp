@@ -390,6 +390,15 @@ void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* 
         c.tick = point->tick;
         c.staff_index = point->staff_index;
         editor_->set_cursor(c);
+        if (chord_mode_) {
+            // The bass goes in the octave clicked (sounding).
+            const auto& staff = working_.staff(std::min<std::size_t>(point->staff_index, working_.staff_count() - 1));
+            const int sounding = notation::midi_note_number(point->pitch) + staff.total_transposition();
+            chord_state_.octave = std::clamp(sounding / 12 - 1, 0, 8);
+            if (palette_) palette_->refresh();
+            enter_chord(false);
+            return;
+        }
         if (note_entry_) handle(editor_->insert_pitch(point->pitch));
         else apply_view_settings();
     }
@@ -488,6 +497,190 @@ void ComposerView::perform(Command command)
         }
     }
     handle(editor_->apply(command));
+}
+
+// --- Chord Mode -------------------------------------------------------------------------
+
+namespace {
+
+/// Letter steps for `semitones` (a transposition), as an interval spells them.
+int steps_for(int semitones)
+{
+    static const int kSteps[12] = {0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6};
+    const int a = std::abs(semitones);
+    const int s = kSteps[a % 12] + 7 * (a / 12);
+    return semitones < 0 ? -s : s;
+}
+
+/// The chord's notes on a staff: written pitch for a transposing one, each
+/// keeping the chord's spelling.
+std::vector<notation::Pitch> written_chord(const std::vector<theory::VoicedTone>& voiced, const notation::Staff& staff)
+{
+    const int t = staff.transposition_semitones;
+    const int total = staff.total_transposition();
+    std::vector<notation::Pitch> out;
+    for (const auto& v : voiced) {
+        theory::VoicedTone w{t != 0 ? v.pitch.transposed(steps_for(-t), -t) : v.pitch, v.midi - total};
+        notation::Pitch p;
+        p.step = static_cast<notation::Step>(((w.pitch.letter % 7) + 7) % 7);
+        p.alteration = static_cast<std::int8_t>(w.pitch.alteration);
+        p.octave = static_cast<std::int8_t>(w.octave());
+        out.push_back(p);
+    }
+    return out;
+}
+
+juce::String note_names(const std::vector<theory::VoicedTone>& voiced)
+{
+    juce::String s;
+    for (const auto& v : voiced) s << (s.isEmpty() ? "" : " ") << juce::String::fromUTF8(v.pitch.display_name().c_str()) << v.octave();
+    return s;
+}
+
+}  // namespace
+
+composer_ui::ChordPalette& ComposerView::chord_palette()
+{
+    if (!palette_) {
+        palette_ = std::make_unique<composer_ui::ChordPalette>(chord_state_);
+        palette_->on_insert = [this](bool replace) { enter_chord(replace); };
+        palette_->on_audition = [this] { audition_chord(); };
+        palette_->on_close = [this] { set_chord_mode(false); };
+        palette_->on_changed = [this] {
+            const auto [notes, warning] = chord_preview();
+            palette_->set_preview(notes, warning);
+        };
+        addChildComponent(*palette_);
+        // Over the right of the lanes, under the ruler.
+        palette_->setTopLeftPosition(std::max(0, getWidth() - composer_ui::ChordPalette::kWidth - 24),
+                                     composer_ui::ComposerRuler::kHeight + 12);
+    }
+    return *palette_;
+}
+
+void ComposerView::set_chord_mode(bool on)
+{
+    chord_mode_ = on;
+    auto& p = chord_palette();
+    p.setVisible(on);
+    if (on) {
+        p.toFront(false);
+        p.refresh();
+        const auto [notes, warning] = chord_preview();
+        p.set_preview(notes, warning);
+    }
+    context_.status(on ? "Chord mode: choose a chord in the palette, then click a staff (the bass goes in the octave you click)"
+                       : "Chord mode off");
+}
+
+std::pair<juce::String, juce::String> ComposerView::chord_preview() const
+{
+    std::string problem;
+    const auto chord = composer_ui::chord_for(chord_state_, &problem);
+    if (!chord) return {{}, juce::String(problem)};
+    const auto voiced = theory::voice_for_entry(*chord, chord_state_.octave, chord_state_.style);
+    juce::String warning;
+    if (const auto* t = context_.session.data().find_track(editing_track_)) {
+        const auto [low, high] = context_.session.range_for(*t);
+        int outside = 0;
+        for (const auto& v : voiced) outside += (v.midi < low || v.midi > high) ? 1 : 0;
+        if (outside > 0)
+            warning << outside << (outside == 1 ? " note is" : " notes are") << " outside the " << juce::String(t->name)
+                    << "'s range (" << juce::MidiMessage::getMidiNoteName(low, true, true, 4) << "-"
+                    << juce::MidiMessage::getMidiNoteName(high, true, true, 4) << ")";
+    }
+    return {note_names(voiced), warning};
+}
+
+bool ComposerView::enter_chord(bool replace_selection)
+{
+    if (!editor_) {
+        context_.status("Select an instrument track to write the chord on");
+        return false;
+    }
+    std::string problem;
+    const auto chord = composer_ui::chord_for(chord_state_, &problem);
+    if (!chord) {
+        context_.status(juce::String(problem));
+        return false;
+    }
+    if (replace_selection) {
+        const auto sel = editor_->selection();
+        const notation::ScoreNote* first = nullptr;
+        for (auto id : sel)
+            if (const auto* n = working_.find_note(id); n && (!first || n->start_tick < first->start_tick)) first = n;
+        if (!first) {
+            context_.status("Select the notes the chord replaces");
+            return false;
+        }
+        editing::EditCursor c = editor_->cursor();
+        c.tick = first->start_tick;
+        c.staff_index = working_.staff_index_of(first->id);
+        c.duration = first->duration;
+        editor_->delete_selection();
+        editor_->set_cursor(c);
+    }
+    const auto cur = editor_->cursor();
+    const auto staff_index = std::min(cur.staff_index, working_.staff_count() - 1);
+    const auto voiced = theory::voice_for_entry(*chord, chord_state_.octave, chord_state_.style);
+    const auto pitches = written_chord(voiced, working_.staff(staff_index));
+    if (pitches.empty()) return false;
+    const notation::Score before = working_;
+    auto r = editor_->insert_pitch(pitches.front());
+    bool ok = r.succeeded();
+    for (std::size_t i = 1; ok && i < pitches.size(); ++i) ok = editor_->add_to_chord(pitches[i]).succeeded();
+    if (!ok) {
+        working_ = before;  // nothing half-entered
+        reload_working_copy(false);
+        context_.status(juce::String("The chord could not be entered: ") + r.message);
+        return false;
+    }
+    // Then: past the chord (as entry does), or on to the next beat or bar.
+    if (chord_state_.then != 0) {
+        const auto& meter = context_.session.data().meter;
+        const int bar = meter.bar_at(cur.tick);
+        Ticks next = meter.bar_start(bar + 1);
+        if (chord_state_.then == 1) {
+            const Ticks beat = std::max<Ticks>(1, meter.at_bar(bar).beat_ticks());
+            const Ticks bs = meter.bar_start(bar);
+            next = bs + ((cur.tick - bs) / beat + 1) * beat;
+        }
+        auto c = editor_->cursor();
+        c.tick = next;
+        editor_->set_cursor(c);
+    }
+    const std::string label = "Enter chord " + chord->name();
+    committing_ = true;
+    if (chord_state_.write_symbol)
+        context_.session.commit_score_with_chord(editing_track_, working_, label, cur.tick, chord->name());
+    else
+        context_.session.commit_score(editing_track_, working_, label);
+    committing_ = false;
+    just_entered_ = true;
+    apply_view_settings();
+    repaint();
+    const auto [notes, warning] = chord_preview();
+    context_.status("Entered " + juce::String::fromUTF8(chord->display_name().c_str()) + ": " + notes +
+                    (warning.isNotEmpty() ? " - " + warning : juce::String()));
+    return true;
+}
+
+void ComposerView::audition_chord()
+{
+    const auto chord = composer_ui::chord_for(chord_state_);
+    if (!chord) return;
+    context_.session.select_track(editing_track_);
+    const auto voiced = theory::voice_for_entry(*chord, chord_state_.octave, chord_state_.style);
+    std::vector<int> notes;
+    for (const auto& v : voiced) {
+        context_.engine.send_live(juce::MidiMessage::noteOn(1, v.midi, static_cast<juce::uint8>(90)));
+        notes.push_back(v.midi);
+    }
+    juce::Component::SafePointer<ComposerView> self(this);
+    juce::Timer::callAfterDelay(900, [self, notes] {
+        if (!self) return;
+        for (int n : notes) self->context_.engine.send_live(juce::MidiMessage::noteOff(1, n));
+    });
 }
 
 bool ComposerView::enter_midi(int midi, bool chord)

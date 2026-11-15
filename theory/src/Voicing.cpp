@@ -201,4 +201,76 @@ std::vector<Voicing> voice_progression(const std::vector<Chord>& chords, const V
     return out;
 }
 
+
+// --- Chord Mode entry voicing --------------------------------------------------
+
+int VoicedTone::octave() const noexcept
+{
+    // The letter's natural pitch class, the alteration moving off it.
+    static const int kNatural[7] = {0, 2, 4, 5, 7, 9, 11};
+    const int natural = midi - pitch.alteration;
+    const int letter_pc = kNatural[((pitch.letter % 7) + 7) % 7];
+    return (natural - letter_pc) / 12 - 1;
+}
+
+std::vector<VoicedTone> voice_for_entry(const Chord& chord, int bass_octave, VoicingStyle style)
+{
+    const auto spelled = chord.tones();
+    const auto intervals = chord.intervals();
+    if (spelled.empty()) return {};
+    auto midi_in_octave = [](const SpelledPitch& p, int octave) {
+        static const int kNatural[7] = {0, 2, 4, 5, 7, 9, 11};
+        return (octave + 1) * 12 + kNatural[((p.letter % 7) + 7) % 7] + p.alteration;
+    };
+    // The order the tones stack in: from the bass (an inversion starts on
+    // its tone and wraps), the extensions above, in the order of their degree.
+    std::vector<std::size_t> order;
+    const std::size_t n = spelled.size();
+    std::size_t core = 0;  // tones within the octave (degrees up to 7)
+    for (const auto& t : intervals) core += t.degree <= 7 ? 1 : 0;
+    const std::size_t inv = chord.bass ? 0 : static_cast<std::size_t>(std::clamp(chord.inversion, 0, 3));
+    const std::size_t start = core > 0 ? std::min(inv, core - 1) : 0;
+    for (std::size_t i = 0; i < core; ++i) order.push_back((start + i) % core);
+    for (std::size_t i = core; i < n; ++i) order.push_back(i);
+
+    std::vector<VoicedTone> out;
+    int last = -1000;
+    if (chord.bass) {
+        out.push_back({*chord.bass, midi_in_octave(*chord.bass, bass_octave)});
+        last = out.back().midi;
+    }
+    for (std::size_t k = 0; k < order.size(); ++k) {
+        const auto& p = spelled[order[k]];
+        int m = midi_in_octave(p, out.empty() ? bass_octave : bass_octave - 1);
+        if (!out.empty())
+            while (m <= last) m += 12;
+        out.push_back({p, m});
+        last = m;
+    }
+    auto sort = [&] { std::sort(out.begin(), out.end(), [](const VoicedTone& a, const VoicedTone& b) { return a.midi < b.midi; }); };
+    switch (style) {
+        case VoicingStyle::Closed: break;
+        case VoicingStyle::Open:
+            if (out.size() >= 3) out[1].midi += 12;
+            break;
+        case VoicingStyle::Drop2:
+        case VoicingStyle::Drop3: {
+            // On the structure above the bass.
+            const std::size_t drop = style == VoicingStyle::Drop2 ? 2 : 3;
+            if (out.size() >= drop + 2) {
+                auto& v = out[out.size() - drop];
+                v.midi -= 12;
+                // Under the bass: the bass goes down an octave and stays the bass.
+                while (v.midi <= out.front().midi) out.front().midi -= 12;
+            }
+            break;
+        }
+        case VoicingStyle::Spread:
+            if (out.size() >= 2) out.front().midi -= 12;
+            break;
+    }
+    sort();
+    return out;
+}
+
 }  // namespace vcc::theory

@@ -950,3 +950,45 @@ macOS, Linux and Windows. What it took:
       click and Return, G7/B typed on beat 3 of bar 2, a bad symbol
       refused, Escape, removal, the Page view printing both. Screenshots
       `39-chord-symbols`, `39b-chord-symbols-page`.
+
+20. **Chord Mode. Done** (November 15, 2026; Add-On Features spec v1.2,
+    Feature A, `docs/spec/VC_Composer_2_Add_On_Features_Spec_v1.2.md`).
+    - **Toolbar.** The Composer's Entry group has a Chord mode key (LED).
+      On, a floating palette (`ui/composer/ChordPalette`) sits over the
+      lanes; drag it by its title; its settings stay for the session.
+    - **Palette.** Root (C-B with flat, natural, sharp), quality (every
+      quality the theory library knows, named: triads, sus, power chord,
+      sixths, sevenths, add9 vs stacked 9, 11, 13, altered), alterations
+      and omissions (b5 #5 b9 #9 #11 b13, no3 no5), bass (root position,
+      the inversions the chord has, or any slash bass), voicing (close,
+      open, drop 2, spread), the bass's octave, what follows an entry
+      (after the chord, next beat, next bar), and whether to write the
+      chord symbol. It shows the chord's name and its notes before entry,
+      and warns when any note lies outside the track's instrument range.
+      A contradiction (m7b5 with b5, the same tone twice) disables entry
+      and says why.
+    - **Entry.** Insert at the cursor, a click on a staff (the bass in the
+      octave clicked), or Replace sel. (at the first selected note's place
+      and value). The notes are ordinary score notes with the active
+      duration, spelled as the chord spells them, written a transposition
+      away on a transposing staff (once); one undo step with the chord
+      symbol (`Session::commit_score_with_chord`). Audition plays it on the
+      selected track.
+    - **Theory.** `parse_chord_symbol` now reads alterations, additions and
+      omissions after a quality (`C7(b5,b9)`, `C7b9b5`, `C7#11`,
+      `C(add9)`, `C7(no3)`) and power chords (`C5`), and refuses
+      contradictions; `Chord::name` writes them back. `voice_for_entry`
+      voices a chord for entry with spelled pitches and MIDI notes. MusicXML
+      `<harmony>` carries them (kind text, degrees, power).
+    - Not yet: capturing a voicing from MIDI input, pinning the palette's
+      position across launches, "preserve the melody's top note" voicing,
+      and Feature B's range policies (the palette only warns).
+    - **Checks.** Unit tests: the new symbol forms and contradictions; entry
+      voicings (C4 E4 G4; G7/B as B3 D4 F4 G4; C7(b5,b9) as C3 E3 Bb3 Gb4
+      Db5; inversions, open, drop 2, spread, slash bass, B#3 octave
+      spelling); MusicXML round trip of the new forms. Desktop check: the
+      key opens and lights the palette; Insert enters C major as C4 E4 G4
+      with its symbol in one undo step; one undo removes both; G7/B and
+      C7(b5,b9) entered as specified; the contradiction refused; a click on
+      a staff enters the chord in the octave clicked; Replace sel.; a
+      B-flat clarinet written D4 F#4 A4. Screenshot `40-chord-mode`.
