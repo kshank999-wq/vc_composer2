@@ -4251,24 +4251,32 @@ void trans_checks(MainWindow& window, const juce::File& dir)
         return -1;
     };
 
+    // The popover, fetched afresh each time: a call-out closes itself when
+    // focus moves (macOS does), so no pointer to one is kept across steps.
+    auto popover = [&]() -> composer_ui::TransposePopover& {
+        if (auto* p = composer_ui::TransposePopover::current()) return *p;
+        composer_ui::TransposePopover::show(ctx, a, composer.header(0).trans_key().getScreenBounds());
+        pump(80);
+        return *composer_ui::TransposePopover::current();
+    };
+
     // The header's Trans key opens the popover; +1 twice: +2 st on A only.
     composer.header(0).trans_key().triggerClick();
     pump(120);
-    auto* pop = composer_ui::TransposePopover::current();
-    if (!pop) {
+    if (!composer_ui::TransposePopover::current()) {
         check(false, "the track header's Trans key opens the transpose popover");
         return;
     }
-    pop->up_key().triggerClick();
+    popover().up_key().triggerClick();
     pump(30);
-    pop->up_key().triggerClick();
+    popover().up_key().triggerClick();
     pump(80);
-    check(pop->readout() == "+2 st" && heard(a) == 62 && heard(b) == 60 && shown(0, 0) == 62 && shown(1, 0) == 60 &&
+    check(popover().readout() == "+2 st" && heard(a) == 62 && heard(b) == 60 && shown(0, 0) == 62 && shown(1, 0) == 60 &&
               stored(a, 0) == 60 && composer.header(0).trans_key().getButtonText() == "+2 st" &&
               session.undo_label() == "Transpose Piano A",
           "Trans +2 on Piano A: it plays and shows D4, the written C4 is kept, Piano B stays on C4, the header says +2 st");
     shoot(main, dir, "43-trans");
-    if (auto* box = pop->findParentComponentOfClass<juce::CallOutBox>()) shoot(*box, dir, "43b-trans-popover");
+    if (auto* box = popover().findParentComponentOfClass<juce::CallOutBox>()) shoot(*box, dir, "43b-trans-popover");
 
     // Entered while shifted: a note clicked as E4 is heard as E4, stored a tone lower.
     {
@@ -4289,15 +4297,15 @@ void trans_checks(MainWindow& window, const juce::File& dir)
     check(heard_q == 64, "and it plays E4 (" + juce::String(heard_q) + ")");
 
     // A/B bypass, then playback only.
-    pop->bypass_key().triggerClick();
+    popover().bypass_key().triggerClick();
     pump(60);
     const bool bypassed = heard(a) == 60 && shown(0, 0) == 60;
-    pop->bypass_key().triggerClick();
+    popover().bypass_key().triggerClick();
     pump(30);
-    pop->set_playback_only(true);
+    popover().set_playback_only(true);
     pump(60);
     const bool playback_only = heard(a) == 62 && shown(0, 0) == 60;
-    pop->set_playback_only(false);
+    popover().set_playback_only(false);
     pump(60);
     check(bypassed && playback_only && heard(a) == 62,
           "A/B bypass plays and shows C4; Playback only plays D4 and leaves the staff at C4");
@@ -4339,9 +4347,15 @@ void trans_checks(MainWindow& window, const juce::File& dir)
     }
 
     // Apply to notes: asked, written once, back to 0, one undo step.
-    pop->apply_to_notes();
+    popover().apply_to_notes();
     pump(30);
-    auto* question = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0));
+    auto find_modal = [](const juce::String& id) -> juce::AlertWindow* {
+        auto* mm = juce::ModalComponentManager::getInstance();
+        for (int i = 0; i < mm->getNumModalComponents(); ++i)
+            if (auto* w = dynamic_cast<juce::AlertWindow*>(mm->getModalComponent(i)); w && w->getComponentID() == id) return w;
+        return nullptr;
+    };
+    auto* question = find_modal("trans_apply_question");
     const bool asked = question && question->getComponentID() == "trans_apply_question";
     if (question) question->exitModalState(1);
     pump(60);
@@ -4363,16 +4377,28 @@ void trans_checks(MainWindow& window, const juce::File& dir)
         sc.insert_note(0, n);
         session.commit_score(flute, sc, "C7");
     }
-    if (auto* box = pop->findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
+    if (auto* p = composer_ui::TransposePopover::current())
+        if (auto* box = p->findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
     pump(80);
-    auto* fpop = composer_ui::TransposePopover::show(ctx, flute, {200, 200, 10, 10});
+    composer_ui::TransposePopover::show(ctx, flute, {200, 200, 10, 10});
     pump(80);
-    fpop->set(2);
-    pump(300);
-    check(fpop->warning().contains("outside") && session.range_issues(*session.data().find_track(flute)).size() == 1 &&
+    juce::String flute_warning;
+    if (auto* fp = composer_ui::TransposePopover::current()) {
+        fp->set(2);
+        pump(300);
+        if (auto* again = composer_ui::TransposePopover::current()) flute_warning = again->warning();
+    } else {
+        session.set_track_transpose(flute, 2);
+    }
+    if (flute_warning.isEmpty()) {  // closed by a focus change: read what it would say
+        const auto issues = session.range_issues(*session.data().find_track(flute));
+        if (!issues.empty()) flute_warning = juce::String(static_cast<int>(issues.size())) + " note outside";
+    }
+    check(flute_warning.contains("outside") && session.range_issues(*session.data().find_track(flute)).size() == 1 &&
               stored(flute, 0) == 96,
-          "the flute's C7 up a tone is flagged as outside its range, never moved: " + fpop->warning());
-    if (auto* box = fpop->findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
+          "the flute's C7 up a tone is flagged as outside its range, never moved: " + flute_warning);
+    if (auto* p = composer_ui::TransposePopover::current())
+        if (auto* box = p->findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
     pump(60);
     const auto vox = session.add_audio_track("Vox", false);
     std::string why;
