@@ -5634,12 +5634,19 @@ void comments_checks(MainWindow& window, const juce::File& dir)
 
     // A reply, then resolved; resolved ones can be hidden.
     panel->entry().setText("Pulled back 3 dB", false);
+    // The rows rebuild on the panel's timer: wait for each button (slow runners).
+    wait_for([&] { return panel->reply_button(id) != nullptr; }, 5000);
     if (auto* b = panel->reply_button(id)) b->triggerClick();
     wait_for([&] {
         const auto* cm = session.find_comment(id);
         return cm && cm->replies.size() == 1;
     });
-    pump(200);  // the list rebuilds its rows on the change: click the new one
+    // The list rebuilds its rows on the change: click the new one.
+    wait_for([&] {
+        auto* b = panel->resolve_button(id);
+        return b != nullptr && b->getButtonText() == "Resolve" && panel->row(id) && panel->row(id)->isShowing();
+    }, 5000);
+    pump(100);
     if (auto* b = panel->resolve_button(id)) b->triggerClick();
     wait_for([&] {
         const auto* cm = session.find_comment(id);
@@ -5651,7 +5658,7 @@ void comments_checks(MainWindow& window, const juce::File& dir)
           "Reply adds the typed reply, Resolve resolves");
     shoot(*panel->getTopLevelComponent(), dir, "53-comments");
     panel->set_show_resolved(false);
-    pump(40);
+    wait_for([&] { return panel->listed().size() == 1; }, 5000);
     check(panel->listed().size() == 1 && panel->listed().front() == second, "hiding resolved leaves the open one");
     panel->set_show_resolved(true);
     // A click on a row locates there.
