@@ -427,9 +427,12 @@ PackagePanel::PackagePanel(AppContext& context) : context_(context)
     destination_ = base.getChildFile(juce::String(session::package::safe_name(context_.session.data().name)) + " Package")
                        .getNonexistentSibling(false);
     choose_.onClick = [this] {
+        // (MSVC: build the pointer first; an init-capture of `this` in a
+        // nested lambda does not compile there.)
+        const juce::Component::SafePointer<PackagePanel> safe(this);
         chooser_ = std::make_unique<juce::FileChooser>("Package into", destination_.getParentDirectory());
         chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
-                              [safe = juce::Component::SafePointer<PackagePanel>(this)](const juce::FileChooser& fc) {
+                              [safe](const juce::FileChooser& fc) {
                                   if (!safe || fc.getResult() == juce::File()) return;
                                   safe->destination_ =
                                       fc.getResult()
