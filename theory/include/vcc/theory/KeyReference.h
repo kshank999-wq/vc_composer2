@@ -44,6 +44,16 @@ struct DiatonicChord {
     bool uses_altered = false;  ///< Built on a raised degree: outside the natural minor.
 };
 
+/// A chord borrowed from outside the key shown (modal mixture): built on a
+/// degree of a related scale, never labelled diatonic (spec §9.3).
+struct BorrowedChord {
+    int degree = 1;
+    std::string roman;          ///< Relative to the home key: "bVI", "iv", "bII", "I".
+    Chord chord;
+    std::string source;         ///< "C minor", "C major", "C Phrygian".
+    std::string name;           ///< "Neapolitan", "Picardy third", or empty.
+};
+
 struct KeyReference {
     Key key;                    ///< Major, or Minor with the form below.
     MinorForm form = MinorForm::Natural;
@@ -52,6 +62,12 @@ struct KeyReference {
     std::vector<ScaleDegree> scale;        ///< Seven degrees, one letter each.
     std::vector<DiatonicChord> triads;     ///< I..vii°
     std::vector<DiatonicChord> sevenths;   ///< Imaj7..viiø7
+    /// Common borrowed chords, triads and sevenths: a major key's from its
+    /// parallel minor, a minor key's from its parallel major (those not
+    /// already in the minor form shown), and the Neapolitan (bII, from
+    /// Phrygian) for both. In degree order.
+    std::vector<BorrowedChord> borrowed_triads;
+    std::vector<BorrowedChord> borrowed_sevenths;
     Key relative, parallel, dominant, subdominant;
     std::string altered_note;   ///< "Raised 7th (G#)" when the form alters degrees; empty otherwise.
 };

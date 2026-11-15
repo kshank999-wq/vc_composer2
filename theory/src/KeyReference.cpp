@@ -168,6 +168,45 @@ KeyReference key_reference(const Key& key, MinorForm form)
             }
         }
     }
+    // Borrowed chords: from the parallel key, and the Neapolitan.
+    if (notes.size() == 7) {
+        const auto home_natural = r.key.scale();
+        const Key parallel_key{key.tonic, minor ? Mode::Major : Mode::Minor};
+        const auto parallel_notes = parallel_key.scale();
+        const Key phrygian{key.tonic, Mode::Phrygian};
+        const auto phrygian_notes = phrygian.scale();
+        const std::string tonic = key.tonic.display_name();
+        for (bool seventh : {false, true}) {
+            const auto& home = seventh ? r.sevenths : r.triads;
+            auto& out = seventh ? r.borrowed_sevenths : r.borrowed_triads;
+            auto add = [&](const std::vector<SpelledPitch>& scale, int degree, const std::string& source, const std::string& name) {
+                if (scale.size() != 7) return;
+                auto c = diatonic_chord(scale, degree, seventh);
+                // Already in the key shown (same root, same quality): not borrowed.
+                for (const auto& h : home)
+                    if (h.chord.root.pitch_class() == c.chord.root.pitch_class() && h.chord.quality.id == c.chord.quality.id) return;
+                // Relative to the home key: a root lowered or raised from the
+                // key's own degree takes a flat or sharp (a minor key's raised
+                // 6th and 7th are its own, as harmonic/melodic minor writes them).
+                const int diff = mod(c.chord.root.pitch_class() - home_natural[static_cast<std::size_t>(degree - 1)].pitch_class() + 6, 12) - 6;
+                std::string prefix;
+                if (diff < 0) prefix = "\xE2\x99\xAD";  // flat
+                if (diff > 0 && !(minor && (degree == 6 || degree == 7))) prefix = "\xE2\x99\xAF";  // sharp
+                BorrowedChord b;
+                b.degree = degree;
+                b.roman = prefix + c.roman;
+                b.chord = c.chord;
+                b.source = source;
+                b.name = name;
+                out.push_back(b);
+            };
+            const std::string from = tonic + (minor ? " major" : " minor");
+            for (int d = 1; d <= 7; ++d) {
+                if (d == 2) add(phrygian_notes, 2, tonic + " Phrygian", "Neapolitan");
+                add(parallel_notes, d, from, minor && d == 1 ? "Picardy third" : "");
+            }
+        }
+    }
     // The keys around it.
     r.relative = minor ? Key{key.tonic.transposed(2, 3), Mode::Major} : Key{relative_minor_of(key.tonic), Mode::Minor};
     r.parallel = Key{key.tonic, minor ? Mode::Major : Mode::Minor};

@@ -1315,3 +1315,34 @@ macOS, Linux and Windows. What it took:
       a folder and .zip with the report, then Open Package elsewhere with
       both audio files found. Screenshots `50-director-review`,
       `51-package`.
+28. **Circle of Fifths: chord reference with Roman numerals and borrowed
+    chords. Done** (November 15, 2026; Add-On spec §9.3, "distinguish
+    chords borrowed/altered outside the selected scale").
+    - Each scale degree shows the Roman numeral of the chord built on it
+      ("2 ii" over A in G major). The diatonic chord row gives each
+      chord's numeral on its key, and under it the chord's name and its
+      notes, spelled in the key ("D / D F# A"); triads or sevenths, as
+      the 7ths key says. A chord that uses a raised degree of the minor
+      form shown says "altered degree".
+    - **Borrowed chords** (a switch, on by default and remembered): a
+      major key's chords from its parallel minor (i, ii°, bIII, iv, v,
+      bVI, bVII) and the Neapolitan bII (from Phrygian); a minor key's
+      from its parallel major, only those not already in the minor form
+      shown (natural minor: I - the Picardy third - ii, #iii, IV, V, vi,
+      vii°; harmonic minor drops V and vii°, its own), and the
+      Neapolitan. Numerals are written against the home key (a lowered
+      root takes a flat, a raised one a sharp, except a minor key's own
+      raised 6th and 7th). They are amber, never in the diatonic row,
+      each with its name, notes and source ("G minor", "Neapolitan").
+    - A click on any chord lights its notes in the scale, plays it, and
+      says what it is: "bVI = Eb (Eb G Bb), borrowed from G minor - Eb
+      and Bb are outside G major". Send to Chord Mode takes a borrowed
+      chord like a diatonic one. The theory comes from
+      `theory::key_reference` (`borrowed_triads`, `borrowed_sevenths`),
+      so a later iPad reference uses the same lists.
+    - **Checks.** Unit test: C major, A harmonic minor, C natural minor and
+      E-flat major (bVI spelled Cb) lists, and no borrowed chord equal to
+      a diatonic one in any of the 24 keys. Desktop check: G major's
+      eight borrowed chords with numerals, bVI's line, Chord Mode set to
+      E-flat from it, a diatonic chord's line, hiding the row.
+      Screenshot `42c-circle-borrowed`.

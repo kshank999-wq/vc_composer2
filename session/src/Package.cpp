@@ -24,7 +24,7 @@ bool is_absolute(const std::string& p)
 std::string project_dir(const std::string& project_path)
 {
     if (project_path.empty()) return {};
-    return fs::u8path(project_path).parent_path().u8string();
+    return fs::u8path(project_path).parent_path().generic_u8string();
 }
 
 std::string human_bytes(std::uintmax_t b)
@@ -80,11 +80,11 @@ std::string resolve(const std::string& stored, const std::string& project_path)
     if (stored.empty()) return {};
     const std::string dir = project_dir(project_path);
     std::error_code ec;
-    if (!is_absolute(stored)) return dir.empty() ? stored : (fs::u8path(dir) / fs::u8path(stored)).u8string();
+    if (!is_absolute(stored)) return dir.empty() ? stored : (fs::u8path(dir) / fs::u8path(stored)).generic_u8string();
     if (fs::exists(fs::u8path(stored), ec) || dir.empty()) return stored;
     // Moved with the project: the same name beside it.
     const auto beside = fs::u8path(dir) / fs::u8path(stored).filename();
-    return fs::exists(beside, ec) ? beside.u8string() : stored;
+    return fs::exists(beside, ec) ? beside.generic_u8string() : stored;
 }
 
 Inventory inventory(const project::ProjectData& d, const std::string& project_path)
@@ -95,7 +95,7 @@ Inventory inventory(const project::ProjectData& d, const std::string& project_pa
         if (stored.empty()) return;
         const std::string source = resolve(stored, project_path);
         std::error_code ec;
-        const std::string key = fs::u8path(source).lexically_normal().u8string();
+        const std::string key = fs::u8path(source).lexically_normal().generic_u8string();
         auto it = by_source.find(key);
         if (it == by_source.end()) {
             Asset a;
@@ -155,7 +155,7 @@ std::string report_text(const project::ProjectData& d, const Inventory& inv, con
     for (const auto& a : inv.assets) {
         if (!a.exists || (a.kind == Asset::Kind::Picture && !options.include_picture)) continue;
         any = true;
-        r += "  " + (a.packaged.empty() ? fs::u8path(a.source).filename().u8string() : a.packaged) + "  (" +
+        r += "  " + (a.packaged.empty() ? fs::u8path(a.source).filename().generic_u8string() : a.packaged) + "  (" +
              human_bytes(a.bytes) + ")\n";
     }
     if (!any) r += "  (no media files)\n";
@@ -224,9 +224,9 @@ Result collect(const project::Project& project, const std::string& project_path,
         if (a.kind == Asset::Kind::Picture && !options.include_picture) continue;
         const std::string dir = a.kind == Asset::Kind::Audio ? "Audio Files" : "Picture";
         const fs::path name = fs::u8path(a.source).filename();
-        std::string candidate = dir + "/" + name.u8string();
+        std::string candidate = dir + "/" + name.generic_u8string();
         for (int n = 2; taken.count(candidate); ++n)
-            candidate = dir + "/" + name.stem().u8string() + " " + std::to_string(n) + name.extension().u8string();
+            candidate = dir + "/" + name.stem().generic_u8string() + " " + std::to_string(n) + name.extension().generic_u8string();
         taken.insert(candidate);
         fs::copy_file(fs::u8path(a.source), root / fs::u8path(candidate), fs::copy_options::overwrite_existing, ec);
         if (ec) return fail("could not copy " + a.source + ": " + ec.message());
@@ -251,12 +251,12 @@ Result collect(const project::Project& project, const std::string& project_path,
         }
     });
     const std::string file_name = safe_name(d.name) + ".vcc2";
-    res.project_file = (root / fs::u8path(file_name)).u8string();
+    res.project_file = (root / fs::u8path(file_name)).generic_u8string();
     std::string err;
     if (!out.save(res.project_file, &err)) return fail("could not save the project: " + err);
 
     const std::string report = report_text(d, inv, options);
-    if (!files::write_file_atomic((root / "Package Report.txt").u8string(), report, &err))
+    if (!files::write_file_atomic((root / "Package Report.txt").generic_u8string(), report, &err))
         return fail("could not write the report: " + err);
     json::Array media, deps;
     for (const auto& a : inv.assets) {
@@ -280,7 +280,7 @@ Result collect(const project::Project& project, const std::string& project_path,
     }
     const json::Value manifest = json::Object{{"format", "vcc2-package"}, {"version", 1},
                                               {"project", file_name}, {"media", media}, {"needs", deps}};
-    if (!files::write_file_atomic((root / "package.json").u8string(), json::write(manifest), &err))
+    if (!files::write_file_atomic((root / "package.json").generic_u8string(), json::write(manifest), &err))
         return fail("could not write the manifest: " + err);
     if (progress) progress(1.0);
     res.ok = true;

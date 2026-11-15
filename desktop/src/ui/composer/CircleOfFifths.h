@@ -35,6 +35,19 @@ public:
     /// Selects a diatonic chord (0-6): its notes are highlighted and heard.
     void select_chord(int index, bool audition = true);
     int selected_chord() const noexcept { return selected_; }
+    /// Shows or hides the borrowed chords (modal mixture). Remembered.
+    void set_borrowed(bool on);
+    bool borrowed_shown() const noexcept { return borrowed_; }
+    /// The borrowed chords shown (triads or sevenths, as the 7ths key says).
+    const std::vector<theory::BorrowedChord>& borrowed() const noexcept
+    {
+        return sevenths_ ? ref_.borrowed_sevenths : ref_.borrowed_triads;
+    }
+    /// Selects a borrowed chord: highlighted, heard, ready for Chord Mode.
+    void select_borrowed(int index, bool audition = true);
+    int selected_borrowed() const noexcept { return selected_borrowed_; }
+    /// The selected chord's line: "bVI = Ab (Ab C Eb), from C minor - Ab and Eb are outside C major".
+    juce::String selection_text() const;
     /// Fills the Composer's chord palette with the selected chord; inserts nothing.
     bool send_to_chord_mode();
     /// Asks, then sets the project's key to the one shown (one undo step).
@@ -55,6 +68,8 @@ public:
     hw::Keycap& manual_key() { return manual_key_; }
     hw::Keycap& chord_key(int i) { return *chord_keys_[static_cast<std::size_t>(i)]; }
     hw::Keycap& send_key() { return send_; }
+    hw::Keycap& borrowed_toggle() { return borrowed_key_; }
+    hw::Keycap& borrowed_key(int i) { return *borrowed_keys_[static_cast<std::size_t>(i)]; }
     juce::ComboBox& form_box() { return form_; }
 
 private:
@@ -72,6 +87,12 @@ private:
     theory::MinorForm form_value_ = theory::MinorForm::Natural;
     bool sevenths_ = false;
     int selected_ = -1;
+    int selected_borrowed_ = -1;
+    bool borrowed_ = true;
+    /// The chord selected (diatonic or borrowed), or null.
+    const theory::Chord* selected_chord_ptr() const;
+    void audition(const theory::Chord& chord);
+    juce::Rectangle<int> chords_area() const;
     theory::KeyReference ref_;
     juce::String anchor_;
     std::string last_key_;
@@ -81,6 +102,8 @@ private:
     juce::ComboBox form_;
     std::vector<std::unique_ptr<hw::Keycap>> chord_keys_;
     std::vector<std::unique_ptr<hw::Keycap>> relation_keys_;
+    hw::Keycap borrowed_key_{"Borrowed chords", true};
+    std::vector<std::unique_ptr<hw::Keycap>> borrowed_keys_;
 };
 
 /// Opens the Circle of Fifths window (or brings it to the front).

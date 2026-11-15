@@ -4240,6 +4240,38 @@ void circle_checks(MainWindow& window, const juce::File& dir)
               juce::String(static_cast<int>(session.project().history_size() - before_send)) + "]");
     composer.set_chord_mode(false);
 
+    // Borrowed chords (modal mixture), shown under the diatonic ones: in G
+    // major, from G minor (and the Neapolitan); a click says what it is and
+    // which notes are outside the key, and it goes to Chord Mode like any other.
+    panel->set_reference(*theory::Key::parse("G major"));
+    panel->set_sevenths(false);
+    panel->set_borrowed(true);
+    pump(40);
+    juce::String lent;
+    for (const auto& b : panel->borrowed()) lent << (lent.isEmpty() ? "" : " ") << juce::String::fromUTF8(b.roman.c_str()) << "=" << b.chord.name();
+    check(panel->borrowed().size() == 8 && panel->borrowed_key(6).isVisible() &&
+              lent == juce::String::fromUTF8("i=Gm \xE2\x99\xADII=Ab ii\xC2\xB0=Adim \xE2\x99\xADIII=Bb iv=Cm v=Dm \xE2\x99\xADVI=Eb \xE2\x99\xADVII=F"),
+          "G major lists its borrowed chords with numerals: " + lent);
+    panel->borrowed_key(6).triggerClick();  // bVI, E-flat
+    pump(40);
+    const auto said = panel->selection_text();
+    check(panel->selected_borrowed() == 6 && panel->selected_chord() < 0 &&
+              said.contains(juce::String::fromUTF8("\xE2\x99\xADVI = E\xE2\x99\xAD (E\xE2\x99\xAD G B\xE2\x99\xAD)")) &&
+              said.contains("borrowed from G minor") && said.contains("outside G major"),
+          "a borrowed chord says what it is, where it comes from and which notes are outside the key: " + said);
+    check(panel->send_to_chord_mode() && composer.chord_mode() && composer.chord_state().letter == 2 &&
+              composer.chord_state().accidental == -1,
+          "a borrowed chord goes to Chord Mode as E-flat");
+    composer.set_chord_mode(false);
+    panel->chord_key(4).triggerClick();
+    pump(40);
+    check(panel->selection_text().contains("V = D (D F") && panel->selection_text().contains("diatonic in G major"),
+          "a diatonic chord's line gives its numeral, name and notes: " + panel->selection_text());
+    shoot(*panel->getTopLevelComponent(), dir, "42c-circle-borrowed");
+    panel->set_borrowed(false);
+    check(!panel->borrowed_key(0).isVisible(), "the borrowed chords can be hidden");
+    panel->set_borrowed(true);
+
     // Apply key to score: asked first, then one undo step.
     panel->choose_position(9, false);  // Eb major, manual
     panel->apply_key_to_score();

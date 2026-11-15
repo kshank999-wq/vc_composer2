@@ -15,6 +15,16 @@ constexpr float kPi = juce::MathConstants<float>::pi;
 
 juce::String disp(const theory::SpelledPitch& p) { return juce::String::fromUTF8(p.display_name().c_str()); }
 
+/// "A C E": a chord's notes, spelled.
+juce::String chord_notes(const theory::Chord& c)
+{
+    juce::String out;
+    for (const auto& t : c.tones()) out << (out.isEmpty() ? "" : " ") << disp(t);
+    return out;
+}
+
+juce::String chord_label(const theory::Chord& c) { return juce::String::fromUTF8(c.display_name().c_str()); }
+
 juce::String key_title(const theory::Key& k)
 {
     return disp(k.tonic) + (theory::is_minor_family(k.mode) ? " minor" : " major");
@@ -44,6 +54,7 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
     follow_ = settings.getBoolValue("circle_follow", true);
     manual_ = theory::Key::parse(settings.getValue("circle_key", "C major").toStdString()).value_or(theory::Key{});
     sevenths_ = settings.getBoolValue("circle_sevenths", false);
+    borrowed_ = settings.getBoolValue("circle_borrowed", true);
     form_value_ = static_cast<theory::MinorForm>(std::clamp(settings.getIntValue("circle_form", 0), 0, 3));
 
     follow_key_.set_led_dot(true);
@@ -72,7 +83,7 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
     send_.onClick = [this] { send_to_chord_mode(); };
     audition_.setTooltip("Hear the selected chord, or the scale");
     audition_.onClick = [this] {
-        if (selected_ >= 0) select_chord(selected_, true);
+        if (const auto* c = selected_chord_ptr()) this->audition(*c);
     };
     for (int i = 0; i < 7; ++i) {
         chord_keys_.push_back(std::make_unique<hw::Keycap>("", true));
@@ -81,6 +92,21 @@ CircleOfFifthsPanel::CircleOfFifthsPanel(AppContext& context) : context_(context
         k.set_keep_case(true);
         k.onClick = [this, i] { select_chord(i, true); };
         addAndMakeVisible(k);
+    }
+    borrowed_key_.set_led_dot(true);
+    borrowed_key_.setComponentID("circle_borrowed");
+    borrowed_key_.setTooltip("Chords borrowed from outside the key (modal mixture): the parallel key's chords and the "
+                             "Neapolitan. Never labelled diatonic.");
+    borrowed_key_.onClick = [this] { set_borrowed(borrowed_key_.getToggleState()); };
+    addAndMakeVisible(borrowed_key_);
+    for (int i = 0; i < 8; ++i) {
+        borrowed_keys_.push_back(std::make_unique<hw::Keycap>("", true));
+        auto& k = *borrowed_keys_.back();
+        k.setComponentID("circle_borrowed_" + juce::String(i));
+        k.set_keep_case(true);
+        k.set_led_colour(juce::Colour(0xffe0a040));
+        k.onClick = [this, i] { select_borrowed(i, true); };
+        addChildComponent(k);
     }
     static const char* relations[] = {"Relative", "Parallel", "Dominant", "Subdominant"};
     for (int i = 0; i < 4; ++i) {
@@ -112,6 +138,7 @@ void CircleOfFifthsPanel::remember() const
     settings.setValue("circle_follow", follow_);
     settings.setValue("circle_key", juce::String(manual_.name()));
     settings.setValue("circle_sevenths", sevenths_);
+    settings.setValue("circle_borrowed", borrowed_);
     settings.setValue("circle_form", static_cast<int>(form_value_));
 }
 
@@ -156,13 +183,27 @@ void CircleOfFifthsPanel::rebuild()
         if (i < chords.size()) {
             const auto& c = chords[i];
             k.setButtonText(juce::String::fromUTF8(c.roman.c_str()));
-            k.set_sublegend(juce::String::fromUTF8(c.chord.display_name().c_str()) + (c.uses_altered ? " *" : ""));
+            k.set_sublegend({});
             k.setTooltip(juce::String::fromUTF8(c.chord.display_name().c_str()) +
                          (c.uses_altered ? " - uses an altered degree of the scale shown, outside the key signature" : ""));
             k.setTitle(juce::String::fromUTF8(c.roman.c_str()) + " " + juce::String::fromUTF8(c.chord.display_name().c_str()));
         }
         k.setToggleState(static_cast<int>(i) == selected_, juce::dontSendNotification);
     }
+    const auto& lent = borrowed();
+    for (std::size_t i = 0; i < borrowed_keys_.size(); ++i) {
+        auto& k = *borrowed_keys_[i];
+        const bool shown = borrowed_ && i < lent.size();
+        k.setVisible(shown);
+        if (!shown) continue;
+        const auto& b = lent[i];
+        k.setButtonText(juce::String::fromUTF8(b.roman.c_str()));
+        k.setTooltip(chord_label(b.chord) + " (" + chord_notes(b.chord) + "), borrowed from " + juce::String(b.source) +
+                     (b.name.empty() ? juce::String() : " - the " + juce::String(b.name)));
+        k.setTitle("Borrowed " + juce::String::fromUTF8(b.roman.c_str()) + " " + chord_label(b.chord));
+        k.setToggleState(static_cast<int>(i) == selected_borrowed_, juce::dontSendNotification);
+    }
+    borrowed_key_.setToggleState(borrowed_, juce::dontSendNotification);
     const theory::Key* keys[] = {&ref_.relative, &ref_.parallel, &ref_.dominant, &ref_.subdominant};
     for (std::size_t i = 0; i < relation_keys_.size(); ++i) relation_keys_[i]->setButtonText(key_title(*keys[i]));
     follow_key_.setToggleState(follow_, juce::dontSendNotification);
@@ -170,8 +211,8 @@ void CircleOfFifthsPanel::rebuild()
     sevenths_key_.setToggleState(sevenths_, juce::dontSendNotification);
     form_.setSelectedItemIndex(static_cast<int>(form_value_), juce::dontSendNotification);
     form_.setEnabled(theory::is_minor_family(ref_.key.mode));
-    send_.setEnabled(selected_ >= 0);
-    audition_.setEnabled(selected_ >= 0);
+    send_.setEnabled(selected_chord_ptr() != nullptr);
+    audition_.setEnabled(selected_chord_ptr() != nullptr);
     repaint();
 }
 
@@ -182,7 +223,7 @@ void CircleOfFifthsPanel::refresh()
     const auto key = score_key(anchor);
     const std::string id = key.name() + "/f" + std::to_string(static_cast<int>(form_value_)) + (sevenths_ ? "7" : "3");
     if (id != last_key_ || anchor != anchor_) {
-        if (id != last_key_) selected_ = -1;
+        if (id != last_key_) selected_ = selected_borrowed_ = -1;
         rebuild();
     }
 }
@@ -191,7 +232,7 @@ void CircleOfFifthsPanel::set_following(bool on)
 {
     follow_ = on;
     if (!on) manual_ = ref_.key;  // manual starts from what was shown
-    selected_ = -1;
+    selected_ = selected_borrowed_ = -1;
     remember();
     rebuild();
 }
@@ -200,7 +241,7 @@ void CircleOfFifthsPanel::set_reference(const theory::Key& key)
 {
     follow_ = false;
     manual_ = key;
-    selected_ = -1;
+    selected_ = selected_borrowed_ = -1;
     remember();
     rebuild();
     context_.status("Reference: " + key_title(key) + " (" + juce::String(theory::signature_text(ref_.fifths)) +
@@ -217,9 +258,18 @@ void CircleOfFifthsPanel::choose_position(int index, bool minor)
 void CircleOfFifthsPanel::set_minor_form(theory::MinorForm form)
 {
     form_value_ = form;
-    selected_ = -1;
+    selected_ = selected_borrowed_ = -1;
     remember();
     rebuild();
+}
+
+void CircleOfFifthsPanel::set_borrowed(bool on)
+{
+    borrowed_ = on;
+    if (!on) selected_borrowed_ = -1;
+    remember();
+    rebuild();
+    resized();
 }
 
 void CircleOfFifthsPanel::set_sevenths(bool on)
@@ -234,9 +284,62 @@ void CircleOfFifthsPanel::select_chord(int index, bool audition)
     const auto& chords = sevenths_ ? ref_.sevenths : ref_.triads;
     if (index < 0 || index >= static_cast<int>(chords.size())) return;
     selected_ = index;
+    selected_borrowed_ = -1;
     rebuild();
-    if (!audition) return;
-    const auto voiced = theory::voice_for_entry(chords[static_cast<std::size_t>(index)].chord, 4, theory::VoicingStyle::Closed);
+    if (audition) this->audition(chords[static_cast<std::size_t>(index)].chord);
+}
+
+void CircleOfFifthsPanel::select_borrowed(int index, bool audition)
+{
+    const auto& lent = borrowed();
+    if (index < 0 || index >= static_cast<int>(lent.size())) return;
+    selected_borrowed_ = index;
+    selected_ = -1;
+    rebuild();
+    if (audition) this->audition(lent[static_cast<std::size_t>(index)].chord);
+}
+
+const theory::Chord* CircleOfFifthsPanel::selected_chord_ptr() const
+{
+    const auto& chords = sevenths_ ? ref_.sevenths : ref_.triads;
+    if (selected_ >= 0 && selected_ < static_cast<int>(chords.size())) return &chords[static_cast<std::size_t>(selected_)].chord;
+    const auto& lent = borrowed();
+    if (selected_borrowed_ >= 0 && selected_borrowed_ < static_cast<int>(lent.size()))
+        return &lent[static_cast<std::size_t>(selected_borrowed_)].chord;
+    return nullptr;
+}
+
+juce::String CircleOfFifthsPanel::selection_text() const
+{
+    const auto* c = selected_chord_ptr();
+    if (!c) return {};
+    juce::String roman, from;
+    if (selected_ >= 0) {
+        const auto& chords = sevenths_ ? ref_.sevenths : ref_.triads;
+        roman = juce::String::fromUTF8(chords[static_cast<std::size_t>(selected_)].roman.c_str());
+        from = "diatonic in " + key_title(ref_.key);
+    } else {
+        const auto& b = borrowed()[static_cast<std::size_t>(selected_borrowed_)];
+        roman = juce::String::fromUTF8(b.roman.c_str());
+        from = "borrowed from " + juce::String(b.source) + (b.name.empty() ? juce::String() : " (" + juce::String(b.name) + ")");
+    }
+    // The notes the key does not have.
+    juce::StringArray outside;
+    for (const auto& t : c->tones()) {
+        bool in = false;
+        for (const auto& d : ref_.scale) in = in || d.note.pitch_class() == t.pitch_class();
+        if (!in) outside.add(disp(t));
+    }
+    juce::String text = roman + " = " + chord_label(*c) + " (" + chord_notes(*c) + "), " + from;
+    if (!outside.isEmpty())
+        text << "  -  " << outside.joinIntoString(" and ") << (outside.size() == 1 ? " is" : " are") << " outside "
+             << key_title(ref_.key);
+    return text;
+}
+
+void CircleOfFifthsPanel::audition(const theory::Chord& chord)
+{
+    const auto voiced = theory::voice_for_entry(chord, 4, theory::VoicingStyle::Closed);
     std::vector<int> notes;
     for (const auto& v : voiced) {
         context_.engine.send_live(juce::MidiMessage::noteOn(1, v.midi, static_cast<juce::uint8>(85)));
@@ -251,12 +354,10 @@ void CircleOfFifthsPanel::select_chord(int index, bool audition)
 
 bool CircleOfFifthsPanel::send_to_chord_mode()
 {
-    const auto& chords = sevenths_ ? ref_.sevenths : ref_.triads;
-    if (selected_ < 0 || selected_ >= static_cast<int>(chords.size()) || !context_.send_to_chord_mode) return false;
-    const auto name = chords[static_cast<std::size_t>(selected_)].chord.name();
-    context_.send_to_chord_mode(name);
-    context_.status("Chord Mode is set to " + juce::String::fromUTF8(chords[static_cast<std::size_t>(selected_)].chord.display_name().c_str()) +
-                    ": click a staff (or Insert) to enter it");
+    const auto* chord = selected_chord_ptr();
+    if (!chord || !context_.send_to_chord_mode) return false;
+    context_.send_to_chord_mode(chord->name());
+    context_.status("Chord Mode is set to " + chord_label(*chord) + ": click a staff (or Insert) to enter it");
     return true;
 }
 
@@ -289,6 +390,11 @@ juce::Rectangle<int> CircleOfFifthsPanel::info_area() const
 {
     const auto c = circle_area();
     return getLocalBounds().withTrimmedTop(44).withTrimmedLeft(juce::roundToInt(c.getRight()) + 16).reduced(0, 10).withTrimmedRight(12);
+}
+
+juce::Rectangle<int> CircleOfFifthsPanel::chords_area() const
+{
+    return info_area().withTrimmedTop(30 + 18 + 6 + 64 + 6 + 58 + 18);
 }
 
 juce::Point<float> CircleOfFifthsPanel::segment_centre(int index, bool minor) const
@@ -414,8 +520,8 @@ void CircleOfFifthsPanel::paint(juce::Graphics& g)
     auto scale = r.removeFromTop(58);
     std::vector<int> members;
     const auto& chords = sevenths_ ? ref_.sevenths : ref_.triads;
-    if (selected_ >= 0 && selected_ < static_cast<int>(chords.size()))
-        for (const auto& t : chords[static_cast<std::size_t>(selected_)].chord.tones()) members.push_back(t.pitch_class());
+    if (const auto* sel = selected_chord_ptr())
+        for (const auto& t : sel->tones()) members.push_back(t.pitch_class());
     const int cw = scale.getWidth() / 7;
     for (const auto& d : ref_.scale) {
         auto cell = scale.removeFromLeft(cw).reduced(2).toFloat();
@@ -426,7 +532,10 @@ void CircleOfFifthsPanel::paint(juce::Graphics& g)
         g.drawRoundedRectangle(cell, 4.0f, d.altered ? 1.6f : 1.0f);
         g.setColour(hw::tok::text);
         g.setFont(hw::fonts::ui(10.0f, false));
-        g.drawText(juce::String(d.degree), cell.withHeight(14).translated(0, 2), juce::Justification::centred, false);
+        juce::String top = juce::String(d.degree);
+        if (d.degree - 1 < static_cast<int>(chords.size()))
+            top << "  " << juce::String::fromUTF8(chords[static_cast<std::size_t>(d.degree - 1)].roman.c_str());
+        g.drawText(top, cell.withHeight(14).translated(0, 2), juce::Justification::centred, false);
         g.setColour(hw::tok::text_bright);
         g.setFont(hw::fonts::ui(16.0f, true));
         g.drawText(disp(d.note) + (d.altered ? "*" : ""), cell.withTrimmedTop(14).withHeight(20), juce::Justification::centred, false);
@@ -439,6 +548,43 @@ void CircleOfFifthsPanel::paint(juce::Graphics& g)
         g.setFont(hw::fonts::ui(11.0f, false));
         g.drawText("* " + juce::String(ref_.altered_note) + ": outside the key signature", r.removeFromTop(16).toFloat(),
                    juce::Justification::centredLeft, true);
+    }
+
+    // Under each chord key: its name and its notes; the borrowed ones also say where from.
+    auto under = [&](hw::Keycap& k, const theory::Chord& chord, const juce::String& extra, bool lent) {
+        const auto b = k.getBounds().toFloat();
+        auto area = juce::Rectangle<float>(b.getX(), b.getBottom() + 2, b.getWidth(), 46);
+        g.setColour(lent ? juce::Colour(0xffe0a040) : hw::tok::text_bright);
+        g.setFont(hw::fonts::ui(12.5f, true));
+        g.drawText(chord_label(chord), area.removeFromTop(16), juce::Justification::centred, true);
+        g.setColour(hw::tok::text);
+        g.setFont(hw::fonts::ui(10.5f, false));
+        g.drawText(chord_notes(chord), area.removeFromTop(14), juce::Justification::centred, true);
+        if (extra.isNotEmpty()) {
+            g.setFont(hw::fonts::ui(9.0f, false));
+            g.setColour(hw::tok::text.withAlpha(0.75f));
+            g.drawText(extra, area.removeFromTop(13), juce::Justification::centred, true);
+        }
+    };
+    for (std::size_t i = 0; i < chord_keys_.size() && i < chords.size(); ++i)
+        under(*chord_keys_[i], chords[i].chord, chords[i].uses_altered ? juce::String("altered degree") : juce::String(), false);
+    g.setColour(hw::tok::text);
+    g.setFont(hw::fonts::silk(9.5f, 0.08f, true));
+    const auto area = chords_area();
+    g.drawText("DIATONIC CHORDS", area.withHeight(14).toFloat(), juce::Justification::centredLeft, false);
+    if (borrowed_) {
+        const auto& lent = borrowed();
+        for (std::size_t i = 0; i < borrowed_keys_.size() && i < lent.size(); ++i) {
+            juce::String from = lent[i].name.empty() ? juce::String(lent[i].source) : juce::String(lent[i].name);
+            under(*borrowed_keys_[i], lent[i].chord, from, true);
+        }
+    }
+    // What the selected chord is, and the notes it brings in from outside.
+    if (const auto text = selection_text(); text.isNotEmpty()) {
+        g.setColour(selected_borrowed_ >= 0 ? juce::Colour(0xffe0a040) : hw::Theme::get().lcd());
+        g.setFont(hw::fonts::ui(12.0f, true));
+        const auto at = send_.getBounds().translated(0, -24).withWidth(info_area().getWidth()).withHeight(18).toFloat();
+        g.drawText(text, at, juce::Justification::centredLeft, true);
     }
 }
 
@@ -453,17 +599,28 @@ void CircleOfFifthsPanel::resized()
     top.removeFromLeft(6);
     sevenths_key_.setBounds(top.removeFromLeft(56));
     apply_.setBounds(top.removeFromRight(150));
-    // Under the scale: the chords, the related keys, and the actions.
-    auto r = info_area();
-    r.removeFromTop(30 + 18 + 6 + 64 + 6 + 58 + 18);
-    auto row = r.removeFromTop(44);
+    // Under the scale: the chords (name and notes under each), the
+    // borrowed chords, the related keys, and the actions.
+    auto r = chords_area();
+    r.removeFromTop(16);
+    auto row = r.removeFromTop(34);
     const int w = row.getWidth() / 7;
     for (auto& k : chord_keys_) k->setBounds(row.removeFromLeft(w).reduced(2, 0));
-    r.removeFromTop(8);
-    row = r.removeFromTop(38);
+    r.removeFromTop(48);
+    row = r.removeFromTop(26);
+    borrowed_key_.setBounds(row.removeFromLeft(170));
+    if (borrowed_) {
+        r.removeFromTop(4);
+        row = r.removeFromTop(34);
+        const int w8 = row.getWidth() / 8;
+        for (auto& k : borrowed_keys_) k->setBounds(row.removeFromLeft(w8).reduced(2, 0));
+        r.removeFromTop(48);
+    }
+    r.removeFromTop(6);
+    row = r.removeFromTop(36);
     const int w4 = row.getWidth() / 4;
     for (auto& k : relation_keys_) k->setBounds(row.removeFromLeft(w4).reduced(2, 0));
-    r.removeFromTop(8);
+    r.removeFromTop(30);
     row = r.removeFromTop(30);
     send_.setBounds(row.removeFromLeft(170));
     row.removeFromLeft(6);
@@ -491,7 +648,7 @@ bool CircleOfFifthsPanel::keyPressed(const juce::KeyPress& key)
 
 void show_circle_of_fifths(AppContext& context)
 {
-    dialogs::show_tool(window_slot(), "Circle of Fifths", 900, 560, [&context] { return new CircleOfFifthsPanel(context); });
+    dialogs::show_tool(window_slot(), "Circle of Fifths", 1040, 700, [&context] { return new CircleOfFifthsPanel(context); });
 }
 
 CircleOfFifthsPanel* circle_of_fifths_panel() { return panel_slot(); }

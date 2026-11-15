@@ -294,3 +294,44 @@ TEST_CASE("key reference: every major and minor key spelled one letter per degre
         }
     }
 }
+
+TEST_CASE("key reference: borrowed chords, labelled against the home key and never duplicating diatonic ones")
+{
+    auto list = [](const std::vector<BorrowedChord>& v) {
+        std::string out;
+        for (const auto& b : v) out += (out.empty() ? "" : " ") + b.roman + "=" + b.chord.name();
+        return out;
+    };
+    // C major borrows from C minor, plus the Neapolitan from C Phrygian.
+    const auto c = key_reference(*Key::parse("C major"));
+    CHECK_EQ(list(c.borrowed_triads),
+             std::string("i=Cm \xE2\x99\xADII=Db ii\xC2\xB0=Ddim \xE2\x99\xADIII=Eb iv=Fm v=Gm \xE2\x99\xADVI=Ab \xE2\x99\xADVII=Bb"));
+    CHECK_EQ(c.borrowed_triads[1].name, std::string("Neapolitan"));
+    CHECK_EQ(c.borrowed_triads[1].source, std::string("C Phrygian"));
+    CHECK_EQ(c.borrowed_triads[4].source, std::string("C minor"));
+    CHECK_EQ(c.borrowed_sevenths.size(), 8u);
+    CHECK_EQ(c.borrowed_sevenths[4].roman, std::string("iv7"));
+    CHECK_EQ(c.borrowed_sevenths[4].chord.name(), std::string("Fm7"));
+    CHECK_EQ(c.borrowed_sevenths[6].chord.name(), std::string("Abmaj7"));
+    // A harmonic minor borrows from A major what it does not already have
+    // (V and vii° are its own); the raised 6th is written as the key's own.
+    const auto am = key_reference(*Key::parse("A minor"), MinorForm::Harmonic);
+    CHECK_EQ(list(am.borrowed_triads),
+             std::string("I=A \xE2\x99\xADII=Bb ii=Bm \xE2\x99\xAFiii=C#m IV=D vi=F#m"));
+    CHECK_EQ(am.borrowed_triads[0].name, std::string("Picardy third"));
+    // Natural minor: V and vii° are borrowed too.
+    const auto cm = key_reference(*Key::parse("C minor"));
+    CHECK_EQ(list(cm.borrowed_triads),
+             std::string("I=C \xE2\x99\xADII=Db ii=Dm \xE2\x99\xAFiii=Em IV=F V=G vi=Am vii\xC2\xB0=Bdim"));
+    // Flat keys spell their borrowed roots with flats (Eb major: bVI is Cb).
+    const auto eb = key_reference(*Key::parse("Eb major"));
+    CHECK_EQ(eb.borrowed_triads[6].chord.name(), std::string("Cb"));
+    // None duplicates a diatonic chord, in any key.
+    for (const auto& p : circle_of_fifths())
+        for (bool minor : {false, true}) {
+            const auto r = key_reference(Key{minor ? p.minor : p.major, minor ? Mode::Minor : Mode::Major});
+            for (const auto& b : r.borrowed_triads)
+                for (const auto& d : r.triads)
+                    CHECK(!(b.chord.root.pitch_class() == d.chord.root.pitch_class() && b.chord.quality.id == d.chord.quality.id));
+        }
+}
