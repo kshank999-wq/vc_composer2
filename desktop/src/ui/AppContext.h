@@ -96,6 +96,8 @@ enum : juce::CommandID {
     editGrid,
     toggleSmartTool,
     showCircleOfFifths,
+    toggleStaffTools,
+    detachStaffTools,
 };
 }  // namespace cmd
 

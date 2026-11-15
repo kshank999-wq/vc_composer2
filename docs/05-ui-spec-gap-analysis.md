@@ -1126,3 +1126,37 @@ macOS, Linux and Windows. What it took:
       check fails: the old pitch hangs), Apply to notes with its question
       and undo, a flute's range flagged, audio refused. Screenshots
       `43-trans`, `43b-trans-popover`.
+
+24. **Contextual and detachable staff tools. Done** (November 15, 2026;
+    Add-On spec Feature F).
+    - **Docked** (`ui/composer/StaffTools`): a bar of touch-sized keys
+      beside the selected staff. The lanes open a gap just above that
+      staff for it (a small one for the folded tab), so it never covers a
+      staff; it follows the selection and hides when the staff is
+      scrolled away. Keys: note values, dot, triplet, rest; flat, natural,
+      sharp (pitched staves only); tie, slur; accent, staccato, tenuto,
+      marcato; p, mp, mf, f, crescendo, diminuendo; voices 1-4; clef and
+      text; delete and select all; Chord (Chord Mode), Circle (the Circle
+      of Fifths), Detach. What shows adapts: with notes selected,
+      articulations, dynamics, slur and delete; while entering, clef and
+      text. Keys light for the value, dot, triplet, rest and voice in
+      force. Every key runs the Composer command on the track being
+      written (shortcuts, undo, "a value right after a note sets the next
+      note's value" all as from the main toolbar).
+    - **Folding.** The fold key, View > Staff Tools or Cmd/Ctrl+Alt+T
+      fold it to a tab (remembered); after 15 s untouched it folds by
+      itself and the next edit unfolds it.
+    - **Detached.** Detach (or View > Detach Staff Tools) floats the same
+      tools in an always-on-top window acting on the selected staff; Dock
+      or closing it puts them back. Its place is remembered and, if that
+      display is gone, it opens on the main display.
+    - Not yet: a vertical layout for a tall detached window, per-monitor
+      pinning beyond "always on top", and stylus-specific hover states.
+    - **Checks.** Desktop check: the bar just above the selected staff
+      clear of every staff, moving with the selection; the eighth key sets
+      (and lights) the value; with a note selected the articulations
+      appear and staccato marks it; Chord turns on Chord Mode; the
+      shortcut folds to a tab and the tab unfolds; detached, the quarter
+      key re-times the selected note, the window comes back where it was
+      left, and a place on a missing display opens on the main one; Dock.
+      Screenshots `44-staff-tools`, `44b-staff-tools-detached`.

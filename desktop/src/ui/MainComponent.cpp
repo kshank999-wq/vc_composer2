@@ -1515,7 +1515,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::ostinatoCreator, cmd::addTemplate, cmd::addTrack, cmd::duplicateVersion, cmd::removeTrack,
                 cmd::audioSettings, cmd::scanPlugins, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::reloadCrashedPlugins,
                 cmd::about, cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool,
-                cmd::showCircleOfFifths});
+                cmd::showCircleOfFifths, cmd::toggleStaffTools, cmd::detachStaffTools});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1598,6 +1598,15 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::showControlGallery: info.setInfo("Control Gallery", "", "View", 0); break;
         case cmd::showCircleOfFifths:
             info.setInfo("Circle of Fifths...", "Key reference: scales, diatonic chords, related keys", "View", 0);
+            break;
+        case cmd::toggleStaffTools:
+            info.setInfo("Staff Tools", "Show or fold the tools beside the selected staff", "View",
+                         composer_.staff_tools_collapsed() ? 0 : juce::ApplicationCommandInfo::isTicked);
+            info.addDefaultKeypress('t', cmdKey | juce::ModifierKeys::altModifier);
+            break;
+        case cmd::detachStaffTools:
+            info.setInfo("Detach Staff Tools", "Float the staff tools in their own window", "View",
+                         composer_.staff_tools_detached() ? juce::ApplicationCommandInfo::isTicked : 0);
             break;
         case cmd::editShuffle:
         case cmd::editSlip:
@@ -1700,6 +1709,10 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::showMixer: show_mixer(); break;
         case cmd::showControlGallery: show_control_gallery(); break;
         case cmd::showCircleOfFifths: composer_ui::show_circle_of_fifths(context_); break;
+        case cmd::toggleStaffTools:
+            composer_.set_staff_tools_collapsed(!composer_.staff_tools_collapsed());
+            break;
+        case cmd::detachStaffTools: composer_.set_staff_tools_detached(!composer_.staff_tools_detached()); break;
         case cmd::editShuffle:
         case cmd::editSlip:
         case cmd::editSpot:
@@ -1810,6 +1823,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             m.addCommandItem(c, cmd::toggleFollow);
             m.addCommandItem(c, cmd::showCircleOfFifths);
+            m.addCommandItem(c, cmd::toggleStaffTools);
+            m.addCommandItem(c, cmd::detachStaffTools);
             m.addSeparator();
             m.addCommandItem(c, cmd::zoomIn);
             m.addCommandItem(c, cmd::zoomOut);

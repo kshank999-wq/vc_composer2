@@ -8,6 +8,8 @@
 #include "AppResources.h"
 #include "ui/Theme.h"
 #include "ui/TrackPanel.h"
+#include "ui/Dialogs.h"
+#include "ui/composer/CircleOfFifths.h"
 #include "ui/composer/ComposerRuler.h"
 #include "ui/composer/LaneParts.h"
 #include "ui/hw/HwControls.h"
@@ -255,6 +257,7 @@ void ComposerView::timerCallback()
 {
     // Each header's meter shows its track's output.
     if (!isShowing()) return;
+    update_staff_tools();
     auto db = [](float lin) { return lin > 0.0f ? 20.0f * std::log10(lin) : -100.0f; };
     for (auto& s : strips_) {
         const auto m = context_.engine.take_deck_meter(s->track_id());
@@ -447,6 +450,7 @@ void ComposerView::zoom(bool larger)
 
 void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* point, notation::EventId id)
 {
+    note_activity();
     grabKeyboardFocus();
     just_entered_ = false;
     context_.session.select_track(strip.track_id());
@@ -648,6 +652,197 @@ void ComposerView::perform(Command command)
         }
     }
     handle(editor_->apply(command));
+}
+
+// --- Staff tools ---------------------------------------------------------------------------
+
+namespace {
+constexpr juce::uint32 kToolsIdleMs = 15000;  // fold after this long untouched
+
+juce::Rectangle<int> on_a_display(juce::Rectangle<int> r)
+{
+    // Kept where the person put it, unless that display is gone.
+    for (const auto& d : juce::Desktop::getInstance().getDisplays().displays)
+        if (d.userArea.intersects(r.reduced(20))) return r;
+    const auto* main = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+    return main ? r.withCentre(main->userArea.getCentre()) : r.withPosition(80, 80);
+}
+}  // namespace
+
+void ComposerView::wire_tools(composer_ui::StaffTools& t)
+{
+    t.on_command = [this](Command c) {
+        note_activity();
+        perform(c);
+        grabKeyboardFocus();
+        update_staff_tools();
+    };
+    t.on_chord_mode = [this] {
+        note_activity();
+        set_chord_mode(!chord_mode_);
+    };
+    t.on_circle = [this] { composer_ui::show_circle_of_fifths(context_); };
+    t.on_detach = [this] { set_staff_tools_detached(!tools_detached_); };
+    t.on_collapse = [this] { set_staff_tools_collapsed(true); };
+}
+
+composer_ui::StaffTools& ComposerView::staff_tools()
+{
+    if (!tools_) {
+        tools_ = std::make_unique<composer_ui::StaffTools>(false);
+        wire_tools(*tools_);
+        addChildComponent(*tools_);
+        tools_tab_.setComponentID("staff_tools_tab");
+        tools_tab_.setTooltip("Staff tools (Cmd/Ctrl+Alt+T)");
+        tools_tab_.set_legend_size(9.5f);
+        tools_tab_.setWantsKeyboardFocus(false);
+        tools_tab_.onClick = [this] { set_staff_tools_collapsed(false); };
+        addChildComponent(tools_tab_);
+        auto& settings = hw::ui_settings();
+        tools_collapsed_ = settings.getBoolValue("staff_tools_collapsed", false);
+        if (settings.getBoolValue("staff_tools_detached", false)) set_staff_tools_detached(true);
+        last_activity_ = juce::Time::getMillisecondCounter();
+    }
+    return *tools_;
+}
+
+composer_ui::StaffTools* ComposerView::detached_staff_tools() { return tools_window_ ? tools_floating_ : nullptr; }
+
+void ComposerView::note_activity()
+{
+    last_activity_ = juce::Time::getMillisecondCounter();
+    if (tools_collapsed_ && tools_auto_folded_) {
+        tools_collapsed_ = false;
+        tools_auto_folded_ = false;
+    }
+}
+
+void ComposerView::set_staff_tools_collapsed(bool collapsed)
+{
+    staff_tools();
+    tools_collapsed_ = collapsed;
+    tools_auto_folded_ = false;
+    hw::ui_settings().setValue("staff_tools_collapsed", collapsed);
+    last_activity_ = juce::Time::getMillisecondCounter();
+    update_staff_tools();
+}
+
+void ComposerView::set_staff_tools_detached(bool detached)
+{
+    staff_tools();
+    auto& settings = hw::ui_settings();
+    if (detached && !tools_window_) {
+        auto content = std::make_unique<composer_ui::StaffTools>(true);
+        tools_floating_ = content.get();
+        wire_tools(*content);
+        juce::Rectangle<int> r(120, 120, 560, 120);
+        const auto saved = juce::StringArray::fromTokens(settings.getValue("staff_tools_bounds"), " ", "");
+        if (saved.size() == 4) r = {saved[0].getIntValue(), saved[1].getIntValue(), saved[2].getIntValue(), saved[3].getIntValue()};
+        r.setHeight(std::max(r.getHeight(), content->height_for(r.getWidth()) + 30));
+        auto* w = new dialogs::ToolWindow("Staff Tools", content.release(), r.getWidth(), r.getHeight());
+        w->setBounds(on_a_display(r));
+        w->setAlwaysOnTop(true);
+        juce::Component::SafePointer<ComposerView> self(this);
+        w->on_close = [self] {
+            if (self) {
+                self->tools_floating_ = nullptr;
+                self->tools_detached_ = false;
+                hw::ui_settings().setValue("staff_tools_detached", false);
+            }
+        };
+        tools_window_ = w;
+    } else if (!detached && tools_window_) {
+        const auto b = tools_window_->getBounds();
+        settings.setValue("staff_tools_bounds", juce::String(b.getX()) + " " + juce::String(b.getY()) + " " +
+                                                    juce::String(b.getWidth()) + " " + juce::String(b.getHeight()));
+        tools_floating_ = nullptr;
+        delete tools_window_.getComponent();
+    }
+    tools_detached_ = detached;
+    settings.setValue("staff_tools_detached", detached);
+    update_staff_tools();
+}
+
+composer_ui::StaffToolsState ComposerView::tools_state() const
+{
+    composer_ui::StaffToolsState s;
+    s.editable = editor_ != nullptr;
+    s.chord_mode = chord_mode_;
+    if (const auto* t = context_.session.data().find_track(context_.session.selected_track())) s.track = t->name;
+    if (editor_) {
+        const auto& cur = editor_->cursor();
+        s.has_selection = !editor_->selection().empty();
+        s.value = static_cast<int>(cur.duration.value) - 1;
+        s.dot = cur.duration.dots > 0;
+        s.triplet = cur.duration.tuplet.is_tuplet();
+        s.rest = cur.rest_mode;
+        s.voice = cur.voice;
+        if (working_.staff_count() > 0)
+            s.pitched = working_.staff(std::min(cur.staff_index, working_.staff_count() - 1)).clef != notation::Clef::Percussion;
+    }
+    return s;
+}
+
+void ComposerView::update_staff_tools()
+{
+    auto& tools = staff_tools();
+    // Folded after a while untouched (the next edit unfolds it).
+    if (!tools_collapsed_ && !tools_detached_ && juce::Time::getMillisecondCounter() - last_activity_ > kToolsIdleMs) {
+        tools_collapsed_ = true;
+        tools_auto_folded_ = true;
+    }
+    const auto s = tools_state();
+    auto same = [](const composer_ui::StaffToolsState& a, const composer_ui::StaffToolsState& b) {
+        return a.editable == b.editable && a.has_selection == b.has_selection && a.pitched == b.pitched && a.value == b.value &&
+               a.dot == b.dot && a.triplet == b.triplet && a.rest == b.rest && a.voice == b.voice &&
+               a.chord_mode == b.chord_mode && a.track == b.track;
+    };
+    if (!same(s, tools.state())) tools.set_state(s);
+    if (tools_floating_ && !same(s, tools_floating_->state())) tools_floating_->set_state(s);
+
+    // Docked: beside the selected staff, above it when the view has room,
+    // otherwise below; hidden when the staff is scrolled away.
+    Strip* strip = nullptr;
+    for (auto& st : strips_)
+        if (st->track_id() == context_.session.selected_track()) strip = st.get();
+    const bool docked = !tools_detached_ && strip != nullptr && s.editable;
+    // The lanes open a gap above the selected staff for the bar (a smaller
+    // one for the folded tab), so no staff is ever under the tools.
+    {
+        int gap = 0;
+        std::string at;
+        if (docked) {
+            const int lane_w = strip->getWidth() - composer_ui::TrackHeader::kWidth;
+            gap = tools_collapsed_ ? 24 : tools.height_for(std::min(lane_w - 16, 780)) + 6;
+            at = strip->track_id();
+        }
+        if (gap != tools_gap_ || at != tools_gap_track_) {
+            tools_gap_ = gap;
+            tools_gap_track_ = at;
+            resized();
+        }
+    }
+    juce::Rectangle<int> area;
+    if (docked) {
+        const auto sb = getLocalArea(strip, strip->getLocalBounds());
+        const auto vb = viewport_.getBounds();
+        const int lane_x = sb.getX() + composer_ui::TrackHeader::kWidth;
+        const int width = std::min(sb.getRight() - lane_x - 16, 780);
+        const int h = tools.height_for(width);
+        int y = sb.getY() - h - 3;  // in the gap above the staff
+        if (sb.getBottom() < vb.getY() || y > vb.getBottom()) y = -10000;  // scrolled away
+        y = std::max(y, y == -10000 ? y : vb.getY() - h + 18);
+        area = {sb.getRight() - width - 12, y, width, h};
+    }
+    const bool show_bar = docked && !tools_collapsed_ && area.getY() > -10000;
+    const bool show_tab = docked && tools_collapsed_ && area.getY() > -10000;
+    if (show_bar && tools.getBounds() != area) tools.setBounds(area);
+    if (tools.isVisible() != show_bar) tools.setVisible(show_bar);
+    if (show_bar) tools.toFront(false);
+    const auto tab = juce::Rectangle<int>(area.getRight() - 58, area.getBottom() - 21, 58, 20);
+    if (show_tab && tools_tab_.getBounds() != tab) tools_tab_.setBounds(tab);
+    if (tools_tab_.isVisible() != show_tab) tools_tab_.setVisible(show_tab);
+    if (palette_ && palette_->isVisible()) palette_->toFront(false);
 }
 
 // --- Chord Mode -------------------------------------------------------------------------
@@ -909,6 +1104,7 @@ void ComposerView::ask_for_input(Command command)
 
 bool ComposerView::keyPressed(const juce::KeyPress& key)
 {
+    note_activity();
     if (key == juce::KeyPress::spaceKey) {
         context_.engine.toggle_play();
         return true;
@@ -946,6 +1142,7 @@ void ComposerView::resized()
     const int w = viewport_.getMaximumVisibleWidth();
     const auto options = lane_layout();
     for (auto& s : strips_) {
+        if (tools_gap_ > 0 && s->track_id() == tools_gap_track_) y += tools_gap_;  // the docked tools' place
         const int h = s->preferred_height(pixels_per_space_, options);
         s->setBounds(0, y, w, h);
         y += h;

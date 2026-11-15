@@ -4380,6 +4380,135 @@ void trans_checks(MainWindow& window, const juce::File& dir)
           "an audio track cannot be transposed (" + juce::String(why) + ")");
 }
 
+/// Staff tools (Add-On spec §8): beside the selected staff without covering
+/// it, following the selection, acting on that staff, adapting to the
+/// selection, folding and unfolding, detached to a remembered place (kept on
+/// a display), and docked back.
+void staff_tools_checks(MainWindow& window, const juce::File& dir)
+{
+    using composer::Command;
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto piano = session.add_track("Piano", "keys.piano");
+    const auto flute = session.add_track("Flute", "woodwinds.flute");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
+    pump(100);
+    auto& composer = main.composer();
+    composer.set_staff_tools_detached(false);
+    composer.set_staff_tools_collapsed(false);
+    session.select_track(piano);
+    pump(60);
+    composer.grabKeyboardFocus();
+    composer.update_staff_tools();
+    auto& tools = composer.staff_tools();
+    auto lane_area = [&](int i) { return composer.getLocalArea(&composer.lane(i), composer.lane(i).getLocalBounds()); };
+    const auto piano_lane = lane_area(0);
+    check(tools.isVisible() && !tools.getBounds().intersects(piano_lane) && !tools.getBounds().intersects(lane_area(1)) &&
+              tools.state().track == "Piano" && tools.getBottom() <= piano_lane.getY() &&
+              piano_lane.getY() - tools.getBottom() < 24,
+          "the staff tools sit just above the selected staff (Piano), in room the lanes make for them: no staff is covered");
+    shoot(main, dir, "44-staff-tools");
+
+    // Another staff selected: the tools follow it.
+    session.select_track(flute);
+    pump(80);
+    composer.update_staff_tools();
+    const auto flute_lane = lane_area(1);
+    check(tools.isVisible() && tools.state().track == "Flute" && !tools.getBounds().intersects(flute_lane) &&
+              !tools.getBounds().intersects(lane_area(0)) && tools.getBottom() <= flute_lane.getY(),
+          "selecting the Flute moves the tools above its staff, clear of every staff");
+
+    // A value key acts on that staff; a note entered and selected brings the articulations.
+    if (auto* eighth = tools.key_for(Command::SelectDurationEighth)) eighth->triggerClick();
+    pump(40);
+    const bool eighth_on = composer.cursor() && composer.cursor()->duration.value == notation::NoteValue::Eighth;
+    composer.update_staff_tools();
+    const bool lit = tools.key_for(Command::SelectDurationEighth) && tools.key_for(Command::SelectDurationEighth)->getToggleState();
+    const bool no_staccato_yet = tools.key_for(Command::ArticulationStaccato) == nullptr && tools.key_for(Command::EditClef) != nullptr;
+    composer.keyPressed(juce::KeyPress('g'));
+    pump(40);
+    // Select the note just entered, as a click on it would.
+    const auto& fs = session.data().find_track(flute)->active_version()->score;
+    if (!fs.notes(0).empty() && composer.lane(1).on_event_clicked) composer.lane(1).on_event_clicked(fs.notes(0).front().id);
+    pump(40);
+    composer.update_staff_tools();
+    auto* staccato = tools.key_for(Command::ArticulationStaccato);
+    const bool adapted = staccato != nullptr && tools.key_for(Command::EditClef) == nullptr;
+    if (staccato) staccato->triggerClick();
+    pump(60);
+    bool marked = false;
+    for (const auto& n : session.data().find_track(flute)->active_version()->score.notes(0))
+        marked = marked || notation::has_articulation(n.articulations, notation::Articulation::Staccato);
+    check(eighth_on && lit && no_staccato_yet && adapted && marked && fs.notes(0).front().duration.value == notation::NoteValue::Eighth,
+          "the tools act on the selected staff: the eighth key sets the value (lit), and with a note selected "
+          "the articulations appear and staccato marks it");
+
+    // Chord mode from the tools.
+    tools.chord_key().triggerClick();
+    pump(40);
+    check(composer.chord_mode(), "the tools' Chord key turns Chord Mode on");
+    composer.set_chord_mode(false);
+
+    // Folded by the shortcut command, unfolded from its tab.
+    ctx.commands.invokeDirectly(cmd::toggleStaffTools, false);
+    pump(40);
+    const bool folded = composer.staff_tools_collapsed() && !tools.isVisible() && composer.staff_tools_tab().isVisible();
+    composer.staff_tools_tab().triggerClick();
+    pump(40);
+    check(folded && !composer.staff_tools_collapsed() && tools.isVisible(),
+          "Cmd/Ctrl+Alt+T folds the tools to a tab; the tab brings them back");
+
+    // Detached: a floating window that acts on the same staff, remembered, kept on a display.
+    tools.detach_key().triggerClick();
+    pump(80);
+    auto* floating = composer.detached_staff_tools();
+    const bool detached = floating && composer.staff_tools_detached() && !tools.isVisible();
+    if (floating) {
+        if (auto* q = floating->key_for(Command::SelectDurationQuarter)) q->triggerClick();
+        pump(40);
+    }
+    // With the note still selected the value key changes it, as in Finale and Sibelius.
+    const bool acts = session.data().find_track(flute)->active_version()->score.notes(0).front().duration.value ==
+                      notation::NoteValue::Quarter;
+    juce::Rectangle<int> placed;
+    if (floating) {
+        auto* w = floating->getTopLevelComponent();
+        w->setBounds(240, 180, 600, 140);
+        placed = w->getBounds();
+        shoot(*w, dir, "44b-staff-tools-detached");
+    }
+    composer.set_staff_tools_detached(false);  // dock: the place is remembered
+    pump(40);
+    composer.set_staff_tools_detached(true);
+    pump(60);
+    floating = composer.detached_staff_tools();
+    const auto again = floating ? floating->getTopLevelComponent()->getBounds() : juce::Rectangle<int>();
+    check(detached && acts && placed.getPosition() == again.getPosition(),
+          "Detach floats the tools (their quarter key re-times the selected note on that staff) and the window comes back where it was left [detached " +
+              juce::String(detached ? "y" : "n") + ", acts " + (acts ? "y" : "n") + ", placed " + placed.toString() + ", again " +
+              again.toString() + "]");
+    // A place on a display that is gone: back on the main display.
+    composer.set_staff_tools_detached(false);
+    hw::ui_settings().setValue("staff_tools_bounds", "-9000 -9000 600 140");
+    composer.set_staff_tools_detached(true);
+    pump(60);
+    floating = composer.detached_staff_tools();
+    bool on_screen = false;
+    if (floating)
+        for (const auto& d : juce::Desktop::getInstance().getDisplays().displays)
+            on_screen = on_screen || d.userArea.intersects(floating->getTopLevelComponent()->getBounds());
+    composer.set_staff_tools_detached(false);
+    pump(40);
+    composer.update_staff_tools();
+    check(on_screen && !composer.staff_tools_detached() && tools.isVisible(),
+          "a remembered place on a display that is gone opens on the main display; Dock puts the tools back by the staff");
+    hw::ui_settings().setValue("staff_tools_bounds", "240 180 600 140");
+}
+
 /// Chord symbols: the ruler's suggestion kept with a click, one typed on a
 /// beat, a bad one refused, Escape, editing to empty removes, and the
 /// symbols printed over the full score's top staff in the Page view.
@@ -5620,6 +5749,7 @@ int main(int argc, char** argv)
         range_checks(window, dir);
         circle_checks(window, dir);
         trans_checks(window, dir);
+        staff_tools_checks(window, dir);
 
         for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
             if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);

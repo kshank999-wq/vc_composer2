@@ -15,6 +15,7 @@
 
 #include "ui/AppContext.h"
 #include "ui/composer/ChordPalette.h"
+#include "ui/composer/StaffTools.h"
 #include "vcc/editing/ScoreEditor.h"
 #include "vcc/ui/NotationView.h"
 
@@ -67,6 +68,21 @@ public:
     /// The palette's chord as the notes it would write on the edited staff
     /// ("B3 D4 F4 G4"), and a warning when any lies outside the instrument.
     std::pair<juce::String, juce::String> chord_preview() const;
+
+    // --- Staff tools (Add-On Features spec §8) --------------------------------
+    /// The docked bar beside the selected staff.
+    composer_ui::StaffTools& staff_tools();
+    /// The floating window's tools while detached, else null.
+    composer_ui::StaffTools* detached_staff_tools();
+    bool staff_tools_detached() const noexcept { return tools_detached_; }
+    void set_staff_tools_detached(bool detached);
+    /// Folded to a small tab (by its key, the shortcut, or after a while untouched).
+    bool staff_tools_collapsed() const noexcept { return tools_collapsed_; }
+    void set_staff_tools_collapsed(bool collapsed);
+    /// The folded tools' tab.
+    hw::Keycap& staff_tools_tab() { return tools_tab_; }
+    /// Places and refreshes the tools now (the timer does it continually).
+    void update_staff_tools();
 
     /// Larger or smaller staves (the toolbar's Zoom keys).
     void zoom(bool larger);
@@ -127,6 +143,19 @@ private:
     /// re-timing that note.
     bool just_entered_ = false;
     bool chord_mode_ = false;
+    std::unique_ptr<composer_ui::StaffTools> tools_;
+    juce::Component::SafePointer<juce::DocumentWindow> tools_window_;
+    composer_ui::StaffTools* tools_floating_ = nullptr;
+    hw::Keycap tools_tab_{"Tools"};
+    bool tools_detached_ = false, tools_collapsed_ = false, tools_auto_folded_ = false;
+    /// Room made above the selected staff for the docked tools, so they never
+    /// cover a staff: its height and the track it opens above.
+    int tools_gap_ = 0;
+    std::string tools_gap_track_;
+    juce::uint32 last_activity_ = 0;
+    void wire_tools(composer_ui::StaffTools& t);
+    composer_ui::StaffToolsState tools_state() const;
+    void note_activity();
     composer_ui::ChordModeState chord_state_;
     std::unique_ptr<composer_ui::ChordPalette> palette_;
     void audition_chord();
