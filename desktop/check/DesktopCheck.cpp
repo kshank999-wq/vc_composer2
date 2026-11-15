@@ -101,10 +101,22 @@ void pump(int ms)
     for (int waited = 0; !done->load() && waited < 5000; waited += 10) mm->runDispatchLoopUntil(10);
 }
 
-void shoot(juce::Component& c, const juce::File& dir, const juce::String& name)
+void shoot(juce::Component& c, const juce::File& dir, const juce::String& name, bool optional = false)
 {
+    // The component may go while the queue runs (a call-out closes itself
+    // when focus moves on macOS), and an empty image must never reach the
+    // PNG writer (libpng aborts the process on one).
+    juce::Component::SafePointer<juce::Component> alive(&c);
     pump(150);
-    auto image = c.createComponentSnapshot(c.getLocalBounds(), true, 1.0f);
+    if (!alive || alive->getWidth() <= 0 || alive->getHeight() <= 0) {
+        if (!optional) check(false, name + " screenshot: the window was gone or empty");
+        return;
+    }
+    auto image = alive->createComponentSnapshot(alive->getLocalBounds(), true, 1.0f);
+    if (!image.isValid() || image.getWidth() <= 0 || image.getHeight() <= 0) {
+        if (!optional) check(false, name + " screenshot: nothing could be drawn");
+        return;
+    }
     juce::FileOutputStream out(dir.getChildFile(name + ".png"));
     if (out.openedOk()) {
         out.setPosition(0);
@@ -4287,7 +4299,7 @@ void trans_checks(MainWindow& window, const juce::File& dir)
               session.undo_label() == "Transpose Piano A",
           "Trans +2 on Piano A: it plays and shows D4, the written C4 is kept, Piano B stays on C4, the header says +2 st");
     shoot(main, dir, "43-trans");
-    if (auto* p = popover()) shoot(*p, dir, "43b-trans-popover");
+    if (auto* p = popover()) shoot(*p, dir, "43b-trans-popover", true);
 
     // Entered while shifted: a note clicked as E4 is heard as E4, stored a tone lower.
     {
