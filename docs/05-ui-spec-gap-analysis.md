@@ -660,9 +660,19 @@ and the document model. The work is mostly presentation.
       and Cmd+T), crossfades, nudges with Alt+Right, consolidates and reads
       the new file back sample for sample against the tone, then undoes.
       Screenshot `clip-editing`.
-    - Not yet: splitting MIDI regions, multi-clip selection (a range
-      selection that consolidates or nudges several clips at once), and
-      drawing crossfade curves across the overlap.
+    - **Several clips at once** (added November 15): Shift-click adds a
+      clip to the selection (or takes it out); a box dragged across empty
+      lanes selects every clip it touches (Shift adds to the selection).
+      Delete removes them all and Mute/Unmute in the clip menu changes them
+      all, each as one undo step; Alt+arrows nudge them together (one step);
+      Consolidate takes the selected clips on the main clip's track; a click
+      on a selected clip keeps the selection, so it can be dragged as one.
+    - **Splitting MIDI regions:** Cmd/Ctrl+T splits the MIDI regions as well
+      as the clips under the playhead, on the tracks of the selected clips,
+      or with none selected on the selected track. A note across the cut
+      stays whole in the left region (nothing re-attacks); controllers go
+      by their tick ("Split region", `Session::split_regions`, unit-tested).
+    - Not yet: drawing crossfade curves across the overlap.
 
 12. **MIDI tools. Done** (on played-in MIDI: regions; score notes follow the
     score and are shaped through their performance instead).

@@ -313,12 +313,24 @@ public:
     bool update_audio_clip(const std::string& track_id, const std::string& clip_id, const std::string& label,
                            const std::function<void(project::AudioClip&)>& change);
     bool remove_audio_clip(const std::string& track_id, const std::string& clip_id);
+    /// A clip on a track: (track id, clip id).
+    using ClipRef = std::pair<std::string, std::string>;
+    /// Several clips at once, as one undo step ("Delete clips").
+    bool remove_audio_clips(const std::vector<ClipRef>& clips);
+    /// The same change to several clips, as one undo step.
+    bool update_audio_clips(const std::vector<ClipRef>& clips, const std::string& label,
+                            const std::function<void(project::AudioClip&)>& change);
 
     // --- Clip editing (one undo step each) ---------------------------------------------
     /// Splits the clips of these tracks that `at` (project seconds) falls
     /// inside, every lane. Each left part keeps its id and fade in, each
     /// right part its fade out. Returns the right parts' ids ("Split clip").
     std::vector<std::string> split_audio_clips(const std::vector<std::string>& track_ids, double at);
+    /// Splits the MIDI regions of these tracks that `at` falls inside, every
+    /// lane ("Split region"). Notes stay with the region they start in (a
+    /// note across the cut keeps its length, so nothing re-attacks);
+    /// controllers go by their tick. Returns the right parts' ids.
+    std::vector<std::string> split_regions(const std::vector<std::string>& track_ids, Ticks at);
     /// A crossfade of `seconds` between two clips on one lane where the first
     /// ends at or after the second starts: an overlap is faded across;
     /// clips that only meet have the second one's start pulled earlier into

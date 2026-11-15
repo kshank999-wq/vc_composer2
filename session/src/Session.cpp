@@ -1245,6 +1245,46 @@ bool Session::update_audio_clip(const std::string& track_id, const std::string& 
     return true;
 }
 
+bool Session::remove_audio_clips(const std::vector<ClipRef>& clips)
+{
+    if (clips.empty()) return false;
+    return edit(clips.size() == 1 ? "Delete clip" : "Delete clips", [&](project::ProjectData& d) {
+        bool any = false;
+        for (const auto& [track, id] : clips) {
+            project::Track* t = d.find_track(track);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
+            if (!v) continue;
+            const auto before = v->audio_clips.size();
+            v->audio_clips.erase(std::remove_if(v->audio_clips.begin(), v->audio_clips.end(),
+                                                [&](const project::AudioClip& c) { return c.id == id; }),
+                                 v->audio_clips.end());
+            any = any || v->audio_clips.size() != before;
+        }
+        return any;
+    });
+}
+
+bool Session::update_audio_clips(const std::vector<ClipRef>& clips, const std::string& label,
+                                 const std::function<void(project::AudioClip&)>& change)
+{
+    if (clips.empty()) return false;
+    return edit(label, [&](project::ProjectData& d) {
+        bool any = false;
+        for (const auto& [track, id] : clips) {
+            project::Track* t = d.find_track(track);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
+            if (!v) continue;
+            for (auto& c : v->audio_clips)
+                if (c.id == id) {
+                    change(c);
+                    c.id = id;
+                    any = true;
+                }
+        }
+        return any;
+    });
+}
+
 bool Session::remove_audio_clip(const std::string& track_id, const std::string& clip_id)
 {
     return edit("Delete clip", on_track(track_id, [&](project::Track& t) {
@@ -1523,6 +1563,43 @@ std::vector<std::string> Session::split_audio_clips(const std::vector<std::strin
                              [](const project::AudioClip& a, const project::AudioClip& b) {
                                  return a.lane != b.lane ? a.lane < b.lane : a.start_seconds < b.start_seconds;
                              });
+            any = any || !rights.empty();
+        }
+        return any;
+    });
+    if (!ok) ids.clear();
+    return ids;
+}
+
+std::vector<std::string> Session::split_regions(const std::vector<std::string>& track_ids, Ticks at)
+{
+    std::vector<std::string> ids;
+    const bool ok = edit("Split region", [&](project::ProjectData& d) {
+        bool any = false;
+        for (const auto& id : track_ids) {
+            project::Track* t = d.find_track(id);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
+            if (!v) continue;
+            std::vector<project::MidiRegion> rights;
+            for (auto& r : v->regions) {
+                if (at <= r.start || at >= r.end) continue;
+                project::MidiRegion right;
+                right.id = project_.ids().next("rgn");
+                right.start = at;
+                right.end = r.end;
+                right.lane = r.lane;
+                right.source = r.source;
+                std::vector<NoteEvent> left_notes;
+                for (const auto& n : r.notes) (n.start < at ? left_notes : right.notes).push_back(n);
+                std::vector<ControllerEvent> left_cc;
+                for (const auto& e : r.controllers) (e.tick < at ? left_cc : right.controllers).push_back(e);
+                r.notes = std::move(left_notes);
+                r.controllers = std::move(left_cc);
+                r.end = at;
+                ids.push_back(right.id);
+                rights.push_back(std::move(right));
+            }
+            for (auto& r : rights) v->regions.push_back(std::move(r));
             any = any || !rights.empty();
         }
         return any;

@@ -242,7 +242,22 @@ struct Model final : AutomationTimeline {
     // Audio clips and recording.
     WaveformCache waveforms;
     std::set<std::string> show_takes;     ///< tracks whose take lanes are open
-    std::string clip_track, clip_id;      ///< the selected audio clip
+    std::string clip_track, clip_id;      ///< the selected audio clip (the one menus and keys start from)
+    /// Clips selected with it (Shift-click, or a box dragged across the lanes).
+    std::set<std::pair<std::string, std::string>> more_clips;
+    bool is_clip_selected(const std::string& track, const std::string& id) const
+    {
+        return (clip_track == track && clip_id == id) || more_clips.count({track, id}) > 0;
+    }
+    /// Everything selected, the main clip first.
+    std::vector<std::pair<std::string, std::string>> selected_clips() const
+    {
+        std::vector<std::pair<std::string, std::string>> out;
+        if (!clip_id.empty()) out.emplace_back(clip_track, clip_id);
+        for (const auto& k : more_clips)
+            if (!(k.first == clip_track && k.second == clip_id)) out.push_back(k);
+        return out;
+    }
     Ticks range_start = 0, range_end = 0; ///< ruler selection (punch range); empty when equal
     bool punch = false;
     bool recording = false;
@@ -1170,6 +1185,14 @@ public:
                 g.drawText("Drop here for a new track", row.withTrimmedLeft(kHeader + 8), juce::Justification::centredLeft);
             }
         }
+        // A selection box being dragged.
+        if (drag_ == Drag::Band) {
+            const auto box = juce::Rectangle<float>(band_start_, band_end_);
+            g.setColour(colours::accent.withAlpha(0.12f));
+            g.fillRect(box);
+            g.setColour(colours::accent.withAlpha(0.8f));
+            g.drawRect(box, 1.0f);
+        }
         // A comp swipe in progress, over its take.
         if (drag_ == Drag::Comp) {
             const float x0 = static_cast<float>(m_.x_of(static_cast<double>(m_.tempo.tick_at_seconds(std::min(comp_from_, comp_to_)))));
@@ -1242,6 +1265,21 @@ public:
             return;
         }
         const int index = clip_at(lane, hit, e.position);
+        if (index >= 0 && e.mods.isShiftDown() && !e.mods.isPopupMenu()) {
+            toggle_clip(track, lane.clips[static_cast<std::size_t>(index)].id);
+            grabKeyboardFocus();
+            return;
+        }
+        if (index < 0 && !take_region_at(lane, hit, e.position) && !e.mods.isPopupMenu()) {
+            // A drag across empty lanes selects the clips it touches (Shift adds).
+            band_start_ = e.position;
+            band_end_ = e.position;
+            band_add_ = e.mods.isShiftDown();
+            drag_ = Drag::Band;
+            if (!band_add_) select_clip({}, {});
+            grabKeyboardFocus();
+            return;
+        }
         if (index < 0) {
             select_clip({}, {});
             // A MIDI take: drag across it to comp that part onto the main lane.
@@ -1262,7 +1300,7 @@ public:
             return;
         }
         const auto& c = lane.clips[static_cast<std::size_t>(index)];
-        select_clip(track, c.id);
+        if (!m_.is_clip_selected(track, c.id)) select_clip(track, c.id);  // a click in the selection keeps it
         grabKeyboardFocus();
         if (e.mods.isPopupMenu()) {
             show_clip_menu(lane, c);
@@ -1303,6 +1341,11 @@ public:
             return;
         }
         if (drag_ == Drag::None) return;
+        if (drag_ == Drag::Band) {
+            band_end_ = e.position;
+            repaint();
+            return;
+        }
         if (drag_ == Drag::Comp) {
             comp_to_ = comp_seconds(e.x, e.mods.isCommandDown());
             const double a = std::min(comp_from_, comp_to_), b = std::max(comp_from_, comp_to_);
@@ -1353,6 +1396,7 @@ public:
                 break;
             }
             case Drag::Comp:
+            case Drag::Band:
             case Drag::None: return;
         }
         const project::AudioClip* now = m_.clip(drag_track_, o.id);
@@ -1375,6 +1419,16 @@ public:
 
     void mouseUp(const juce::MouseEvent&) override
     {
+        if (drag_ == Drag::Band) {
+            drag_ = Drag::None;
+            const auto box = juce::Rectangle<float>(band_start_, band_end_);
+            if (box.getWidth() > 3.0f || box.getHeight() > 3.0f) {
+                const int n = select_in_box(box, band_add_);
+                if (n > 0) m_.ctx.status(juce::String(static_cast<int>(m_.selected_clips().size())) + " clips selected");
+            }
+            repaint();
+            return;
+        }
         if (drag_ == Drag::Comp) {
             drag_ = Drag::None;
             repaint();
@@ -1414,6 +1468,7 @@ public:
                         shape = hit.take > 0 ? juce::MouseCursor::IBeamCursor : juce::MouseCursor::NormalCursor;
                         break;
                     case Drag::Comp:
+                    case Drag::Band:
                     case Drag::None: shape = juce::MouseCursor::NormalCursor; break;
                 }
             } else if (take_region_at(*hit.lane, hit, e.position)) {
@@ -1451,11 +1506,17 @@ public:
             m_.set_pencil_mode(!m_.pencil);
             return true;
         }
+        // Cmd/Ctrl+T: split at the playhead (clips and MIDI regions; with no
+        // clip selected, the selected track's).
+        if (key.getModifiers().isCommandDown() && (key.getKeyCode() == 'T' || key.getKeyCode() == 't')) {
+            split_at_playhead();
+            return true;
+        }
         if (m_.clip_id.empty()) return false;
         if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) {
-            const std::string track = m_.clip_track, id = m_.clip_id;
+            const auto clips = m_.selected_clips();
             select_clip({}, {});
-            m_.ctx.session.remove_audio_clip(track, id);
+            m_.ctx.session.remove_audio_clips(clips);
             return true;
         }
         if (key == juce::KeyPress::escapeKey) {
@@ -1463,11 +1524,6 @@ public:
             return true;
         }
         const auto mods = key.getModifiers();
-        // Cmd/Ctrl+T: split at the playhead.
-        if (mods.isCommandDown() && (key.getKeyCode() == 'T' || key.getKeyCode() == 't')) {
-            split_at_playhead();
-            return true;
-        }
         // Alt+Left/Right: nudge 10 ms; with Shift, a grid step.
         if (mods.isAltDown() && (key.getKeyCode() == juce::KeyPress::leftKey || key.getKeyCode() == juce::KeyPress::rightKey)) {
             const double sign = key.getKeyCode() == juce::KeyPress::leftKey ? -1.0 : 1.0;
@@ -1550,15 +1606,23 @@ public:
     /// The selected clip's track, split where the playhead is (every lane).
     bool split_at_playhead()
     {
-        if (m_.clip_track.empty()) return false;
-        const double at = m_.tempo.seconds_at(m_.playhead);
-        const auto ids = m_.ctx.session.split_audio_clips({m_.clip_track}, at);
-        if (ids.empty()) {
-            m_.ctx.status("The playhead is not inside a clip on this track");
+        // The tracks of the selected clips, else the selected track: their
+        // audio clips and MIDI regions under the playhead.
+        std::vector<std::string> tracks;
+        for (const auto& [t, id] : m_.selected_clips())
+            if (std::find(tracks.begin(), tracks.end(), t) == tracks.end()) tracks.push_back(t);
+        if (tracks.empty() && !m_.ctx.session.selected_track().empty()) tracks.push_back(m_.ctx.session.selected_track());
+        if (tracks.empty()) return false;
+        const auto clips = m_.ctx.session.split_audio_clips(tracks, m_.tempo.seconds_at(m_.playhead));
+        const auto regions = m_.ctx.session.split_regions(tracks, m_.playhead);
+        if (clips.empty() && regions.empty()) {
+            m_.ctx.status("The playhead is not inside a clip or region on the selected track");
             return false;
         }
-        m_.ctx.status("Split " + juce::String(static_cast<int>(ids.size())) + (ids.size() == 1 ? " clip" : " clips") +
-                      " at the playhead");
+        juce::StringArray parts;
+        if (!clips.empty()) parts.add(juce::String(static_cast<int>(clips.size())) + (clips.size() == 1 ? " clip" : " clips"));
+        if (!regions.empty()) parts.add(juce::String(static_cast<int>(regions.size())) + (regions.size() == 1 ? " region" : " regions"));
+        m_.ctx.status("Split " + parts.joinIntoString(" and ") + " at the playhead");
         return true;
     }
 
@@ -1597,7 +1661,11 @@ public:
     bool consolidate_selected()
     {
         if (m_.clip_track.empty()) return false;
-        const auto ids = touching_clips(m_.ctx, m_.clip_track, m_.clip_id);
+        // Several clips selected on the main clip's track: those; else the clips touching it.
+        std::vector<std::string> ids;
+        for (const auto& [t, id] : m_.selected_clips())
+            if (t == m_.clip_track) ids.push_back(id);
+        if (ids.size() < 2) ids = touching_clips(m_.ctx, m_.clip_track, m_.clip_id);
         const auto r = consolidate_clips(m_.ctx, m_.clip_track, ids);
         m_.ctx.status(r.message);
         if (r.ok) select_clip(m_.clip_track, r.clip_id);
@@ -1607,7 +1675,11 @@ public:
     bool nudge_selected(double seconds)
     {
         if (m_.clip_track.empty()) return false;
-        const bool ok = m_.ctx.session.nudge_audio_clips(m_.clip_track, {m_.clip_id}, seconds);
+        // Every selected clip, track by track (the nudges merge into one undo step).
+        std::map<std::string, std::vector<std::string>> by_track;
+        for (const auto& [t, id] : m_.selected_clips()) by_track[t].push_back(id);
+        bool ok = false;
+        for (const auto& [t, ids] : by_track) ok = m_.ctx.session.nudge_audio_clips(t, ids, seconds) || ok;
         if (ok) m_.ctx.status("Nudge " + juce::String(seconds * 1000.0, 1) + " ms");
         return ok;
     }
@@ -1668,7 +1740,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Move, TrimLeft, TrimRight, FadeIn, FadeOut, Gain, Comp };
+    enum class Drag { None, Move, TrimLeft, TrimRight, FadeIn, FadeOut, Gain, Comp, Band };
 
     /// The track whose header's bottom edge is under `p`, or null.
     const LaneView* resize_edge_at(juce::Point<int> p) const
@@ -1763,10 +1835,74 @@ private:
 
     void select_clip(const std::string& track, const std::string& id)
     {
-        if (m_.clip_track == track && m_.clip_id == id) return;
+        if (m_.clip_track == track && m_.clip_id == id && m_.more_clips.empty()) return;
         m_.clip_track = track;
         m_.clip_id = id;
+        m_.more_clips.clear();
         repaint();
+    }
+
+    /// Shift-click: adds a clip to the selection, or takes it out.
+    void toggle_clip(const std::string& track, const std::string& id)
+    {
+        if (m_.clip_id.empty()) {
+            select_clip(track, id);
+            return;
+        }
+        if (m_.clip_track == track && m_.clip_id == id) {
+            // The main clip leaves: the next one leads.
+            if (m_.more_clips.empty()) {
+                select_clip({}, {});
+                return;
+            }
+            const auto next = *m_.more_clips.begin();
+            m_.more_clips.erase(next);
+            m_.clip_track = next.first;
+            m_.clip_id = next.second;
+        } else if (!m_.more_clips.erase({track, id})) {
+            m_.more_clips.insert({track, id});
+        }
+        repaint();
+    }
+
+    /// Selects every clip whose rectangle touches `box` (a drag across empty lanes).
+    int select_in_box(juce::Rectangle<float> box, bool add)
+    {
+        if (!add) {
+            m_.clip_track.clear();
+            m_.clip_id.clear();
+            m_.more_clips.clear();
+        }
+        int n = 0;
+        int top = -scroll_y_;
+        for (const auto& l : m_.lanes) {
+            const int rh = m_.row_height(l);
+            if (!l.bus) {
+                const int base = m_.base_height(l);
+                const juce::Rectangle<int> row{0, top, getWidth() - kScroll, base};
+                for (const auto& c : l.clips) {
+                    juce::Rectangle<int> lane_row;
+                    if (c.lane == 0) {
+                        lane_row = m_.clip_row(l, row);
+                    } else {
+                        const auto it = std::find(l.takes.begin(), l.takes.end(), c.lane);
+                        if (it == l.takes.end() || m_.takes_height(l) == 0) continue;
+                        lane_row = {0, top + base + static_cast<int>(it - l.takes.begin()) * kTakeHeight, getWidth() - kScroll, kTakeHeight};
+                    }
+                    if (!clip_rect(c, lane_row).intersects(box)) continue;
+                    if (m_.clip_id.empty()) {
+                        m_.clip_track = l.id;
+                        m_.clip_id = c.id;
+                    } else {
+                        m_.more_clips.insert({l.id, c.id});
+                    }
+                    ++n;
+                }
+            }
+            top += rh;
+        }
+        repaint();
+        return n;
     }
 
     void toggle_takes(const std::string& track)
@@ -1925,9 +2061,12 @@ private:
         menu.addSectionHeader(juce::String(c.name.empty() ? std::string("Clip") : c.name));
         if (c.lane > 0)
             menu.addItem("Promote take", [&session, track, id] { promote_take(session, track, id); });
-        menu.addItem(c.muted ? "Unmute clip" : "Mute clip", [this, track, id, muted = c.muted] {
-            m_.ctx.session.update_audio_clip(track, id, unique_label(muted ? "Unmute clip" : "Mute clip"),
-                                             [muted](project::AudioClip& x) { x.muted = !muted; });
+        const auto chosen = m_.is_clip_selected(track, id) ? m_.selected_clips()
+                                                           : std::vector<std::pair<std::string, std::string>>{{track, id}};
+        const juce::String what = chosen.size() > 1 ? juce::String(static_cast<int>(chosen.size())) + " clips" : juce::String("clip");
+        menu.addItem((c.muted ? "Unmute " : "Mute ") + what, [this, chosen, muted = c.muted] {
+            m_.ctx.session.update_audio_clips(chosen, unique_label(muted ? "Unmute clip" : "Mute clip"),
+                                              [muted](project::AudioClip& x) { x.muted = !muted; });
         });
         juce::PopupMenu gain;
         for (double db : {6.0, 3.0, 0.0, -3.0, -6.0, -12.0})
@@ -1972,9 +2111,9 @@ private:
             menu.addItem(open ? "Hide take lanes" : "Show take lanes", [this, track] { toggle_takes(track); });
         }
         menu.addSeparator();
-        menu.addItem("Delete clip", [this, track, id] {
+        menu.addItem("Delete " + what, [this, chosen] {
             select_clip({}, {});
-            m_.ctx.session.remove_audio_clip(track, id);
+            m_.ctx.session.remove_audio_clips(chosen);
         });
         menu.showMenuAsync({});
     }
@@ -2147,7 +2286,7 @@ private:
         const auto& c = l.clips[index];
         const auto r = clip_rect(c, row);
         if (r.getRight() < body.getX() || r.getX() > body.getRight()) return;
-        const bool selected = m_.clip_track == l.id && m_.clip_id == c.id;
+        const bool selected = m_.is_clip_selected(l.id, c.id);
         const juce::String name(c.name.empty() ? juce::File(juce::String(c.file)).getFileNameWithoutExtension() : juce::String(c.name));
         const std::string& path = l.clip_paths[index];
 
@@ -2446,6 +2585,9 @@ private:
     std::string drag_track_, drag_label_;
     project::AudioClip drag_clip_;
     double file_length_ = 0.0;  ///< Of the dragged clip's file, when known.
+    // A selection box being dragged across the lanes.
+    juce::Point<float> band_start_, band_end_;
+    bool band_add_ = false;
     // A file drag over the lanes: where it would land (-1: none).
     int drop_x_ = -1;
     std::string drop_track_;
@@ -4617,6 +4759,8 @@ void SequencerView::show_take_lanes(const std::string& track_id, bool show)
     impl_->lanes.update_scroll();
     impl_->lanes.repaint();
 }
+
+int SequencerView::selected_clip_count() const { return static_cast<int>(impl_->model.selected_clips().size()); }
 
 std::pair<std::string, std::string> SequencerView::selected_clip() const
 {

@@ -307,3 +307,34 @@ TEST_CASE("MIDI comping: a range of a take replaces the main lane's notes there;
     CHECK(main_60 == 8);
     CHECK(!s.promote_region_take(t, take1_id));  // already on the main lane
 }
+
+TEST_CASE("splitting a MIDI region: notes stay where they start, controllers by tick, one undo step")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Keys", "keys.piano");
+    project::MidiRegion r;
+    r.start = 0;
+    r.end = 8 * Q;
+    r.notes = {{0, Q, 60, 80, 0, {}}, {3 * Q, 2 * Q, 62, 80, 0, {}}, {5 * Q, Q, 64, 80, 0, {}}};
+    r.controllers = {{Q, 0, 64, 127}, {6 * Q, 0, 64, 0}};
+    s.add_recorded_regions({{t, r}}, "Record MIDI");
+    const auto right = s.split_regions({t}, 4 * Q);
+    REQUIRE(right.size() == 1);
+    CHECK(s.undo_label() == "Split region");
+    const auto& regions = s.data().find_track(t)->active_version()->regions;
+    REQUIRE(regions.size() == 2);
+    const auto& left = regions[0].id == right[0] ? regions[1] : regions[0];
+    const auto& rr = regions[0].id == right[0] ? regions[0] : regions[1];
+    CHECK(left.end == 4 * Q);
+    CHECK(rr.start == 4 * Q);
+    CHECK(rr.end == 8 * Q);
+    CHECK(left.notes.size() == 2);  // the note across the cut keeps its length, on the left
+    CHECK(left.notes[1].duration == 2 * Q);
+    CHECK(rr.notes.size() == 1);
+    CHECK(left.controllers.size() == 1);
+    CHECK(rr.controllers.size() == 1);
+    CHECK(s.split_regions({t}, 4 * Q).empty());  // on a boundary: nothing
+    s.undo();
+    CHECK(s.data().find_track(t)->active_version()->regions.size() == 1);
+}

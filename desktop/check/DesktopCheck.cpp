@@ -3007,6 +3007,29 @@ void clip_editing_checks(MainWindow& window, const juce::File& dir)
     }
     session.undo();
     check(clips().size() == 3, "undo brings the clips back");
+
+    // Several clips at once: a box dragged across the track's row from empty
+    // space selects all three; Alt+Right nudges them together; Delete
+    // removes them as one undo step.
+    if (lanes) {
+        seq.select_clip(track, clips()[0].id);
+        pump(30);
+        const float y = 40.0f;
+        const float right = static_cast<float>(lanes->getWidth() - 30), left = 230.0f;
+        drag(*lanes, {right, y - 15.0f}, {left, y + 15.0f});
+        const int chosen = seq.selected_clip_count();
+        lanes->keyPressed(juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::altModifier, 0));
+        auto moved = clips();
+        bool all_moved = moved.size() == 3;
+        for (const auto& m : moved) all_moved = all_moved && m.start_seconds > 0.005;
+        check(chosen == 3 && all_moved && session.undo_label() == "Nudge clip",
+              "a box across the lanes selects every clip it touches (" + juce::String(chosen) + "), and they nudge together");
+        session.undo();
+        lanes->keyPressed(juce::KeyPress(juce::KeyPress::deleteKey));
+        check(clips().empty() && session.undo_label() == "Delete clips", "Delete removes the selected clips as one undo step");
+        session.undo();
+        check(clips().size() == 3, "and undo brings them all back");
+    }
 }
 
 /// MIDI tools: input quantize and controllers while recording, Quantize and
@@ -3424,6 +3447,15 @@ void midi_comp_checks(MainWindow& window, const juce::File& dir)
     int played60 = 0, played72 = 0;
     for (const auto& n : project::render_track(*d.find_track(keys)).notes) (n.pitch == 60 ? played60 : played72)++;
     check(played60 == 8 && played72 == 0, "only the main lane's MIDI plays");
+
+    // Cmd/Ctrl+T splits the selected track's MIDI regions at the playhead.
+    seq.select_clip({}, {});
+    session.select_track(keys);
+    seq.set_playhead(2 * Q + Q / 2, false);
+    lanes->keyPressed(juce::KeyPress('t', juce::ModifierKeys::commandModifier, 't'));
+    int main_regions = 0;
+    for (const auto& r : d.find_track(keys)->active_version()->regions) main_regions += r.lane == 0 ? 1 : 0;
+    check(session.undo_label() == "Split region" && main_regions == 2, "Cmd/Ctrl+T splits a MIDI region at the playhead");
 }
 
 /// Sidechain: a bass on input 1 keyed from a (muted) kick on input 2 ducks
