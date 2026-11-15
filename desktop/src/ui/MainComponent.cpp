@@ -262,10 +262,17 @@ MainComponent::MainComponent(AppContext& context)
         else sequencer_.zoom(larger);
     };
     toolbar_.on_pencil = [this](bool on) { sequencer_.set_pencil_mode(on); };
-    toolbar_.on_edit_mode = [this](int mode) { sequencer_.set_edit_mode(static_cast<SequencerView::EditMode>(mode)); };
-    toolbar_.on_smart = [this](bool on) { sequencer_.set_smart_tool(on); };
+    toolbar_.on_edit_mode = [this](int mode) {
+        sequencer_.set_edit_mode(static_cast<SequencerView::EditMode>(mode));
+        refresh_tool_keys();
+    };
+    toolbar_.on_smart = [this](bool on) {
+        sequencer_.set_smart_tool(on);
+        refresh_tool_keys();
+    };
     toolbar_.on_chord_mode = [this](bool on) {
         composer_.set_chord_mode(on);
+        refresh_tool_keys();
         composer_.grabKeyboardFocus();
     };
     // The Composer keys and the inspector run notation commands on the
@@ -638,6 +645,12 @@ void MainComponent::set_page_view(bool page)
                          : "Track view");
 }
 
+void MainComponent::refresh_tool_keys()
+{
+    toolbar_.update(punch_, sequencer_.pencil_mode(), static_cast<int>(sequencer_.edit_mode()), sequencer_.smart_tool());
+    if (auto* k = toolbar_.key("Chord mode")) k->setToggleState(composer_.chord_mode(), juce::dontSendNotification);
+}
+
 void MainComponent::timerCallback()
 {
     const Ticks tick = context_.engine.position();
@@ -645,8 +658,7 @@ void MainComponent::timerCallback()
     deck_.update_position();
     const auto& sel = context_.session.selection();
     deck_.set_range(sel.from, sel.to);
-    toolbar_.update(punch_, sequencer_.pencil_mode(), static_cast<int>(sequencer_.edit_mode()), sequencer_.smart_tool());
-    if (auto* k = toolbar_.key("Chord mode")) k->setToggleState(composer_.chord_mode(), juce::dontSendNotification);
+    refresh_tool_keys();
     if (page_view_.isVisible()) page_view_.set_playhead(tick);
     if (composer_.isVisible()) {
         composer_.set_playhead(tick, playing);
@@ -1669,8 +1681,12 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::editSpot:
         case cmd::editGrid:
             sequencer_.set_edit_mode(static_cast<SequencerView::EditMode>(info.commandID - cmd::editShuffle));
+            refresh_tool_keys();
             break;
-        case cmd::toggleSmartTool: sequencer_.set_smart_tool(!sequencer_.smart_tool()); break;
+        case cmd::toggleSmartTool:
+            sequencer_.set_smart_tool(!sequencer_.smart_tool());
+            refresh_tool_keys();
+            break;
         case cmd::toggleView:
             show_workspace(workspace_ == Workspace::Composer ? Workspace::Producer : Workspace::Composer);
             break;

@@ -136,6 +136,9 @@ private:
     class BuiltinInsertWindow;
     std::string insert_kind(const std::string& owner_id, int slot) const;
     void timerCallback() override;
+    /// Lights the toolbar keys that mirror a mode (punch, pencil, edit mode,
+    /// Smart tool, Chord mode) at once, not on the next timer tick.
+    void refresh_tool_keys();
     void capture_plugin_states();
     void export_midi();
     void save_as_template();

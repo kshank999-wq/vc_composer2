@@ -3112,7 +3112,9 @@ void edit_mode_checks(MainWindow& window, const juce::File& dir)
     auto* slip_key = dynamic_cast<juce::Button*>(find_by_id(main, "edit_mode_1"));
     check(slip && fkeys && seq.edit_mode() == Mode::Grid && grid_key && grid_key->getToggleState() && slip_key &&
               !slip_key->getToggleState(),
-          "the Edit keys and F1-F4 choose Shuffle, Slip, Spot or Grid, and the chosen key lights (F6: Smart tool)");
+          "the Edit keys and F1-F4 choose Shuffle, Slip, Spot or Grid, and the chosen key lights (F6: Smart tool) [slip " +
+              juce::String(slip ? "y" : "n") + ", F-keys " + (fkeys ? "y" : "n") + ", grid " +
+              (seq.edit_mode() == Mode::Grid ? "y" : "n") + ", lit " + (grid_key && grid_key->getToggleState() ? "y" : "n") + "]");
 
     // Grid snaps a dragged clip; Slip leaves it where it is let go.
     const float nudge = 0.35f * px_per_second();
