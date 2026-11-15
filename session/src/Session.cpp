@@ -1514,7 +1514,9 @@ bool Session::set_sidechain(const std::string& owner_id, int slot, const std::st
         if (slot >= 0) {
             if (slot >= static_cast<int>(inserts->size())) return false;
             auto& ins = (*inserts)[static_cast<std::size_t>(slot)];
-            if (ins.kind != "compressor" && ins.kind != "gate") return false;
+            // Built-in compressors and gates, and effect plug-ins (those with a
+            // sidechain input take the key; others ignore it).
+            if (ins.kind != "compressor" && ins.kind != "gate" && ins.kind != "plugin") return false;
             target = &ins.sidechain;
         }
         if (*target == source_id) return false;

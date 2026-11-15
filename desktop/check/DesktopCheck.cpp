@@ -3592,6 +3592,28 @@ void sidechain_checks(MainWindow& window, const juce::File& dir)
     const double insert_quiet = level(false), insert_ducked = level(true);
     check(insert_ducked < insert_quiet - 12.0, "a compressor insert keyed from the kick ducks the bass (" +
                                                    juce::String(insert_quiet, 1) + " -> " + juce::String(insert_ducked, 1) + " dB)");
+
+    // An effect plug-in with a sidechain input (the test effect ducks 20 dB
+    // while its key is loud): keyed from the kick, run in its own process.
+    if (const auto effect_ref = scan(ctx, VCC_TEST_EFFECT)) {
+        session.update_track_mix(bass, "plug-in insert", [&](project::Track& t) {
+            project::InsertSlot slot;
+            slot.kind = "plugin";
+            slot.suggestion = false;
+            slot.plugin = *effect_ref;
+            t.inserts = {slot};
+        });
+        const double plain_quiet = level(false), plain_loud = level(true);
+        check(session.set_sidechain(bass, 0, kick), "an effect plug-in insert can be keyed");
+        const double keyed_quiet = level(false), keyed_loud = level(true);
+        check(std::abs(plain_quiet - plain_loud) < 0.5 && std::abs(keyed_quiet - plain_quiet) < 0.5 &&
+                  keyed_loud < keyed_quiet - 15.0,
+              "the plug-in's sidechain input hears the kick: it ducks only while the kick sounds (" + juce::String(keyed_quiet, 1) +
+                  " -> " + juce::String(keyed_loud, 1) + " dB; unkeyed " + juce::String(plain_quiet, 1) + " / " +
+                  juce::String(plain_loud, 1) + " dB)");
+    } else {
+        check(false, "the test effect scans for the plug-in sidechain check");
+    }
     // Keyed processing stays allocation-free.
     engine.locate(0);
     engine.play();

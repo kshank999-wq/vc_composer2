@@ -8,6 +8,7 @@
 // callback, the way a plug-in switching to a look-ahead mode would.
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <algorithm>
 #include <csignal>
 
 namespace {
@@ -21,7 +22,8 @@ public:
     TestEffect()
         : juce::AudioProcessor(BusesProperties()
                                    .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                                   .withOutput("Output", juce::AudioChannelSet::stereo(), true))
+                                   .withOutput("Output", juce::AudioChannelSet::stereo(), true)
+                                   .withInput("Sidechain", juce::AudioChannelSet::stereo(), false))
     {
         addParameter(latency_ = new juce::AudioParameterInt(juce::ParameterID{"latency", 1}, "Latency", 0, kMaxLatency, 0));
         addParameter(gain_ = new juce::AudioParameterFloat(juce::ParameterID{"gain", 1}, "Gain", 0.0f, 1.0f, 1.0f));
@@ -41,8 +43,11 @@ public:
 
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override
     {
+        // The sidechain: off, or stereo.
+        const auto side = layouts.inputBuses.size() > 1 ? layouts.getChannelSet(true, 1) : juce::AudioChannelSet::disabled();
         return layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo() &&
-               layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+               layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() &&
+               (side == juce::AudioChannelSet::disabled() || side == juce::AudioChannelSet::stereo());
     }
 
     void prepareToPlay(double, int max_block) override
@@ -95,6 +100,12 @@ private:
             setLatencySamples(current_);  // the host is told and re-aligns
         }
         const int n = buffer.getNumSamples();
+        // A ducker on the sidechain (input channels 2-3): while the key is
+        // above -26 dB the output drops 20 dB. Nothing on the key, no change.
+        if (buffer.getNumChannels() >= 4 && getTotalNumInputChannels() >= 4) {
+            const float key = std::max(buffer.getMagnitude(2, 0, n), buffer.getMagnitude(3, 0, n));
+            if (key > 0.05f) gain *= 0.1f;
+        }
         for (int ch = 0; ch < std::min(2, buffer.getNumChannels()); ++ch) {
             float* d = buffer.getWritePointer(ch);
             float* ring = ring_.getWritePointer(ch);

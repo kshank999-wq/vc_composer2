@@ -554,6 +554,13 @@ private:
             view.copyFrom(0, 0, l, n);
             view.copyFrom(1, 0, r, n);
         }
+        // Sidechain: a plug-in with a second (sidechain) input bus takes the
+        // key on input channels 2-3, after the stereo main input. Out of
+        // process, those channels travel with the others in the shared block.
+        if (key_l_ && ins >= 4 && view.getNumChannels() >= 4) {
+            view.copyFrom(2, 0, key_l_, n);
+            view.copyFrom(3, 0, key_r_ ? key_r_ : key_l_, n);
+        }
         midi_.clear();
         if (bypassed) instance_->processBlockBypassed(view, midi_);
         else instance_->processBlock(view, midi_);

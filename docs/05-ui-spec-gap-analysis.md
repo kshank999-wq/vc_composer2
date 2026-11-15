@@ -811,13 +811,17 @@ macOS, Linux and Windows. What it took:
       with their key sources first, so a key from a track arrives in the
       same block. A key from a bus reaches a track one block late (buses
       run after the tracks). Delay compensation does not shift the key.
-    - Hosted effect plug-ins with their own sidechain inputs are not fed
-      yet (the out-of-process host carries one stereo bus).
+    - A hosted effect plug-in with a sidechain input bus can be keyed the
+      same way (Sidechain... on its insert slot). The host enables every
+      bus; the key goes to the plug-in's input channels 2-3, out of
+      process, and a plug-in without a sidechain bus is simply not fed.
     - **Checks.** A quiet bass keyed from a muted 1 kHz kick added after it:
       unkeyed it ignores the kick (-38.1 / -38.1 dB); keyed it ducks only
       while the kick sounds (-38.1 to -63.0 dB, 25 dB of gain reduction on
       its meter); unkeyed again it ignores the kick; a keyed compressor
-      insert ducks the same; keyed processing allocates nothing.
+      insert ducks the same; the test effect plug-in, keyed from the kick
+      through its sidechain bus, ducks only while the kick sounds (-38.0 to
+      -58.1 dB); keyed processing allocates nothing.
       `test_producer_tracks` covers the session side and saving.
 
 16. **Full-screen mixer. Done** (revised November 15: hardware proportions).

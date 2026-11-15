@@ -109,7 +109,7 @@ void show_insert_menu(AppContext& context, const std::string& owner_id, int inde
         m.addItem(5, "Open window...");
         if (s.suggestion && s.kind != "plugin") m.addItem(3, "Use the built-in " + insert_name(s));
         m.addItem(1, "Bypass", true, s.bypass);
-        if (s.kind == "compressor" || s.kind == "gate") {
+        if (s.kind == "compressor" || s.kind == "gate" || s.kind == "plugin") {
             const auto key = sidechain_text(context, owner_id, static_cast<int>(at));
             m.addItem(6, key.isEmpty() ? juce::String("Sidechain...") : "Sidechain: " + key + "...");
         }
