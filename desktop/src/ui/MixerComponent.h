@@ -10,6 +10,10 @@
 
 namespace vcc::desktop {
 
+namespace console {
+class ConsoleView;
+}
+
 class MixerComponent final : public juce::Component {
 public:
     explicit MixerComponent(AppContext& context);
@@ -17,6 +21,7 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    console::ConsoleView& view();
 
 private:
     struct Impl;

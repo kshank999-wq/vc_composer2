@@ -59,6 +59,8 @@ public:
 
     juce::Component& top() noexcept;
     juce::Component& bottom() noexcept;
+    /// The fader's throw on screen (the check measures proportions with it).
+    juce::Rectangle<int> fader_bounds() const;
     Kind kind() const noexcept { return kind_; }
     const std::string& id() const noexcept { return id_; }
 

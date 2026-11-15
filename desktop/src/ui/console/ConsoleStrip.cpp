@@ -1097,6 +1097,8 @@ void Strip::layout_top()
     }
 }
 
+juce::Rectangle<int> Strip::fader_bounds() const { return fader_.getBounds(); }
+
 void Strip::layout_bottom()
 {
     const int w = bottom_->getWidth(), h = bottom_->getHeight();

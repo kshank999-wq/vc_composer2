@@ -27,6 +27,8 @@
 #include "ui/Dialogs.h"
 #include "ui/hw/HwGallery.h"
 #include "ui/console/MixActions.h"
+#include "ui/console/ConsoleStrip.h"
+#include "ui/console/ConsoleView.h"
 #include "ui/composer/ComposerRuler.h"
 #include "ui/composer/Inspector.h"
 #include "ui/composer/LaneParts.h"
@@ -2276,26 +2278,37 @@ void mix_checks(MainWindow& window, const juce::File& dir)
     pump(80);
     check(deck.isVisible() && main.edit_frame().stage_key(2).getToggleState(), "the Mix stage shows the mixer deck");
 
-    // Full screen: the deck's key; the strips (and their faders) run the window's height.
-    const int compact_h = deck.strip_count() > 0 ? deck.strip(0).getHeight() : 0;
+    // Full screen: the deck's key brings up the console, laid out like a
+    // hardware console - every section above, the fader the bottom third.
     deck.full_key().triggerClick();
-    pump(100);
-    const int full_h = deck.strip_count() > 0 ? deck.strip(0).getHeight() : 0;
-    check(main.mixer_full() && deck.full() && deck.getY() < main.edit_frame().getBottom() - 100 &&
-              full_h > 2 * compact_h - 40 && deck.full_key().getButtonText() == "Compact",
-          "Full screen fills the window under the toolbar; the faders run its height (strips " + juce::String(compact_h) +
-              " -> " + juce::String(full_h) + " px)");
+    pump(150);
+    auto* full = main.full_console();
+    bool proportional = false;
+    juce::String measured;
+    if (full && full->isVisible()) {
+        auto& view = full->view();
+        if (auto* s = view.master()) {
+            const int fader = s->fader_bounds().getHeight();
+            const int strip = full->getHeight();
+            const double share = static_cast<double>(fader) / strip;
+            proportional = share > 0.22 && share < 0.40 && fader >= 140;
+            measured = juce::String(fader) + " of " + juce::String(strip) + " px, " + juce::String(share * 100.0, 0) + "%";
+        }
+    }
+    check(main.mixer_full() && full && full->isVisible() && full->getY() < main.edit_frame().getY() && proportional,
+          "Full screen is the console in hardware proportions: the fader about a third of the strip (" + measured + ")");
     shoot(main, dir, "35b-mixer-full");
-    deck.full_key().triggerClick();
+    if (full) full->view().compact_button().triggerClick();
     pump(100);
-    check(!main.mixer_full() && deck.isVisible() && deck.getHeight() == shell::MixerDeck::kHeight,
-          "Compact puts the mixer back in the bottom deck");
+    check(!main.mixer_full() && (!full || !full->isVisible()) && deck.isVisible() &&
+              deck.getHeight() == shell::MixerDeck::kHeight,
+          "COMPACT puts the mixer back in the bottom deck");
     // Cmd/Ctrl+M (the toolbar's Mixer key) from the Composer view, and back.
     main.show_workspace(MainComponent::Workspace::Composer);
     pump(50);
     main.show_mixer();
     pump(80);
-    const bool opened = main.mixer_full() && deck.isVisible();
+    const bool opened = main.mixer_full() && main.full_console() && main.full_console()->isVisible();
     main.show_mixer();
     pump(80);
     check(opened && !main.mixer_full() && main.workspace() == MainComponent::Workspace::Composer,

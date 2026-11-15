@@ -38,6 +38,10 @@ public:
     Lcd& pdc_readout() noexcept { return pdc_readout_; }
     void update_delay_compensation();
     void set_section_shown(Section s, bool shown);
+    /// When set, the header shows a COMPACT key that calls it (the console
+    /// is the full-screen mixer in the Edit window).
+    void set_on_compact(std::function<void()> f);
+    LedButton& compact_button() noexcept { return compact_; }
     void scroll_to(int x, int y);
 
 private:
@@ -66,6 +70,7 @@ private:
     juce::ScrollBar hbar_{false}, vbar_{true};
     std::vector<std::unique_ptr<LedButton>> section_buttons_;
     LedButton narrow_button_{"NARROW", paint::led_amber, "Narrow strips"};
+    LedButton compact_{"COMPACT", paint::led_white, "Back to the compact mixer in the bottom deck (Cmd/Ctrl+M)"};
     LedButton add_fx_{"+ FX BUS", paint::led_white, "Add an FX (aux) bus, fed by sends"};
     LedButton add_group_{"+ GROUP", paint::led_white, "Add a group bus (subgroup / stem)"};
     LedButton auto_all_{"AUTO ALL", paint::led_white, "Set the automation mode of every strip"};

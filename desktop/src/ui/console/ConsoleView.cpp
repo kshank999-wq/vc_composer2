@@ -88,6 +88,8 @@ ConsoleView::ConsoleView(AppContext& context) : context_(context), tip_(std::mak
     add_fx_.onClick = [this] { add_bus(true); };
     add_group_.onClick = [this] { add_bus(false); };
     for (auto* b : {&narrow_button_, &add_fx_, &add_group_, &auto_all_, &pdc_}) addAndMakeVisible(*b);
+    addChildComponent(compact_);
+    compact_.setComponentID("console_compact");
     auto_all_.onClick = [this] { show_all_modes_menu(); };
     pdc_.onClick = [this] {
         context_.engine.set_delay_compensation(!context_.engine.delay_compensation());
@@ -195,6 +197,10 @@ void ConsoleView::layout_all()
             b->setBounds(h.removeFromLeft(50));
             h.removeFromLeft(3);
         }
+        if (compact_.isVisible()) {
+            compact_.setBounds(h.removeFromRight(78));
+            h.removeFromRight(10);
+        }
         add_group_.setBounds(h.removeFromRight(72));
         h.removeFromRight(4);
         add_fx_.setBounds(h.removeFromRight(72));
@@ -219,11 +225,21 @@ void ConsoleView::layout_all()
 
     const int content_top = layout_.top_height();
     const int avail = r.getHeight() - kBarThickness;
-    bottom_h_ = juce::jlimit(juce::jmax(0, juce::jmin(380, avail - 80)), juce::jmax(520, avail / 2), avail / 2);
+    // Hardware proportions: on a console the fader's 100 mm throw is about
+    // the bottom third of the channel, the input, EQ, dynamics, inserts and
+    // sends fill the rest. The bottom area is the fader zone plus its fixed
+    // parts (pan, automation, record/monitor, mute/solo, readout, scribble);
+    // the throw is ~30 % of the height, 140..340 px. When every section fits
+    // with room to spare, the fader takes up to ~36 % before the rest is left
+    // as space under the sections.
+    constexpr int kBottomParts = 205;
+    const int throw_px = juce::jlimit(140, 340, juce::roundToInt(avail * 0.30));
+    bottom_h_ = juce::jmin(juce::jmax(0, avail - 60), kBottomParts + throw_px);
     top_h_ = avail - bottom_h_;
     if (top_h_ > content_top) {
-        top_h_ = content_top;
-        bottom_h_ = avail - top_h_;
+        const int grow = juce::jmin(top_h_ - content_top, juce::jmax(0, juce::roundToInt(avail * 0.36) - throw_px));
+        bottom_h_ += grow;
+        top_h_ = avail - bottom_h_;
     }
     top_h_ = juce::jmax(0, top_h_);
 
@@ -479,6 +495,13 @@ void ConsoleView::save_settings() const
     const auto file = settings_file();
     file.getParentDirectory().createDirectory();
     xml.writeTo(file);
+}
+
+void ConsoleView::set_on_compact(std::function<void()> f)
+{
+    compact_.onClick = std::move(f);
+    compact_.setVisible(static_cast<bool>(compact_.onClick));
+    layout_all();
 }
 
 }  // namespace vcc::desktop::console

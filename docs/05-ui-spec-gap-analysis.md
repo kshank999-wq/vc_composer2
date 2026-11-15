@@ -794,21 +794,23 @@ macOS, Linux and Windows. What it took:
       insert ducks the same; keyed processing allocates nothing.
       `test_producer_tracks` covers the session side and saving.
 
-16. **Full-screen mixer. Done.**
-    - The mixer is meant to be used full screen: the toolbar's **Mixer** key
-      (View > Mixer, Cmd/Ctrl+M) opens it over everything under the
-      toolbar, from either view. Strips are wider (96 px, the master
-      136 px) and each fader runs the window's height (about 490 px at
-      1440 x 900, against 120 px in the bottom deck). Pressing the key
-      again returns to the view it was opened from; choosing a view does
-      too.
-    - **Full screen / Compact** in the mixer's header switches size:
-      Compact puts it back in the bottom deck of the Producer view, under
-      the tracks and the inline piano roll (and Full screen brings it up
-      again). The Keyboard key still swaps the bottom deck to the keyboard.
-    - The Console key opens the console window (every strip's EQ,
-      dynamics, sends and inserts), which the Mixer key used to open.
-    - **Checks.** Full screen: the deck covers the window under the toolbar
-      and the strips run its height; Compact returns it to the 262 px
+16. **Full-screen mixer. Done** (revised November 15: hardware proportions).
+    - The mixer is meant to be used full screen. The toolbar's **Mixer** key
+      (View > Mixer, Cmd/Ctrl+M) or the bottom deck's **Full screen** key
+      brings up the channel console over everything under the transport
+      deck, from either view. Pressing Mixer again, or choosing a view,
+      returns to where it was opened; **COMPACT** in the console's header
+      returns to the compact mixer in the Producer view's bottom deck,
+      under the tracks and the inline piano roll.
+    - It is laid out like a large-format console: input, filters, EQ,
+      dynamics, inserts and sends above (scrolling when the screen is not
+      tall enough for all of them), then pan, automation, mute/solo, the
+      fader and meter, and the scribble strip. The fader's throw is about
+      30 % of the strip's height (140-340 px; up to ~36 % when every
+      section fits with room to spare), as a 100 mm fader is on a desk -
+      not stretched to the window. The console window (a second monitor)
+      uses the same proportions.
+    - **Checks.** Full screen covers the edit window and its fader is a
+      quarter to two-fifths of the strip; COMPACT returns to the 262 px
       bottom deck; Cmd/Ctrl+M from the Composer view opens it and closes it
       back to the Composer view. Screenshot `35b-mixer-full`.

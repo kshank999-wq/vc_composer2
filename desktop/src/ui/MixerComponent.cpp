@@ -24,6 +24,8 @@ MixerComponent::MixerComponent(AppContext& context) : context_(context)
 
 MixerComponent::~MixerComponent() { impl_.reset(); }
 
+console::ConsoleView& MixerComponent::view() { return impl_->view; }
+
 void MixerComponent::paint(juce::Graphics& g) { g.fillAll(console::paint::backdrop); }
 
 void MixerComponent::resized()

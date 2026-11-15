@@ -200,7 +200,7 @@ MixerDeck::MixerDeck(AppContext& context) : hw::Panel({}, true), context_(contex
     full_key_.setComponentID("mixer_full_key");
     full_key_.setTooltip("Full screen mixer, or back to the compact mixer at the bottom (Cmd/Ctrl+M)");
     full_key_.onClick = [this] {
-        if (on_full) on_full(!full_);
+        if (on_full) on_full(true);
     };
     listener_ = context_.session.add_listener([this](session::Change c) {
         if (c == session::Change::Document || c == session::Change::Selection) rebuild();

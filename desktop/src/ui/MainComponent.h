@@ -91,6 +91,8 @@ public:
     bool mixer_full() const noexcept { return mixer_full_; }
     /// The console window: every strip's EQ, dynamics, sends and inserts.
     void show_console_window();
+    /// The full-screen mixer (the console, laid out like hardware), or null before it is first shown.
+    MixerComponent* full_console() noexcept { return full_console_.get(); }
     /// In a short window the Producer column shows Channel (0) or Print (1).
     void show_right_tab(int tab);
     bool right_tabs() const noexcept { return right_tabs_; }
@@ -161,6 +163,7 @@ private:
     shell::MixerDeck mixer_deck_;
     bool bottom_mixer_ = true;
     bool mixer_full_ = false;
+    std::unique_ptr<MixerComponent> full_console_;
     Workspace before_mixer_ = Workspace::Producer;  ///< Where Cmd/Ctrl+M returns to.
     TrackPanel tracks_;
     juce::StretchableLayoutManager layout_;
