@@ -1628,3 +1628,14 @@ macOS, Linux and Windows. What it took:
       layers, cache keying, JSON, health), `test_library` (maps through
       patches, templates, saving, packs); `articulation_map_checks` in the
       desktop check.
+40. **New Project wizard. Done** (November 15, 2026; Main Spec §5).
+    File > New Project... (Cmd/Ctrl+N; New from Template... and New Empty
+    Project stay): name and location; scoring category, mood and template,
+    or an empty project, with the template's description and size; key,
+    meter and tempo filled from the template's recommendations and free to
+    change; frame rate, start timecode and sample rate; an optional
+    picture, imported on Create. `Session::create_project` makes the
+    project with no undo history in `<folder>/<name>/<name>.vcc2`, never
+    over an existing project, and refuses an unknown key, a bad meter,
+    tempo or timecode before anything is written. Tests: `test_session`;
+    `wizard_checks` in the desktop check.

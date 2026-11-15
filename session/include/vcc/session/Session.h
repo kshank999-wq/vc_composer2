@@ -54,6 +54,30 @@ struct ImportSummary {
     std::vector<std::string> warnings;    ///< What was approximated or left out.
 };
 
+/// What File > New Project... asks (Main Spec §5): every template default
+/// can be overridden without rebuilding the project.
+struct ProjectSetup {
+    std::string name = "Untitled";
+    /// Where it is saved: <folder>/<name>/<name>.vcc2 (a folder of its own,
+    /// for its audio). Empty: not saved yet.
+    std::string folder;
+    std::string template_id;  ///< Empty: an empty project.
+    /// Nullopt keeps the template's recommendation (or the default).
+    std::optional<std::string> key;      ///< "D minor".
+    std::optional<TimeSignature> meter;
+    std::optional<double> tempo;
+    FrameRate frame_rate = FrameRate::Fps24;
+    std::string start_timecode = "01:00:00:00";
+    int sample_rate = 48000;
+};
+
+struct SetupResult {
+    bool ok = false;
+    std::string error;
+    std::string project_file;  ///< Where it was saved, if it was.
+    std::vector<std::string> warnings;  ///< From the template (placeholders, fallbacks).
+};
+
 enum class Change {
     Document,   ///< Tracks, notes, mix or anything else in the project changed.
     Selection,  ///< The selected track changed.
@@ -86,6 +110,10 @@ public:
     /// document; the caller asks about unsaved changes first.
     templates::InstantiateResult new_from_template(const std::string& template_id,
                                                    const templates::InstantiateOptions& options = {});
+    /// File > New Project...: a new document from the setup, with no undo
+    /// history, saved when a folder is given (the folder is created; an
+    /// existing project file there is never overwritten).
+    SetupResult create_project(const ProjectSetup& setup);
     /// The composer's saved library patches (Main Spec §10): templates
     /// resolve their tracks to these, and load their sounds, unless the
     /// options name others.

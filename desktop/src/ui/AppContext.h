@@ -123,6 +123,7 @@ enum : juce::CommandID {
     relinkMedia,
     articulationMap,
     missingInstruments,
+    newProjectWizard,
 };
 }  // namespace cmd
 

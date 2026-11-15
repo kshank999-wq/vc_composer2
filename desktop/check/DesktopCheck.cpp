@@ -41,6 +41,7 @@
 #include "ui/surface/ControlSurface.h"
 #include "ui/review/Review.h"
 #include "ui/review/Relink.h"
+#include "ui/NewProjectWizard.h"
 #include "ui/library/ArticulationMapWindow.h"
 #include "ui/library/LibraryBrowser.h"
 #include "vcc/project/ArticulationMap.h"
@@ -5665,6 +5666,64 @@ void articulation_map_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// File > New Project... (Main Spec §5): the template's recommendations fill
+/// the music fields, every one can be overridden, and Create makes the
+/// project in its own folder with the picture settings, no undo history.
+void wizard_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    ctx.commands.invokeDirectly(cmd::newProjectWizard, false);
+    NewProjectWizard* wizard = nullptr;
+    wait_for([&] { return (wizard = new_project_wizard()) != nullptr; });
+    if (!wizard) {
+        check(false, "File > New Project opens the wizard");
+        return;
+    }
+    const auto folder = dir.getChildFile("wizard-check");
+    folder.deleteRecursively();
+    folder.createDirectory();
+    wizard->set_folder(folder);
+    const auto* tpl = ctx.catalogs.templates->get("cinematic.suspense.tension");
+    wizard->choose("cinematic", tpl ? tpl->subcategory : std::string(), "cinematic.suspense.tension");
+    const auto suggested = wizard->setup();
+    check(tpl && suggested.template_id == tpl->template_id && suggested.tempo &&
+              *suggested.tempo >= tpl->tempo_low && *suggested.tempo <= tpl->tempo_high && suggested.name == tpl->display_name,
+          "choosing a template fills tempo, key and meter with its recommendations (" +
+              juce::String(suggested.tempo ? *suggested.tempo : 0.0) + " BPM, " +
+              juce::String(suggested.key ? *suggested.key : std::string("?")) + ")");
+    wizard->name().setText("2M3 Chase", juce::sendNotificationSync);
+    wizard->set_key("E minor");
+    wizard->set_meter("7/8");
+    wizard->set_tempo(141);
+    wizard->set_frame_rate(FrameRate::Fps25);
+    wizard->set_start_timecode("10:00:00:00");
+    wizard->set_sample_rate(96000);
+    shoot(*wizard->getTopLevelComponent(), dir, "60-new-project");
+    const auto error = wizard->create();
+    const auto& d = session.data();
+    const auto file = folder.getChildFile("2M3 Chase/2M3 Chase.vcc2");
+    check(error.isEmpty() && file.existsAsFile() && juce::File(juce::String(session.path())) == file,
+          "Create saves the project in a folder of its own: " + (error.isEmpty() ? file.getFullPathName() : error));
+    check(d.name == "2M3 Chase" && d.key == "E minor" && d.meter.at_bar(1) == TimeSignature{7, 8} &&
+              std::abs(d.tempo.bpm_at(0) - 141.0) < 1e-9 && d.frame_rate == FrameRate::Fps25 &&
+              d.start_timecode == "10:00:00:00" && d.sample_rate == 96000 && !session.can_undo() &&
+              session.music_tracks().size() >= 3u,
+          "the overrides win over the template's defaults, with its tracks, and nothing to undo");
+    // A second Create with the same name never overwrites it.
+    ctx.commands.invokeDirectly(cmd::newProjectWizard, false);
+    wait_for([&] { return (wizard = new_project_wizard()) != nullptr; });
+    if (wizard) {
+        wizard->set_folder(folder);
+        wizard->name().setText("2M3 Chase", juce::sendNotificationSync);
+        check(wizard->create().contains("already exists"), "a project of the same name is never overwritten");
+        wizard->getTopLevelComponent()->setVisible(false);
+    }
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -6182,6 +6241,8 @@ void accessibility_checks(MainWindow& window, const juce::File& dir)
         ctx.commands.invokeDirectly(id, false);
         pump(200);
     }
+    show_new_project_wizard(ctx);  // (its command asks to save first)
+    pump(150);
     for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;) {
         auto* w = juce::TopLevelWindow::getTopLevelWindow(i);
         if (!w || w == &window || !w->isShowing()) continue;
@@ -7504,6 +7565,8 @@ int main(int argc, char** argv)
         library_checks(window, dir);
         section("articulation_map_checks");
         articulation_map_checks(window, dir);
+        section("wizard_checks");
+        wizard_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

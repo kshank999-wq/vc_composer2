@@ -9,6 +9,7 @@
 using namespace vcc;
 using session::Change;
 using session::Session;
+using session::ProjectSetup;
 
 namespace {
 const session::Catalogs& catalogs()
@@ -392,4 +393,63 @@ TEST_CASE("one selection: notes give a range, edits prune it, a new track clears
     CHECK(s.selection().notes.empty());
     CHECK(s.selection().has_range());
     s.remove_listener(id);
+}
+
+TEST_CASE("new project setup: template defaults overridden, timecode and sample rate set, saved in its own folder")
+{
+    Session s(catalogs());
+    const std::string root = std::string(VCC_TEST_TMP_DIR) + "/setup";
+    std::filesystem::remove_all(root);
+    ProjectSetup setup;
+    setup.name = "1M1 Arrival";
+    setup.folder = root;
+    setup.template_id = "cinematic.suspense.tension";
+    setup.key = "D minor";
+    setup.meter = TimeSignature{6, 8};
+    setup.tempo = 72.0;
+    setup.frame_rate = FrameRate::Fps23_976;
+    setup.start_timecode = "00:59:58:00";
+    setup.sample_rate = 96000;
+    const auto r = s.create_project(setup);
+    REQUIRE(r.ok);
+    CHECK_EQ(r.project_file, root + "/1M1 Arrival/1M1 Arrival.vcc2");
+    CHECK(std::filesystem::exists(r.project_file));
+    CHECK_EQ(s.path(), r.project_file);
+    CHECK_EQ(s.data().name, std::string("1M1 Arrival"));
+    CHECK_EQ(s.data().key, std::string("D minor"));
+    CHECK(s.data().meter.at_bar(1) == (TimeSignature{6, 8}));
+    CHECK_NEAR(s.data().tempo.bpm_at(0), 72.0, 1e-9);
+    CHECK(s.data().frame_rate == FrameRate::Fps23_976);
+    CHECK_EQ(s.data().start_timecode, std::string("00:59:58:00"));
+    CHECK_EQ(s.data().sample_rate, 96000);
+    CHECK(s.music_tracks().size() >= 3u);
+    CHECK(!s.can_undo());  // a new document, not an edit
+    // Every staff has the project's key and meter.
+    for (const auto* t : s.music_tracks())
+        if (const auto* v = t->active_version())
+            CHECK(v->score.time_signature_at(0).numerator == 6);
+
+    // Never over an existing project; bad settings refused before anything is made.
+    CHECK(!s.create_project(setup).ok);
+    ProjectSetup bad = setup;
+    bad.name = "Other";
+    bad.key = "H major";
+    CHECK(!s.create_project(bad).ok);
+    bad.key.reset();
+    bad.start_timecode = "not a timecode";
+    CHECK(!s.create_project(bad).ok);
+    CHECK(!std::filesystem::exists(root + "/Other"));
+
+    // Empty project, template defaults kept when nothing is overridden.
+    ProjectSetup plain;
+    plain.name = "Sketch";
+    REQUIRE(s.create_project(plain).ok);
+    CHECK(s.path().empty());
+    CHECK(s.music_tracks().empty());
+    CHECK_EQ(s.data().name, std::string("Sketch"));
+    ProjectSetup tpl;
+    tpl.name = "T";
+    tpl.template_id = "cinematic.suspense.tension";
+    REQUIRE(s.create_project(tpl).ok);
+    CHECK(s.data().tempo.bpm_at(0) > 0);
 }

@@ -1,4 +1,5 @@
 #include "vcc/session/Session.h"
+#include "vcc/session/Package.h"
 #include "vcc/session/Relink.h"
 
 #include <algorithm>
@@ -191,6 +192,83 @@ templates::InstantiateResult Session::new_from_template(const std::string& id, c
     dirty_ = true;
     notify(Change::File);
     return r;
+}
+
+SetupResult Session::create_project(const ProjectSetup& setup)
+{
+    SetupResult out;
+    if (setup.key && !theory::Key::parse(*setup.key)) {
+        out.error = "unknown key '" + *setup.key + "'";
+        return out;
+    }
+    if (setup.meter && !setup.meter->is_valid()) {
+        out.error = "invalid time signature";
+        return out;
+    }
+    if (setup.tempo && (*setup.tempo < 20 || *setup.tempo > 400)) {
+        out.error = "tempo must be 20-400 BPM";
+        return out;
+    }
+    if (const auto tc = Timecode::parse(setup.start_timecode); !tc || !timecode_to_frames(*tc, setup.frame_rate)) {
+        out.error = "start timecode '" + setup.start_timecode + "' is not valid at this frame rate";
+        return out;
+    }
+    std::string file;
+    if (!setup.folder.empty()) {
+        const auto dir = fs::u8path(setup.folder) / fs::u8path(package::safe_name(setup.name));
+        file = (dir / fs::u8path(package::safe_name(setup.name) + ".vcc2")).generic_u8string();
+        std::error_code ec;
+        if (fs::exists(fs::u8path(file), ec)) {
+            out.error = file + " already exists: choose another name or folder";
+            return out;
+        }
+        fs::create_directories(dir, ec);
+        if (ec) {
+            out.error = "could not create " + dir.generic_u8string() + ": " + ec.message();
+            return out;
+        }
+    }
+
+    project::Project fresh;
+    if (!setup.template_id.empty()) {
+        const templates::Template* t = catalogs_.templates->get(setup.template_id);
+        if (!t) {
+            out.error = "no template '" + setup.template_id + "'";
+            return out;
+        }
+        templates::InstantiateOptions opt;
+        opt.mode = templates::InstantiateMode::Create;
+        opt.installed = installed_patches_;
+        const auto r = templates::instantiate(fresh, *t, catalogs_.instruments, opt);
+        if (!r.ok) {
+            out.error = r.error;
+            return out;
+        }
+        out.warnings = r.warnings;
+        fresh = project::Project(fresh.data(), fresh.ids().peek());
+    }
+    fresh.modify_unrecorded([&](project::ProjectData& d) {
+        d.name = setup.name.empty() ? d.name : setup.name;
+        if (setup.key) d.key = *setup.key;
+        if (setup.meter) d.meter = MeterMap(*setup.meter);
+        if (setup.tempo) d.tempo = TempoMap(*setup.tempo);
+        d.frame_rate = setup.frame_rate;
+        d.start_timecode = setup.start_timecode;
+        d.sample_rate = setup.sample_rate;
+    });
+    reset(std::move(fresh), {});
+    dirty_ = true;
+    if (!file.empty()) {
+        std::string error;
+        if (!save_as(file, &error)) {
+            out.error = "created, but not saved: " + error;
+            return out;
+        }
+        out.project_file = file;
+    }
+    notify(Change::File);
+    out.ok = true;
+    return out;
 }
 
 templates::InstantiateResult Session::add_template(const std::string& id, const templates::InstantiateOptions& o)

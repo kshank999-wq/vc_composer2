@@ -4,6 +4,7 @@
 #include "ui/console/RoutingCanvas.h"
 #include "ui/review/Review.h"
 #include "ui/review/Relink.h"
+#include "ui/NewProjectWizard.h"
 #include "ui/library/ArticulationMapWindow.h"
 #include "ui/library/LibraryBrowser.h"
 #include "vcc/theory/Chord.h"
@@ -1564,7 +1565,7 @@ void MainComponent::show_about()
 
 void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
 {
-    c.addArray({cmd::newProject, cmd::newFromTemplate, cmd::open, cmd::save, cmd::saveAs, cmd::exportMidi,
+    c.addArray({cmd::newProjectWizard, cmd::newProject, cmd::newFromTemplate, cmd::open, cmd::save, cmd::saveAs, cmd::exportMidi,
                 cmd::exportScoreSvg, cmd::importMusicXml, cmd::exportMusicXml, cmd::exportPartsPdf, cmd::exportFullScorePdf, cmd::exportStems, cmd::saveAsTemplate, cmd::undo, cmd::redo, cmd::play, cmd::rewind,
                 cmd::toggleMetronome, cmd::toggleRecord, cmd::togglePunch, cmd::toggleLoop, cmd::addAudioTrack, cmd::importAudio,
                 cmd::addAuxBus, cmd::addGroupBus, cmd::showComposer, cmd::showSequencer, cmd::showMixer, cmd::showVideo,
@@ -1587,7 +1588,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
     const bool has_track = !context_.session.selected_track().empty();
     switch (id) {
         case cmd::newProject: info.setInfo("New Empty Project", "", "File", 0); info.addDefaultKeypress('n', cmdKey | shift); break;
-        case cmd::newFromTemplate: info.setInfo("New from Template...", "", "File", 0); info.addDefaultKeypress('n', cmdKey); break;
+        case cmd::newProjectWizard:
+            info.setInfo("New Project...", "Name, template, key, meter, tempo, frame rate and picture", "File", 0);
+            info.addDefaultKeypress('n', cmdKey);
+            break;
+        case cmd::newFromTemplate: info.setInfo("New from Template...", "", "File", 0); break;
         case cmd::open: info.setInfo("Open...", "", "File", 0); info.addDefaultKeypress('o', cmdKey); break;
         case cmd::save: info.setInfo("Save", "", "File", 0); info.addDefaultKeypress('s', cmdKey); break;
         case cmd::saveAs: info.setInfo("Save As...", "", "File", 0); info.addDefaultKeypress('s', cmdKey | shift); break;
@@ -1760,6 +1765,9 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::newFromTemplate:
             if (confirm_discard()) show_template_browser(context_, true);
             break;
+        case cmd::newProjectWizard:
+            if (confirm_discard()) show_new_project_wizard(context_);
+            break;
         case cmd::open:
             if (!confirm_discard()) break;
             chooser_ = std::make_unique<juce::FileChooser>("Open project", juce::File(), "*.vcc2");
@@ -1913,7 +1921,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
     auto* c = &context_.commands;
     switch (index) {
         case 0:
-            for (auto id : {cmd::newFromTemplate, cmd::newProject, cmd::open, cmd::openPackage}) m.addCommandItem(c, id);
+            for (auto id : {cmd::newProjectWizard, cmd::newFromTemplate, cmd::newProject, cmd::open, cmd::openPackage})
+                m.addCommandItem(c, id);
             m.addSeparator();
             m.addCommandItem(c, cmd::importPicture);
             m.addCommandItem(c, cmd::importAudio);
