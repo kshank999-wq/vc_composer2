@@ -4425,7 +4425,8 @@ private:
                 "stays as written; only playback changes, and Composer marks the note.",
             juce::MessageBoxIconType::QuestionIcon);
         w->setComponentID("producer_edit_question");
-        auto always = std::make_shared<juce::ToggleButton>("Always do this for this project");
+        auto always = std::make_shared<juce::ToggleButton>();
+        always->setButtonText("Always do this for this project");  // no name: the dialog would print it as a label too
         always->setComponentID("always");
         always->setSize(320, 26);
         w->addCustomComponent(always.get());
