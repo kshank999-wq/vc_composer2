@@ -1,6 +1,7 @@
 #include <filesystem>
 
 #include "vcc/core/Files.h"
+#include "vcc/project/Merge.h"
 #include "vcc/project/Project.h"
 #include "vcc_test.h"
 
@@ -330,4 +331,126 @@ TEST_CASE("collaboration: two copies of a shared project never hand out the same
     const auto a3 = add_note(*again, violins, 3 * kTicksPerQuarter);
     CHECK_EQ(a3 & notation::Score::kSiteCounterMask, 3u);
     CHECK(a3 != a1 && a3 != a2);
+}
+
+// --- Three-way merge (collaboration, Main Spec §15) ---------------------------------
+
+namespace {
+struct Pair {
+    json::Value base;
+    std::optional<Project> ann, ben;
+    std::string violins;
+};
+notation::EventId write(Project& p, const std::string& track, Ticks at, int midi)
+{
+    notation::ScoreNote n;
+    n.start_tick = at;
+    n.duration = notation::quarter();
+    n.pitch = notation::spell_midi_note(midi, {});
+    notation::EventId id = 0;
+    p.edit("Write", [&](ProjectData& d) {
+        id = d.find_track(track)->active_version()->score.insert_note(0, n);
+        return id != 0;
+    });
+    return id;
+}
+Pair shared_pair()
+{
+    Pair x;
+    Project p;
+    x.violins = p.add_track("Violins I", TrackKind::Instrument, "strings.violins_1");
+    write(p, x.violins, 0, 67);
+    x.base = p.to_json();
+    x.ann = Project::from_json(x.base);
+    x.ben = Project::from_json(x.base);
+    x.ann->set_site(0xa);
+    x.ben->set_site(0xb);
+    return x;
+}
+const notation::ScoreNote* note(const Project& p, const std::string& track, notation::EventId id)
+{
+    return p.data().find_track(track)->active_version()->score.find_note(id);
+}
+}  // namespace
+
+TEST_CASE("merge: separate changes from two people combine with no questions")
+{
+    auto x = shared_pair();
+    const auto a1 = write(*x.ann, x.violins, kTicksPerQuarter, 69);         // Ann writes a note
+    const auto b1 = write(*x.ben, x.violins, 2 * kTicksPerQuarter, 71);     // Ben writes another in the same bar
+    x.ben->edit("Mix", [&](ProjectData& d) { d.find_track(x.violins)->gain_db = -6.0; return true; });
+    const auto horns = x.ben->add_track("Horns", TrackKind::Instrument, "brass.horn_section");
+    const auto r = merge_projects(x.base, x.ann->to_json(), x.ben->to_json());
+    CHECK(r.clean());
+    CHECK(r.from_ours > 0);
+    CHECK(r.from_theirs > 0);
+    auto merged = Project::from_json(r.merged);
+    REQUIRE(merged);
+    CHECK(note(*merged, x.violins, a1) != nullptr);
+    CHECK(note(*merged, x.violins, b1) != nullptr);
+    CHECK_EQ(merged->data().find_track(x.violins)->active_version()->score.total_note_count(), 3u);
+    CHECK_EQ(merged->data().find_track(x.violins)->gain_db, -6.0);
+    CHECK(merged->data().find_track(horns) != nullptr);
+    // The same change on both sides is taken once.
+    auto y = shared_pair();
+    y.ann->edit("Mix", [&](ProjectData& d) { d.find_track(y.violins)->pan = 0.5; return true; });
+    y.ben->edit("Mix", [&](ProjectData& d) { d.find_track(y.violins)->pan = 0.5; return true; });
+    CHECK(merge_projects(y.base, y.ann->to_json(), y.ben->to_json()).clean());
+}
+
+TEST_CASE("merge: the same note changed differently is a conflict, described and resolvable")
+{
+    auto x = shared_pair();
+    const auto first = x.ann->data().find_track(x.violins)->active_version()->score.notes(0).front().id;
+    auto repitch = [&](Project& p, int midi) {
+        p.edit("Pitch", [&](ProjectData& d) {
+            auto& sc = d.find_track(x.violins)->active_version()->score;
+            auto n = *sc.find_note(first);
+            n.pitch = notation::spell_midi_note(midi, {});
+            return sc.modify_note(first, n);
+        });
+    };
+    repitch(*x.ann, 72);  // C5
+    repitch(*x.ben, 64);  // E4
+    x.ben->edit("Mix", [&](ProjectData& d) { d.find_track(x.violins)->mute = true; return true; });  // not in conflict
+    const auto r = merge_projects(x.base, x.ann->to_json(), x.ben->to_json());
+    REQUIRE(r.conflicts.size() == 1u);  // the note, once - not its step and octave apart
+    for (const auto& c : r.conflicts) {
+        CHECK(c.kind == MergeConflict::Kind::Changed);
+        CHECK(c.description.find("Violins I") != std::string::npos);
+        CHECK(c.description.find("note") != std::string::npos);
+    }
+    // Ours by default; the rest of Ben's work is in.
+    auto mine = Project::from_json(r.merged);
+    REQUIRE(mine);
+    CHECK_EQ(notation::midi_note_number(note(*mine, x.violins, first)->pitch), 72);
+    CHECK(mine->data().find_track(x.violins)->mute);
+    // Taking theirs at every conflict gives Ben's pitch.
+    auto theirs = Project::from_json(r.resolve(std::vector<bool>(r.conflicts.size(), true)));
+    REQUIRE(theirs);
+    CHECK_EQ(notation::midi_note_number(note(*theirs, x.violins, first)->pitch), 64);
+}
+
+TEST_CASE("merge: a note deleted on one side and changed on the other is asked about")
+{
+    auto x = shared_pair();
+    const auto first = x.ann->data().find_track(x.violins)->active_version()->score.notes(0).front().id;
+    x.ann->edit("Delete", [&](ProjectData& d) { return d.find_track(x.violins)->active_version()->score.remove_note(first); });
+    x.ben->edit("Pitch", [&](ProjectData& d) {
+        auto& sc = d.find_track(x.violins)->active_version()->score;
+        auto n = *sc.find_note(first);
+        n.pitch = notation::spell_midi_note(60, {});
+        return sc.modify_note(first, n);
+    });
+    const auto r = merge_projects(x.base, x.ann->to_json(), x.ben->to_json());
+    REQUIRE(r.conflicts.size() == 1u);
+    CHECK(r.conflicts[0].kind == MergeConflict::Kind::ChangedAndDeleted);
+    CHECK(!r.conflicts[0].ours.has_value());
+    auto deleted = Project::from_json(r.merged);  // ours: deleted
+    REQUIRE(deleted);
+    CHECK(note(*deleted, x.violins, first) == nullptr);
+    auto kept = Project::from_json(r.resolve({true}));  // theirs: kept, changed
+    REQUIRE(kept);
+    REQUIRE(note(*kept, x.violins, first) != nullptr);
+    CHECK_EQ(notation::midi_note_number(note(*kept, x.violins, first)->pitch), 60);
 }
