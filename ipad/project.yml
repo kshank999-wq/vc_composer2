@@ -39,7 +39,7 @@ targets:
         PRODUCT_NAME: VCComposerPad
         SWIFT_OBJC_BRIDGING_HEADER: VCComposerPad/Bridge/VCComposerPad-Bridging-Header.h
         HEADER_SEARCH_PATHS: $(SRCROOT)/build/headers
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: VCComposerPad/Info.plist
       properties:

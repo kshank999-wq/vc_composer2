@@ -125,7 +125,11 @@ juce_add_gui_app(VCComposer2
     VERSION "${PROJECT_VERSION}"
     DOCUMENT_EXTENSIONS vcc2
     MICROPHONE_PERMISSION_ENABLED TRUE
-    MICROPHONE_PERMISSION_TEXT "VC Composer records audio and MIDI input.")
+    MICROPHONE_PERMISSION_TEXT "VC Composer records audio and MIDI input."
+    # The app icon (brand/icons): JUCE makes the macOS .icns and the Windows
+    # .ico from these, the big one for the large sizes, the monogram for the small.
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/../brand/icons/VC-Composer-1024.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/../brand/icons/VC-Composer-64.png")
 target_sources(VCComposer2 PRIVATE app/Main.cpp)
 target_link_libraries(VCComposer2 PRIVATE vcc_desktop)
 

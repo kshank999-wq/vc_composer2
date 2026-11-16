@@ -40,6 +40,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 WizardStyle=modern
 UninstallDisplayIcon={app}\VC Composer.exe
+; The installer's own icon (brand/icons).
+SetupIconFile=..\..\brand\icons\VC-Composer.ico
 ChangesAssociations=yes
 LicenseFile={#SourceDir}\licenses\EULA.txt
 
