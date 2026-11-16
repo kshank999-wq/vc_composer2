@@ -169,6 +169,16 @@ public:
     /// True when an autosave newer than `path` exists (offer to recover it).
     static bool has_newer_autosave(const std::string& path);
 
+    // --- Collaboration (Shared.h) -------------------------------------------------
+    /// This installation's id site in the shared project now open (0:
+    /// unshared). Applies to the open document only; opening another clears it.
+    void set_site(std::uint32_t site) { project_.set_site(site); }
+    /// Parts other people are writing (track id -> who): edits to them are refused.
+    void set_track_locks(std::map<std::string, std::string> locks);
+    const std::map<std::string, std::string>& track_locks() const noexcept { return project_.track_locks(); }
+    /// Takes a document a sync produced as one undo step (whatever the locks).
+    bool adopt_document(const json::Value& doc, const std::string& label, std::string* error = nullptr);
+
     // --- Editing ----------------------------------------------------------------
     /// One undoable step. Returns false (and changes nothing) if `change` does.
     bool edit(const std::string& label, const std::function<bool(project::ProjectData&)>& change);

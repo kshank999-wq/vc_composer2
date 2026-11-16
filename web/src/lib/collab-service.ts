@@ -129,7 +129,7 @@ export const projectDetail = async (db: SupabaseClient, projectId: string, userI
       .eq('project_id', projectId)
       .gt('expires_at', new Date().toISOString()),
   ]);
-  return { ok: true as const, value: { role, project, members: members ?? [], revisions: revisions ?? [], locks: locks ?? [] } };
+  return { ok: true as const, value: { role, me: userId, project, members: members ?? [], revisions: revisions ?? [], locks: locks ?? [] } };
 };
 
 // --- Revisions: push and pull ---------------------------------------------------------------

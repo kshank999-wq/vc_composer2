@@ -9,6 +9,8 @@
 #include "Preview.h"
 #include "licensing/Account.h"
 #include "licensing/AccountWindow.h"
+#include "collab/Collaboration.h"
+#include "collab/SharedWindow.h"
 #include "ui/PictureTools.h"
 #include "ui/PrintPreview.h"
 #include "ui/InstrumentUsage.h"
@@ -355,6 +357,8 @@ MainComponent::MainComponent(AppContext& context)
                             ": their memory is given back; Unfreeze reloads them");
     };
     context_.show_instrument_usage = [this] { show_instrument_usage(context_); };
+    collab::Controller::get().ask_conflicts = ask_conflicts;
+    collab::Controller::get().attach(context_);
     context_.freeze_progress = [this]() -> juce::String {
         if (!print_.printing()) return {};
         return print_.progress_lcd().text().replace("\n", "  ");
@@ -529,6 +533,8 @@ MainComponent::~MainComponent()
     context_.freeze_progress = nullptr;
     context_.cancel_freeze = nullptr;
     context_.show_instrument_usage = nullptr;
+    collab::Controller::get().detach();
+    collab::Controller::get().ask_conflicts = nullptr;
 }
 
 void MainComponent::paint(juce::Graphics& g) { g.fillAll(hw::tok::chassis); }
@@ -843,6 +849,16 @@ void MainComponent::timerCallback()
 }
 
 // --- File ------------------------------------------------------------------------------------------
+
+std::function<bool(const juce::File&)> MainComponent::open_shared_file()
+{
+    juce::Component::SafePointer<MainComponent> self(this);
+    return [self](const juce::File& f) {
+        if (self == nullptr || !self->confirm_discard()) return false;
+        self->open_file(f);
+        return self->context_.session.path() == f.getFullPathName().toStdString();
+    };
+}
 
 bool MainComponent::confirm_discard()
 {
@@ -1671,7 +1687,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::captureMidi, cmd::midiInputFilter, cmd::lyrics, cmd::explodeTracks, cmd::implodeTracks, cmd::addRepeat,
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
-                cmd::instrumentUsage});
+                cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1914,6 +1930,31 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
                          t && !t->print_signature.empty() ? 0 : juce::ApplicationCommandInfo::isDisabled);
             break;
         }
+        case cmd::sharedProjects:
+            info.setInfo("Shared Projects...", "Projects shared with you, and this project's sharing: sync, people, locks", "File", 0);
+            break;
+        case cmd::shareProject:
+            info.setInfo("Share Project...", "Put this project on vc-composer.com so the people you invite can open and sync it", "File",
+                         !context_.session.path().empty() && !collab::Controller::get().link()
+                             ? 0
+                             : juce::ApplicationCommandInfo::isDisabled);
+            break;
+        case cmd::syncShared:
+            info.setInfo("Sync Shared Project", "Bring in what the others pushed, then push your changes", "File",
+                         collab::Controller::get().link() && !collab::Controller::get().busy() ? 0
+                                                                                             : juce::ApplicationCommandInfo::isDisabled);
+            info.addDefaultKeypress('y', cmdKey | juce::ModifierKeys::shiftModifier);
+            break;
+        case cmd::lockPart:
+        case cmd::unlockPart:
+            info.setInfo(id == cmd::lockPart ? "Lock Part for Writing" : "Unlock Part",
+                         id == cmd::lockPart ? "Only you can change the selected part until you unlock it"
+                                             : "Others can write the selected part again",
+                         "Track",
+                         collab::Controller::get().link() && !context_.session.selected_track().empty()
+                             ? 0
+                             : juce::ApplicationCommandInfo::isDisabled);
+            break;
         case cmd::instrumentUsage:
             info.setInfo("Instrument Usage...", "Every instrument's memory and engine load, with Freeze & Unload, Suspend and Reload",
                          "Tools", 0);
@@ -2042,6 +2083,20 @@ bool MainComponent::perform(const InvocationInfo& info)
             break;
         case cmd::expandArticulations: ask_expand_articulations(context_); break;
         case cmd::instrumentUsage: show_instrument_usage(context_); break;
+        case cmd::sharedProjects: show_shared_projects(context_, open_shared_file()); break;
+        case cmd::shareProject:
+            show_shared_projects(context_, open_shared_file());
+            break;
+        case cmd::syncShared:
+            if (may_save(context_))
+                collab::Controller::get().sync([](collab::Outcome) {});
+            break;
+        case cmd::lockPart:
+        case cmd::unlockPart:
+            collab::Controller::get().set_lock(s.selected_track(), info.commandID == cmd::lockPart, [this](collab::Outcome o) {
+                context_.status(o.message);
+            });
+            break;
         case cmd::consolidateArticulations: context_.status(consolidate_articulations(context_)); break;
         case cmd::editShortcuts:
             show_shortcut_editor(context_, [this](const std::string& name) { use_shortcut_profile(name); });
@@ -2165,6 +2220,9 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
     switch (index) {
         case 0:
             for (auto id : {cmd::newProjectWizard, cmd::newFromTemplate, cmd::newProject, cmd::open, cmd::openPackage})
+                m.addCommandItem(c, id);
+            m.addSeparator();
+            for (auto id : {cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart})
                 m.addCommandItem(c, id);
             m.addSeparator();
             m.addCommandItem(c, cmd::importPicture);

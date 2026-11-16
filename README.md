@@ -39,8 +39,7 @@ Content in `content/`:
 
 The schema is in [`docs/04-template-content-schema.md`](docs/04-template-content-schema.md).
 
-Not built yet: audio recording and editing, effect plug-in inserts, picture
-export, MusicXML and PDF export, and collaboration sync. See
+What is built and what is not is tracked in
 [`docs/00-architecture-and-roadmap.md`](docs/00-architecture-and-roadmap.md).
 
 ## The desktop app

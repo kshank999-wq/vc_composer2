@@ -349,6 +349,22 @@ bool Session::has_newer_autosave(const std::string& path)
     return fs::last_write_time(a, ec) > fs::last_write_time(fs::u8path(path), ec);
 }
 
+void Session::set_track_locks(std::map<std::string, std::string> locks)
+{
+    if (locks == project_.track_locks()) return;
+    project_.set_track_locks(std::move(locks));
+    notify(Change::Document);
+}
+
+bool Session::adopt_document(const json::Value& doc, const std::string& label, std::string* error)
+{
+    auto loaded = project::Project::from_json(doc, error);
+    if (!loaded) return false;
+    project_.replace_document(label, loaded->data(), loaded->ids().peek());
+    document_changed();
+    return true;
+}
+
 bool Session::edit(const std::string& label, const std::function<bool(project::ProjectData&)>& change)
 {
     if (!project_.edit(label, change)) return false;

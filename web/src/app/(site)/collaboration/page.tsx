@@ -3,65 +3,85 @@ import Link from 'next/link';
 
 export const metadata: Metadata = {
   title: 'Collaboration',
-  description: 'Collaboration in VC Composer is coming, as a separate subscription.',
+  description:
+    'Share a VC Composer project with your orchestrator, music editor and director: sync with merge, roles, and part locks.',
 };
 
 /**
- * Collaboration: coming soon.
+ * Collaboration (Main Spec §15).
  *
- * It will be a subscription of its own, separate from the desktop licence, the
- * way VC Writer's Writers Room is. There is no billing for it yet: when it
- * ships, its checkout stamps its own `kind` on the subscription
- * (`lib/checkout-kind.ts`) so the webhook can never confuse it with the
- * desktop licence.
- *
- * What the page says is limited to what is true today: the app already has the
- * local half (versions, snapshots, director review, comments, packages); sync
- * and roles, which need a server, are not built.
+ * What the page says is limited to what is true: sharing, sync with merge,
+ * the five roles and part locks are built (desktop File > Shared Projects,
+ * the /api/collab routes, My shared projects). The per-editor-seat plan is
+ * sold once its Stripe prices are configured; until then checkout answers
+ * "not on sale yet", so the page does not quote a price.
  */
 export default function CollaborationPage() {
   return (
     <>
       <div className="hero">
-        <span className="eyebrow">Coming soon</span>
-        <h1>Collaboration</h1>
+        <span className="eyebrow">Collaboration</span>
+        <h1>One project, the whole team</h1>
         <p>
-          Working on one VC Composer project with your orchestrator, your music editor and your director is coming.
-          It will be a separate subscription from the desktop licence, so you only pay for it if your team uses it.
+          Share a project from the desktop app and invite your orchestrator, music editor and director. Everyone works
+          on their own copy; Sync brings in what the others did and sends yours. Separate work combines by itself, and
+          you are asked only when two people changed the same thing.
         </p>
       </div>
 
       <section className="grid">
         <article className="card">
-          <h3>What you can do today</h3>
+          <h3>Sync with merge</h3>
           <p className="lede">
-            The review tools are already in the app: track versions and snapshots, director review with approval
-            locks, timecode comments with replies, review mixes, and Collect and Save Package to hand a project to
-            another machine.
+            File &gt; Shared Projects in the desktop app. A sync merges note by note and track by track; a real conflict
+            shows both versions side by side, and you keep yours or theirs. Every sync is one undo step.
           </p>
         </article>
         <article className="card">
-          <h3>What is coming</h3>
+          <h3>Roles and part locks</h3>
           <p className="lede">
-            Sharing a project between people, with roles, without passing packages back and forth. It needs a
-            server, and it will be offered as its own subscription.
+            Owner, editor, arranger, reviewer and view-only. Lock a part while you write it and nobody else can change
+            it until you unlock it; a forgotten lock frees itself after two hours.
           </p>
         </article>
         <article className="card">
-          <h3>Your subscription is unaffected</h3>
+          <h3>Who pays</h3>
           <p className="lede">
-            The desktop subscription stays what it is. Collaboration will be an addition, never something taken out of
-            it.
+            The project owner. Editors and arrangers each take a seat on the owner&apos;s collaboration plan; reviewers
+            and view-only people join free. It is separate from the desktop licence, so your licence is unaffected.
+          </p>
+        </article>
+      </section>
+
+      <section className="grid">
+        <article className="card">
+          <h3>What travels</h3>
+          <p className="lede">
+            The project itself: tracks, notes, versions, mix, markers and comments. Audio and picture files stay on each
+            computer; Collect and Save Package hands them over when someone needs them.
+          </p>
+        </article>
+        <article className="card">
+          <h3>Every revision kept</h3>
+          <p className="lede">
+            Each sync is a numbered revision with who made it and when, and the project&apos;s history shows who joined,
+            changed roles and locked parts.
+          </p>
+        </article>
+        <article className="card">
+          <h3>Inviting people</h3>
+          <p className="lede">
+            From My shared projects in your account: invite by email with a role, change roles, or remove someone.
           </p>
         </article>
       </section>
 
       <div className="actions">
-        <Link href="/download" className="button">
-          Subscribe to VC Composer
+        <Link href="/account/collaboration" className="button">
+          My shared projects
         </Link>
-        <Link href="/download#preview" className="button secondary">
-          Try the free preview
+        <Link href="/download" className="button secondary">
+          Get VC Composer
         </Link>
       </div>
     </>

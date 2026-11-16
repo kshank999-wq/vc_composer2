@@ -282,6 +282,55 @@ Account::Result Account::check_standing()
     return {true, "Licence " + juce::String(claim->status)};
 }
 
+Account::Reply Account::api(const juce::String& method, const juce::String& path, const json::Value& body)
+{
+    Reply out;
+    const auto token = access_token();
+    if (token.isEmpty()) {
+        out.status = 401;
+        out.error = "Sign in first (Help > Account and Licence...)";
+        return out;
+    }
+    const auto r = request(config().site_url + path, method, "Authorization: Bearer " + token + "\r\n",
+                           body.is_null() ? juce::String() : juce::String(json::write(body)));
+    out.status = r.status;
+    out.body = r.body;
+    if (!out.ok()) out.error = error_of(r, "The server refused");
+    return out;
+}
+
+Account::Reply Account::put_bytes(const juce::String& url, const juce::MemoryBlock& data)
+{
+    Reply out;
+    juce::URL u = juce::URL(url).withPOSTData(data);
+    juce::WebInputStream stream(u, true);
+    stream.withExtraHeaders("Content-Type: application/octet-stream\r\nx-upsert: false\r\n");
+    stream.withCustomRequestCommand("PUT");
+    stream.withConnectionTimeout(30000);
+    stream.connect(nullptr);
+    out.status = stream.getStatusCode();
+    const auto text = stream.readEntireStreamAsString();
+    if (auto parsed = json::parse(text.toStdString())) out.body = *parsed;
+    if (!out.ok())
+        out.error = out.status == 0 ? juce::String("Could not reach the server. Check the internet connection and try again.")
+                                    : "The upload was refused (" + juce::String(out.status) + ")";
+    return out;
+}
+
+std::optional<juce::MemoryBlock> Account::get_bytes(const juce::String& url, int* status)
+{
+    juce::WebInputStream stream(juce::URL(url), false);
+    stream.withConnectionTimeout(30000);
+    const bool connected = stream.connect(nullptr);
+    if (status) *status = stream.getStatusCode();
+    if (!connected || stream.getStatusCode() < 200 || stream.getStatusCode() >= 300) return std::nullopt;
+    juce::MemoryBlock data;
+    juce::MemoryOutputStream out(data, false);
+    out.writeFromInputStream(stream, -1);
+    out.flush();
+    return data;
+}
+
 void Account::sign_out()
 {
     const juce::ScopedLock sl(lock_);

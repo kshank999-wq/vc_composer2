@@ -21,6 +21,7 @@
 
 #include <juce_core/juce_core.h>
 
+#include "vcc/core/Json.h"
 #include "vcc/licensing/Standing.h"
 
 namespace vcc::desktop {
@@ -62,6 +63,18 @@ public:
     /// GET /api/licenses/standing and write it down. A failure changes nothing.
     Result check_standing();
     void sign_out();
+
+    /// A signed-in call to vc-composer.com (collaboration). Blocking.
+    struct Reply {
+        int status = 0;  ///< 0: the server could not be reached.
+        json::Value body;
+        juce::String error;  ///< The server's reason (or ours) when not 2xx.
+        bool ok() const { return status >= 200 && status < 300; }
+    };
+    Reply api(const juce::String& method, const juce::String& path, const json::Value& body = {});
+    /// Raw transfers to and from a short-lived signed storage link.
+    Reply put_bytes(const juce::String& url, const juce::MemoryBlock& data);
+    std::optional<juce::MemoryBlock> get_bytes(const juce::String& url, int* status = nullptr);
 
     juce::String device_fingerprint();
     static juce::String platform();

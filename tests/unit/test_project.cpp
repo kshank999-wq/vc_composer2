@@ -454,3 +454,41 @@ TEST_CASE("merge: a note deleted on one side and changed on the other is asked a
     REQUIRE(note(*kept, x.violins, first) != nullptr);
     CHECK_EQ(notation::midi_note_number(note(*kept, x.violins, first)->pitch), 60);
 }
+
+TEST_CASE("track locks: a part somebody else is writing cannot be edited here; the mix stays mine")
+{
+    auto x = shared_pair();
+    Project& p = *x.ann;
+    const auto first = p.data().find_track(x.violins)->active_version()->score.notes(0).front().id;
+    p.set_track_locks({{x.violins, "Ben"}});
+    auto pitch = [&](int midi) {
+        return p.edit("Pitch", [&](ProjectData& d) {
+            auto& sc = d.find_track(x.violins)->active_version()->score;
+            auto n = *sc.find_note(first);
+            n.pitch = notation::spell_midi_note(midi, {});
+            return sc.modify_note(first, n);
+        });
+    };
+    const auto refused = p.refusal_count();
+    CHECK(!pitch(71));
+    CHECK(p.refusal_count() == refused + 1);
+    CHECK(p.last_refusal().find("Ben is writing") == 0);
+    CHECK(!p.edit("Rename", [&](ProjectData& d) { d.find_track(x.violins)->name = "Vln"; return true; }));
+    CHECK(!p.edit("Delete", [&](ProjectData& d) {
+        auto& t = d.tracks;
+        t.erase(std::remove_if(t.begin(), t.end(), [&](const Track& k) { return k.id == x.violins; }), t.end());
+        return true;
+    }));
+    CHECK(p.edit("Mute", [&](ProjectData& d) { d.find_track(x.violins)->mute = true; return true; }));
+    // A sync brings in what the holder wrote, whatever the lock.
+    ProjectData theirs = p.data();
+    theirs.find_track(x.violins)->name = "Violins (Ben)";
+    const auto site = p.data().site;
+    p.replace_document("Sync", theirs);
+    CHECK(p.data().find_track(x.violins)->name == "Violins (Ben)");
+    CHECK(p.data().site == site);
+    CHECK(p.undo_label() == "Sync");
+    // Unlocked, it edits again.
+    p.set_track_locks({});
+    CHECK(pitch(71));
+}

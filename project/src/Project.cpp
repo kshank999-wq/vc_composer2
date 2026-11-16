@@ -387,6 +387,41 @@ bool Project::breaks_approval(const ProjectData& working)
     return false;
 }
 
+bool Project::breaks_lock(const ProjectData& working)
+{
+    for (const auto& lock : locks_) {
+        const std::string& track_id = lock.first;
+        const std::string& holder = lock.second;
+        const Track* before = data_.find_track(track_id);
+        if (!before) continue;
+        const Track* after = working.find_track(track_id);
+        auto refuse = [&](const std::string& what) {
+            refusal_ = holder + " is writing " + before->name + ": " + what + " once they unlock it";
+            ++refusals_;
+            return true;
+        };
+        if (!after) return refuse("delete it");
+        if (after->name != before->name) return refuse("rename it");
+        if (after->versions.size() != before->versions.size()) return refuse("change its versions");
+        for (std::size_t i = 0; i < before->versions.size(); ++i)
+            if (after->versions[i].id != before->versions[i].id ||
+                version_music(after->versions[i]) != version_music(before->versions[i]))
+                return refuse("edit it");
+    }
+    return false;
+}
+
+void Project::replace_document(const std::string& label, ProjectData data, std::uint64_t next_id)
+{
+    ids_.advance_to(next_id);
+    data.site = data_.site;
+    data.sync_scores();
+    undo_.push_back({label, compact(std::move(data_)), {}});
+    trim_undo();
+    data_ = std::move(data);
+    redo_.clear();
+}
+
 bool Project::edit(const std::string& label, const std::function<bool(ProjectData&)>& change)
 {
     ProjectData working = data_;
@@ -399,7 +434,7 @@ bool Project::edit(const std::string& label, const std::function<bool(ProjectDat
     }
     if (!ok) return false;
     working.sync_scores();
-    if (breaks_approval(working)) return false;
+    if (breaks_approval(working) || breaks_lock(working)) return false;
     undo_.push_back({label, compact(std::move(data_)), {}});
     trim_undo();
     data_ = std::move(working);
@@ -420,7 +455,7 @@ bool Project::edit_coalescing(const std::string& label, const std::function<bool
     }
     if (!ok) return false;
     working.sync_scores();
-    if (breaks_approval(working)) return false;
+    if (breaks_approval(working) || breaks_lock(working)) return false;
     data_ = std::move(working);  // the existing step's "before" stays as it was
     return true;
 }

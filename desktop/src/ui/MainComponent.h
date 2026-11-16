@@ -44,6 +44,8 @@ public:
 
     /// True when it is fine to discard the document (saved, or the user agreed).
     bool confirm_discard();
+    /// File > Shared Projects opens a downloaded project through this (asks about unsaved work first).
+    std::function<bool(const juce::File&)> open_shared_file();
     void open_file(const juce::File& file);
     /// Unpacks a package .zip beside it and opens the project inside.
     void open_package(const juce::File& zip);

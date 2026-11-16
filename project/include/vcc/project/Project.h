@@ -682,6 +682,19 @@ public:
     void set_site(std::uint32_t site);
     const IdAllocator& ids() const noexcept { return ids_; }
 
+    /// Collaboration: parts other people have locked for writing (track id
+    /// -> who). An edit that changes a locked part's music, renames it or
+    /// deletes it is refused (last_refusal() says who holds it); the mix
+    /// stays the composer's own. Not an edit and not undoable.
+    void set_track_locks(std::map<std::string, std::string> locks) { locks_ = std::move(locks); }
+    const std::map<std::string, std::string>& track_locks() const noexcept { return locks_; }
+
+    /// Replaces the whole document as one undo step, with no approval or
+    /// lock check: a sync brings in what other people wrote, locked parts
+    /// included. The id counter moves up to `next_id` if that is further
+    /// (it never goes back: ids this copy handed out stay unique).
+    void replace_document(const std::string& label, ProjectData data, std::uint64_t next_id = 0);
+
     /// Applies `change` to a copy of the document. If it returns true the copy
     /// becomes current and one undo step labelled `label` is recorded; if it
     /// returns false (or throws) the document is unchanged.
@@ -749,11 +762,14 @@ private:
     /// Whether `working` changes an approved version's music (or deletes
     /// one from a track that stays); sets refusal_.
     bool breaks_approval(const ProjectData& working);
+    /// Whether `working` changes a part somebody else has locked; sets refusal_.
+    bool breaks_lock(const ProjectData& working);
 
     ProjectData data_;
     IdAllocator ids_;
     std::string refusal_;
     std::uint64_t refusals_ = 0;
+    std::map<std::string, std::string> locks_;
     /// A document kept for undo: its scores held apart and shared, so a
     /// score no edit touched is stored once however many steps keep it
     /// (scores are most of a project's memory: a long session of one-note

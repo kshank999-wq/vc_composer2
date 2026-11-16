@@ -49,6 +49,10 @@
 #include "system/ResourceMonitor.h"
 #include "licensing/Account.h"
 #include "licensing/AccountWindow.h"
+#include "collab/Collaboration.h"
+#include "collab/SharedWindow.h"
+#include "vcc/session/Shared.h"
+#include <juce_cryptography/juce_cryptography.h>
 #include "ui/PictureTools.h"
 #include "ui/TemplateBrowser.h"
 #include "ui/PrintPreview.h"
@@ -6388,6 +6392,28 @@ public:
     int codes_sent = 0;
     juce::String last_activate, last_auth;
 
+    // Collaboration (web/src/app/api/collab), in memory. The signed-in
+    // composer is "u-ann"; push_as() stands in for another composer's push.
+    struct CollabProject {
+        juce::String name;
+        std::vector<std::string> revisions;  ///< Revision n is [n - 1].
+        std::map<juce::String, std::pair<juce::String, juce::String>> locks;  ///< track -> (user, name)
+    };
+    std::map<juce::String, CollabProject> collab;
+    std::map<juce::String, std::string> uploads;
+    int pushes_refused = 0;
+    juce::String push_as(const juce::String& id, const std::string& text)
+    {
+        const juce::ScopedLock sl(lock);
+        collab[id].revisions.push_back(text);
+        return juce::String(static_cast<int>(collab[id].revisions.size()));
+    }
+    int head(const juce::String& id)
+    {
+        const juce::ScopedLock sl(lock);
+        return static_cast<int>(collab[id].revisions.size());
+    }
+
 private:
     void run() override
     {
@@ -6447,6 +6473,18 @@ private:
         } else if (path.startsWith("/api/licenses/standing") && method == "GET") {
             status = auth == "Bearer tok" ? 200 : 401;
             reply = status == 200 ? standing : juce::String(R"({"error":"Sign in"})");
+        } else if (path.startsWith("/storage/")) {
+            const auto key = path.fromFirstOccurrenceOf("/storage/", false, false);
+            if (method == "PUT") {
+                uploads[key] = body.toStdString();
+                status = 200;
+                reply = "{}";
+            } else if (uploads.count(key)) {
+                status = 200;
+                reply = juce::String::fromUTF8(uploads[key].data(), static_cast<int>(uploads[key].size()));
+            }
+        } else if (path.startsWith("/api/collab/")) {
+            collab_route(method, path, body, auth, status, reply);
         }
         const juce::String out = "HTTP/1.1 " + juce::String(status) + (status == 200 ? " OK" : " Error") +
                                  "\r\nContent-Type: application/json\r\nContent-Length: " + juce::String(reply.getNumBytesAsUTF8()) +
@@ -6455,9 +6493,283 @@ private:
         s.close();
     }
 
+    void collab_route(const juce::String& method, const juce::String& path, const juce::String& body, const juce::String& auth,
+                      int& status, juce::String& reply)
+    {
+        if (auth != "Bearer tok") {
+            status = 401;
+            reply = R"({"error":"Sign in to use shared projects"})";
+            return;
+        }
+        auto parts = juce::StringArray::fromTokens(path.fromFirstOccurrenceOf("/api/collab/", false, false), "/", "");
+        parts.removeEmptyStrings();
+        const auto in = json::parse(body.toStdString()).value_or(json::Value());
+        auto answer = [&](int code, const json::Value& v) {
+            status = code;
+            reply = juce::String(json::write(v));
+        };
+        if (parts.size() == 1 && parts[0] == "projects") {
+            if (method == "POST") {
+                const auto id = "00000000-0000-4000-8000-" + juce::String::toHexString(static_cast<int>(collab.size()) + 1).paddedLeft('0', 12);
+                collab[id].name = juce::String(in.get_string("name"));
+                return answer(200, json::Object{{"id", id.toStdString()}});
+            }
+            json::Array list;
+            for (const auto& [id, p] : collab)
+                list.push_back(json::Object{{"id", id.toStdString()}, {"name", p.name.toStdString()}, {"role", "owner"},
+                                            {"head", static_cast<long long>(p.revisions.size())}, {"ownerName", "Ann"},
+                                            {"updatedAt", "2026-11-16T10:00:00Z"}});
+            return answer(200, json::Object{{"projects", json::Value(std::move(list))}});
+        }
+        if (parts.size() < 2 || parts[0] != "projects" || !collab.count(parts[1])) return answer(404, json::Object{{"error", "No such shared project"}});
+        auto& p = collab[parts[1]];
+        const auto id = parts[1];
+        if (parts.size() == 2) {
+            json::Array locks, revisions;
+            for (const auto& [track, holder] : p.locks)
+                locks.push_back(json::Object{{"track_id", track.toStdString()}, {"user_id", holder.first.toStdString()},
+                                             {"expires_at", "2026-11-16T12:30:00Z"},
+                                             {"holder", json::Object{{"display_name", holder.second.toStdString()}}}});
+            for (int n = static_cast<int>(p.revisions.size()); n >= 1; --n)
+                revisions.push_back(json::Object{{"number", static_cast<long long>(n)}, {"message", ""}, {"created_at", "2026-11-16T10:00:00Z"},
+                                                 {"author", json::Object{{"display_name", n % 2 ? "Ann" : "Ben"}}}});
+            json::Array members;
+            members.push_back(json::Object{{"role", "owner"}, {"invited_email", "ann@example.com"}, {"accepted_at", "2026-11-16T09:00:00Z"},
+                                           {"profile", json::Object{{"display_name", "Ann"}}}});
+            members.push_back(json::Object{{"role", "editor"}, {"invited_email", "ben@example.com"}, {"accepted_at", "2026-11-16T09:05:00Z"},
+                                           {"profile", json::Object{{"display_name", "Ben"}}}});
+            members.push_back(json::Object{{"role", "reviewer"}, {"invited_email", "director@example.com"}, {"accepted_at", json::Value()}});
+            return answer(200, json::Object{{"role", "owner"},
+                                            {"me", "u-ann"},
+                                            {"project", json::Object{{"id", id.toStdString()}, {"name", p.name.toStdString()},
+                                                                     {"head_revision", static_cast<long long>(p.revisions.size())}}},
+                                            {"members", json::Value(std::move(members))},
+                                            {"revisions", json::Value(std::move(revisions))},
+                                            {"locks", json::Value(std::move(locks))}});
+        }
+        if (parts[2] == "upload") {
+            const auto key = id + "/" + juce::Uuid().toDashedString() + ".vcc2";
+            return answer(200, json::Object{{"path", key.toStdString()}, {"url", (url() + "/storage/" + key).toStdString()},
+                                            {"token", "t"}, {"head", static_cast<long long>(p.revisions.size())}});
+        }
+        if (parts[2] == "revisions" && parts.size() == 3) {
+            const auto base = in.get_int("base", -1);
+            if (base != static_cast<long long>(p.revisions.size())) {
+                ++pushes_refused;
+                return answer(409, json::Object{{"error", "Somebody pushed since"}, {"head", static_cast<long long>(p.revisions.size())}});
+            }
+            const auto key = juce::String(in.get_string("path"));
+            if (!uploads.count(key)) return answer(400, json::Object{{"error", "Upload the file first"}});
+            const auto& text = uploads[key];
+            if (juce::SHA256(text.data(), text.size()).toHexString().toStdString() != in.get_string("sha256") ||
+                in.get_int("sizeBytes") != static_cast<long long>(text.size()) || in.get_int("site") < 1)
+                return answer(400, json::Object{{"error", "That is not a revision this server takes"}});
+            p.revisions.push_back(text);
+            return answer(200, json::Object{{"revision", static_cast<long long>(p.revisions.size())}});
+        }
+        if (parts[2] == "revisions" && parts.size() == 4) {
+            const int n = parts[3].getIntValue();
+            if (n < 1 || n > static_cast<int>(p.revisions.size())) return answer(404, json::Object{{"error", "No such revision"}});
+            const auto key = "rev/" + id + "/" + juce::String(n);
+            uploads[key] = p.revisions[static_cast<std::size_t>(n - 1)];
+            const auto& text = uploads[key];
+            return answer(200, json::Object{{"url", (url() + "/storage/" + key).toStdString()},
+                                            {"sha256", juce::SHA256(text.data(), text.size()).toHexString().toStdString()},
+                                            {"sizeBytes", static_cast<long long>(text.size())},
+                                            {"number", static_cast<long long>(n)}});
+        }
+        if (parts[2] == "locks") {
+            const auto track = juce::String(in.get_string("trackId"));
+            if (track.isEmpty()) return answer(400, json::Object{{"error", "Name the track to lock"}});
+            const auto it = p.locks.find(track);
+            if (method == "DELETE") {
+                if (it != p.locks.end() && it->second.first == "u-ann") p.locks.erase(it);
+                return answer(200, json::Object{{"ok", true}});
+            }
+            if (it != p.locks.end() && it->second.first != "u-ann")
+                return answer(409, json::Object{{"error", (it->second.second + " is writing this part").toStdString()}});
+            p.locks[track] = {"u-ann", "Ann"};
+            return answer(200, json::Object{{"until", "2026-11-16T12:30:00Z"}});
+        }
+        answer(404, json::Object{{"error", "not found"}});
+    }
+
     juce::StreamingSocket listener_;
     int port_ = 0;
 };
+
+/// Collaboration (Main Spec §15) against the fake server: share, another
+/// composer's push merged in, a real conflict asked about, track locks,
+/// the Shared Projects window, and opening a shared project elsewhere.
+void collab_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    namespace shared = session::shared;
+    auto& sync = collab::Controller::get();
+    FakeStore store;
+    if (!store.ok()) {
+        check(false, "a local port for the fake server");
+        return;
+    }
+    auto& account = Account::get();
+    const auto saved_folder = account.folder();
+    const auto saved_config = account.config();
+    const auto folder = dir.getChildFile("collab-account");
+    folder.deleteRecursively();
+    account.set_folder(folder);
+    account.set_config({store.url(), "anon-key", store.url()});
+    check(account.verify_code("ann@example.com", "123456").ok && account.activate().ok, "signed in and activated against the fake server");
+
+    auto run = [](std::function<void(collab::Done)> op) {
+        collab::Outcome out{false, "timed out"};
+        bool done = false;
+        op([&](collab::Outcome o) {
+            out = o;
+            done = true;
+        });
+        wait_for([&] { return done; }, 20000);
+        return out;
+    };
+    auto has_track = [](const session::Session& s, const std::string& name) {
+        for (const auto& t : s.data().tracks)
+            if (t.name == name) return true;
+        return false;
+    };
+    auto track_id = [](const session::Session& s, const std::string& name) {
+        for (const auto& t : s.data().tracks)
+            if (t.name == name) return t.id;
+        return std::string();
+    };
+
+    // Ann's project, saved, then shared.
+    const auto root = dir.getChildFile("collab");
+    root.deleteRecursively();
+    session.new_empty();
+    session.add_track("Violins I", "violin");
+    const auto file = root.getChildFile("Ann").getChildFile("Night Cue").getChildFile("Night Cue.vcc2");
+    file.getParentDirectory().createDirectory();
+    check(session.save_as(file.getFullPathName().toStdString()), "the project is saved before sharing");
+    const auto path = session.path();
+    auto o = run([&](collab::Done d) { sync.share("Night Cue", d); });
+    const auto link = shared::read_link(path);
+    check(o.ok && link && link->base == 1 && link->role == "owner", "Share Project creates it and pushes revision 1: " + o.message);
+    if (!link) return;
+    const juce::String id(link->project_id);
+    check(store.head(id) == 1 && session.data().site == collab::Controller::site() && shared::read_base(path).has_value(),
+          "the server has revision 1; the copy carries this computer's id site and its base");
+
+    // Ben, elsewhere, opens revision 1 and adds a harp.
+    session::Session ben(ctx.catalogs);
+    std::string rev;
+    {
+        const juce::ScopedLock sl(store.lock);
+        rev = store.collab[id].revisions.back();
+    }
+    ben.adopt_document(*json::parse(rev), "Open");
+    ben.set_site(collab::Controller::site() + 1);
+    ben.add_track("Harp", "harp");
+    store.push_as(id, shared::document_text(ben.project().to_json()));
+
+    // Meanwhile Ann adds horns; Sync brings the harp in and pushes both.
+    session.add_track("Horns", "horn");
+    o = run([&](collab::Done d) { sync.sync(d); });
+    check(o.ok && has_track(session, "Harp") && has_track(session, "Horns") && has_track(session, "Violins I"),
+          "Sync merges Ben's harp with Ann's horns, no questions: " + o.message);
+    check(store.head(id) == 3 && shared::read_link(path)->base == 3 && !session.dirty(),
+          "and pushes the result as revision 3, saved with its new base");
+    o = run([&](collab::Done d) { sync.sync(d); });
+    check(o.ok && o.message.startsWith("In sync") && store.head(id) == 3, "a second Sync has nothing to do: " + o.message);
+
+    // A real conflict: both rename the violins.
+    {
+        const juce::ScopedLock sl(store.lock);
+        rev = store.collab[id].revisions.back();
+    }
+    ben.adopt_document(*json::parse(rev), "Sync");
+    const auto violins = track_id(ben, "Violins I");
+    ben.edit("Rename", [&](project::ProjectData& d) { d.find_track(violins)->name = "Violins (Ben)"; return true; });
+    store.push_as(id, shared::document_text(ben.project().to_json()));
+    session.edit("Rename", [&](project::ProjectData& d) { d.find_track(violins)->name = "Violins (Ann)"; return true; });
+    bool synced = false;
+    collab::Outcome last;
+    sync.sync([&](collab::Outcome r) {
+        last = r;
+        synced = true;
+    });
+    ConflictPanel* panel = nullptr;
+    wait_for([&] { return (panel = conflict_panel()) != nullptr; }, 20000);
+    check(panel != nullptr, "the same thing changed two ways opens the conflict dialog");
+    if (panel) {
+        check(panel->conflict_count() == 1 && panel->row_text(0).startsWith("Violins I: name") && panel->row_text(0).contains("Violins (Ben)") && panel->row_text(0).contains("Violins (Ann)"),
+              "one conflict, both sides named: " + panel->row_text(0));
+        panel->getTopLevelComponent()->setSize(760, 480);
+        shoot(*panel->getTopLevelComponent(), dir, "78-sync-conflict");
+        panel->choose(0, true);
+        panel->finish();
+    }
+    wait_for([&] { return synced; }, 20000);
+    check(synced && last.ok && session.data().find_track(violins)->name == "Violins (Ben)",
+          "Take Theirs keeps Ben's name: " + last.message);
+    check(session.project().undo_label().rfind("Sync with", 0) == 0, "the sync is one undo step");
+
+    // Locks: Ben locks the harp; Ann locks the horns.
+    const auto harp = track_id(session, "Harp"), horns = track_id(session, "Horns");
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.collab[id].locks[juce::String(harp)] = {"u-ben", "Ben"};
+    }
+    o = run([&](collab::Done d) { sync.refresh(d); });
+    check(session.track_locks().count(harp) == 1, "a refresh brings in Ben's lock on the harp");
+    const bool renamed = session.edit("Rename", [&](project::ProjectData& d) { d.find_track(harp)->name = "Harp 2"; return true; });
+    const juce::String refusal(session.project().last_refusal());
+    check(!renamed && refusal.startsWith("Ben is writing Harp"), "editing the harp here is refused: " + refusal);
+    session.select_track(horns);
+    o = run([&](collab::Done d) { sync.set_lock(horns, true, d); });
+    bool server_has = false;
+    {
+        const juce::ScopedLock sl(store.lock);
+        const auto& locks = store.collab[id].locks;
+        server_has = locks.count(juce::String(horns)) && locks.at(juce::String(horns)).first == "u-ann";
+    }
+    check(o.ok && server_has && session.track_locks().count(horns) == 0, "Lock Part locks the horns for Ann, not against her: " + o.message);
+
+    // The window.
+    show_shared_projects(ctx, [&](const juce::File& f) { return session.open(f.getFullPathName().toStdString()); });
+    SharedProjectsPanel* sp = nullptr;
+    wait_for([&] { return (sp = shared_projects_panel()) != nullptr && sp->project_count() == 1; }, 20000);
+    check(sp != nullptr && sp->project_count() == 1, "File > Shared Projects... lists the project shared with this account");
+    if (sp) {
+        wait_for([&] { return sp->people_text().contains("Locked parts"); }, 5000);
+        check(sp->project_text().contains("revision 4") || sp->project_text().contains("revision 5"), "it says which revision this copy has: " + sp->project_text());
+        check(sp->people_text().contains("Harp - Ben") && sp->people_text().contains("Horns - you") &&
+                  sp->people_text().contains("Reviewer / director, invited"),
+              "who is in it, and who holds which part: " + sp->people_text().upToFirstOccurrenceOf("Recent", false, false));
+        sp->getTopLevelComponent()->setSize(900, 560);
+        shoot(*sp->getTopLevelComponent(), dir, "77-shared-projects");
+
+        // Opening it on another computer (here, another folder).
+        const auto elsewhere = root.getChildFile("Elsewhere");
+        elsewhere.createDirectory();
+        collab::Outcome opened;
+        bool got = false;
+        sp->open_row(0, elsewhere, [&](collab::Outcome r) {
+            opened = r;
+            got = true;
+        });
+        wait_for([&] { return got; }, 20000);
+        const auto there = elsewhere.getChildFile("Night Cue").getChildFile("Night Cue.vcc2");
+        check(opened.ok && session.path() == there.getFullPathName().toStdString() && has_track(session, "Harp") &&
+                  shared::read_link(session.path()).has_value() && session.data().site == collab::Controller::site(),
+              "Open Shared Project downloads the latest revision, opens it, and it syncs from there: " + opened.message);
+        sp->getTopLevelComponent()->setVisible(false);
+    }
+
+    session.new_empty();
+    account.sign_out();
+    account.set_config(saved_config);
+    account.set_folder(saved_folder);
+}
 
 /// The account and licence (sign in with a code, activate, the standing and
 /// its grace), against the fake store.
@@ -8350,7 +8662,8 @@ int main(int argc, char** argv)
                 {"freeze_checks", freeze_checks},
                 {"articulation_checks", articulation_checks},
                 {"articulation_template_checks", articulation_template_checks},
-                {"usage_checks", usage_checks}};
+                {"usage_checks", usage_checks},
+                {"collab_checks", collab_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -9014,6 +9327,8 @@ int main(int argc, char** argv)
         preview_checks();
         section("account_checks");
         account_checks(window, dir);
+        section("collab_checks");
+        collab_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

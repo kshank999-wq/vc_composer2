@@ -180,9 +180,11 @@ struct Merger {
         json::Array result;
         for (const auto& k : order) {
             const Opt ov = get(om, k), tv = get(tm, k), bv = get(bm, k);
-            // What names this item, for the description.
+            // What names this item, for the description: the name both
+            // sides started from, when there was one (a rename on both
+            // sides is "Violins I: name", not one side's new name).
             std::string label;
-            const json::Value* any = ov ? &*ov : tv ? &*tv : bv ? &*bv : nullptr;
+            const json::Value* any = bv ? &*bv : ov ? &*ov : tv ? &*tv : nullptr;
             if (any)
                 if (const auto* n = any->get("name"); n && n->is_string()) label = n->as_string();
             where.push_back({k, label});

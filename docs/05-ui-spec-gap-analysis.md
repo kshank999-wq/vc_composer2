@@ -1964,3 +1964,57 @@ macOS, Linux and Windows. What it took:
       articulations, slurs and dynamics in handwriting; page view; the
       full score of several parts at once; a kept sketch layer; signing
       and TestFlight (needs App Store Connect API key secrets).
+
+51. **Collaboration: shared projects with sync, roles and part locks**
+    (November 16, 2026; Main Spec §15. Decisions: the owner pays per
+    editor seat, reviewers and viewers free; push/pull with merge; the
+    five roles project-wide, plus part locks).
+    - **How Sibelius does it, and why this is different**: Sibelius's cloud
+      sharing publishes a score for others to view and play back; two
+      people editing one score still pass files and merge by hand. A film
+      team edits in parallel (composer, orchestrator, music editor), so
+      VC Composer merges.
+    - **Ids that never collide** (`core/Ids`, `Score::set_site`): each
+      installation has a random 24-bit site (kept in the user data
+      folder), and in a shared project every new track, version and note
+      id carries it, so two copies never hand out the same id.
+    - **Three-way merge** (`project/Merge`): base, mine and theirs,
+      matched by id (tracks, versions, buses, markers), by note id and by
+      tick. Separate changes combine silently; a note is one thing (two
+      pitch edits never blend into a pitch nobody wrote); a real conflict
+      is described in words ("Violins I: name", "Violins I: a note") with
+      both sides, and resolved per conflict.
+    - **The server** (`web/supabase/migrations/0005`, `/api/collab`):
+      numbered revisions in private storage, a push naming the revision it
+      was made from (refused with the head if somebody pushed since),
+      roles, invitations by email, part locks that expire after two hours,
+      and an audit trail. Nothing is writable by a signed-in user directly:
+      every write is a server route that checks the role and the seats.
+    - **The desktop** (`desktop/src/collab`, `session/Shared`): File >
+      Shared Projects... lists the projects shared with you (Open
+      downloads the latest revision into a folder you choose) and shows
+      the open project's sharing: who is in it, recent revisions, which
+      parts are locked by whom. **Share Project** pushes revision 1.
+      **Sync** (Shift+Cmd+Y) pulls and merges, opens the conflict dialog
+      only for real conflicts (Mine / Theirs per conflict, all at once,
+      or cancel and nothing changes), saves the project with its new base,
+      then pushes - pulling again if somebody pushed meanwhile. A sync is
+      one undo step. **Lock Part for Writing**: while someone else holds
+      a part, edits to its music, its name or its versions are refused
+      with who holds it ("Ben is writing Harp: rename it once they unlock
+      it"); the mix stays yours. Reviewers and viewers pull but never push.
+    - **Files beside the project**: `<Name>.vcc2.shared.json` (which
+      shared project, your role, the revision last synced) and
+      `<Name>.vcc2.shared-base` (that revision: the merge's common
+      ancestor).
+    - **Checks**: `test_shared` and `test_project` (two composers syncing
+      through files; locks; a sync past a lock), and the desktop check's
+      `collab_checks` against a fake vc-composer.com: share, another
+      composer's push merged in, a rename conflict decided in the dialog,
+      a lock refused and taken, the window, and opening the project in
+      another folder.
+    - **Not yet**: audio and picture files do not travel (a package
+      carries them); a push message typed by the composer (the last edit's
+      name is used); live presence or real-time co-editing; comments
+      threaded to revisions. The per-seat plan goes on sale once its Stripe
+      prices are set (`STRIPE_PRICE_ID_COLLAB_SEAT_MONTHLY` / `_YEARLY`).

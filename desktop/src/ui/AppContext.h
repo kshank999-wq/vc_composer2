@@ -165,6 +165,11 @@ enum : juce::CommandID {
     expandArticulations,
     consolidateArticulations,
     instrumentUsage,
+    sharedProjects,
+    shareProject,
+    syncShared,
+    lockPart,
+    unlockPart,
 };
 }  // namespace cmd
 
