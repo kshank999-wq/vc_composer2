@@ -86,6 +86,17 @@ export const env = {
   get stripeYearlyPriceId(): string {
     return required('STRIPE_PRICE_ID_YEARLY');
   },
+  /**
+   * The collaboration plan's per-editor-seat prices (a separate Stripe
+   * product). Empty until it is on sale: the collaboration checkout then
+   * says so instead of failing.
+   */
+  get stripeCollabSeatMonthlyPriceId(): string {
+    return optional('STRIPE_PRICE_ID_COLLAB_SEAT_MONTHLY', '');
+  },
+  get stripeCollabSeatYearlyPriceId(): string {
+    return optional('STRIPE_PRICE_ID_COLLAB_SEAT_YEARLY', '');
+  },
   get resendApiKey(): string {
     return required('RESEND_API_KEY');
   },

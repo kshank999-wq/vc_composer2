@@ -9,6 +9,7 @@ import { fulfillCheckout, parsePlatform } from '@/lib/fulfillment';
 import { sendPurchaseEmail } from '@/lib/email';
 import { recordDesktopSubscription } from '@/lib/desktop-subscription';
 import { checkoutKind, subscriptionKind } from '@/lib/checkout-kind';
+import { recordCollabPlan } from '@/lib/collab-plan';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -169,6 +170,8 @@ export async function POST(request: Request): Promise<Response> {
       // VC Writer room, a subscription made by hand) is left alone.
       const subscription = event.data.object as Stripe.Subscription;
       if (subscriptionKind(subscription) === 'desktop') await recordDesktopSubscription(subscription);
+      // The collaboration plan: its seats and standing, from the same events.
+      else if (subscriptionKind(subscription) === 'collab') await recordCollabPlan(subscription);
     } else if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
       // Entitlement follows the money: a refund or a dispute revokes the licence.
       const charge =

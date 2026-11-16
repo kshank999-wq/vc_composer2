@@ -53,3 +53,13 @@ describe('subscription kind', () => {
     expect(subscriptionKind({ metadata: { product: 'vc-composer', kind: 'collaboration' } })).toBe('other-product');
   });
 });
+
+describe('the collaboration plan', () => {
+  it('is its own kind, never a desktop licence', () => {
+    expect(checkoutKind({ metadata: { product: OWN_PRODUCT, kind: 'collab', supabase_user_id: 'u1' } })).toBe('collab');
+    expect(subscriptionKind({ metadata: { product: OWN_PRODUCT, kind: 'collab' } })).toBe('collab');
+  });
+  it('leaves another product stamped collab alone', () => {
+    expect(checkoutKind({ metadata: { product: 'vc-writer', kind: 'collab' } })).toBe('other-product');
+  });
+});

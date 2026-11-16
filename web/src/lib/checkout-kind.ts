@@ -11,17 +11,19 @@
  * carried one from the first sale. Anything else (another product, no stamp,
  * a subscription made by hand in the dashboard) is left alone.
  *
- * Collaboration will be a separate subscription; when it ships it gets its own
- * `kind` here, so the desktop licence is never confused with it.
+ * Collaboration is a separate subscription with its own `kind: 'collab'`, so
+ * the desktop licence is never confused with it.
  */
 export const OWN_PRODUCT = 'vc-composer';
 
-export type CheckoutKind = 'desktop' | 'other-product';
+export type CheckoutKind = 'desktop' | 'collab' | 'other-product';
 
 type Stamped = { metadata?: Record<string, string> | null };
 
-export const checkoutKind = (session: Stamped): CheckoutKind =>
-  session.metadata?.['product'] === OWN_PRODUCT ? 'desktop' : 'other-product';
+export const checkoutKind = (session: Stamped): CheckoutKind => {
+  if (session.metadata?.['product'] !== OWN_PRODUCT) return 'other-product';
+  return session.metadata?.['kind'] === 'collab' ? 'collab' : 'desktop';
+};
 
 /**
  * The same reading for `customer.subscription.*` events. A desktop
@@ -29,10 +31,11 @@ export const checkoutKind = (session: Stamped): CheckoutKind =>
  * subscription stamped with the product alone still reads as desktop, since
  * that is the only kind VC Composer sells today.
  */
-export type SubscriptionKind = 'desktop' | 'other-product';
+export type SubscriptionKind = 'desktop' | 'collab' | 'other-product';
 
 export const subscriptionKind = (subscription: Stamped): SubscriptionKind => {
   if (subscription.metadata?.['product'] !== OWN_PRODUCT) return 'other-product';
   const kind = subscription.metadata?.['kind'];
+  if (kind === 'collab') return 'collab';
   return kind === undefined || kind === '' || kind === 'desktop' ? 'desktop' : 'other-product';
 };
