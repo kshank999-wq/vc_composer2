@@ -168,3 +168,20 @@ desktop binary, not set here.
    `revoked`.
 6. `/admin` dashboard shows the order; `stripe_webhook_events` has every event
    with `processed_at` set.
+
+## The live setup (November 16, 2026)
+
+- **Supabase:** project `vc-composer` (ref `nionythbfoeqpkrnqwuf`, us-west-1),
+  migrations 0001-0004 applied, private `releases` bucket created.
+- **Vercel:** project `vc_composer2` (Root Directory `web`, Next.js, Node 22),
+  domains vc-composer.com and www.vc-composer.com (redirects to the bare
+  domain). Set so far: `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_SUPABASE_URL`,
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `RELEASE_BUCKET`, `RESEND_FROM_ADDRESS`.
+- **Still to add** (secrets, by the owner, in Vercel > Settings > Environment
+  Variables): `SUPABASE_SERVICE_ROLE_KEY` (Supabase > Project Settings > API
+  Keys), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+  `STRIPE_PRICE_ID_MONTHLY`, `STRIPE_PRICE_ID_YEARLY`, `RESEND_API_KEY`,
+  `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `RATE_LIMIT_SALT`
+  (any long random string). Then redeploy.
+- **Supabase Auth:** Site URL `https://vc-composer.com`; redirect URL
+  `https://vc-composer.com/auth/callback`.
