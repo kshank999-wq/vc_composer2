@@ -45,6 +45,8 @@
 #include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
 #include "Preview.h"
+#include "licensing/Account.h"
+#include "licensing/AccountWindow.h"
 #include "ui/PictureTools.h"
 #include "ui/TemplateBrowser.h"
 #include "ui/PrintPreview.h"
@@ -6309,6 +6311,201 @@ void preview_checks()
     check(preview::status(before) == "Preview - 45 days left", "45 days before: " + preview::status(before));
 }
 
+/// A stand-in for vc-composer.com and its Supabase Auth on 127.0.0.1, so
+/// the account flow runs end to end with no real service.
+class FakeStore final : public juce::Thread {
+public:
+    FakeStore() : juce::Thread("fake store")
+    {
+        for (int p = 47810; p < 47900 && port_ == 0; ++p)
+            if (listener_.createListener(p, "127.0.0.1")) port_ = p;
+        if (port_ != 0) startThread();
+    }
+    ~FakeStore() override
+    {
+        signalThreadShouldExit();
+        listener_.close();
+        stopThread(3000);
+    }
+    juce::String url() const { return "http://127.0.0.1:" + juce::String(port_); }
+    bool ok() const { return port_ != 0; }
+
+    juce::CriticalSection lock;
+    juce::String standing = R"({"standing":{"status":"active","expiresAt":"2027-11-16T00:00:00.000Z"}})";
+    bool refuse = false;
+    int codes_sent = 0;
+    juce::String last_activate, last_auth;
+
+private:
+    void run() override
+    {
+        while (!threadShouldExit()) {
+            std::unique_ptr<juce::StreamingSocket> s(listener_.waitForNextConnection());
+            if (s) serve(*s);
+        }
+    }
+    void serve(juce::StreamingSocket& s)
+    {
+        juce::MemoryBlock in;
+        char buf[4096];
+        int header_end = -1, length = 0;
+        while (s.waitUntilReady(true, 3000) == 1) {
+            const int n = s.read(buf, sizeof buf, false);
+            if (n <= 0) break;
+            in.append(buf, static_cast<std::size_t>(n));
+            const juce::String text(static_cast<const char*>(in.getData()), in.getSize());
+            if (header_end < 0 && (header_end = text.indexOf("\r\n\r\n")) >= 0) {
+                const auto cl = text.substring(0, header_end).fromFirstOccurrenceOf("Content-Length:", false, true);
+                length = cl.upToFirstOccurrenceOf("\r\n", false, false).trim().getIntValue();
+            }
+            if (header_end >= 0 && static_cast<int>(in.getSize()) >= header_end + 4 + length) break;
+        }
+        const juce::String text(static_cast<const char*>(in.getData()), in.getSize());
+        const auto head = text.substring(0, std::max(0, header_end));
+        const auto body = text.substring(header_end + 4);
+        const auto line = head.upToFirstOccurrenceOf("\r\n", false, false);
+        const auto method = line.upToFirstOccurrenceOf(" ", false, false);
+        const auto path = line.fromFirstOccurrenceOf(" ", false, false).upToFirstOccurrenceOf(" ", false, false);
+        const auto auth = head.fromFirstOccurrenceOf("Authorization:", false, true).upToFirstOccurrenceOf("\r\n", false, false).trim();
+        int status = 404;
+        juce::String reply = R"({"error":"not found"})";
+        const juce::ScopedLock sl(lock);
+        if (path.startsWith("/auth/v1/otp")) {
+            ++codes_sent;
+            status = 200;
+            reply = "{}";
+        } else if (path.startsWith("/auth/v1/verify")) {
+            const bool good = body.contains("\"123456\"");
+            status = good ? 200 : 403;
+            reply = good ? R"({"access_token":"tok","refresh_token":"ref","expires_in":3600})"
+                         : R"({"code":403,"msg":"Token has expired or is invalid"})";
+        } else if (path.startsWith("/api/licenses/activate")) {
+            last_activate = body;
+            last_auth = auth;
+            if (auth != "Bearer tok") {
+                status = 401;
+                reply = R"({"error":"Sign in to activate VC Composer"})";
+            } else if (refuse) {
+                status = 409;
+                reply = R"({"error":"All 2 activations on this licence are in use. Free one from your account.","outcome":{"result":"refused"}})";
+            } else {
+                status = 200;
+                reply = R"({"activated":true,"reason":"new","license":{"serial":"VCC-ABCDE-FGHJK-LMNPQ-RSTUV"}})";
+            }
+        } else if (path.startsWith("/api/licenses/standing") && method == "GET") {
+            status = auth == "Bearer tok" ? 200 : 401;
+            reply = status == 200 ? standing : juce::String(R"({"error":"Sign in"})");
+        }
+        const juce::String out = "HTTP/1.1 " + juce::String(status) + (status == 200 ? " OK" : " Error") +
+                                 "\r\nContent-Type: application/json\r\nContent-Length: " + juce::String(reply.getNumBytesAsUTF8()) +
+                                 "\r\nConnection: close\r\n\r\n" + reply;
+        s.write(out.toRawUTF8(), static_cast<int>(out.getNumBytesAsUTF8()));
+        s.close();
+    }
+
+    juce::StreamingSocket listener_;
+    int port_ = 0;
+};
+
+/// The account and licence (sign in with a code, activate, the standing and
+/// its grace), against the fake store.
+void account_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    FakeStore store;
+    if (!store.ok()) {
+        check(false, "a local port for the fake store");
+        return;
+    }
+    auto& account = Account::get();
+    const auto saved_folder = account.folder();
+    const auto saved_config = account.config();
+    const auto folder = dir.getChildFile("account-check");
+    folder.deleteRecursively();
+    account.set_folder(folder);
+    account.set_config({store.url(), "anon-key", store.url()});
+    check(account.activated() == std::optional<bool>(false) && !account.saving().can_save && account.saving().needs_activation,
+          "a release build that was never activated does not save, and says to activate");
+
+    show_account_window(ctx);
+    AccountPanel* panel = nullptr;
+    wait_for([&] { return (panel = account_panel()) != nullptr; });
+    if (!panel) {
+        check(false, "Help > Account and Licence opens");
+        return;
+    }
+    bool done = false;
+    panel->set_fields("Composer@Example.com", "000000", "");
+    panel->send_code([&] { done = true; });
+    wait_for([&] { return done; }, 10000);
+    check(store.codes_sent == 1, "Email Me a Code asks Supabase Auth for a code");
+    done = false;
+    panel->sign_in([&] { done = true; });
+    wait_for([&] { return done; }, 10000);
+    check(!account.signed_in() && panel->standing_text().contains("invalid"), "a wrong code is refused with the server's reason");
+    panel->set_fields("Composer@Example.com", "123456", "");
+    done = false;
+    panel->sign_in([&] { done = true; });
+    wait_for([&] { return done; }, 10000);
+    check(account.signed_in() && account.email() == "composer@example.com", "the right code signs in: " + panel->status_text());
+
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.refuse = true;
+    }
+    done = false;
+    panel->activate([&] { done = true; });
+    wait_for([&] { return done; }, 10000);
+    check(account.activated() == std::optional<bool>(false) && panel->standing_text().contains("activations"),
+          "no free seat: activation is refused with the reason");
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.refuse = false;
+    }
+    done = false;
+    panel->activate([&] { done = true; });
+    wait_for([&] { return done; }, 10000);
+    juce::String sent;
+    {
+        const juce::ScopedLock sl(store.lock);
+        sent = store.last_activate;
+    }
+    const auto body = json::parse(sent.toStdString()).value_or(json::Value());
+    check(account.activated() == std::optional<bool>(true) && account.saving().can_save && account.standing() &&
+              account.standing()->status == "active",
+          "activation writes it down and the standing comes back active");
+    check(body.get_string("deviceFingerprint").size() == 64 && body.get_string("platform").size() > 0 &&
+              body.get("serial") == nullptr,
+          "the request carries a hashed device fingerprint and the platform, and no serial when none was typed");
+    shoot(*panel->getTopLevelComponent(), dir, "69-account");
+
+    // The licence lapses: a week's grace, then saving stops.
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.standing = R"({"standing":{"status":"expired","expiresAt":"2026-01-01T00:00:00.000Z"}})";
+    }
+    account.check_standing();
+    auto s = account.saving();
+    check(s.can_save && s.warning && juce::String(s.notice).contains("keeps saving until"), "a lapse warns first: " + juce::String(s.notice));
+    auto standing = *account.standing();
+    standing.seen_lapsed_at = licensing::format_iso(static_cast<std::int64_t>(std::time(nullptr)) - 8 * 86400);
+    folder.getChildFile("license-standing.json").replaceWithText(juce::String(json::write(standing.to_json())));
+    s = account.saving();
+    check(!s.can_save && !s.needs_activation, "and after the week, saving is off: " + juce::String(s.notice));
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.standing = R"({"standing":{"status":"active","expiresAt":null}})";
+    }
+    account.check_standing();
+    check(account.saving().can_save && account.standing()->seen_lapsed_at.empty(), "renewing turns saving back on");
+
+    account.sign_out();
+    check(!account.signed_in() && !folder.getChildFile("session.json").existsAsFile(), "Sign Out forgets the session");
+    panel->getTopLevelComponent()->setVisible(false);
+    account.set_config(saved_config);
+    account.set_folder(saved_folder);
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -6822,7 +7019,7 @@ void accessibility_checks(MainWindow& window, const juce::File& dir)
     pump(150);
     report("Producer view", main);
     for (auto id : {cmd::showCircleOfFifths, cmd::showRouting, cmd::showReview, cmd::showComments, cmd::collectPackage,
-                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap, cmd::mixTools, cmd::midiInputFilter, cmd::editShortcuts, cmd::printPreview, cmd::tempoFinder}) {
+                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap, cmd::mixTools, cmd::midiInputFilter, cmd::editShortcuts, cmd::printPreview, cmd::tempoFinder, cmd::account}) {
         ctx.commands.invokeDirectly(id, false);
         pump(200);
     }
@@ -8164,6 +8361,8 @@ int main(int argc, char** argv)
         template_shelf_checks(window, dir);
         section("preview_checks");
         preview_checks();
+        section("account_checks");
+        account_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

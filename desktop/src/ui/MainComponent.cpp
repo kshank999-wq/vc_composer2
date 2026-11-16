@@ -7,6 +7,8 @@
 #include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
 #include "Preview.h"
+#include "licensing/Account.h"
+#include "licensing/AccountWindow.h"
 #include "ui/PictureTools.h"
 #include "ui/PrintPreview.h"
 #include "ui/ScoreTools.h"
@@ -710,12 +712,22 @@ void MainComponent::timerCallback()
     // Save on transport stop (Main Spec §12): a saved project, changed, saves
     // when playback stops (never while recording or playing).
     if (was_playing_ && !playing && !context_.engine.recording() && hw::ui_settings().getBoolValue("save_on_stop", false) &&
-        !context_.session.path().empty() && context_.session.dirty() && !preview::ended()) {
+        !context_.session.path().empty() && context_.session.dirty() && !preview::ended() && Account::get().saving().can_save) {
         std::string error;
         if (context_.session.save(&error)) context_.status("Saved on stop");
         else context_.status("Could not save on stop: " + juce::String(error));
     }
     was_playing_ = playing;
+    // The licence's standing, asked in the background a minute after start
+    // and every six hours after (a failure changes nothing).
+    {
+        static double next_check = juce::Time::getMillisecondCounterHiRes() + 60'000.0;
+        auto& account = Account::get();
+        if (juce::Time::getMillisecondCounterHiRes() >= next_check) {
+            next_check = juce::Time::getMillisecondCounterHiRes() + 6.0 * 3600'000.0;
+            if (account.configured() && account.signed_in()) juce::Thread::launch([] { Account::get().check_standing(); });
+        }
+    }
     deck_.update_position();
     const auto& sel = context_.session.selection();
     deck_.set_range(sel.from, sel.to);
@@ -839,13 +851,7 @@ void MainComponent::capture_plugin_states()
 
 bool MainComponent::save(bool save_as)
 {
-    if (preview::ended()) {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::MessageBoxIconType::InfoIcon, "This preview has ended",
-            "This preview of VC Composer 2 ended on " + preview::expires() +
-                ". Projects still open, play, print and export; to save, download the latest version from vc-composer.com.");
-        return false;
-    }
+    if (!may_save(context_)) return false;
     capture_plugin_states();
     std::string path = context_.session.path();
     if (save_as || path.empty()) {
@@ -1608,7 +1614,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::articulationMap, cmd::missingInstruments, cmd::mixTools, cmd::bounceInPlace, cmd::saveOnStop,
                 cmd::monitorDim, cmd::reverseClips, cmd::timeStretchClips, cmd::groupClips, cmd::ungroupClips,
                 cmd::captureMidi, cmd::midiInputFilter, cmd::lyrics, cmd::explodeTracks, cmd::implodeTracks, cmd::addRepeat,
-                cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder});
+                cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1831,6 +1837,7 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::reloadCrashedPlugins:
             info.setInfo("Reload Crashed Plug-ins", "Starts crashed plug-ins again from their last state", "Tools", 0);
             break;
+        case cmd::account: info.setInfo("Account and Licence...", "Sign in, activate this computer, see the licence", "Help", 0); break;
         case cmd::about: info.setInfo("About VC Composer 2", "", "Help", 0); break;
         default: break;
     }
@@ -1923,6 +1930,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::printPreview: show_print_preview(context_); break;
         case cmd::exportPicture: show_picture_export(context_); break;
         case cmd::tempoFinder: show_tempo_finder(context_); break;
+        case cmd::account: show_account_window(context_); break;
         case cmd::editShortcuts:
             show_shortcut_editor(context_, [this](const std::string& name) { use_shortcut_profile(name); });
             break;
@@ -2133,7 +2141,10 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
                             cmd::reloadCrashedPlugins})
                 m.addCommandItem(c, id);
             break;
-        case 6: m.addCommandItem(c, cmd::about); break;
+        case 6:
+            m.addCommandItem(c, cmd::account);
+            m.addCommandItem(c, cmd::about);
+            break;
         default: break;
     }
     return m;

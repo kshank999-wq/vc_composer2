@@ -143,6 +143,7 @@ enum : juce::CommandID {
     printPreview,
     exportPicture,
     tempoFinder,
+    account,
 };
 }  // namespace cmd
 

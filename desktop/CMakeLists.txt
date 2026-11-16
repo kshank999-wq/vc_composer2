@@ -20,6 +20,7 @@ target_link_libraries(vcc_juce
         juce::juce_audio_devices
         juce::juce_audio_formats
         juce::juce_gui_extra
+        juce::juce_cryptography
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
@@ -91,6 +92,13 @@ add_library(vcc_desktop STATIC ${vcc_desktop_sources})
 # until a date. Release builds leave both unset.
 option(VCC_PREVIEW_BUILD "A time-limited preview build" OFF)
 set(VCC_PREVIEW_EXPIRES "" CACHE STRING "Last day a preview build saves (YYYY-MM-DD)")
+# Licensing (desktop/src/licensing/Account.h): a release build is pointed at
+# its Supabase project and site; left empty, saving is not licensed.
+set(VCC_SUPABASE_URL "" CACHE STRING "Supabase project URL for sign-in (release builds)")
+set(VCC_SUPABASE_ANON_KEY "" CACHE STRING "Supabase anon (publishable) key (release builds)")
+set(VCC_SITE_URL "" CACHE STRING "The storefront, e.g. https://vc-composer.com (release builds)")
+target_compile_definitions(vcc_desktop PRIVATE VCC_SUPABASE_URL="${VCC_SUPABASE_URL}"
+    VCC_SUPABASE_ANON_KEY="${VCC_SUPABASE_ANON_KEY}" VCC_SITE_URL="${VCC_SITE_URL}")
 if(VCC_PREVIEW_BUILD)
     target_compile_definitions(vcc_desktop PRIVATE VCC_PREVIEW=1 VCC_PREVIEW_EXPIRES="${VCC_PREVIEW_EXPIRES}")
 endif()
@@ -107,7 +115,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(vcc_desktop PRIVATE X11::X11)
 endif()
 target_link_libraries(vcc_desktop
-    PUBLIC vcc_ui_notation vcc_session vcc_library vcc_media vcc_picture vcc_cues vcc_templates vcc_project vcc_theory vcc_ostinato vcc_engine vcc_audio vcc_juce
+    PUBLIC vcc_ui_notation vcc_session vcc_licensing vcc_library vcc_media vcc_picture vcc_cues vcc_templates vcc_project vcc_theory vcc_ostinato vcc_engine vcc_audio vcc_juce
     PRIVATE vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_content_library_data vcc_ui_font_data)
 
 juce_add_gui_app(VCComposer2
