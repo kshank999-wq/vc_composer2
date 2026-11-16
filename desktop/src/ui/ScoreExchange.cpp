@@ -147,7 +147,7 @@ int export_parts_pdf(AppContext& context, const juce::File& target, juce::String
     const auto& d = context.session.data();
 
     std::vector<std::pair<std::string, engraving::PrintResult>> parts;
-    for (const auto* t : context.session.music_tracks()) {
+    for (const auto* t : context.session.staff_tracks()) {
         const auto* v = t->active_version();
         if (!v || t->kind != project::TrackKind::Instrument || !t->include_in_export) continue;
         engraving::PrintOptions po;
@@ -290,7 +290,7 @@ std::unique_ptr<FullScoreLayout> lay_out_full_score(AppContext& context, const F
     const auto& d = context.session.data();
 
     std::vector<const project::Track*> tracks;
-    for (const auto* t : context.session.music_tracks()) {
+    for (const auto* t : context.session.staff_tracks()) {
         const auto* v = t->active_version();
         if (!v || t->kind != project::TrackKind::Instrument || !t->include_in_export) continue;
         tracks.push_back(t);

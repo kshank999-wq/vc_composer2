@@ -400,6 +400,27 @@ public:
     /// Back to the live instrument: the MIDI plays, the plug-in is loaded;
     /// the printed audio stays on the track's audio lane.
     bool unfreeze(const std::string& track_id);
+
+    // --- Articulation tracks (Memory Management spec §4) ---------------------------------
+    struct ArticulationSplit {
+        std::string group;  ///< "staccato", "natural"...
+        std::string name;   ///< "Staccato".
+        int notes = 0;      ///< Of the part's notes, how many play this sound.
+    };
+    /// What Expand would make: one track per sound the part's notes play
+    /// (as playback selects them); for a part with no notes yet, one per
+    /// sound its articulation map has, natural first.
+    std::vector<ArticulationSplit> preview_articulation_tracks(const std::string& track_id) const;
+    /// Expand Articulations to Tracks: a track per sound, after the part,
+    /// with its instrument, map, routing and mix; the part then plays
+    /// through them. One undo step; the new ids.
+    std::vector<std::string> expand_articulations(const std::string& track_id,
+                                                  const std::vector<std::string>& groups = {});
+    /// Consolidate to One Track: the articulation tracks go and the part
+    /// plays itself again - the same notes. One undo step.
+    bool consolidate_articulations(const std::string& track_id);
+    /// A part's articulation tracks, in order.
+    std::vector<const project::Track*> articulation_tracks(const std::string& track_id) const;
     /// MIDI played in (a recording pass), as one undo step: each region on
     /// its track's main lane; with `as_takes` the main-lane regions it
     /// overlaps move to the next free take lane. Ids are returned in order.
@@ -656,6 +677,9 @@ public:
     // --- Queries for views ----------------------------------------------------------
     /// Instrument tracks in display order (folders and video excluded).
     std::vector<const project::Track*> music_tracks() const;
+    /// The tracks that are staves: music tracks but expanded articulation
+    /// tracks (those belong to Producer; their notes are their parent's).
+    std::vector<const project::Track*> staff_tracks() const;
     /// Whether a track is audible given mute and solo across the project.
     bool audible(const project::Track& track) const;
     /// Total length worth showing: the last note or region end, at least 32 bars.

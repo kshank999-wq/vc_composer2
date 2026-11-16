@@ -20,6 +20,7 @@
 #include "ui/hw/HwTheme.h"
 #include "ui/shell/TopDeck.h"
 #include "vcc/picture/Picture.h"
+#include "vcc/project/ArticulationMap.h"
 #include "vcc/project/Automation.h"
 #include "vcc/project/MidiTools.h"
 #include "vcc/project/Performance.h"
@@ -102,6 +103,8 @@ struct LaneView {
     double gain_db = 0.0;
     std::string playback = "both";
     bool printed_fx = false;
+    juce::String articulation;  ///< An articulation track: its sound ("Staccato").
+    bool expanded = false;      ///< A part expanded to articulation tracks: they play it.
     std::vector<int> inserts;  ///< Per insert slot: 0 empty, 1 active, 2 bypassed.
     juce::String route;        ///< "IN 1 > MASTER".
     // Automation (Main Spec §12).
@@ -500,6 +503,9 @@ struct Model final : AutomationTimeline {
                 l.route = in + juce::String::fromUTF8(" \xe2\x80\xba ") + out;
             }
             l.name = juce::String(t->name);
+            if (!t->articulation_parent.empty())
+                l.articulation = juce::String(project::articulation_group_name(t->articulation_group));
+            l.expanded = t->articulations_expanded;
             l.colour = colour_from_hex(t->color);
             l.reference = t->kind == project::TrackKind::Reference;
             l.channel = t->midi_channel;
@@ -2485,6 +2491,8 @@ private:
         g.setFont(hw::fonts::silk(9.5f, 0.08f));
         const juce::String tag = l.bus ? (l.bus_kind == "master" ? "MASTER" : "AUX")
                                  : (l.audio || l.reference) ? "AUDIO"
+                                 : l.articulation.isNotEmpty() ? "ARTIC"
+                                 : l.expanded ? "PART"
                                  : l.midi_only ? "MIDI"
                                                : "INST";
         g.drawText(tag, p.tag, juce::Justification::centred, false);
@@ -2492,8 +2500,13 @@ private:
         hw::paint::lcd_text(g, l.bus ? juce::String("--") : juce::String(l.number).paddedLeft('0', 2), p.number.toFloat(), 11.0f,
                             juce::Justification::centred);
         hw::paint::lcd_window(g, p.name.toFloat());
-        hw::paint::lcd_text(g, l.name.toUpperCase(), p.name.toFloat().reduced(5.0f, 0.0f), 11.0f, juce::Justification::centredLeft,
-                            l.reference ? 0.7f : 1.0f);
+        // An articulation track reads as a branch of its part: an elbow, then
+        // the sound; the part says its notes play on the tracks below.
+        const juce::String shown = l.articulation.isNotEmpty() ? juce::String::fromUTF8("\xe2\x94\x94 ") + l.articulation
+                                   : l.expanded ? l.name + juce::String::fromUTF8(" \xe2\x96\xbe")
+                                                : l.name;
+        hw::paint::lcd_text(g, shown.toUpperCase(), p.name.toFloat().reduced(5.0f, 0.0f), 11.0f, juce::Justification::centredLeft,
+                            l.reference || l.expanded ? 0.7f : 1.0f);
         paint_automation_button(g, l, row, m_.show_automation.count(l.id) > 0);
         if (l.bus) return;
         // R S M I, and the volume.

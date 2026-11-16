@@ -157,6 +157,8 @@ enum : juce::CommandID {
     freezeUnload,
     unfreezeTrack,
     rerenderTrack,
+    expandArticulations,
+    consolidateArticulations,
 };
 }  // namespace cmd
 

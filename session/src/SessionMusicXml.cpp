@@ -255,7 +255,12 @@ std::string Session::export_musicxml(const interchange::ExportOptions& options, 
             else if (def && def->gm_program >= 0) info.midi_program = def->gm_program;
         }
     }
-    return interchange::export_musicxml(data(), opts, warnings);
+    // Expanded articulation tracks are not parts: their notes are their parent's.
+    project::ProjectData parts = data();
+    parts.tracks.erase(std::remove_if(parts.tracks.begin(), parts.tracks.end(),
+                                      [](const project::Track& t) { return !t.articulation_parent.empty(); }),
+                       parts.tracks.end());
+    return interchange::export_musicxml(parts, opts, warnings);
 }
 
 }  // namespace vcc::session

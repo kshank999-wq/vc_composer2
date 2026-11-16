@@ -1073,7 +1073,7 @@ void export_parts_svg(AppContext& c, const juce::File& folder)
     engraving::LayoutEngine engine;
     if (music_font().loaded) engine.set_glyph_table(music_font().glyphs);
     int pages = 0;
-    for (const auto* t : c.session.music_tracks()) {
+    for (const auto* t : c.session.staff_tracks()) {
         const auto* v = t->active_version();
         if (!v || t->kind != project::TrackKind::Instrument) continue;
         engraving::PrintOptions po;
@@ -1655,7 +1655,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::monitorDim, cmd::reverseClips, cmd::timeStretchClips, cmd::groupClips, cmd::ungroupClips,
                 cmd::captureMidi, cmd::midiInputFilter, cmd::lyrics, cmd::explodeTracks, cmd::implodeTracks, cmd::addRepeat,
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
-                cmd::unfreezeTrack, cmd::rerenderTrack});
+                cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1898,6 +1898,23 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
                          t && !t->print_signature.empty() ? 0 : juce::ApplicationCommandInfo::isDisabled);
             break;
         }
+        case cmd::expandArticulations: {
+            const auto* t = context_.session.data().find_track(articulation_part(context_, context_.session.selected_track()));
+            info.setInfo("Expand Articulations to Tracks...",
+                         "A track per sound the part plays (staccato, pizzicato...), each with its own instrument; "
+                         "the notes stay in the part's score",
+                         "Track",
+                         t && t->kind == project::TrackKind::Instrument && !t->articulations_expanded
+                             ? 0
+                             : juce::ApplicationCommandInfo::isDisabled);
+            break;
+        }
+        case cmd::consolidateArticulations: {
+            const auto* t = context_.session.data().find_track(articulation_part(context_, context_.session.selected_track()));
+            info.setInfo("Consolidate to One Track", "The articulation tracks go and the part plays every sound itself again",
+                         "Track", t && t->articulations_expanded ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            break;
+        }
         case cmd::account: info.setInfo("Account and Licence...", "Sign in, activate this computer, see the licence", "Help", 0); break;
         case cmd::about: info.setInfo("About VC Composer", "", "Help", 0); break;
         default: break;
@@ -2003,6 +2020,8 @@ bool MainComponent::perform(const InvocationInfo& info)
             if (const auto* t = s.data().find_track(s.selected_track()))
                 context_.freeze_tracks({t->id}, t->instrument_unloaded);
             break;
+        case cmd::expandArticulations: ask_expand_articulations(context_); break;
+        case cmd::consolidateArticulations: context_.status(consolidate_articulations(context_)); break;
         case cmd::editShortcuts:
             show_shortcut_editor(context_, [this](const std::string& name) { use_shortcut_profile(name); });
             break;
@@ -2186,7 +2205,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             for (auto id : {cmd::duplicateVersion, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::articulationMap,
                             cmd::missingInstruments, cmd::bounceInPlace, cmd::freezeTrack, cmd::freezeUnload, cmd::unfreezeTrack,
-                            cmd::rerenderTrack, cmd::removeTrack})
+                            cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations, cmd::removeTrack})
                 m.addCommandItem(c, id);
             m.addCommandItem(c, cmd::mixTools);
             m.addSeparator();

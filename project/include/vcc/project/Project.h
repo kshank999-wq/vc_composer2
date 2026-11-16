@@ -339,6 +339,17 @@ struct Track {
     /// Freeze & Unload: the instrument plug-in is closed to give its memory
     /// back; its state stays in instrument_plugin and comes back on Unfreeze.
     bool instrument_unloaded = false;
+    /// Expanded articulations (Memory Management spec §4.2). On the parent:
+    /// its notes play through its articulation tracks instead of itself.
+    bool articulations_expanded = false;
+    /// On an articulation track: its parent's id, and which of the parent's
+    /// sounds it plays ("staccato", "pizzicato"... or "natural": the notes
+    /// no articulation switches). Its notes are the parent's, filtered, kept
+    /// in step on every edit; they are edited on the parent.
+    std::string articulation_parent;
+    std::string articulation_group;
+    /// Not saved: what the derived notes were made from.
+    std::string derived_key;
     /// A MIDI track's external MIDI output device (its name), or empty: its
     /// notes then play the track's instrument. The hardware's sound comes
     /// back on the track's audio input (`input`), which a real-time print

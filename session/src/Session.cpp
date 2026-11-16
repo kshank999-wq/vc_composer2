@@ -1,4 +1,5 @@
 #include "vcc/session/Session.h"
+#include "vcc/project/ArticulationMap.h"
 #include "vcc/session/Package.h"
 #include "vcc/session/Relink.h"
 #include "vcc/project/Percussion.h"
@@ -408,7 +409,9 @@ bool Session::remove_track(const std::string& id)
     const project::Track* t = data().find_track(id);
     if (!t) return false;
     return edit("Remove " + t->name, [&](project::ProjectData& d) {
-        d.tracks.erase(std::remove_if(d.tracks.begin(), d.tracks.end(), [&](const project::Track& x) { return x.id == id; }),
+        // A part takes its articulation tracks with it.
+        d.tracks.erase(std::remove_if(d.tracks.begin(), d.tracks.end(),
+                                      [&](const project::Track& x) { return x.id == id || x.articulation_parent == id; }),
                        d.tracks.end());
         for (auto& x : d.tracks)
             if (x.folder_id == id) x.folder_id.clear();
@@ -1277,6 +1280,14 @@ std::vector<const project::Track*> Session::music_tracks() const
     return out;
 }
 
+std::vector<const project::Track*> Session::staff_tracks() const
+{
+    std::vector<const project::Track*> out;
+    for (const auto* t : music_tracks())
+        if (t->articulation_parent.empty()) out.push_back(t);
+    return out;
+}
+
 bool Session::audible(const project::Track& track) const
 {
     if (track.mute) return false;
@@ -1924,6 +1935,103 @@ std::vector<std::string> Session::place_prints(const std::vector<std::pair<std::
     });
     if (!ok) ids.clear();
     return ids;
+}
+
+std::vector<Session::ArticulationSplit> Session::preview_articulation_tracks(const std::string& track_id) const
+{
+    std::vector<ArticulationSplit> out;
+    const auto* t = data().find_track(track_id);
+    const auto* v = t ? t->active_version() : nullptr;
+    if (!v || !t->articulation_parent.empty()) return out;
+    const auto map = project::expression_map_for(*t);
+    auto bump = [&](const std::string& g, int n) {
+        for (auto& o : out)
+            if (o.group == g) {
+                o.notes += n;
+                return;
+            }
+        out.push_back({g, project::articulation_group_name(g), n});
+    };
+    for (std::size_t s = 0; s < v->score.staff_count(); ++s)
+        for (const auto& n : v->score.notes(s))
+            if (!n.is_rest) bump(project::articulation_group(map, n.articulations), 1);
+    if (out.empty()) {
+        // No notes yet (a template): every sound the map selects.
+        bump("natural", 0);
+        for (const auto& rule : map.articulations)
+            if (notation::selects_sound(rule.action)) bump(notation::to_string(rule.articulation), 0);
+    }
+    // Natural first, then as the map lists them.
+    std::stable_sort(out.begin(), out.end(), [](const ArticulationSplit& a, const ArticulationSplit& b) {
+        return (a.group == "natural") > (b.group == "natural");
+    });
+    return out;
+}
+
+std::vector<const project::Track*> Session::articulation_tracks(const std::string& track_id) const
+{
+    std::vector<const project::Track*> out;
+    for (const auto& t : data().tracks)
+        if (t.articulation_parent == track_id) out.push_back(&t);
+    return out;
+}
+
+std::vector<std::string> Session::expand_articulations(const std::string& track_id, const std::vector<std::string>& groups)
+{
+    const auto* t = data().find_track(track_id);
+    if (!t || t->kind != project::TrackKind::Instrument || !t->articulation_parent.empty() || t->articulations_expanded) return {};
+    std::vector<std::string> wanted = groups;
+    if (wanted.empty())
+        for (const auto& p : preview_articulation_tracks(track_id)) wanted.push_back(p.group);
+    if (wanted.empty()) return {};
+    std::vector<std::string> ids;
+    const bool ok = edit("Expand " + t->name + " to articulation tracks", [&](project::ProjectData& d) {
+        auto it = std::find_if(d.tracks.begin(), d.tracks.end(), [&](const project::Track& x) { return x.id == track_id; });
+        if (it == d.tracks.end()) return false;
+        it->articulations_expanded = true;
+        const project::Track parent = *it;
+        std::vector<project::Track> children;
+        for (const auto& g : wanted) {
+            project::Track c = parent;
+            c.id = project_.ids().next("trk");
+            c.name = parent.name + " - " + project::articulation_group_name(g);
+            c.articulations_expanded = false;
+            c.articulation_parent = parent.id;
+            c.articulation_group = g;
+            c.derived_key.clear();
+            c.automation.clear();
+            c.print_signature.clear();
+            c.instrument_unloaded = false;
+            c.playback = "midi";
+            c.record_armed = false;
+            c.folder_id = parent.folder_id;
+            project::TrackVersion v;
+            v.id = project_.ids().next("ver");
+            v.name = "Version 1";
+            if (const auto* pv = parent.active_version()) v.score = pv->score;  // filtered by sync_scores
+            c.versions = {std::move(v)};
+            c.active_version_id = c.versions.front().id;
+            ids.push_back(c.id);
+            children.push_back(std::move(c));
+        }
+        d.tracks.insert(std::next(it), children.begin(), children.end());
+        return true;
+    });
+    if (!ok) ids.clear();
+    return ids;
+}
+
+bool Session::consolidate_articulations(const std::string& track_id)
+{
+    const auto* t = data().find_track(track_id);
+    if (!t || !t->articulations_expanded) return false;
+    return edit("Consolidate " + t->name + " to one track", [&](project::ProjectData& d) {
+        d.tracks.erase(std::remove_if(d.tracks.begin(), d.tracks.end(),
+                                      [&](const project::Track& x) { return x.articulation_parent == track_id; }),
+                       d.tracks.end());
+        if (auto* p = d.find_track(track_id)) p->articulations_expanded = false;
+        return true;
+    });
 }
 
 project::FreezeState Session::freeze_state(const std::string& track_id) const

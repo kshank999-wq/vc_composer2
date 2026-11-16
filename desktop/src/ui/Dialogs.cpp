@@ -298,7 +298,7 @@ void TrackSelector::refresh()
     addItem(new_label_, 1);
     addSeparator();
     int select_id = 0;
-    for (const auto* t : context_.session.music_tracks()) {
+    for (const auto* t : context_.session.staff_tracks()) {
         if (t->kind != project::TrackKind::Instrument) continue;
         ids_.push_back(t->id);
         const int id = static_cast<int>(ids_.size()) + 1;

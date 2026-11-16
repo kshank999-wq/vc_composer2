@@ -230,6 +230,7 @@ std::string export_project_midi(const Project& project, bool include_keyswitches
 {
     std::vector<MidiFileTrack> tracks;
     for (const Track* t : project.export_tracks()) {
+        if (!t->articulation_parent.empty()) continue;  // its notes are its parent's
         if (t->kind != TrackKind::Instrument && t->kind != TrackKind::MidiOnly) continue;
         RenderedTrack r = render_track(*t);
         MidiFileTrack mt{t->name, r.notes, t->midi_channel == 9 ? -1 : t->assignment.placeholder_program, r.controllers};

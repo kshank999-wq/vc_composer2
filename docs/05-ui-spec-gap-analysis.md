@@ -1795,3 +1795,33 @@ macOS, Linux and Windows. What it took:
     - **Tests**: `test_project` (3,072 tracks save/load/edit, undo budget);
       `resources_checks` and `stress_checks` in the desktop check
       (`VCC_STRESS_MIDI` / `VCC_STRESS_AUDIO` change the counts).
+47. **Memory Management spec, P1: Freeze & Unload, articulation tracks.
+    Done** (November 16, 2026; Memory Management spec §5, §6).
+    - **Freeze** (Track menu, or the header's Freeze key): prints the track
+      through its instrument and inserts and plays the print; fader, pan
+      and sends stay live (decision 2). **Freeze & Unload** also closes the
+      instrument. With the new default hosting, *each instrument alone*
+      (decision 3: an instrument gets a host process of its own, effects
+      share one per manufacturer), its memory goes back to the computer;
+      its settings are kept for **Unfreeze**. **Re-render** prints again,
+      loading the instrument for that print only.
+    - **States** on the audio lane: `FROZEN`, `FROZEN · UNLOADED`,
+      `STALE` (the music, maps, instrument, its settings, automation, tempo
+      or meter changed since the print: `render_signature` in
+      `vcc/project/Freeze.h`), `RENDERING`, `MISSING PLUG-IN`.
+    - **Expand Articulations to Tracks...** (Track menu): a dialog lists
+      the sounds the part's notes play, as its articulation map selects
+      them, with note counts; the ones ticked become tracks after the part
+      ("Violins - Staccato"), each with the part's instrument, map, routing
+      and mix. The notes stay in the part's score: each articulation track
+      derives the ones for its sound, so editing the part (in either view)
+      updates them and every note plays once. The part's own instrument
+      closes while they play. Composer, printed parts, MusicXML and MIDI
+      export see the part alone. In Producer the part reads `PART` and its
+      tracks `ARTIC`, named `└ STACCATO`. **Consolidate to One Track**, from
+      the part or any of its tracks, removes them and the part plays every
+      sound again. Each is one undo step; removing the part removes them.
+    - **Tests**: `test_session` (freeze states, stale signatures; expand,
+      play once, follow edits, save/reopen, consolidate);
+      `freeze_checks` and `articulation_checks` in the desktop check, with
+      the test plug-in in its own process (process counts are checked).

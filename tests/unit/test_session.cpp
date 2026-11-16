@@ -1,5 +1,6 @@
 // The desktop app's document controller, exercised without a window.
 #include <algorithm>
+#include <set>
 #include <filesystem>
 
 #include "vcc/core/Files.h"
@@ -861,4 +862,91 @@ TEST_CASE("freeze: a print records what it was made from; mix moves leave it fro
     CHECK(s.freeze_state(t) == project::FreezeState::Live);
     CHECK(!s.data().find_track(t)->instrument_unloaded);
     CHECK(!s.data().find_track(t)->active_version()->audio_clips.empty());
+}
+
+TEST_CASE("articulation tracks: expand a part, play the same notes once, follow edits, consolidate back")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto part = s.add_track("Violins", "strings.violins_1");
+    // A keyswitch map: staccato and pizzicato select sounds; natural is the sustain.
+    notation::ExpressionMap map = notation::make_default_expression_map();
+    map.name = "KS";
+    map.articulations.clear();
+    for (const auto& [art, ks] : {std::pair{notation::Articulation::Staccato, 24}, std::pair{notation::Articulation::Pizzicato, 25}}) {
+        notation::ArticulationRule r;
+        r.articulation = art;
+        r.action = notation::ArticulationAction::Keyswitch;
+        r.keyswitch_note = static_cast<std::uint8_t>(ks);
+        map.articulations.push_back(r);
+    }
+    map.has_natural = true;
+    map.natural.action = notation::ArticulationAction::Keyswitch;
+    map.natural.keyswitch_note = 23;
+    REQUIRE(s.set_articulation_map(part, map));
+    notation::Score sc = s.data().find_track(part)->active_version()->score;
+    auto note = [&](int beat, int midi, notation::ArticulationMask arts) {
+        notation::ScoreNote n;
+        n.start_tick = beat * kTicksPerQuarter;
+        n.duration = notation::quarter();
+        n.pitch = notation::spell_midi_note(midi, {});
+        n.articulations = arts;
+        sc.insert_note(0, n);
+    };
+    note(0, 67, 0);
+    note(1, 69, notation::to_mask(notation::Articulation::Staccato));
+    note(2, 71, notation::to_mask(notation::Articulation::Pizzicato));
+    note(3, 72, 0);
+    REQUIRE(s.commit_score(part, sc, "Write"));
+    const auto before = project::render_track(*s.data().find_track(part));
+
+    const auto preview = s.preview_articulation_tracks(part);
+    REQUIRE(preview.size() == 3u);
+    CHECK_EQ(preview[0].group, std::string("natural"));
+    CHECK_EQ(preview[0].notes, 2);
+    const auto ids = s.expand_articulations(part);
+    REQUIRE(ids.size() == 3u);
+    CHECK(s.data().find_track(part)->articulations_expanded);
+    CHECK_EQ(s.undo_label(), std::string("Expand Violins to articulation tracks"));
+    // Every note plays once, through exactly one articulation track.
+    std::multiset<std::pair<Ticks, int>> played, written;
+    for (const auto& id : ids) {
+        const auto r = project::render_track(*s.data().find_track(id));
+        for (const auto& n : r.notes) played.insert({n.start, n.pitch});
+    }
+    for (const auto& n : before.notes) written.insert({n.start, n.pitch});
+    CHECK(played == written);
+    CHECK_EQ(s.data().find_track(ids[1])->name, std::string("Violins - Staccato"));
+    // Not staves: Composer, parts and exports see the part alone.
+    CHECK_EQ(s.staff_tracks().size(), 1u);
+    CHECK_EQ(s.music_tracks().size(), 4u);
+    // The part is edited; its articulation tracks follow.
+    notation::Score more = s.data().find_track(part)->active_version()->score;
+    notation::ScoreNote extra;
+    extra.start_tick = 4 * kTicksPerQuarter;
+    extra.duration = notation::quarter();
+    extra.pitch = notation::spell_midi_note(74, {});
+    extra.articulations = notation::to_mask(notation::Articulation::Staccato);
+    more.insert_note(0, extra);
+    REQUIRE(s.commit_score(part, more, "Write"));
+    CHECK_EQ(s.data().find_track(ids[1])->active_version()->score.total_note_count(), 2u);
+    // Saved and reopened, it is still expanded and still in step.
+    const auto dir = std::filesystem::temp_directory_path() / "vcc_artic_test";
+    std::filesystem::create_directories(dir);
+    std::string error;
+    REQUIRE(s.save_as((dir / "a.vcc2").string(), &error));
+    session::Session back(catalogs());
+    REQUIRE(back.open((dir / "a.vcc2").string(), &error));
+    CHECK_EQ(back.articulation_tracks(part).size(), 3u);
+    CHECK_EQ(back.data().find_track(ids[1])->active_version()->score.total_note_count(), 2u);
+    std::filesystem::remove_all(dir);
+    // Consolidate: one track again, the same music.
+    REQUIRE(s.consolidate_articulations(part));
+    CHECK_EQ(s.music_tracks().size(), 1u);
+    CHECK(!s.data().find_track(part)->articulations_expanded);
+    CHECK_EQ(project::render_track(*s.data().find_track(part)).notes.size(), before.notes.size() + 1);
+    // Removing an expanded part takes its tracks with it.
+    REQUIRE(s.expand_articulations(part).size() == 3u);
+    REQUIRE(s.remove_track(part));
+    CHECK(s.music_tracks().empty());
 }

@@ -305,7 +305,7 @@ theory::Key CircleOfFifthsPanel::score_key(juce::String& anchor) const
     const Ticks at = sel.has_range() ? sel.from : std::max<Ticks>(0, context_.engine.position());
     const project::Track* t = d.find_track(s.selected_track());
     if (!t || !t->active_version()) {
-        const auto tracks = s.music_tracks();
+        const auto tracks = s.staff_tracks();
         t = tracks.empty() ? nullptr : tracks.front();
     }
     const int bar = d.meter.bar_at(at);

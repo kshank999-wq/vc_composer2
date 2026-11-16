@@ -267,7 +267,7 @@ void ComposerView::timerCallback()
 
 void ComposerView::rebuild()
 {
-    const auto tracks = context_.session.music_tracks();
+    const auto tracks = context_.session.staff_tracks();
     std::vector<std::string> ids;
     for (const auto* t : tracks)
         if (t->kind == project::TrackKind::Instrument || t->kind == project::TrackKind::MidiOnly) ids.push_back(t->id);

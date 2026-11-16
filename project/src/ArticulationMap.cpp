@@ -1,6 +1,7 @@
 #include "vcc/project/ArticulationMap.h"
 
 #include <algorithm>
+#include <cctype>
 
 #include "vcc/project/Render.h"
 
@@ -171,6 +172,28 @@ MapHealth map_health(const Track& track)
                                       [](const nt::ArticulationRule& r) { return nt::selects_sound(r.action); });
     h.missing_natural = switches && !map.has_natural;
     return h;
+}
+
+}  // namespace vcc::project
+
+namespace vcc::project {
+
+std::string articulation_group(const notation::ExpressionMap& map, notation::ArticulationMask articulations)
+{
+    // As the renderer chooses: the map's rules in order, the first that
+    // both matches a written articulation and selects a sound.
+    for (const auto& rule : map.articulations)
+        if (notation::has_articulation(articulations, rule.articulation) && notation::selects_sound(rule.action))
+            return notation::to_string(rule.articulation);
+    return "natural";
+}
+
+std::string articulation_group_name(const std::string& group)
+{
+    if (group.empty()) return group;
+    std::string s = group;
+    s[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
+    return s;
 }
 
 }  // namespace vcc::project

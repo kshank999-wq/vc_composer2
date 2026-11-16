@@ -1217,13 +1217,17 @@ private:
 std::shared_ptr<Instrument> PlaybackEngine::instrument_for(const project::Track& t, InstrumentSlot& slot)
 {
     // A print of this very track (Re-render) loads it for the print's own engine.
-    if (t.instrument_unloaded && !(print_tap_ && print_tap_->track_id == t.id)) {
+    // A part expanded to articulation tracks plays through them: its own
+    // instrument would sit silent, so it is not loaded either.
+    if ((t.instrument_unloaded || t.articulations_expanded) && !(print_tap_ && print_tap_->track_id == t.id)) {
         // The plug-in instance goes with the old slot: its process closes
         // when nothing else uses it, giving its memory back.
-        if (slot.instrument && slot.key == "unloaded") return slot.instrument;
-        slot.key = "unloaded";
+        const std::string key = t.articulations_expanded ? "unloaded:expanded" : "unloaded";
+        if (slot.instrument && slot.key == key) return slot.instrument;
+        slot.key = key;
         slot.instrument = std::make_shared<UnloadedInstrument>(
-            "Unloaded (frozen)" + (t.instrument_plugin.empty() ? juce::String() : ": " + juce::String(t.instrument_plugin.name)));
+            juce::String(t.articulations_expanded ? "Unloaded (its articulation tracks play)" : "Unloaded (frozen)") +
+            (t.instrument_plugin.empty() ? juce::String() : ": " + juce::String(t.instrument_plugin.name)));
         slot.status = slot.instrument->display_name();
         return slot.instrument;
     }
@@ -1414,7 +1418,8 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
             // A track set to play only its audio lane keeps its instrument
             // (for a MIDI keyboard) but sends it none of its notes.
             const bool printing_this = (print_tap_ && print_tap_->track_id == t->id) || live_slot >= 0;
-            if (t->playback != "audio" || printing_this) {
+            // An expanded part plays through its articulation tracks, never itself.
+            if ((t->playback != "audio" || printing_this) && !t->articulations_expanded) {
                 project::RenderedTrack r = render_cache_.render(*t);
                 if (st.instrument->wants_keyswitches()) r.notes.insert(r.notes.end(), r.keyswitches.begin(), r.keyswitches.end());
                 st.events = to_events(r.notes, r.controllers, d.tempo, sample_rate_);

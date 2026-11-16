@@ -1,4 +1,5 @@
 #include "vcc/project/Project.h"
+#include "vcc/project/ArticulationMap.h"
 #include "vcc/project/Freeze.h"
 
 #include "vcc/project/ArticulationMap.h"
@@ -272,6 +273,30 @@ void ProjectData::sync_scores()
                     v.score.modify_note(id, changed);
                 }
         }
+    }
+    // Articulation tracks: the parent's notes of their sound, kept in step.
+    for (auto& child : tracks) {
+        if (child.articulation_parent.empty()) continue;
+        const Track* parent = find_track(child.articulation_parent);
+        const TrackVersion* pv = parent ? parent->active_version() : nullptr;
+        TrackVersion* cv = child.active_version();
+        if (!pv || !cv) continue;
+        const notation::ExpressionMap map = expression_map_for(*parent);
+        std::uint64_t perf = pv->performance.size();
+        for (const auto& [id, ov] : pv->performance)
+            perf = perf * 1099511628211ull + id * 31u + static_cast<std::uint64_t>(ov.onset * 7 + ov.length * 13 + ov.velocity * 17 + ov.cc);
+        const std::string source_key = std::to_string(pv->score.revision()) + "|" + expression_map_key(*parent) + "|" +
+                                       child.articulation_group + "|" + std::to_string(perf);
+        if (child.derived_key == source_key) continue;
+        notation::Score derived = pv->score;
+        std::vector<notation::EventId> drop;
+        for (std::size_t s = 0; s < derived.staff_count(); ++s)
+            for (const auto& n : derived.notes(s))
+                if (!n.is_rest && articulation_group(map, n.articulations) != child.articulation_group) drop.push_back(n.id);
+        for (const auto id : drop) derived.remove_note(id);
+        cv->score = std::move(derived);
+        cv->performance = pv->performance;
+        child.derived_key = source_key;
     }
 }
 
@@ -987,6 +1012,9 @@ static json::Value track_to_json(const Track& t)
     if (t.printed_fx) o.set("printed_fx", true);
     if (!t.print_signature.empty()) o.set("print_signature", t.print_signature);
     if (t.instrument_unloaded) o.set("instrument_unloaded", true);
+    if (t.articulations_expanded) o.set("articulations_expanded", true);
+    if (!t.articulation_parent.empty()) o.set("articulation_parent", t.articulation_parent);
+    if (!t.articulation_group.empty()) o.set("articulation_group", t.articulation_group);
     if (!t.midi_output.empty()) o.set("midi_output", t.midi_output);
     if (t.record_source != "midi") o.set("record_source", t.record_source);
     if (!t.sidechain.empty()) o.set("sidechain", t.sidechain);
@@ -1320,6 +1348,9 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.printed_fx = j.get_bool("printed_fx", false);
         t.print_signature = j.get_string("print_signature");
         t.instrument_unloaded = j.get_bool("instrument_unloaded", false);
+        t.articulations_expanded = j.get_bool("articulations_expanded", false);
+        t.articulation_parent = j.get_string("articulation_parent");
+        t.articulation_group = j.get_string("articulation_group");
         t.midi_output = j.get_string("midi_output", "");
         t.record_source = j.get_string("record_source", "midi") == "audio" ? "audio" : "midi";
         t.sidechain = j.get_string("sidechain", "");

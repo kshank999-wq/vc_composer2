@@ -20,6 +20,7 @@
 #include "PlatformFixes.h"
 #include "audio/CueRenderer.h"
 #include <mutex>
+#include <set>
 #include "audio/MidiOut.h"
 #include "audio/PrintToAudio.h"
 #include "audio/Mp3Encoder.h"
@@ -6741,6 +6742,120 @@ void freeze_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// Expand Articulations to Tracks (Memory Spec §6): the dialog lists the
+/// sounds the part plays with their note counts; the chosen ones become
+/// tracks that play the part's notes once between them, each with its own
+/// instrument, while the part's own instrument closes; the score keeps one
+/// staff; Consolidate puts it back as it was.
+void articulation_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& host = ctx.plugins;
+    ctx.engine.stop();
+    const auto original = host.hosting_mode();
+    host.set_hosting_mode(PluginHost::HostingMode::instruments_alone);
+    session.new_empty();
+    ctx.engine.prepare_offline(48000.0, 512);
+    const auto part = session.add_track("Violins", "strings.violins_1");
+    const auto instrument = host.host_tool().existsAsFile() ? scan(ctx, VCC_TEST_PLUGIN) : std::nullopt;
+    if (instrument) session.set_instrument_plugin(part, *instrument);
+    notation::ExpressionMap map = notation::make_default_expression_map();
+    map.name = "KS";
+    map.articulations.clear();
+    for (const auto& [art, ks] : {std::pair{notation::Articulation::Staccato, 24}, std::pair{notation::Articulation::Pizzicato, 25},
+                                  std::pair{notation::Articulation::Tremolo, 26}}) {
+        notation::ArticulationRule r;
+        r.articulation = art;
+        r.action = notation::ArticulationAction::Keyswitch;
+        r.keyswitch_note = static_cast<std::uint8_t>(ks);
+        map.articulations.push_back(r);
+    }
+    map.has_natural = true;
+    map.natural.action = notation::ArticulationAction::Keyswitch;
+    map.natural.keyswitch_note = 23;
+    session.set_articulation_map(part, map);
+    notation::Score sc = session.data().find_track(part)->active_version()->score;
+    int beat = 0;
+    auto note = [&](int midi, notation::ArticulationMask arts) {
+        notation::ScoreNote n;
+        n.start_tick = beat++ * kTicksPerQuarter;
+        n.duration = notation::quarter();
+        n.pitch = notation::spell_midi_note(midi, {});
+        n.articulations = arts;
+        sc.insert_note(0, n);
+    };
+    for (int i = 0; i < 4; ++i) note(67 + i, 0);
+    for (int i = 0; i < 3; ++i) note(72 + i, notation::to_mask(notation::Articulation::Staccato));
+    note(76, notation::to_mask(notation::Articulation::Pizzicato));
+    session.commit_score(part, sc, "Write");
+    const auto before = project::render_track(*session.data().find_track(part));
+    session.select_track(part);
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(300);
+    auto own_process = [&] {
+        for (const auto& [label, n] : host.host_processes())
+            if (label == "VCC Test Instrument") return n;
+        return 0;
+    };
+
+    // The dialog: three sounds played, with their note counts.
+    ctx.commands.invokeDirectly(cmd::expandArticulations, false);
+    pump(100);
+    auto* dialog = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0));
+    juce::StringArray rows;
+    if (dialog && dialog->getNumCustomComponents() > 0)
+        for (auto* c : dialog->getCustomComponent(0)->getChildren())
+            if (auto* b = dynamic_cast<juce::ToggleButton*>(c)) rows.add(b->getButtonText());
+    if (dialog) shoot(*dialog, dir, "74-expand-articulations");
+    check(dialog && dialog->getComponentID() == "expand_articulations" && rows.size() == 3 &&
+              rows[0] == "Natural  -  4 notes" && rows[1] == "Staccato  -  3 notes" && rows[2] == "Pizzicato  -  1 note",
+          "Expand Articulations to Tracks lists the sounds the part plays: " + rows.joinIntoString(", "));
+    if (dialog) dialog->exitModalState(1);
+    pump(300);
+    const auto children = session.articulation_tracks(part);
+    std::multiset<std::pair<Ticks, int>> played, written;
+    for (const auto* c : children)
+        for (const auto& n : project::render_track(*c).notes) played.insert({n.start, n.pitch});
+    for (const auto& n : before.notes) written.insert({n.start, n.pitch});
+    check(children.size() == 3 && played == written && session.staff_tracks().size() == 1,
+          "it makes " + juce::String(static_cast<int>(children.size())) +
+              " articulation tracks that play each note once between them; the score keeps one staff");
+    if (instrument) {
+        wait_for([&] { return own_process() == 3; }, 10000);
+        check(own_process() == 3 && ctx.engine.instrument_status(part).startsWith("Unloaded"),
+              "each articulation track runs its own instrument; the part's own closes (" + ctx.engine.instrument_status(part) + ")");
+    }
+    session.select_track(children.empty() ? part : children[1]->id);
+    pump(300);
+    shoot(main, dir, "74-articulation-tracks");
+
+    // Editing the part: its articulation tracks follow.
+    notation::Score more = session.data().find_track(part)->active_version()->score;
+    beat = 8;
+    sc = more;
+    note(79, notation::to_mask(notation::Articulation::Staccato));
+    session.commit_score(part, sc, "Write");
+    const auto* stacc = session.data().find_track(children.size() > 1 ? children[1]->id : part);
+    check(stacc && stacc->active_version()->score.total_note_count() == 4, "a staccato note written in the part plays on its Staccato track");
+
+    // Consolidate, from one of its tracks: one track again, its instrument back.
+    ctx.commands.invokeDirectly(cmd::consolidateArticulations, false);
+    pump(300);
+    const auto* back = session.data().find_track(part);
+    check(back && !back->articulations_expanded && session.music_tracks().size() == 1 &&
+              project::render_track(*back).notes.size() == 9,
+          "Consolidate to One Track (from an articulation track) leaves the part playing all its notes");
+    if (instrument) {
+        wait_for([&] { return own_process() == 1; }, 10000);
+        check(own_process() == 1 && ctx.engine.instrument_status(part) == "VCC Test Instrument",
+              "the part's instrument is loaded again and the three others closed");
+    }
+    host.set_hosting_mode(original);
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -8604,6 +8719,8 @@ int main(int argc, char** argv)
         stress_checks(window, dir);
         section("freeze_checks");
         freeze_checks(window, dir);
+        section("articulation_checks");
+        articulation_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

@@ -146,3 +146,106 @@ juce::String unroll(AppContext& c)
 }
 
 }  // namespace vcc::desktop
+
+namespace vcc::desktop {
+
+std::string articulation_part(const AppContext& c, const std::string& track_id)
+{
+    const auto* t = c.session.data().find_track(track_id);
+    if (!t) return {};
+    return t->articulation_parent.empty() ? t->id : t->articulation_parent;
+}
+
+namespace {
+
+/// One tick box per sound, with how many of the part's notes play it.
+class SoundChoice final : public juce::Component {
+public:
+    explicit SoundChoice(const std::vector<session::Session::ArticulationSplit>& splits)
+    {
+        for (const auto& s : splits) {
+            auto b = std::make_unique<juce::ToggleButton>(
+                juce::String(s.name) + "  -  " +
+                (s.notes > 0 ? juce::String(s.notes) + (s.notes == 1 ? " note" : " notes") : juce::String("no notes yet")));
+            b->setToggleState(true, juce::dontSendNotification);
+            b->setTitle(juce::String(s.name));
+            addAndMakeVisible(*b);
+            boxes_.push_back({s.group, std::move(b)});
+        }
+        setSize(380, static_cast<int>(boxes_.size()) * 26 + 4);
+    }
+    void resized() override
+    {
+        int y = 2;
+        for (auto& [g, b] : boxes_) {
+            b->setBounds(0, y, getWidth(), 24);
+            y += 26;
+        }
+    }
+    std::vector<std::string> chosen() const
+    {
+        std::vector<std::string> out;
+        for (const auto& [g, b] : boxes_)
+            if (b->getToggleState()) out.push_back(g);
+        return out;
+    }
+
+private:
+    std::vector<std::pair<std::string, std::unique_ptr<juce::ToggleButton>>> boxes_;
+};
+
+}  // namespace
+
+void ask_expand_articulations(AppContext& c)
+{
+    const auto part = articulation_part(c, c.session.selected_track());
+    const auto* t = c.session.data().find_track(part);
+    if (!t || t->kind != project::TrackKind::Instrument) {
+        c.status("Select the instrument track to expand");
+        return;
+    }
+    if (t->articulations_expanded) {
+        c.status("Already expanded: Consolidate to One Track first");
+        return;
+    }
+    const auto splits = c.session.preview_articulation_tracks(part);
+    if (splits.empty()) {
+        c.status("This track has no articulation map to expand by");
+        return;
+    }
+    auto* w = new juce::AlertWindow(
+        "Expand Articulations to Tracks",
+        juce::String(t->name) + ": a track per sound, each with the instrument, routing and mix of the part. "
+                                "The notes stay in the part's score; each track plays the ones for its sound. "
+                                "Each loads its own instrument, so this uses more memory.",
+        juce::MessageBoxIconType::NoIcon);
+    w->setComponentID("expand_articulations");
+    auto choice = std::make_shared<SoundChoice>(splits);
+    w->addCustomComponent(choice.get());
+    w->addButton("Expand", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    w->enterModalState(true, juce::ModalCallbackFunction::create([&c, w, part, choice](int r) {
+                           w->removeCustomComponent(0);
+                           if (r != 1) return;
+                           const auto groups = choice->chosen();
+                           if (groups.empty()) {
+                               c.status("No sounds chosen: nothing expanded");
+                               return;
+                           }
+                           const auto ids = c.session.expand_articulations(part, groups);
+                           c.status(ids.empty() ? juce::String("Nothing to expand")
+                                                : "Expanded into " + juce::String(static_cast<int>(ids.size())) +
+                                                      " articulation tracks");
+                       }),
+                       true);
+}
+
+juce::String consolidate_articulations(AppContext& c)
+{
+    const auto part = articulation_part(c, c.session.selected_track());
+    if (!c.session.consolidate_articulations(part)) return "Select an expanded part (or one of its articulation tracks)";
+    c.session.select_track(part);
+    return "Consolidated: one track plays every articulation again";
+}
+
+}  // namespace vcc::desktop

@@ -28,6 +28,14 @@ notation::ExpressionMap expression_map_for(const Track& track);
 /// Changes whenever what plays changes (the render cache keys on it).
 std::string expression_map_key(const Track& track);
 
+/// Which of a map's sounds a note with these articulations plays: the
+/// first sound-selecting rule's articulation name ("staccato"), or
+/// "natural" when none applies (Memory Management spec §4: expanded
+/// articulation tracks split on exactly what playback selects).
+std::string articulation_group(const notation::ExpressionMap& map, notation::ArticulationMask articulations);
+/// "Staccato", "Natural".
+std::string articulation_group_name(const std::string& group);
+
 /// Mapping health (Main Spec §11 "mapping health indicator").
 struct MapHealth {
     /// Articulations written in the track's score that the map does nothing

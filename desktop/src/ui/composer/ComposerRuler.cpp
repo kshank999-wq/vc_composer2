@@ -64,7 +64,7 @@ void ComposerRuler::refresh()
     // marker): no need to read every note again.
     std::string content = d.key + "|" + std::to_string(song_end()) + "|";
     for (const auto& c : d.meter.changes()) content += std::to_string(c.bar) + ":" + c.signature.to_string() + ",";
-    for (const auto* t : session.music_tracks()) {
+    for (const auto* t : session.staff_tracks()) {
         const auto* v = t->active_version();
         content += t->id + "/" + t->color + "/" + std::to_string(t->midi_channel) + "/" + std::to_string(t->effective_transpose());
         if (v) {
@@ -84,7 +84,7 @@ void ComposerRuler::refresh()
     // Chords: every pitched track's sounding notes, bar by bar.
     std::vector<NoteEvent> all;
     lanes_.clear();
-    for (const auto* t : session.music_tracks()) {
+    for (const auto* t : session.staff_tracks()) {
         if (t->kind != project::TrackKind::Instrument && t->kind != project::TrackKind::MidiOnly) continue;
         const auto& r = render_.render(*t);
         if (t->midi_channel != 9) all.insert(all.end(), r.notes.begin(), r.notes.end());
