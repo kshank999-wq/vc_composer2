@@ -389,8 +389,18 @@ public:
     /// keep one copy of a score that did not change. 0: never changed.
     std::uint64_t revision() const noexcept { return revision_; }
 
+    /// Collaboration: a shared project's copy hands out note ids carrying its
+    /// site (bits 40-63), each site counting on its own, so two people's new
+    /// notes never share an id and a merge can tell them apart. Site 0 (an
+    /// unshared project) hands out the ids it always has. Not saved with the
+    /// score and not a change to it: the site is the installation's.
+    static constexpr int kSiteShift = 40;
+    static constexpr EventId kSiteCounterMask = (EventId{1} << kSiteShift) - 1;
+    void set_site(std::uint32_t site) noexcept;
+    std::uint32_t site() const noexcept { return site_; }
+
 private:
-    EventId next_id() noexcept { return ++last_event_id_; }
+    EventId next_id() noexcept;
     void touch() noexcept;
 
     /// Keeps a staff's notes ordered by start tick, then voice, then pitch,
@@ -432,6 +442,9 @@ private:
     std::vector<RepeatSection> repeats_;
 
     EventId last_event_id_ = kInvalidEventId;
+    std::uint32_t site_ = 0;
+    /// The last counter this site handed out (the low bits of its ids).
+    EventId site_last_ = 0;
     std::uint64_t revision_ = 0;
 };
 

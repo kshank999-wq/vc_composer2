@@ -648,8 +648,14 @@ struct ProjectData {
     std::string unique_bus_name(const std::string& wanted) const;
 
     /// Pushes the project's meter map and key into every track version's
-    /// score. Called after every edit; cheap when nothing changed.
+    /// score, and the collaboration site. Called after every edit; cheap
+    /// when nothing changed.
     void sync_scores();
+
+    /// Collaboration: this installation's site in a shared project (0:
+    /// unshared). New note ids carry it (Score::set_site). The machine's,
+    /// not the project's: never saved.
+    std::uint32_t site = 0;
 };
 
 /// What to do when Send to Track lands on material already there
@@ -671,6 +677,9 @@ public:
 
     const ProjectData& data() const noexcept { return data_; }
     IdAllocator& ids() noexcept { return ids_; }
+    /// Collaboration: ids this copy hands out from now on carry `site`
+    /// (0: unshared, as before). Not an edit and not undoable.
+    void set_site(std::uint32_t site);
     const IdAllocator& ids() const noexcept { return ids_; }
 
     /// Applies `change` to a copy of the document. If it returns true the copy

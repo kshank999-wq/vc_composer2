@@ -404,6 +404,23 @@ bool Score::remove_note(EventId id)
     return false;
 }
 
+EventId Score::next_id() noexcept
+{
+    const EventId id = (static_cast<EventId>(site_) << kSiteShift) | ++site_last_;
+    if (id > last_event_id_) last_event_id_ = id;
+    return id;
+}
+
+void Score::set_site(std::uint32_t site) noexcept
+{
+    if (site == site_) return;
+    site_ = site & 0xFFFFFFu;  // 24 bits
+    site_last_ = 0;
+    for (const auto& staff : staff_notes_)
+        for (const auto& n : staff)
+            if ((n.id >> kSiteShift) == site_) site_last_ = std::max(site_last_, n.id & kSiteCounterMask);
+}
+
 bool Score::restore_note(std::size_t staff_index, const ScoreNote& note)
 {
     if (staff_index >= staff_notes_.size())
@@ -422,6 +439,7 @@ bool Score::restore_note(std::size_t staff_index, const ScoreNote& note)
     // cannot hand out an id this note already holds.
     if (note.id > last_event_id_)
         last_event_id_ = note.id;
+    if ((note.id >> kSiteShift) == site_) site_last_ = std::max(site_last_, note.id & kSiteCounterMask);
 
     touch();
     return true;

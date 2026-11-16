@@ -17,8 +17,12 @@ class IdAllocator {
 public:
     explicit IdAllocator(std::uint64_t next = 1) noexcept : next_(next) {}
 
-    /// "trk-0001", "note-0002", ... Width grows past 9999 as needed.
+    /// "trk-0001", "note-0002", ... Width grows past 9999 as needed. With a
+    /// site (a shared project's copy, collaboration): "trk-1a2b-0001", so
+    /// two people's new tracks never share an id.
     std::string next(const char* prefix);
+    void set_site(std::uint32_t site) noexcept { site_ = site; }
+    std::uint32_t site() const noexcept { return site_; }
 
     std::uint64_t peek() const noexcept { return next_; }
     /// Never moves backwards; used when loading a file whose counter is ahead.
@@ -29,6 +33,7 @@ public:
 
 private:
     std::uint64_t next_;
+    std::uint32_t site_ = 0;
 };
 
 }  // namespace vcc

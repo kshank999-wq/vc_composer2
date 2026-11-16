@@ -256,6 +256,7 @@ void ProjectData::sync_scores()
     for (auto& t : tracks) {
         const PercussionMap* drums = t.percussion_map.empty() ? nullptr : percussion_map_named(t.percussion_map);
         for (auto& v : t.versions) {
+            v.score.set_site(site);
             sync_score(v.score, meter, ks);
             if (v.score.repeats() != repeats) v.score.set_repeats(repeats);
             if (!drums) continue;
@@ -422,6 +423,13 @@ bool Project::edit_coalescing(const std::string& label, const std::function<bool
     if (breaks_approval(working)) return false;
     data_ = std::move(working);  // the existing step's "before" stays as it was
     return true;
+}
+
+void Project::set_site(std::uint32_t site)
+{
+    ids_.set_site(site);
+    data_.site = site;
+    data_.sync_scores();
 }
 
 void Project::modify_unrecorded(const std::function<void(ProjectData&)>& change)

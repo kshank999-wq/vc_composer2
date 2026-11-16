@@ -281,3 +281,53 @@ TEST_CASE("no track-count ceiling: 1,024 instrument and 2,048 audio tracks save,
     CHECK(p.data().tracks[119].gain_db == 0.0);
     std::filesystem::remove_all(dir);
 }
+
+TEST_CASE("collaboration: two copies of a shared project never hand out the same id")
+{
+    Project base;
+    const std::string violins = base.add_track("Violins I", TrackKind::Instrument, "strings.violins_1");
+    auto add_note = [](Project& p, const std::string& track, Ticks at) {
+        notation::ScoreNote n;
+        n.start_tick = at;
+        n.duration = notation::quarter();
+        n.pitch = notation::spell_midi_note(67, {});
+        notation::EventId id = 0;
+        p.edit("Write", [&](ProjectData& d) {
+            auto* t = d.find_track(track);
+            id = t->active_version()->score.insert_note(0, n);
+            return id != notation::kInvalidEventId;
+        });
+        return id;
+    };
+    const auto first = add_note(base, violins, 0);
+    CHECK(first < (notation::EventId{1} << notation::Score::kSiteShift));  // unshared: ids as always
+
+    // Two collaborators, each with a copy and a site of their own.
+    const auto doc = base.to_json();
+    auto ann = Project::from_json(doc);
+    auto ben = Project::from_json(doc);
+    REQUIRE(ann && ben);
+    ann->set_site(0x1a2b);
+    ben->set_site(0x3c4d);
+    const auto a1 = add_note(*ann, violins, kTicksPerQuarter);
+    const auto a2 = add_note(*ann, violins, 2 * kTicksPerQuarter);
+    const auto b1 = add_note(*ben, violins, kTicksPerQuarter);
+    CHECK(a1 != b1);
+    CHECK(a1 != a2);
+    CHECK_EQ(a1 >> notation::Score::kSiteShift, 0x1a2bu);
+    CHECK_EQ(b1 >> notation::Score::kSiteShift, 0x3c4du);
+    CHECK_EQ(a1 & notation::Score::kSiteCounterMask, 1u);  // each site counts on its own
+    const auto at = ann->add_track("Horns", TrackKind::Instrument, "brass.horn_section");
+    const auto bt = ben->add_track("Horns", TrackKind::Instrument, "brass.horn_section");
+    CHECK(at != bt);
+    CHECK(at.find("-1a2b-") != std::string::npos);
+
+    // Saved and reopened on the same machine, the site's counter continues
+    // past what it had handed out: nothing is reused.
+    auto again = Project::from_json(ann->to_json());
+    REQUIRE(again);
+    again->set_site(0x1a2b);
+    const auto a3 = add_note(*again, violins, 3 * kTicksPerQuarter);
+    CHECK_EQ(a3 & notation::Score::kSiteCounterMask, 3u);
+    CHECK(a3 != a1 && a3 != a2);
+}
