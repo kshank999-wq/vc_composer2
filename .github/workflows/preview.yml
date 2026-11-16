@@ -51,11 +51,22 @@ jobs:
       - uses: actions/checkout@v4
       - name: LGPL FFmpeg (BtbN shared build)
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $name = "ffmpeg-n7.1-latest-win64-lgpl-shared-7.1"
-          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$name.zip" -OutFile ffmpeg.zip
+          # The newest release-branch LGPL shared build, preferring 7.1 (the
+          # version macOS builds from source); never a gpl build.
+          $assets = (gh release view latest -R BtbN/FFmpeg-Builds --json assets | ConvertFrom-Json).assets.name |
+            Where-Object { $_ -match '^ffmpeg-n[0-9.]+-latest-win64-lgpl-shared-[0-9.]+\.zip$' }
+          $assets | ForEach-Object { Write-Host "available: $_" }
+          $name = ($assets | Where-Object { $_ -match '-7\.1\.zip$' } | Select-Object -First 1)
+          if (-not $name) { $name = $assets | Sort-Object -Descending | Select-Object -First 1 }
+          if (-not $name) { throw "no LGPL shared Windows build in BtbN's latest release" }
+          Write-Host "using $name"
+          gh release download latest -R BtbN/FFmpeg-Builds -p $name -O ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath C:\ffmpeg-dl
-          Move-Item "C:\ffmpeg-dl\$name" C:\ffmpeg
+          Move-Item (Join-Path C:\ffmpeg-dl ($name -replace '\.zip$', '')) C:\ffmpeg
+          "$name" | Out-File C:\ffmpeg\BUILD-NAME.txt
           Get-ChildItem C:\ffmpeg\lib, C:\ffmpeg\bin | Select-Object Name
       - name: Version
         id: version
@@ -81,7 +92,7 @@ jobs:
           cp /c/ffmpeg/bin/*.dll stage/
           packaging/collect-notices.sh stage/licenses
           cp /c/ffmpeg/LICENSE.txt stage/licenses/FFmpeg-LICENSE.txt 2>/dev/null || true
-          echo "FFmpeg LGPL shared build from https://github.com/BtbN/FFmpeg-Builds (ffmpeg-n7.1-latest-win64-lgpl-shared-7.1); source: https://github.com/FFmpeg/FFmpeg/tree/release/7.1" > stage/licenses/FFmpeg-SOURCE.txt
+          echo "FFmpeg LGPL shared build $(cat /c/ffmpeg/BUILD-NAME.txt | tr -d '\r\n') from https://github.com/BtbN/FFmpeg-Builds (release 'latest'); source: https://github.com/FFmpeg/FFmpeg" > stage/licenses/FFmpeg-SOURCE.txt
           ls -la stage stage/licenses
       - name: Sign the programs
         if: env.HAS_SIGNING == 'true'

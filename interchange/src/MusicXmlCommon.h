@@ -4,7 +4,9 @@
 #include <charconv>
 #include <cstdint>
 #include <cstdlib>
+#include <locale>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -109,9 +111,30 @@ inline std::optional<double> parse_double(std::string_view s) noexcept
     s = trim_view(s);
     if (!s.empty() && s.front() == '+') s.remove_prefix(1);
     if (s.empty()) return std::nullopt;
+    // The shape first ([-]digits[.digits][e[+-]digits]), then a classic-locale
+    // stream: floating-point std::from_chars needs macOS 26 in Apple's library.
+    std::size_t i = 0;
+    if (s[i] == '-') ++i;
+    std::size_t mantissa = 0;
+    while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i, ++mantissa;
+    if (i < s.size() && s[i] == '.') {
+        ++i;
+        while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i, ++mantissa;
+    }
+    if (mantissa == 0) return std::nullopt;
+    if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
+        ++i;
+        if (i < s.size() && (s[i] == '+' || s[i] == '-')) ++i;
+        const std::size_t from = i;
+        while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+        if (i == from) return std::nullopt;
+    }
+    if (i != s.size()) return std::nullopt;
+    std::istringstream in{std::string(s)};
+    in.imbue(std::locale::classic());
     double v = 0;
-    auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
-    if (ec != std::errc() || ptr != s.data() + s.size()) return std::nullopt;
+    in >> v;
+    if (in.fail()) return std::nullopt;
     return v;
 }
 
