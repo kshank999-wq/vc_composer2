@@ -6794,10 +6794,11 @@ void articulation_checks(MainWindow& window, const juce::File& dir)
     session.select_track(part);
     main.show_workspace(MainComponent::Workspace::Sequencer);
     pump(300);
-    auto own_process = [&] {
-        for (const auto& [label, n] : host.host_processes())
-            if (label == "VCC Test Instrument") return n;
-        return 0;
+    auto own_process = [&] {  // processes running the test instrument
+        int n = 0;
+        for (const auto& [label, instances] : host.host_processes())
+            if (label == "VCC Test Instrument" && instances > 0) ++n;
+        return n;
     };
 
     // The dialog: three sounds played, with their note counts.
@@ -6825,7 +6826,8 @@ void articulation_checks(MainWindow& window, const juce::File& dir)
     if (instrument) {
         wait_for([&] { return own_process() == 3; }, 10000);
         check(own_process() == 3 && ctx.engine.instrument_status(part).startsWith("Unloaded"),
-              "each articulation track runs its own instrument; the part's own closes (" + ctx.engine.instrument_status(part) + ")");
+              "each articulation track runs its own instrument (" + juce::String(own_process()) +
+                  " processes); the part's own closes (" + ctx.engine.instrument_status(part) + ")");
     }
     session.select_track(children.empty() ? part : children[1]->id);
     pump(300);
