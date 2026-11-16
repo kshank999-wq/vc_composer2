@@ -831,6 +831,10 @@ TEST_CASE("freeze: a print records what it was made from; mix moves leave it fro
     s.set_gain(t, -6.0);
     s.set_mute(t, true);
     CHECK(s.freeze_state(t) == project::FreezeState::Frozen);
+    // Suspend (loaded, not played) does not change what was printed either.
+    REQUIRE(s.set_instrument_suspended(t, true));
+    CHECK(s.freeze_state(t) == project::FreezeState::Frozen);
+    CHECK_EQ(s.undo_label(), std::string("Suspend Violins"));
     // Unload, and it survives save and open.
     REQUIRE(s.set_instrument_unloaded(t, true));
     CHECK(s.data().find_track(t)->instrument_unloaded);
@@ -841,6 +845,7 @@ TEST_CASE("freeze: a print records what it was made from; mix moves leave it fro
     session::Session back(catalogs());
     REQUIRE(back.open((dir / "f.vcc2").string(), &error));
     CHECK(back.data().find_track(t)->instrument_unloaded);
+    CHECK(back.data().find_track(t)->instrument_suspended);
     CHECK(back.freeze_state(t) == project::FreezeState::Frozen);
     std::filesystem::remove_all(dir);
 

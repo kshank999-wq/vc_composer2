@@ -1133,7 +1133,7 @@ void StatusStrip::mouseUp(const juce::MouseEvent& e)
 void StatusStrip::show_resources()
 {
     auto panel = std::make_unique<ResourcePanel>(context_);
-    panel->setSize(420, 300);
+    panel->setSize(420, 340);
     juce::CallOutBox::launchAsynchronously(std::move(panel), resources_area().toNearestInt() + getScreenPosition(), nullptr);
 }
 
@@ -1143,6 +1143,12 @@ ResourcePanel::ResourcePanel(AppContext& context) : context_(context)
 {
     setComponentID("resource_panel");
     setTitle("CPU and memory");
+    usage_.setTooltip("Every instrument's memory and engine load, with Freeze & Unload, Suspend and Reload");
+    usage_.onClick = [this] {
+        if (context_.show_instrument_usage) context_.show_instrument_usage();
+        if (auto* box = findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
+    };
+    addAndMakeVisible(usage_);
     startTimer(1000);
 }
 
@@ -1176,6 +1182,8 @@ juce::String ResourcePanel::text() const
     }
     return t;
 }
+
+void ResourcePanel::resized() { usage_.setBounds(getLocalBounds().reduced(12).removeFromBottom(26).removeFromRight(170)); }
 
 void ResourcePanel::paint(juce::Graphics& g)
 {

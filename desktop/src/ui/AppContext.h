@@ -57,6 +57,11 @@ struct AppContext {
     std::function<void(const std::vector<std::string>& tracks, bool unload)> freeze_tracks;
     /// "LIVE", "RENDERING", "FROZEN", "FROZEN · UNLOADED", "STALE", "MISSING PLUG-IN".
     std::function<juce::String(const std::string& track_id)> track_state;
+    /// A freeze in progress: "Violins I  42%" (empty when none); and stop it.
+    std::function<juce::String()> freeze_progress;
+    std::function<void()> cancel_freeze;
+    /// Opens the instrument usage panel (Memory Management spec §6.1).
+    std::function<void()> show_instrument_usage;
 };
 
 /// Application commands (menus, toolbar buttons and key bindings).
@@ -159,6 +164,7 @@ enum : juce::CommandID {
     rerenderTrack,
     expandArticulations,
     consolidateArticulations,
+    instrumentUsage,
 };
 }  // namespace cmd
 

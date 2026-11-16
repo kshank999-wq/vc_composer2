@@ -2029,6 +2029,17 @@ bool Session::set_instrument_unloaded(const std::string& track_id, bool unloaded
     });
 }
 
+bool Session::set_instrument_suspended(const std::string& track_id, bool suspended)
+{
+    const auto* t = data().find_track(track_id);
+    if (!t || t->instrument_suspended == suspended) return false;
+    if (t->kind != project::TrackKind::Instrument && t->kind != project::TrackKind::MidiOnly) return false;
+    return edit((suspended ? "Suspend " : "Resume ") + t->name, [&](project::ProjectData& d) {
+        d.find_track(track_id)->instrument_suspended = suspended;
+        return true;
+    });
+}
+
 bool Session::unfreeze(const std::string& track_id)
 {
     const auto* t = data().find_track(track_id);

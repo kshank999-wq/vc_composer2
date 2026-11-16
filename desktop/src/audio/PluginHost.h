@@ -98,6 +98,7 @@ public:
         juce::String label;   ///< "All plug-ins", "Spitfire Audio", a plug-in's name.
         int instances = 0;    ///< Plug-ins it carries.
         std::uint64_t bytes = 0;  ///< Its physical memory, as it reports it; 0: no answer.
+        std::uintptr_t process = 0;  ///< Its identity (Instrument::host_process).
     };
     /// Asks every host process for its memory (a short call each). Off the
     /// audio and message threads: the resource monitor's thread calls it.
@@ -143,6 +144,7 @@ public:
     bool wants_keyswitches() const noexcept override { return true; }
     juce::String display_name() const override;
     int latency_samples() const noexcept override { return instance_->getLatencySamples(); }
+    std::uintptr_t host_process() const noexcept override;
 
     juce::AudioPluginInstance& instance() noexcept { return *instance_; }
     /// Listens to the plug-in's parameter gestures (message thread).

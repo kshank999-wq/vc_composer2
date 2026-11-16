@@ -11,6 +11,7 @@
 #include "licensing/AccountWindow.h"
 #include "ui/PictureTools.h"
 #include "ui/PrintPreview.h"
+#include "ui/InstrumentUsage.h"
 #include "ui/ScoreTools.h"
 #include "ui/ShortcutEditor.h"
 #include "ui/console/MixTools.h"
@@ -353,6 +354,15 @@ MainComponent::MainComponent(AppContext& context)
             context_.status("Frozen and unloaded " + juce::String(unloaded) + (unloaded == 1 ? " instrument" : " instruments") +
                             ": their memory is given back; Unfreeze reloads them");
     };
+    context_.show_instrument_usage = [this] { show_instrument_usage(context_); };
+    context_.freeze_progress = [this]() -> juce::String {
+        if (!print_.printing()) return {};
+        return print_.progress_lcd().text().replace("\n", "  ");
+    };
+    context_.cancel_freeze = [this] {
+        unload_after_print_.clear();
+        print_.cancel();
+    };
     context_.track_state = [this](const std::string& id) -> juce::String {
         const auto* t = context_.session.data().find_track(id);
         if (!t) return {};
@@ -370,6 +380,8 @@ MainComponent::MainComponent(AppContext& context)
         if (state == project::FreezeState::Stale) return "STALE" + unloaded;
         if (state == project::FreezeState::Frozen) return "FROZEN" + unloaded;
         if (context_.engine.instrument_status(id).startsWith("Missing")) return "MISSING PLUG-IN";
+        if (t->articulations_expanded) return "EXPANDED";
+        if (t->instrument_suspended) return "SUSPENDED";
         return "LIVE";
     };
 
@@ -514,6 +526,9 @@ MainComponent::~MainComponent()
     context_.show_library_for_track = nullptr;
     context_.freeze_tracks = nullptr;
     context_.track_state = nullptr;
+    context_.freeze_progress = nullptr;
+    context_.cancel_freeze = nullptr;
+    context_.show_instrument_usage = nullptr;
 }
 
 void MainComponent::paint(juce::Graphics& g) { g.fillAll(hw::tok::chassis); }
@@ -1655,7 +1670,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::monitorDim, cmd::reverseClips, cmd::timeStretchClips, cmd::groupClips, cmd::ungroupClips,
                 cmd::captureMidi, cmd::midiInputFilter, cmd::lyrics, cmd::explodeTracks, cmd::implodeTracks, cmd::addRepeat,
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
-                cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations});
+                cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
+                cmd::instrumentUsage});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1898,6 +1914,10 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
                          t && !t->print_signature.empty() ? 0 : juce::ApplicationCommandInfo::isDisabled);
             break;
         }
+        case cmd::instrumentUsage:
+            info.setInfo("Instrument Usage...", "Every instrument's memory and engine load, with Freeze & Unload, Suspend and Reload",
+                         "Tools", 0);
+            break;
         case cmd::expandArticulations: {
             const auto* t = context_.session.data().find_track(articulation_part(context_, context_.session.selected_track()));
             info.setInfo("Expand Articulations to Tracks...",
@@ -2021,6 +2041,7 @@ bool MainComponent::perform(const InvocationInfo& info)
                 context_.freeze_tracks({t->id}, t->instrument_unloaded);
             break;
         case cmd::expandArticulations: ask_expand_articulations(context_); break;
+        case cmd::instrumentUsage: show_instrument_usage(context_); break;
         case cmd::consolidateArticulations: context_.status(consolidate_articulations(context_)); break;
         case cmd::editShortcuts:
             show_shortcut_editor(context_, [this](const std::string& name) { use_shortcut_profile(name); });
@@ -2230,7 +2251,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             for (auto id : {cmd::chordExplorer, cmd::ostinatoCreator, cmd::addTemplate}) m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::audioSettings, cmd::midiInputFilter, cmd::showControlSurfaces, cmd::scanPlugins,
-                            cmd::reloadCrashedPlugins})
+                            cmd::reloadCrashedPlugins, cmd::instrumentUsage})
                 m.addCommandItem(c, id);
             break;
         case 6:

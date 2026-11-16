@@ -152,6 +152,22 @@ public:
     /// a saved plug-in could not be loaded.
     juce::String instrument_status(const std::string& track_id) const;
     juce::AudioPluginInstance* plugin_for(const std::string& track_id) const;
+    /// Per instrument, for the usage panel (Memory Management spec §6.1):
+    /// its share of the engine's real-time budget since the last call, and
+    /// where it runs. Message thread.
+    struct InstrumentUsage {
+        std::string track_id;
+        juce::String name;             ///< What plays: a plug-in, a placeholder, "Unloaded...".
+        bool plugin = false;           ///< A hosted plug-in (not the placeholder).
+        bool loaded = true;            ///< False: unloaded (frozen) or played by articulation tracks.
+        std::uintptr_t host_process = 0;  ///< Its plug-in host process; 0: inside the app.
+        double load_percent = 0.0;     ///< Its processing time / real time, since the last call.
+        bool measured = false;         ///< False until it has processed audio in a measured period.
+    };
+    std::vector<InstrumentUsage> instrument_usage();
+    /// Reload: the instrument is closed and opened again from its saved
+    /// settings (captured first by the caller). False when it has none.
+    bool reload_instrument(const std::string& track_id);
     /// Peak level since the last call, 0..1+, for the mixer meters.
     float take_peak(const std::string& track_id);
     float take_master_peak();
@@ -490,6 +506,7 @@ private:
         std::string key;  ///< what it was built from; rebuilt when this changes
         std::shared_ptr<Instrument> instrument;
         juce::String status;
+        std::int64_t seen_ticks = 0, seen_samples = 0;  ///< At the last usage reading.
     };
 
     void timerCallback() override;

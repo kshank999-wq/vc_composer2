@@ -32,6 +32,24 @@ public:
     virtual int latency_samples() const noexcept { return 0; }
 
     virtual juce::String display_name() const = 0;
+
+    /// The plug-in host process it runs in (an identity to match against
+    /// PluginHost::HostMemory::process), or 0 inside the app.
+    virtual std::uintptr_t host_process() const noexcept { return 0; }
+
+    /// Audio thread: the time its `process` took (high-resolution ticks)
+    /// for so many samples - its share of the engine's load (Memory
+    /// Management spec §6.1). Read on the message thread.
+    void account(std::int64_t ticks, int samples) noexcept
+    {
+        ticks_.fetch_add(ticks, std::memory_order_relaxed);
+        samples_.fetch_add(samples, std::memory_order_relaxed);
+    }
+    std::int64_t ticks_used() const noexcept { return ticks_.load(std::memory_order_relaxed); }
+    std::int64_t samples_done() const noexcept { return samples_.load(std::memory_order_relaxed); }
+
+private:
+    std::atomic<std::int64_t> ticks_{0}, samples_{0};
 };
 
 }  // namespace vcc::desktop

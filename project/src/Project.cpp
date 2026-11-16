@@ -1020,6 +1020,7 @@ static json::Value track_to_json(const Track& t)
     if (t.printed_fx) o.set("printed_fx", true);
     if (!t.print_signature.empty()) o.set("print_signature", t.print_signature);
     if (t.instrument_unloaded) o.set("instrument_unloaded", true);
+    if (t.instrument_suspended) o.set("instrument_suspended", true);
     if (t.articulations_expanded) o.set("articulations_expanded", true);
     if (!t.articulation_parent.empty()) o.set("articulation_parent", t.articulation_parent);
     if (!t.articulation_group.empty()) o.set("articulation_group", t.articulation_group);
@@ -1356,6 +1357,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.printed_fx = j.get_bool("printed_fx", false);
         t.print_signature = j.get_string("print_signature");
         t.instrument_unloaded = j.get_bool("instrument_unloaded", false);
+        t.instrument_suspended = j.get_bool("instrument_suspended", false);
         t.articulations_expanded = j.get_bool("articulations_expanded", false);
         t.articulation_parent = j.get_string("articulation_parent");
         t.articulation_group = j.get_string("articulation_group");
@@ -1688,7 +1690,7 @@ std::string render_signature(const ProjectData& d, const Track& t)
     json::Value j = track_to_json(t);
     // What does not change the instrument's sound.
     for (const char* k : {"id", "name", "color", "folder_id", "family", "role", "gain_db", "pan", "mute", "solo", "sends",
-                          "input", "input_stereo", "monitor", "playback", "print_signature", "instrument_unloaded",
+                          "input", "input_stereo", "monitor", "playback", "print_signature", "instrument_unloaded", "instrument_suspended",
                           "include_in_export", "record_source", "output_bus_id", "template_origin", "automation_mode",
                           "input_quantize", "range_policy", "assignment", "articulation_intents", "fallback_instruments",
                           "plugin_requirements", "sidechain"})

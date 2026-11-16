@@ -198,6 +198,7 @@ struct PlaybackSnapshot {
         int transpose = 0;
         int midi_channel = 0;
         bool external = false;
+        bool suspended = false;  ///< Loaded but not processed (Suspend).
         int print_slot = -1;  ///< Real-time print: this track's take, or -1.
     };
     struct Bus {
@@ -1394,6 +1395,8 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
             for (std::size_t s = 0; s < live_takes_ids_.size(); ++s)
                 if (live_takes_ids_[s] == t->id) live_slot = static_cast<int>(s);
         st.print_slot = live_slot;
+        // A suspended instrument still plays a print of its own track.
+        st.suspended = t->instrument_suspended && live_slot < 0 && !(print_tap_ && print_tap_->track_id == t->id);
         if (live_slot >= 0) st.strip.fx_bypassed = false;
         // External MIDI: notes to the hardware (a virtual port also offline;
         // real hardware only while the device runs), never to the instrument.
@@ -1929,6 +1932,40 @@ void PlaybackEngine::stop_preview()
 {
     stop_preview_request_ = true;
     delete pending_preview_.exchange(nullptr);
+}
+
+std::vector<PlaybackEngine::InstrumentUsage> PlaybackEngine::instrument_usage()
+{
+    std::vector<InstrumentUsage> out;
+    const double tick_rate = static_cast<double>(juce::Time::getHighResolutionTicksPerSecond());
+    for (auto& [id, slot] : instruments_) {
+        if (!slot.instrument) continue;
+        InstrumentUsage u;
+        u.track_id = id;
+        u.name = slot.status;
+        u.loaded = slot.key.rfind("unloaded", 0) != 0;
+        u.plugin = dynamic_cast<PluginInstrument*>(slot.instrument.get()) != nullptr;
+        u.host_process = slot.instrument->host_process();
+        const auto ticks = slot.instrument->ticks_used(), samples = slot.instrument->samples_done();
+        const auto dt = ticks - slot.seen_ticks, ds = samples - slot.seen_samples;
+        if (ds > 0 && sample_rate_ > 0.0) {
+            u.load_percent = 100.0 * (static_cast<double>(dt) / tick_rate) / (static_cast<double>(ds) / sample_rate_);
+            u.measured = true;
+        }
+        slot.seen_ticks = ticks;
+        slot.seen_samples = samples;
+        out.push_back(std::move(u));
+    }
+    return out;
+}
+
+bool PlaybackEngine::reload_instrument(const std::string& track_id)
+{
+    auto it = instruments_.find(track_id);
+    if (it == instruments_.end() || !dynamic_cast<PluginInstrument*>(it->second.instrument.get())) return false;
+    it->second.key.clear();  // instrument_for builds a new one from the saved state
+    rebuild_now();
+    return true;
 }
 
 juce::String PlaybackEngine::instrument_status(const std::string& id) const
@@ -2777,7 +2814,11 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
                     }
                     t.midi.addEvents(live_block_, 0, n, 0);
                 }
-                if (!t.external) t.instrument->process(buf, t.midi, n);
+                if (!t.external && !t.suspended) {
+                    const auto t0 = juce::Time::getHighResolutionTicks();
+                    t.instrument->process(buf, t.midi, n);
+                    t.instrument->account(juce::Time::getHighResolutionTicks() - t0, n);
+                }
                 // External MIDI: each message stamped with when it should sound,
                 // with the delay compensation and the output latency, so the
                 // hardware lines up with what is heard.

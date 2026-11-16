@@ -397,6 +397,8 @@ public:
     /// Closes (true) or reopens (false) a frozen track's instrument plug-in;
     /// its settings stay in the track. Unloading needs a print playing.
     bool set_instrument_unloaded(const std::string& track_id, bool unloaded);
+    /// Suspend / Resume: the instrument stays loaded but is not played.
+    bool set_instrument_suspended(const std::string& track_id, bool suspended);
     /// Back to the live instrument: the MIDI plays, the plug-in is loaded;
     /// the printed audio stays on the track's audio lane.
     bool unfreeze(const std::string& track_id);

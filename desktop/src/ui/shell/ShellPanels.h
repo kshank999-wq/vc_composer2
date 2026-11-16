@@ -279,10 +279,12 @@ public:
     explicit ResourcePanel(AppContext& context);
     juce::String text() const;
     void paint(juce::Graphics& g) override;
+    void resized() override;
 
 private:
     void timerCallback() override { repaint(); }
     AppContext& context_;
+    juce::TextButton usage_{"Instrument Usage..."};
 };
 
 }  // namespace vcc::desktop::shell

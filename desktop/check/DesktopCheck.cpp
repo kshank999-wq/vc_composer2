@@ -63,6 +63,7 @@
 #include "vcc/theory/Chord.h"
 #include "ui/composer/Inspector.h"
 #include "ui/composer/LaneParts.h"
+#include "ui/InstrumentUsage.h"
 #include "ui/VideoWindow.h"
 #include "vcc/media/VideoDecoder.h"
 #include "vcc/media/VideoEncoder.h"
@@ -6927,6 +6928,165 @@ void articulation_template_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// The instrument usage panel (Memory Management spec §6.1, §6.3): every
+/// instrument with its engine load and memory as measured (exact for an
+/// instrument alone in its process), sortable; Suspend, Reload, Purge,
+/// Locate; batch Freeze & Unload by selection, articulation group or family,
+/// with progress and Cancel.
+void usage_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& host = ctx.plugins;
+    auto& engine = ctx.engine;
+    const auto instrument = host.host_tool().existsAsFile() ? scan(ctx, VCC_TEST_PLUGIN) : std::nullopt;
+    if (!instrument || !ctx.resources) {
+        std::printf("  skip  instrument usage (no test plug-in or host tool in this build)\n");
+        return;
+    }
+    engine.stop();
+    const auto original = host.hosting_mode();
+    host.set_hosting_mode(PluginHost::HostingMode::instruments_alone);
+    session.new_empty();
+    const auto folder = dir.getChildFile("usage-check");
+    folder.deleteRecursively();
+    folder.createDirectory();
+    std::string error;
+    session.save_as(folder.getChildFile("Usage.vcc2").getFullPathName().toStdString(), &error);
+    std::map<std::string, std::string> ids;
+    for (const auto& [name, std_id] : std::vector<std::pair<std::string, std::string>>{
+             {"Violins", "strings.violins_1"}, {"Horns", "brass.horn_section"}, {"Flute", "woodwinds.flute"}, {"Piano", "keys.piano"}}) {
+        const auto t = session.add_track(name, std_id);
+        ids[name] = t;
+        if (name != "Piano") session.set_instrument_plugin(t, *instrument);
+        notation::Score sc = session.data().find_track(t)->active_version()->score;
+        for (int b = 0; b < 8; ++b) {
+            notation::ScoreNote n;
+            n.start_tick = b * kTicksPerWhole;
+            n.duration = notation::whole();
+            n.pitch = notation::spell_midi_note(60 + b, {});
+            sc.insert_note(0, n);
+        }
+        session.commit_score(t, sc, "Write");
+    }
+    engine.prepare_offline(48000.0, 512);
+    engine.rebuild_now();
+    pump(300);
+
+    ctx.commands.invokeDirectly(cmd::instrumentUsage, false);
+    InstrumentUsagePanel* panel = nullptr;
+    wait_for([&] { return (panel = instrument_usage_panel()) != nullptr; });
+    if (!panel) {
+        check(false, "Tools > Instrument Usage... opens the panel");
+        return;
+    }
+    juce::AudioBuffer<float> out(2, 512);
+    auto run_audio = [&](int blocks) {
+        engine.play();
+        for (int i = 0; i < blocks; ++i) engine.render_offline(out, 512);
+        engine.stop();
+    };
+    run_audio(60);
+    ctx.resources->sample_now();
+    panel->refresh();
+    auto row = [&](const std::string& name) -> const InstrumentUsagePanel::Row* {
+        for (const auto& r : panel->rows())
+            if (r.track == juce::String(name)) return &r;
+        return nullptr;
+    };
+    const auto* vln = row("Violins");
+    const auto* pno = row("Piano");
+    check(panel->rows().size() == 4 && vln && vln->plugin && vln->memory_exact && vln->memory_bytes.value_or(0) > 1000000 &&
+              pno && !pno->plugin && !pno->memory_bytes && vln->load_measured,
+          "each instrument has a row: Violins (alone in its process) " + (vln ? vln->memory : juce::String()) + ", load " +
+              (vln ? juce::String(vln->load, 2) : juce::String()) + "%; Piano " + (pno ? pno->memory : juce::String()));
+    check(panel->summary().contains("3 plug-ins in 3 host processes"), "the summary: " + panel->summary());
+    check(panel->suggestion().contains("unless you choose") || panel->suggestion().startsWith("No suggestions"),
+          "it suggests and never acts on its own: " + panel->suggestion());
+    shoot(*panel, dir, "76-instrument-usage");
+
+    // Sorting.
+    panel->sort_by(InstrumentUsagePanel::Sort::Track, true);
+    juce::StringArray names;
+    for (const auto& r : panel->rows()) names.add(r.track);
+    panel->sort_by(InstrumentUsagePanel::Sort::Memory, false);
+    const bool largest_first = panel->rows().front().memory_bytes.value_or(0) >= panel->rows().back().memory_bytes.value_or(0);
+    panel->sort_by(InstrumentUsagePanel::Sort::State, true);
+    check(names.joinIntoString(",") == "Flute,Horns,Piano,Violins" && largest_first,
+          "it sorts by track name (" + names.joinIntoString(", ") + "), memory, state and engine load");
+
+    // Suspend: loaded, not played; Resume.
+    panel->select_tracks({ids["Horns"]});
+    const auto suspended = panel->run(InstrumentUsagePanel::Action::Suspend);
+    run_audio(20);
+    panel->refresh();
+    const auto* horns = row("Horns");
+    check(session.data().find_track(ids["Horns"])->instrument_suspended && horns && horns->state == "SUSPENDED" &&
+              horns->load == 0.0 && horns->loaded,
+          "Suspend keeps the Horns loaded but stops processing them: " + suspended);
+    panel->select_tracks({ids["Horns"]});
+    panel->run(InstrumentUsagePanel::Action::Suspend);
+    check(!session.data().find_track(ids["Horns"])->instrument_suspended, "Resume plays them again");
+
+    // Reload, Purge, Locate.
+    panel->select_tracks({ids["Flute"]});
+    const auto reloaded = panel->run(InstrumentUsagePanel::Action::Reload);
+    pump(300);
+    check(reloaded.startsWith("Reloaded 1") && engine.instrument_status(ids["Flute"]) == "VCC Test Instrument",
+          "Reload opens the Flute's plug-in again from its settings: " + reloaded);
+    check(panel->run(InstrumentUsagePanel::Action::Purge).contains("not offered by VST3"),
+          "Purge says plainly that the plug-in format does not offer it");
+    panel->select_tracks({ids["Horns"]});
+    panel->run(InstrumentUsagePanel::Action::Locate);
+    pump(100);
+    check(session.selected_track() == ids["Horns"] && main.workspace() == MainComponent::Workspace::Producer,
+          "Locate selects the track and shows it in Producer");
+
+    // Batch: the menu's groups; Cancel; then a family frozen and unloaded.
+    panel->select_tracks({ids["Violins"], ids["Flute"]});
+    juce::StringArray groups;
+    for (const auto& [label, tracks] : panel->batch_targets()) groups.add(label);
+    check(groups.contains("Selected tracks  (2)") && groups.contains("Family: Strings  (1)") && groups.contains("Family: Brass  (1)"),
+          "Batch Freeze & Unload offers the selection and each family: " + groups.joinIntoString("; "));
+    panel->freeze_batch(panel->selected_tracks());
+    pump(60);
+    const auto progress = panel->progress();
+    panel->cancel_batch();
+    wait_for([&] { return !ctx.freeze_progress || ctx.freeze_progress().isEmpty(); }, 10000);
+    pump(300);
+    check(progress.startsWith("Freezing") && !session.data().find_track(ids["Violins"])->instrument_unloaded &&
+              !session.data().find_track(ids["Flute"])->instrument_unloaded,
+          "a batch shows its progress (" + progress + ") and Cancel stops it with nothing unloaded");
+    std::vector<std::string> woodwinds_and_strings;
+    for (const auto& [label, tracks] : panel->batch_targets())
+        if (label.startsWith("Family: Strings") || label.startsWith("Family: Woodwinds"))
+            woodwinds_and_strings.insert(woodwinds_and_strings.end(), tracks.begin(), tracks.end());
+    panel->freeze_batch(woodwinds_and_strings);
+    wait_for([&] {
+        return session.data().find_track(ids["Violins"])->instrument_unloaded && session.data().find_track(ids["Flute"])->instrument_unloaded;
+    }, 60000);
+    pump(500);
+    int own = 0;
+    wait_for([&] {
+        own = 0;
+        for (const auto& [label, n] : host.host_processes())
+            if (label == "VCC Test Instrument" && n > 0) ++own;
+        return own == 1;
+    }, 8000);
+    ctx.resources->sample_now();
+    panel->refresh();
+    const auto* frozen = row("Violins");
+    check(own == 1 && frozen && !frozen->loaded && frozen->state.startsWith("FROZEN") && frozen->memory == "0 (unloaded)",
+          "batch Freeze & Unload of Strings and Woodwinds: printed, unloaded, their processes closed (" + juce::String(own) +
+              " plug-in process left)");
+    shoot(*panel, dir, "76-after-batch");
+    if (auto* w = panel->findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed();
+    pump(100);
+    host.set_hosting_mode(original);
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -8794,6 +8954,8 @@ int main(int argc, char** argv)
         articulation_checks(window, dir);
         section("articulation_template_checks");
         articulation_template_checks(window, dir);
+        section("usage_checks");
+        usage_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

@@ -1851,3 +1851,42 @@ macOS, Linux and Windows. What it took:
       expanded template); `freeze_checks`, `articulation_checks` and
       `articulation_template_checks` in the desktop check, with the test
       plug-in in its own process (process counts are checked).
+48. **Memory Management spec, P2: instrument usage panel and batch
+    actions. Done** (November 16, 2026; Memory Management spec §6.1-6.3).
+    - **Tools > Instrument Usage...** (also the *Instrument Usage...* key in
+      the CPU/RAM readout's details): every instrument in the project, one
+      row each - track, instrument, state (`LIVE`, `SUSPENDED`, `STALE`,
+      `FROZEN · UNLOADED`, `EXPANDED`, `MISSING PLUG-IN`), memory and
+      engine load - sortable by any column (memory, largest first, to
+      start). Above it: instruments, plug-ins and host processes, the
+      engine load, VC Composer's memory and the computer's.
+    - **Memory, honestly**: an instrument alone in its host process (the
+      default hosting) is measured exactly - the process's own figure.
+      Instruments sharing a process get an even share marked `~`, with the
+      process's total beside it. A plug-in inside the app reads `Not
+      reported (in app)`; nothing is guessed from sample-folder sizes.
+    - **Engine load per instrument**: the time its processing takes on the
+      audio thread over the real time it covers, measured with a
+      high-resolution tick count around each block (no locks, no
+      allocation). For a plug-in in a host process this includes the
+      round trip to it - what it really costs the engine.
+    - **Per instrument**: *Freeze & Unload*; *Suspend* / *Resume* (the
+      instrument stays loaded, settings and samples kept, but is not
+      processed - saved with the project, undoable, never makes a print
+      stale); *Reload* (closed and opened again from its saved settings);
+      *Purge* (shown, disabled: VST3 has no purge call - the tooltip says
+      Freeze & Unload is the way to give memory back); *Locate* (selects
+      the track in Producer; double-click a row does the same).
+    - **Batch Freeze & Unload...**: the selection, a part's articulation
+      tracks, every track of one sound (all the Staccato tracks), or an
+      instrument family. A progress line follows the print; *Cancel*
+      stops it, unloading nothing.
+    - **Suggestions, never actions**: at 80% of the computer's memory, the
+      panel names the largest live instruments and what freezing them
+      would give back; at 70% engine load, the heaviest. Nothing is
+      unloaded or suspended unless chosen.
+    - **Tests**: `test_session` (Suspend is saved and does not make a
+      print stale); `usage_checks` in the desktop check: three test
+      plug-ins each in its own process and a built-in synth, measured
+      rows, sorting, Suspend, Reload, Purge, Locate, a cancelled batch and
+      a family batch that closes its processes.

@@ -339,6 +339,10 @@ struct Track {
     /// Freeze & Unload: the instrument plug-in is closed to give its memory
     /// back; its state stays in instrument_plugin and comes back on Unfreeze.
     bool instrument_unloaded = false;
+    /// Suspend (Memory Management spec §6.3): the instrument stays loaded,
+    /// its settings and samples kept, but is not processed - silent, no
+    /// engine load - until resumed. Saved.
+    bool instrument_suspended = false;
     /// Expanded articulations (Memory Management spec §4.2). On the parent:
     /// its notes play through its articulation tracks instead of itself.
     bool articulations_expanded = false;

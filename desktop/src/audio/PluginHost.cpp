@@ -144,7 +144,8 @@ std::vector<PluginHost::HostMemory> PluginHost::host_memory() const
             if (auto p = w.lock(); p && !p->crashed()) live.push_back(std::move(p));
     }
     std::vector<HostMemory> out;
-    for (const auto& p : live) out.push_back({p->label(), p->instance_count(), p->memory_bytes()});
+    for (const auto& p : live)
+        out.push_back({p->label(), p->instance_count(), p->memory_bytes(), reinterpret_cast<std::uintptr_t>(p.get())});
     return out;
 }
 
@@ -394,5 +395,12 @@ void PluginInstrument::process(juce::AudioBuffer<float>& out, juce::MidiBuffer& 
 void PluginInstrument::all_notes_off() noexcept { panic_pending_ = true; }
 
 juce::String PluginInstrument::display_name() const { return instance_->getName(); }
+
+std::uintptr_t PluginInstrument::host_process() const noexcept
+{
+    if (const auto* remote = dynamic_cast<const RemotePluginInstance*>(instance_.get()))
+        return reinterpret_cast<std::uintptr_t>(&remote->process());
+    return 0;
+}
 
 }  // namespace vcc::desktop
