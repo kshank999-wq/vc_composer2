@@ -58,6 +58,9 @@ public:
     /// Sends a control message for an instance and waits for its reply.
     bool call(int instance, const juce::String& command, const juce::MemoryBlock& payload, juce::MemoryBlock& reply,
               int timeout_ms);
+    /// Its physical memory, as it reports it (a short control call; 0 when
+    /// it does not answer). Call off the audio thread.
+    std::uint64_t memory_bytes(int timeout_ms = 500);
     /// Marks the process dead (an instance found it hung) and stops it.
     void mark_crashed();
 

@@ -16,6 +16,7 @@
 namespace vcc::desktop {
 
 class LibraryService;
+class ResourceMonitor;
 
 struct AppContext {
     session::Catalogs& catalogs;  ///< mutable: user templates are added at run time
@@ -45,6 +46,8 @@ struct AppContext {
     std::function<void(const std::string& comment_id)> show_comment;
     /// The library browser's library (Main Spec §10; owned by the main window).
     LibraryService* library = nullptr;
+    /// CPU/RAM sampling for the status strip (Memory Management spec §6; owned by the main window).
+    ResourceMonitor* resources = nullptr;
     /// Shows the library browser's candidates for the selected track (set
     /// by the main window).
     std::function<void()> show_library_for_track;

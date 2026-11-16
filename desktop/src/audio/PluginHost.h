@@ -91,6 +91,14 @@ public:
     /// Host processes running now, and the instances each carries (for the
     /// Plug-ins window and the checks).
     std::vector<std::pair<juce::String, int>> host_processes() const;
+    struct HostMemory {
+        juce::String label;   ///< "All plug-ins", "Spitfire Audio", a plug-in's name.
+        int instances = 0;    ///< Plug-ins it carries.
+        std::uint64_t bytes = 0;  ///< Its physical memory, as it reports it; 0: no answer.
+    };
+    /// Asks every host process for its memory (a short call each). Off the
+    /// audio and message threads: the resource monitor's thread calls it.
+    std::vector<HostMemory> host_memory() const;
 
     /// Creates and prepares a plug-in instance for a saved reference,
     /// restoring its state. Returns nullptr with a reason when the plug-in is

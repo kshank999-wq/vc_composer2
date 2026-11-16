@@ -7,6 +7,7 @@
 #include "audio/MidiOut.h"
 #include "ui/SequencerView.h"
 #include "ui/Theme.h"
+#include "system/ResourceMonitor.h"
 #include "ui/TrackPanel.h"
 #include "ui/composer/KeyLegend.h"
 #include "ui/console/ConsoleStyle.h"
@@ -1055,7 +1056,134 @@ void ChannelPanel::paintOverChildren(juce::Graphics& g)
 
 // --- Status strip -------------------------------------------------------------------------------
 
-StatusStrip::StatusStrip(AppContext& context) : context_(context) { startTimer(1000); }
+StatusStrip::StatusStrip(AppContext& context) : context_(context)
+{
+    setTitle("Status");
+    startTimer(1000);
+}
+
+void StatusStrip::timerCallback()
+{
+    // Read on the message thread: the device's load and dropout count are
+    // counters the audio callback keeps; reading them costs nothing there.
+    auto& dev = context_.engine.devices();
+    cpu_ = dev.getCpuUsage();
+    auto* device = dev.getCurrentAudioDevice();
+    if (device != device_) {  // a new device starts its own count
+        device_ = device;
+        dropouts_base_ = device ? device->getXRunCount() : -1;
+    }
+    if (device && dropouts_base_ >= 0) {
+        const int now = device->getXRunCount() - dropouts_base_;
+        if (now > dropouts_) last_dropout_ms_ = juce::Time::currentTimeMillis();
+        dropouts_ = now;
+    } else {
+        dropouts_ = -1;
+    }
+    repaint();
+}
+
+juce::String StatusStrip::resources_text() const
+{
+    juce::String s = "CPU " + juce::String(juce::roundToInt(cpu_ * 100.0)) + "%";
+    if (auto* m = context_.resources) {
+        const auto snap = m->latest();
+        if (snap.app_bytes > 0) s << "   APP " << format_bytes(snap.total_bytes());
+        if (snap.system.total > 0)
+            s << "   RAM " << format_bytes(snap.system.used()) << " / " << format_bytes(snap.system.total);
+    }
+    if (last_dropout_ms_ > 0 && juce::Time::currentTimeMillis() - last_dropout_ms_ < 10000) s << "   DROPOUT";
+    return s;
+}
+
+int StatusStrip::resources_level() const
+{
+    int level = cpu_ >= 0.9 ? 2 : cpu_ >= 0.7 ? 1 : 0;
+    if (auto* m = context_.resources) {
+        const auto sys = m->latest().system;
+        if (sys.total > 0) {
+            const double used = static_cast<double>(sys.used()) / static_cast<double>(sys.total);
+            level = std::max(level, used >= 0.92 ? 2 : used >= 0.8 ? 1 : 0);
+        }
+    }
+    if (last_dropout_ms_ > 0 && juce::Time::currentTimeMillis() - last_dropout_ms_ < 10000) level = 2;
+    return level;
+}
+
+juce::Rectangle<float> StatusStrip::resources_area() const
+{
+    const auto shown = resources_text() + (resources_level() == 2 ? "  HIGH" : "");
+    const float w = juce::GlyphArrangement::getStringWidth(hw::fonts::lcd(11.0f), shown) + 18.0f;
+    return getLocalBounds().toFloat().reduced(4.0f, 1.0f).removeFromRight(w);
+}
+
+void StatusStrip::mouseMove(const juce::MouseEvent& e)
+{
+    const bool over = resources_area().contains(e.position);
+    setMouseCursor(over ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+    setTooltip(over ? "CPU: audio engine load. APP: memory VC Composer and its plug-ins use. RAM: the computer's memory in use. Click for details."
+                    : juce::String());
+}
+
+void StatusStrip::mouseUp(const juce::MouseEvent& e)
+{
+    if (resources_area().contains(e.position)) show_resources();
+}
+
+void StatusStrip::show_resources()
+{
+    auto panel = std::make_unique<ResourcePanel>(context_);
+    panel->setSize(420, 300);
+    juce::CallOutBox::launchAsynchronously(std::move(panel), resources_area().toNearestInt() + getScreenPosition(), nullptr);
+}
+
+// --- Resource panel ---------------------------------------------------------------------------
+
+ResourcePanel::ResourcePanel(AppContext& context) : context_(context)
+{
+    setComponentID("resource_panel");
+    setTitle("CPU and memory");
+    startTimer(1000);
+}
+
+juce::String ResourcePanel::text() const
+{
+    juce::String t;
+    auto& dev = context_.engine.devices();
+    t << "AUDIO ENGINE\n";
+    t << "  Load  " << juce::roundToInt(dev.getCpuUsage() * 100.0) << "% of the time each buffer allows\n";
+    if (auto* device = dev.getCurrentAudioDevice()) {
+        t << "  " << juce::String(device->getCurrentSampleRate() / 1000.0, 1) << " kHz, " << device->getCurrentBufferSizeSamples()
+          << "-sample buffer\n";
+        const int x = device->getXRunCount();
+        t << "  Dropouts  " << (x < 0 ? juce::String("not reported by this device") : juce::String(x)) << "\n";
+    } else {
+        t << "  No audio device\n";
+    }
+    if (auto* m = context_.resources) {
+        const auto snap = m->latest();
+        t << "\nMEMORY\n";
+        t << "  VC Composer  " << format_bytes(snap.total_bytes()) << "\n";
+        t << "    App  " << format_bytes(snap.app_bytes) << "\n";
+        for (const auto& h : snap.hosts)
+            t << "    " << h.label << " (" << h.instances << (h.instances == 1 ? " plug-in" : " plug-ins") << ")  "
+              << (h.bytes > 0 ? format_bytes(h.bytes) : juce::String("not reported")) << "\n";
+        if (snap.system.total > 0)
+            t << "  Computer  " << format_bytes(snap.system.used()) << " used of " << format_bytes(snap.system.total) << ", "
+              << format_bytes(snap.system.available) << " available\n";
+        t << "\nPlug-ins sharing a process are measured together; an instrument in its own process is measured on "
+             "its own. Sample memory a plug-in does not report is not guessed.";
+    }
+    return t;
+}
+
+void ResourcePanel::paint(juce::Graphics& g)
+{
+    g.fillAll(hw::tok::chassis);
+    g.setColour(hw::tok::text);
+    g.setFont(hw::fonts::ui(13.0f));
+    g.drawFittedText(text(), getLocalBounds().reduced(12), juce::Justification::topLeft, 30, 1.0f);
+}
 
 void StatusStrip::set_message(const juce::String& text)
 {
@@ -1070,7 +1198,7 @@ juce::String StatusStrip::readout() const
     auto& dev = context_.engine.devices();
     if (auto* device = dev.getCurrentAudioDevice()) {
         s << juce::String(device->getCurrentSampleRate() / 1000.0, 1) << " kHz  " << device->getCurrentBufferSizeSamples()
-          << " smp   CPU " << juce::roundToInt(dev.getCpuUsage() * 100.0) << "%   ";
+          << " smp   ";
     } else {
         s << "NO AUDIO DEVICE   ";
     }
@@ -1091,7 +1219,16 @@ void StatusStrip::paint(juce::Graphics& g)
     g.setColour(hw::tok::edge);
     g.drawHorizontalLine(0, r.getX(), r.getRight());
     r = r.reduced(10.0f, 0.0f);
+    // The resources, bottom right, coloured and worded by level (not colour alone).
+    const auto res_area = resources_area();
+    const int level = resources_level();
+    g.setColour(level == 2 ? juce::Colour(0xffe85d4f).withAlpha(0.25f) : level == 1 ? juce::Colour(0xffe8a33d).withAlpha(0.2f)
+                                                                                     : juce::Colours::transparentBlack);
+    g.fillRoundedRectangle(res_area, 3.0f);
     g.setFont(hw::fonts::lcd(11.0f));
+    g.setColour(level == 2 ? juce::Colour(0xffff8a7a) : level == 1 ? juce::Colour(0xfff0c060) : hw::tok::silk);
+    g.drawText(resources_text() + (level == 2 ? "  HIGH" : ""), res_area, juce::Justification::centred, false);
+    r.removeFromRight(res_area.getWidth() + 6.0f);
     const auto right = readout();
     const float rw = juce::GlyphArrangement::getStringWidth(hw::fonts::lcd(11.0f), right) + 8.0f;
     g.setColour(hw::tok::silk);

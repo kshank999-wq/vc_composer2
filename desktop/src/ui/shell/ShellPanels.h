@@ -241,20 +241,48 @@ private:
 
 /// The bottom strip: the latest message on the left; sample rate, buffer,
 /// CPU, key, meter and the last autosave on the right.
-class StatusStrip final : public juce::Component, private juce::Timer {
+class StatusStrip final : public juce::Component, public juce::SettableTooltipClient, private juce::Timer {
 public:
     explicit StatusStrip(AppContext& context);
     void set_message(const juce::String& text);
     const juce::String& message() const noexcept { return message_; }
     void set_autosaved(juce::Time when) { autosaved_ = when; }
     juce::String readout() const;
+    /// The resource readout at the right end (Memory Management spec §6):
+    /// "CPU 24%   APP 3.1 GB   RAM 12.8 / 32 GB" (VC Composer with
+    /// its plug-in hosts, then the computer); click it for the details.
+    juce::String resources_text() const;
+    /// 0 normal, 1 elevated, 2 critical (the worse of CPU and memory).
+    int resources_level() const;
+    /// Dropouts the audio device reported since this window opened (-1: not reported).
+    int dropouts() const noexcept { return dropouts_; }
+    void show_resources();
+    void paint(juce::Graphics& g) override;
+    void mouseUp(const juce::MouseEvent& e) override;
+    void mouseMove(const juce::MouseEvent& e) override;
+
+private:
+    void timerCallback() override;
+    juce::Rectangle<float> resources_area() const;
+    AppContext& context_;
+    juce::String message_;
+    juce::Time autosaved_;
+    double cpu_ = 0.0;
+    int dropouts_ = -1, dropouts_base_ = -1;
+    juce::int64 last_dropout_ms_ = 0;
+    juce::AudioIODevice* device_ = nullptr;
+};
+
+/// The details behind the status strip's CPU and RAM readout.
+class ResourcePanel final : public juce::Component, private juce::Timer {
+public:
+    explicit ResourcePanel(AppContext& context);
+    juce::String text() const;
     void paint(juce::Graphics& g) override;
 
 private:
     void timerCallback() override { repaint(); }
     AppContext& context_;
-    juce::String message_;
-    juce::Time autosaved_;
 };
 
 }  // namespace vcc::desktop::shell

@@ -45,6 +45,7 @@
 #include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
 #include "Preview.h"
+#include "system/ResourceMonitor.h"
 #include "licensing/Account.h"
 #include "licensing/AccountWindow.h"
 #include "ui/PictureTools.h"
@@ -6506,6 +6507,97 @@ void account_checks(MainWindow& window, const juce::File& dir)
     account.set_folder(saved_folder);
 }
 
+/// Memory Management spec §6 and §2.3: the CPU/RAM readout at the bottom
+/// right of both views, the plug-in hosts' memory, and switching views
+/// while playing.
+void resources_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& host = ctx.plugins;
+    if (!ctx.resources) {
+        check(false, "the resource monitor runs");
+        return;
+    }
+    ctx.engine.stop();
+    session.new_empty();
+
+    // A plug-in alone in its process is measured on its own.
+    const auto instrument = scan(ctx, VCC_TEST_PLUGIN);
+    std::unique_ptr<juce::AudioPluginInstance> held;
+    const auto original = host.hosting_mode();
+    if (instrument && host.host_tool().existsAsFile()) {
+        host.set_hosting_mode(PluginHost::HostingMode::each_instance);
+        juce::String why;
+        held = host.create(*instrument, 48000.0, 512, why);
+    }
+    ctx.resources->sample_now();
+    const auto snap = ctx.resources->latest();
+    check(snap.app_bytes > 20ull * 1024 * 1024 && snap.system.total > snap.app_bytes && snap.system.available <= snap.system.total,
+          "VC Composer's memory and the computer's are measured (" + format_bytes(snap.app_bytes) + " of " +
+              format_bytes(snap.system.total) + ")");
+    if (held) {
+        std::uint64_t own = 0;
+        for (const auto& h : snap.hosts)
+            if (h.label == "VCC Test Instrument" && h.instances == 1) own = h.bytes;
+        check(own > 1024 * 1024 && snap.total_bytes() >= snap.app_bytes + own,
+              "an instrument in its own process reports its memory, and it counts in the total (" + format_bytes(own) + ")");
+    }
+
+    // The readout, bottom right, in both views.
+    const auto t0 = session.add_track("Violins", "strings.violins_1");
+    session.select_track(t0);
+    for (const auto view : {cmd::showComposer, cmd::showSequencer}) {
+        ctx.commands.invokeDirectly(view, false);
+        pump(1300);
+        auto& strip = main.status_strip();
+        const auto in_window = window.getLocalArea(&strip, strip.getLocalBounds());
+        const bool bottom = strip.isShowing() && in_window.getBottom() >= window.getHeight() - 60 &&
+                            in_window.getRight() >= window.getWidth() - 40;
+        check(bottom && strip.resources_text().contains("CPU") && strip.resources_text().contains("RAM"),
+              juce::String(view == cmd::showComposer ? "Composer" : "Producer") + " shows CPU and RAM at the bottom right: " +
+                  strip.resources_text());
+    }
+    shoot(main, dir, "70-resources-producer");
+    main.status_strip().show_resources();
+    shell::ResourcePanel* panel = nullptr;
+    wait_for([&] {
+        for (int i = juce::Desktop::getInstance().getNumComponents(); --i >= 0;)
+            if (auto* box = dynamic_cast<juce::CallOutBox*>(juce::Desktop::getInstance().getComponent(i)))
+                if (box->getNumChildComponents() > 0)
+                    for (auto* c : box->getChildren())
+                        if ((panel = dynamic_cast<shell::ResourcePanel*>(c)) != nullptr) return true;
+        return false;
+    });
+    check(panel && panel->text().contains("AUDIO ENGINE") && panel->text().contains("VC Composer") &&
+              panel->text().contains("Computer") && (!held || panel->text().contains("VCC Test Instrument (1 plug-in)")),
+          "clicking it shows the engine load, VC Composer's memory by process and the computer's");
+    if (panel) {
+        if (auto* box = panel->findParentComponentOfClass<juce::CallOutBox>()) {
+            shoot(*box, dir, "71-resource-panel");
+            box->dismiss();
+        }
+    }
+    pump(300);
+    held.reset();
+    host.set_hosting_mode(original);
+
+    // Switching views while playing: the transport, playhead and selection carry on.
+    const Ticks bar5 = 4 * kTicksPerWhole;
+    ctx.engine.locate(bar5);
+    ctx.engine.play();
+    pump(200);
+    ctx.commands.invokeDirectly(cmd::toggleView, false);
+    pump(300);
+    ctx.commands.invokeDirectly(cmd::toggleView, false);
+    pump(300);
+    check(ctx.engine.playing() && ctx.engine.position() >= bar5 && session.selected_track() == t0,
+          "switching Composer / Producer while playing keeps playing, from where it was, with the track still selected");
+    ctx.engine.stop();
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -8363,6 +8455,8 @@ int main(int argc, char** argv)
         preview_checks();
         section("account_checks");
         account_checks(window, dir);
+        section("resources_checks");
+        resources_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

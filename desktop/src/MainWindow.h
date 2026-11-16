@@ -7,6 +7,7 @@
 #include "ui/AppContext.h"
 #include "ui/MainComponent.h"
 #include "ui/Theme.h"
+#include "system/ResourceMonitor.h"
 #include "ui/library/LibraryBrowser.h"
 
 namespace vcc::desktop {
@@ -36,6 +37,7 @@ private:
     juce::TooltipWindow tooltips_;
     std::unique_ptr<AppContext> context_;
     std::unique_ptr<LibraryService> library_;  // outlives the views that list it
+    std::unique_ptr<ResourceMonitor> resources_;
     std::unique_ptr<MainComponent> main_;
     int listener_ = 0;
 };

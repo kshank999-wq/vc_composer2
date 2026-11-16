@@ -166,6 +166,17 @@ RemotePluginInstance::RemotePluginInstance(const BusesProperties& buses, juce::P
     ++process_->instances_;
 }
 
+std::uint64_t HostProcess::memory_bytes(int timeout_ms)
+{
+    if (crashed()) return 0;
+    juce::MemoryBlock reply;
+    if (!call(0, "memory", {}, reply, timeout_ms)) return 0;
+    juce::MemoryInputStream in(reply, false);
+    if (!in.readBool()) return 0;
+    const auto bytes = in.readInt64();
+    return bytes > 0 ? static_cast<std::uint64_t>(bytes) : 0;
+}
+
 std::unique_ptr<RemotePluginInstance> RemotePluginInstance::create(std::shared_ptr<HostProcess> process,
                                                                    const juce::PluginDescription& description,
                                                                    const std::string& state_base64,

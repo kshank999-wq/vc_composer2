@@ -134,6 +134,19 @@ std::vector<std::pair<juce::String, int>> PluginHost::host_processes() const
     return out;
 }
 
+std::vector<PluginHost::HostMemory> PluginHost::host_memory() const
+{
+    std::vector<std::shared_ptr<HostProcess>> live;
+    {
+        std::lock_guard<std::mutex> lock(hosting_lock_);
+        for (const auto& w : all_processes_)
+            if (auto p = w.lock(); p && !p->crashed()) live.push_back(std::move(p));
+    }
+    std::vector<HostMemory> out;
+    for (const auto& p : live) out.push_back({p->label(), p->instance_count(), p->memory_bytes()});
+    return out;
+}
+
 std::shared_ptr<HostProcess> PluginHost::process_for(const juce::PluginDescription& d)
 {
     const auto mode = hosting_mode();

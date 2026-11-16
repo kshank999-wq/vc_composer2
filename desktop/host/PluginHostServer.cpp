@@ -29,6 +29,7 @@
 #endif
 
 #include "audio/PluginIpc.h"
+#include "system/ProcessStats.h"
 
 namespace {
 
@@ -364,6 +365,11 @@ private:
         } else if (m.command == "unload") {
             instances_.erase(m.instance);
             out.writeBool(true);
+        } else if (m.command == "memory") {
+            // The resource monitor: this process's own physical memory.
+            out.writeBool(true);
+            out.writeInt64(static_cast<juce::int64>(vcc::desktop::stats::process_memory_bytes()));
+            out.writeInt(static_cast<int>(instances_.size()));
         } else if (auto it = instances_.find(m.instance); it != instances_.end()) {
             it->second->handle(m.command, in, out);
         } else {

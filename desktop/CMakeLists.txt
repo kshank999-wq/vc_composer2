@@ -155,7 +155,7 @@ add_custom_command(TARGET VCComposer2 POST_BUILD
 # Runs one plug-in instance per process, so a crash in a plug-in cannot take the
 # app down. Ships beside the app, like the scanner.
 juce_add_console_app(vcc_plugin_host PRODUCT_NAME "vcc_plugin_host")
-target_sources(vcc_plugin_host PRIVATE host/PluginHostServer.cpp src/audio/PluginIpc.cpp)
+target_sources(vcc_plugin_host PRIVATE host/PluginHostServer.cpp src/audio/PluginIpc.cpp src/system/ProcessStats.cpp)
 target_include_directories(vcc_plugin_host PRIVATE src)
 target_compile_definitions(vcc_plugin_host PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1
                                                    JUCE_PLUGINHOST_AU=1 JUCE_PLUGINHOST_LADSPA=0

@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "Preview.h"
+#include "system/ResourceMonitor.h"
 
 #include "ui/Dialogs.h"
 
@@ -17,6 +18,8 @@ MainWindow::MainWindow(const juce::String& file, bool show_welcome)
                                                        composer::make_composer2_profile(), {}, {}, {}});
     library_ = std::make_unique<LibraryService>(*context_);
     context_->library = library_.get();
+    resources_ = std::make_unique<ResourceMonitor>(context_->plugins);
+    context_->resources = resources_.get();
     main_ = std::make_unique<MainComponent>(*context_);
 
     commands_.registerAllCommandsForTarget(main_.get());
