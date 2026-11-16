@@ -8,6 +8,9 @@ import {
   decidePush,
   invitableRoles,
   pushSchema,
+  isSafeMediaPath,
+  mediaQuerySchema,
+  MEDIA_MAX_BYTES,
   ROLES,
   seatsUsed,
   takesSeat,
@@ -85,6 +88,35 @@ describe('push and pull with merge', () => {
     expect(pushSchema.safeParse(ok).success).toBe(true);
     expect(pushSchema.safeParse({ ...ok, path: '../other/x.vcc2' }).success).toBe(false);
     expect(pushSchema.safeParse({ ...ok, site: 0 }).success).toBe(false);
+  });
+});
+
+describe('media files', () => {
+  it('takes only paths that stay inside the project folder', () => {
+    for (const ok of ['Audio Files/Vox take 1.wav', 'Picture/Reel 2 v3.mov', 'a.wav', 'Audio Files/..hidden.wav'])
+      expect(isSafeMediaPath(ok)).toBe(true);
+    for (const bad of ['', '/etc/passwd', '../x.wav', 'Audio Files/../../x.wav', 'C:/x.wav', 'c:x.wav', 'a\\b.wav',
+      'Audio Files//x.wav', './x.wav', 'x.wav/', 'a\0b'])
+      expect(isSafeMediaPath(bad)).toBe(false);
+  });
+  it('a push carries its media manifest, each path once', () => {
+    const ok = {
+      base: 1,
+      sizeBytes: 1000,
+      sha256: 'a'.repeat(64),
+      site: 7,
+      path: '3f1c2b44-1111-4222-8333-944455556666/5a6b7c8d-1111-4222-8333-944455556666.vcc2',
+    };
+    expect(pushSchema.parse(ok).media).toEqual([]);
+    const m = { path: 'Audio Files/a.wav', sha256: 'b'.repeat(64), sizeBytes: 10 };
+    expect(pushSchema.safeParse({ ...ok, media: [m] }).success).toBe(true);
+    expect(pushSchema.safeParse({ ...ok, media: [m, m] }).success).toBe(false);
+    expect(pushSchema.safeParse({ ...ok, media: [{ ...m, path: '../a.wav' }] }).success).toBe(false);
+    expect(pushSchema.safeParse({ ...ok, media: [{ ...m, sizeBytes: MEDIA_MAX_BYTES + 1 }] }).success).toBe(false);
+  });
+  it('asks about at least one file and at most a thousand', () => {
+    expect(mediaQuerySchema.safeParse({ files: [] }).success).toBe(false);
+    expect(mediaQuerySchema.safeParse({ files: [{ sha256: 'c'.repeat(64), sizeBytes: 5 }] }).success).toBe(true);
   });
 });
 

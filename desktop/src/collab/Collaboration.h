@@ -8,6 +8,11 @@
 //
 // A sync always saves the project with its new base: a project file older
 // than its base would read as "I deleted what the others wrote".
+//
+// Audio and picture files travel with it (vcc/session/SharedMedia.h): media
+// outside the project folder is gathered into it first, files are uploaded
+// once each by content, and a pull downloads what this computer lacks,
+// checking every file's SHA-256.
 #pragma once
 
 #include <functional>
@@ -105,8 +110,12 @@ private:
     void opened();
     void apply_locks();
     void finish(Done& done, Outcome outcome);
-    void sync_round(Done done, int attempt);
-    void push(const session::shared::Link& link, Done done, int attempt);
+    // The sync, step by step (each step's slow part runs in the background).
+    void step_pull(Done done, int attempt);
+    void step_fetch(Done done, int attempt, juce::String pulled);
+    void step_push(Done done, int attempt, juce::String pulled);
+    /// Tells the status bar from any thread (downloads and uploads of large files).
+    void progress(const juce::String& text);
 
     AppContext* context_ = nullptr;
     int listener_ = 0;

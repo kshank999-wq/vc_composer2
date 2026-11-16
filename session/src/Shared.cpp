@@ -16,7 +16,8 @@ json::Value Link::to_json() const
                         {"name", name},
                         {"role", role},
                         {"base", static_cast<long long>(base)},
-                        {"site", static_cast<long long>(site)}};
+                        {"site", static_cast<long long>(site)},
+                        {"base_media", manifest_to_json(base_media)}};
 }
 
 std::optional<Link> Link::from_json(const json::Value& doc)
@@ -28,6 +29,7 @@ std::optional<Link> Link::from_json(const json::Value& doc)
     l.role = doc.get_string("role");
     l.base = static_cast<int>(doc.get_int("base", 0));
     l.site = static_cast<std::uint32_t>(doc.get_int("site", 0));
+    l.base_media = manifest_from_json(doc["base_media"]);
     return l;
 }
 

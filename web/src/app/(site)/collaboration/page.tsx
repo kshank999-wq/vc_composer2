@@ -4,7 +4,7 @@ import Link from 'next/link';
 export const metadata: Metadata = {
   title: 'Collaboration',
   description:
-    'Share a VC Composer project with your orchestrator, music editor and director: sync with merge, roles, and part locks.',
+    'Share a VC Composer project, audio and picture included, with your orchestrator, music editor and director: sync with merge, roles, and part locks.',
 };
 
 /**
@@ -57,8 +57,9 @@ export default function CollaborationPage() {
         <article className="card">
           <h3>What travels</h3>
           <p className="lede">
-            The project itself: tracks, notes, versions, mix, markers and comments. Audio and picture files stay on each
-            computer; Collect and Save Package hands them over when someone needs them.
+            The project and its media: tracks, notes, versions, mix, markers and comments, and the audio and picture
+            files it uses. Each file uploads once and downloads only to the people who don&apos;t have it yet; if two
+            people record a take with the same name, both are kept.
           </p>
         </article>
         <article className="card">

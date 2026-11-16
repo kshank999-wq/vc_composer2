@@ -14,8 +14,7 @@
 // if somebody pushed meanwhile (then pull again). The network half lives in
 // the desktop app; everything here is testable without one.
 //
-// Only the project document is shared. Audio and picture files stay on each
-// computer (a project package carries them, §16).
+// Audio and picture files travel too: SharedMedia.h.
 #pragma once
 
 #include <cstdint>
@@ -24,6 +23,7 @@
 
 #include "vcc/core/Json.h"
 #include "vcc/project/Merge.h"
+#include "vcc/session/SharedMedia.h"
 
 namespace vcc::session::shared {
 
@@ -33,6 +33,7 @@ struct Link {
     std::string role;        ///< owner, editor, arranger, reviewer, viewer.
     int base = 0;            ///< The revision this copy last synced with (0: none yet).
     std::uint32_t site = 0;  ///< This installation's id site in it.
+    Manifest base_media;     ///< The base revision's media (what changed here since).
 
     json::Value to_json() const;
     static std::optional<Link> from_json(const json::Value& doc);

@@ -7,6 +7,7 @@ import {
   type CollabRole,
   decideLock,
   LOCK_MINUTES,
+  type MediaEntry,
   seatsUsed,
   takesSeat,
 } from '@/domain';
@@ -158,12 +159,15 @@ export const pushRevision = async (
   db: SupabaseClient,
   projectId: string,
   userId: string,
-  push: { base: number; message: string; sizeBytes: number; sha256: string; site: number; path: string },
+  push: { base: number; message: string; sizeBytes: number; sha256: string; site: number; path: string; media?: MediaEntry[] },
 ): Promise<Answer<{ revision: number }> | { ok: false; status: 409; error: string; head: number }> => {
   const role = await roleIn(db, projectId, userId);
   if (!role) return fail(404, 'No such shared project, or you are not in it');
   if (!canPush(role)) return fail(403, 'Only editors, arrangers and the owner sync changes');
   if (!push.path.startsWith(`${projectId}/`)) return fail(400, 'That file is not this project\'s');
+  const media = push.media ?? [];
+  const registered = await registerMedia(db, projectId, userId, media);
+  if (!registered.ok) return registered;
   const { data: revision, error } = await db.rpc('collab_commit_revision', {
     p_project: projectId,
     p_base: push.base,
@@ -173,6 +177,7 @@ export const pushRevision = async (
     p_size: push.sizeBytes,
     p_sha256: push.sha256,
     p_site: push.site,
+    p_media: media,
   });
   if (error) return fail(500, 'The change could not be saved. Try again.');
   if (revision === null || revision === undefined) {
@@ -193,19 +198,118 @@ export const revisionLink = async (
   projectId: string,
   userId: string,
   number: number,
-): Promise<Answer<{ url: string; sha256: string; sizeBytes: number; number: number }>> => {
+): Promise<Answer<{ url: string; sha256: string; sizeBytes: number; number: number; media: MediaEntry[] }>> => {
   const role = await roleIn(db, projectId, userId);
   if (!role) return fail(404, 'No such shared project, or you are not in it');
   const { data: rev } = await db
     .from('collab_revisions')
-    .select('storage_path,sha256,size_bytes,number')
+    .select('storage_path,sha256,size_bytes,number,media')
     .eq('project_id', projectId)
     .eq('number', number)
     .maybeSingle();
   if (!rev) return fail(404, `There is no revision ${number}`);
   const { data, error } = await db.storage.from(COLLAB_BUCKET).createSignedUrl(rev.storage_path as string, LINK_SECONDS);
   if (error || !data) return fail(500, 'No download link right now. Try again.');
-  return { ok: true, value: { url: data.signedUrl, sha256: rev.sha256 as string, sizeBytes: Number(rev.size_bytes), number } };
+  return {
+    ok: true,
+    value: {
+      url: data.signedUrl,
+      sha256: rev.sha256 as string,
+      sizeBytes: Number(rev.size_bytes),
+      number,
+      media: (rev.media as MediaEntry[] | null) ?? [],
+    },
+  };
+};
+
+// --- Media: audio and picture files, stored once per project by content ------------------
+
+const mediaPath = (projectId: string, sha256: string) => `${projectId}/media/${sha256}`;
+
+/**
+ * Which of these files the project does not have yet, each with a place to
+ * upload it. A file already registered is never uploaded again, whichever
+ * revision or person brought it.
+ */
+export const mediaSlots = async (
+  db: SupabaseClient,
+  projectId: string,
+  userId: string,
+  files: ReadonlyArray<{ sha256: string; sizeBytes: number }>,
+): Promise<Answer<{ missing: Array<{ sha256: string; url: string }> }>> => {
+  const role = await roleIn(db, projectId, userId);
+  if (!role) return fail(404, 'No such shared project, or you are not in it');
+  if (!canPush(role)) return fail(403, 'Reviewers and viewers open revisions; only editors, arrangers and the owner sync changes');
+  const wanted = [...new Set(files.map((f) => f.sha256))];
+  const { data: known } = await db.from('collab_media').select('sha256').eq('project_id', projectId).in('sha256', wanted);
+  const have = new Set((known ?? []).map((r) => r.sha256 as string));
+  const missing: Array<{ sha256: string; url: string }> = [];
+  for (const sha256 of wanted.filter((h) => !have.has(h))) {
+    // upsert: an upload that failed half-way can be sent again.
+    const { data, error } = await db.storage.from(COLLAB_BUCKET).createSignedUploadUrl(mediaPath(projectId, sha256), { upsert: true });
+    if (error || !data) return fail(500, 'No upload slot right now. Try again.');
+    missing.push({ sha256, url: data.signedUrl });
+  }
+  return { ok: true, value: { missing } };
+};
+
+/**
+ * Before a push names them: every file in its manifest is registered, or is
+ * in storage at its content's place with the size the manifest says (then it
+ * is registered now). A push naming a file nobody uploaded is refused.
+ */
+const registerMedia = async (
+  db: SupabaseClient,
+  projectId: string,
+  userId: string,
+  media: ReadonlyArray<MediaEntry>,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> => {
+  if (media.length === 0) return { ok: true };
+  const sizes = new Map(media.map((m) => [m.sha256, m.sizeBytes]));
+  const { data: known } = await db.from('collab_media').select('sha256').eq('project_id', projectId).in('sha256', [...sizes.keys()]);
+  const have = new Set((known ?? []).map((r) => r.sha256 as string));
+  const unknown = [...sizes.keys()].filter((h) => !have.has(h));
+  if (unknown.length === 0) return { ok: true };
+  // What is in the project's media folder, with sizes (listed a page at a time).
+  const stored = new Map<string, number>();
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await db.storage.from(COLLAB_BUCKET).list(`${projectId}/media`, { limit: 1000, offset });
+    if (error) return fail(500, 'The media could not be checked. Try again.');
+    for (const o of data ?? []) stored.set(o.name, Number((o.metadata as { size?: number } | null)?.size ?? -1));
+    if (!data || data.length < 1000) break;
+  }
+  const absent = unknown.filter((h) => stored.get(h) !== sizes.get(h));
+  if (absent.length > 0)
+    return fail(400, `${absent.length} media file${absent.length === 1 ? ' was' : 's were'} not uploaded completely: sync again`);
+  const { error } = await db
+    .from('collab_media')
+    .upsert(unknown.map((sha256) => ({ project_id: projectId, sha256, size_bytes: sizes.get(sha256), uploaded_by: userId })), {
+      onConflict: 'project_id,sha256',
+      ignoreDuplicates: true,
+    });
+  if (error) return fail(500, 'The media could not be recorded. Try again.');
+  return { ok: true };
+};
+
+/** A link to download one media file (every member may). */
+export const mediaLink = async (
+  db: SupabaseClient,
+  projectId: string,
+  userId: string,
+  sha256: string,
+): Promise<Answer<{ url: string; sizeBytes: number }>> => {
+  const role = await roleIn(db, projectId, userId);
+  if (!role) return fail(404, 'No such shared project, or you are not in it');
+  const { data: row } = await db
+    .from('collab_media')
+    .select('size_bytes')
+    .eq('project_id', projectId)
+    .eq('sha256', sha256)
+    .maybeSingle();
+  if (!row) return fail(404, 'This project has no such media file');
+  const { data, error } = await db.storage.from(COLLAB_BUCKET).createSignedUrl(mediaPath(projectId, sha256), LINK_SECONDS);
+  if (error || !data) return fail(500, 'No download link right now. Try again.');
+  return { ok: true, value: { url: data.signedUrl, sizeBytes: Number(row.size_bytes) } };
 };
 
 // --- People -------------------------------------------------------------------------

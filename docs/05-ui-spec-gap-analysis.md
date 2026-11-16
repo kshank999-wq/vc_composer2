@@ -2013,8 +2013,45 @@ macOS, Linux and Windows. What it took:
       composer's push merged in, a rename conflict decided in the dialog,
       a lock refused and taken, the window, and opening the project in
       another folder.
-    - **Not yet**: audio and picture files do not travel (a package
-      carries them); a push message typed by the composer (the last edit's
+    - **Not yet**: a push message typed by the composer (the last edit's
       name is used); live presence or real-time co-editing; comments
       threaded to revisions. The per-seat plan goes on sale once its Stripe
       prices are set (`STRIPE_PRICE_ID_COLLAB_SEAT_MONTHLY` / `_YEARLY`).
+
+52. **Collaboration: audio and picture files travel with the project**
+    (November 16, 2026).
+    - **Gathered first** (`session/SharedMedia`): a sync copies media that
+      lies outside the project folder into `Audio Files/` and `Picture/`
+      and relinks it (one undo step, "Gather media for sharing"; the
+      originals stay where they were), so every path in a shared project
+      is relative and means the same on every computer.
+    - **Stored once, by content**: each revision carries a manifest -
+      every media path with its file's SHA-256 and size. The server keeps
+      each file once per project (`collab_media`, migration 0007), so a
+      file is uploaded once however many revisions use it; a push naming
+      a file that is not in storage whole is refused. A cache beside the
+      project (`<Name>.vcc2.shared-media.json`, by size and modification
+      time) means a large picture file is hashed once, not at every sync.
+    - **Pulled as needed**: a sync downloads what the project uses and this
+      computer lacks or has with other content, and an earlier download
+      that failed is tried again at the next sync. Every file is checked
+      against its SHA-256 before it replaces anything; a damaged one is
+      refused and nothing is left behind. Open Shared Project brings the
+      media before the project opens.
+    - **Two takes at one path**: when both people made different files at
+      the same path (both recorded "Vox 1"), mine is kept under a new name
+      ("Vox 1 (b11d48).wav") and my project relinked to it before the
+      merge, so both takes survive. A file I did not change since the base
+      is simply replaced by theirs.
+    - **Safety**: a manifest path from someone else must be a plain
+      relative path inside the project folder (no "..", no absolute path,
+      no drive), checked on the server and again on the desktop.
+    - **Limits**: files over 2 GB are not shared (the desktop holds one in
+      memory to upload it; said in the sync's message). The Supabase
+      project's global upload limit also applies: 50 MB per file on the
+      Free plan, set under Storage settings on paid plans.
+    - **Checks**: `test_hash` (the NIST vectors, streaming), `test_shared`
+      (gather and relink, manifests, clashes, what to fetch, unsafe paths),
+      and the desktop check's `collab_checks` with real WAV files and a
+      picture: gathered on share, Ben's take downloaded byte for byte, both
+      vocals kept, a damaged download refused and fetched by the next sync.

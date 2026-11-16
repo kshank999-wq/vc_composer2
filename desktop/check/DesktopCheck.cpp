@@ -52,6 +52,7 @@
 #include "collab/Collaboration.h"
 #include "collab/SharedWindow.h"
 #include "vcc/session/Shared.h"
+#include "vcc/core/Hash.h"
 #include <juce_cryptography/juce_cryptography.h>
 #include "ui/PictureTools.h"
 #include "ui/TemplateBrowser.h"
@@ -6397,16 +6398,38 @@ public:
     struct CollabProject {
         juce::String name;
         std::vector<std::string> revisions;  ///< Revision n is [n - 1].
+        std::vector<json::Value> manifests;  ///< Each revision's media.
+        std::set<std::string> media;         ///< Registered files (sha256).
         std::map<juce::String, std::pair<juce::String, juce::String>> locks;  ///< track -> (user, name)
     };
     std::map<juce::String, CollabProject> collab;
-    std::map<juce::String, std::string> uploads;
+    std::map<juce::String, std::string> uploads;  ///< Storage: key -> bytes.
     int pushes_refused = 0;
-    juce::String push_as(const juce::String& id, const std::string& text)
+    /// Another composer's push: the project and any media files (path -> bytes) it adds.
+    juce::String push_as(const juce::String& id, const std::string& text, const std::map<std::string, std::string>& files = {})
     {
         const juce::ScopedLock sl(lock);
-        collab[id].revisions.push_back(text);
-        return juce::String(static_cast<int>(collab[id].revisions.size()));
+        auto& p = collab[id];
+        json::Value manifest = p.manifests.empty() ? json::Value(json::Array{}) : p.manifests.back();
+        for (const auto& [path, bytes] : files) {
+            const auto sha = hash::sha256_hex(bytes);
+            uploads["media/" + id + "/" + juce::String(sha)] = bytes;
+            p.media.insert(sha);
+            json::Array kept;
+            for (const auto& e : manifest.as_array())
+                if (e.get_string("path") != path) kept.push_back(e);
+            kept.push_back(json::Object{{"path", path}, {"sha256", sha}, {"sizeBytes", static_cast<long long>(bytes.size())}});
+            manifest = json::Value(std::move(kept));
+        }
+        p.revisions.push_back(text);
+        p.manifests.push_back(manifest);
+        return juce::String(static_cast<int>(p.revisions.size()));
+    }
+    json::Value manifest(const juce::String& id, int revision)
+    {
+        const juce::ScopedLock sl(lock);
+        const auto& m = collab[id].manifests;
+        return revision >= 1 && revision <= static_cast<int>(m.size()) ? m[static_cast<std::size_t>(revision - 1)] : json::Value();
     }
     int head(const juce::String& id)
     {
@@ -6441,6 +6464,12 @@ private:
         const juce::String text(static_cast<const char*>(in.getData()), in.getSize());
         const auto head = text.substring(0, std::max(0, header_end));
         const auto body = text.substring(header_end + 4);
+        // The bytes as sent (media files are binary).
+        const std::string raw_body = header_end >= 0 && static_cast<std::size_t>(header_end + 4) <= in.getSize()
+                                         ? std::string(static_cast<const char*>(in.getData()) + header_end + 4,
+                                                       in.getSize() - static_cast<std::size_t>(header_end + 4))
+                                         : std::string();
+        std::optional<std::string> raw_reply;
         const auto line = head.upToFirstOccurrenceOf("\r\n", false, false);
         const auto method = line.upToFirstOccurrenceOf(" ", false, false);
         const auto path = line.fromFirstOccurrenceOf(" ", false, false).upToFirstOccurrenceOf(" ", false, false);
@@ -6476,20 +6505,21 @@ private:
         } else if (path.startsWith("/storage/")) {
             const auto key = path.fromFirstOccurrenceOf("/storage/", false, false);
             if (method == "PUT") {
-                uploads[key] = body.toStdString();
+                uploads[key] = raw_body;
                 status = 200;
                 reply = "{}";
             } else if (uploads.count(key)) {
                 status = 200;
-                reply = juce::String::fromUTF8(uploads[key].data(), static_cast<int>(uploads[key].size()));
+                raw_reply = uploads[key];
             }
         } else if (path.startsWith("/api/collab/")) {
             collab_route(method, path, body, auth, status, reply);
         }
-        const juce::String out = "HTTP/1.1 " + juce::String(status) + (status == 200 ? " OK" : " Error") +
-                                 "\r\nContent-Type: application/json\r\nContent-Length: " + juce::String(reply.getNumBytesAsUTF8()) +
-                                 "\r\nConnection: close\r\n\r\n" + reply;
-        s.write(out.toRawUTF8(), static_cast<int>(out.getNumBytesAsUTF8()));
+        const std::string payload = raw_reply ? *raw_reply : reply.toStdString();
+        const std::string out = "HTTP/1.1 " + std::to_string(status) + (status == 200 ? " OK" : " Error") +
+                                "\r\nContent-Type: " + (raw_reply ? "application/octet-stream" : "application/json") +
+                                "\r\nContent-Length: " + std::to_string(payload.size()) + "\r\nConnection: close\r\n\r\n" + payload;
+        s.write(out.data(), static_cast<int>(out.size()));
         s.close();
     }
 
@@ -6547,6 +6577,19 @@ private:
                                             {"revisions", json::Value(std::move(revisions))},
                                             {"locks", json::Value(std::move(locks))}});
         }
+        if (parts[2] == "media" && parts.size() == 3) {
+            json::Array missing;
+            for (const auto& f : in["files"].as_array()) {
+                const auto sha = f.get_string("sha256");
+                if (p.media.count(sha)) continue;
+                missing.push_back(json::Object{{"sha256", sha}, {"url", (url() + "/storage/media/" + id + "/" + juce::String(sha)).toStdString()}});
+            }
+            return answer(200, json::Object{{"missing", json::Value(std::move(missing))}});
+        }
+        if (parts[2] == "media" && parts.size() == 4) {
+            if (!p.media.count(parts[3].toStdString())) return answer(404, json::Object{{"error", "This project has no such media file"}});
+            return answer(200, json::Object{{"url", (url() + "/storage/media/" + id + "/" + parts[3]).toStdString()}, {"sizeBytes", 1}});
+        }
         if (parts[2] == "upload") {
             const auto key = id + "/" + juce::Uuid().toDashedString() + ".vcc2";
             return answer(200, json::Object{{"path", key.toStdString()}, {"url", (url() + "/storage/" + key).toStdString()},
@@ -6564,7 +6607,18 @@ private:
             if (juce::SHA256(text.data(), text.size()).toHexString().toStdString() != in.get_string("sha256") ||
                 in.get_int("sizeBytes") != static_cast<long long>(text.size()) || in.get_int("site") < 1)
                 return answer(400, json::Object{{"error", "That is not a revision this server takes"}});
+            // Every file the manifest names is registered, or uploaded whole.
+            for (const auto& e : in["media"].as_array()) {
+                const auto sha = e.get_string("sha256");
+                if (p.media.count(sha)) continue;
+                const auto stored = uploads.find("media/" + id + "/" + juce::String(sha));
+                if (stored == uploads.end() || hash::sha256_hex(stored->second) != sha ||
+                    static_cast<long long>(stored->second.size()) != e.get_int("sizeBytes"))
+                    return answer(400, json::Object{{"error", "1 media file was not uploaded completely: sync again"}});
+                p.media.insert(sha);
+            }
             p.revisions.push_back(text);
+            p.manifests.push_back(in["media"].is_array() ? in["media"] : json::Value(json::Array{}));
             return answer(200, json::Object{{"revision", static_cast<long long>(p.revisions.size())}});
         }
         if (parts[2] == "revisions" && parts.size() == 4) {
@@ -6576,7 +6630,10 @@ private:
             return answer(200, json::Object{{"url", (url() + "/storage/" + key).toStdString()},
                                             {"sha256", juce::SHA256(text.data(), text.size()).toHexString().toStdString()},
                                             {"sizeBytes", static_cast<long long>(text.size())},
-                                            {"number", static_cast<long long>(n)}});
+                                            {"number", static_cast<long long>(n)},
+                                            {"media", p.manifests.size() >= static_cast<std::size_t>(n)
+                                                          ? p.manifests[static_cast<std::size_t>(n - 1)]
+                                                          : json::Value(json::Array{})}});
         }
         if (parts[2] == "locks") {
             const auto track = juce::String(in.get_string("trackId"));
@@ -6597,6 +6654,21 @@ private:
     juce::StreamingSocket listener_;
     int port_ = 0;
 };
+
+/// A short WAV file's bytes (a sine at `hz`), for media that must be real audio.
+std::string wav_bytes(double hz)
+{
+    juce::MemoryBlock block;
+    {
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::MemoryOutputStream>(block, false);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(16));
+        juce::AudioBuffer<float> wave(1, 4800);
+        for (int i = 0; i < 4800; ++i) wave.setSample(0, i, 0.3f * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * hz * i / 48000.0)));
+        if (writer) writer->writeFromAudioSampleBuffer(wave, 0, 4800);
+    }
+    return std::string(static_cast<const char*>(block.getData()), block.getSize());
+}
 
 /// Collaboration (Main Spec §15) against the fake server: share, another
 /// composer's push merged in, a real conflict asked about, track locks,
@@ -6647,6 +6719,35 @@ void collab_checks(MainWindow& window, const juce::File& dir)
     root.deleteRecursively();
     session.new_empty();
     session.add_track("Violins I", "violin");
+    // Media outside the project folder: a theme recorded elsewhere, and the picture.
+    const auto theme = wav_bytes(440.0);
+    const auto theme_file = root.getChildFile("Ann").getChildFile("Recordings").getChildFile("Theme.wav");
+    const auto reel_file = root.getChildFile("Ann").getChildFile("Movies").getChildFile("Reel 1.mov");
+    theme_file.getParentDirectory().createDirectory();
+    reel_file.getParentDirectory().createDirectory();
+    theme_file.replaceWithData(theme.data(), theme.size());
+    reel_file.replaceWithText("picture bytes stand in for a movie");
+    auto add_clip = [&](session::Session& to, const std::string& track_name, const std::string& file_path) {
+        std::string id;
+        for (const auto& t : to.data().tracks)
+            if (t.name == track_name) id = t.id;
+        if (id.empty()) id = to.add_audio_track(track_name, false);
+        project::AudioClip c;
+        c.file = file_path;
+        c.length = 0.1;
+        c.channels = 1;
+        c.file_sample_rate = 48000.0;
+        to.add_audio_clips({{id, c}}, "Import");
+    };
+    add_clip(session, "Theme", theme_file.getFullPathName().toStdString());
+    session.edit("Picture", [&](project::ProjectData& d) {
+        project::PictureVersion pv;
+        pv.id = "pic-reel1";
+        pv.name = "Reel 1";
+        pv.path = reel_file.getFullPathName().toStdString();
+        d.pictures.push_back(pv);
+        return true;
+    });
     const auto file = root.getChildFile("Ann").getChildFile("Night Cue").getChildFile("Night Cue.vcc2");
     file.getParentDirectory().createDirectory();
     check(session.save_as(file.getFullPathName().toStdString()), "the project is saved before sharing");
@@ -6658,6 +6759,20 @@ void collab_checks(MainWindow& window, const juce::File& dir)
     const juce::String id(link->project_id);
     check(store.head(id) == 1 && session.data().site == collab::Controller::site() && shared::read_base(path).has_value(),
           "the server has revision 1; the copy carries this computer's id site and its base");
+    const auto folder_of_project = file.getParentDirectory();
+    auto clip_file = [&](const session::Session& in, const std::string& track_name) {
+        for (const auto& t : in.data().tracks)
+            if (t.name == track_name && !t.active_version()->audio_clips.empty()) return t.active_version()->audio_clips.front().file;
+        return std::string();
+    };
+    check(clip_file(session, "Theme") == "Audio Files/Theme.wav" && session.data().pictures.front().path == "Picture/Reel 1.mov" &&
+              folder_of_project.getChildFile("Audio Files/Theme.wav").getSize() == static_cast<juce::int64>(theme.size()) &&
+              theme_file.existsAsFile(),
+          "sharing gathers the media into the project folder and relinks it (the originals stay)");
+    const auto m1 = store.manifest(id, 1);
+    check(m1.as_array().size() == 2 && m1.as_array()[0].get_string("path") == "Audio Files/Theme.wav" &&
+              m1.as_array()[0].get_string("sha256") == hash::sha256_hex(theme),
+          "revision 1 lists both files by content, and both were uploaded: " + juce::String(json::write(m1)));
 
     // Ben, elsewhere, opens revision 1 and adds a harp.
     session::Session ben(ctx.catalogs);
@@ -6669,15 +6784,41 @@ void collab_checks(MainWindow& window, const juce::File& dir)
     ben.adopt_document(*json::parse(rev), "Open");
     ben.set_site(collab::Controller::site() + 1);
     ben.add_track("Harp", "harp");
-    store.push_as(id, shared::document_text(ben.project().to_json()));
+    // Ben records a harp take, and a vocal at a path Ann also uses for hers.
+    const auto harp_wav = wav_bytes(220.0), ben_vox = wav_bytes(330.0), ann_vox = wav_bytes(550.0);
+    add_clip(ben, "Ben Audio", "Audio Files/Harp.wav");
+    add_clip(ben, "Ben Vox", "Audio Files/Vox 1.wav");
+    store.push_as(id, shared::document_text(ben.project().to_json()), {{"Audio Files/Harp.wav", harp_wav}, {"Audio Files/Vox 1.wav", ben_vox}});
 
-    // Meanwhile Ann adds horns; Sync brings the harp in and pushes both.
+    // Meanwhile Ann adds horns and records her own "Vox 1"; Sync brings the
+    // harp in, keeps both vocals, and pushes everything.
     session.add_track("Horns", "horn");
+    folder_of_project.getChildFile("Audio Files/Vox 1.wav").replaceWithData(ann_vox.data(), ann_vox.size());
+    add_clip(session, "Ann Vox", "Audio Files/Vox 1.wav");
     o = run([&](collab::Done d) { sync.sync(d); });
     check(o.ok && has_track(session, "Harp") && has_track(session, "Horns") && has_track(session, "Violins I"),
           "Sync merges Ben's harp with Ann's horns, no questions: " + o.message);
     check(store.head(id) == 3 && shared::read_link(path)->base == 3 && !session.dirty(),
           "and pushes the result as revision 3, saved with its new base");
+    {
+        juce::MemoryBlock got;
+        folder_of_project.getChildFile("Audio Files/Harp.wav").loadFileAsData(got);
+        check(got.toString().length() > 0 && std::string(static_cast<const char*>(got.getData()), got.getSize()) == harp_wav,
+              "Ben's harp take is downloaded, byte for byte");
+        juce::MemoryBlock vox;
+        folder_of_project.getChildFile("Audio Files/Vox 1.wav").loadFileAsData(vox);
+        const auto mine = clip_file(session, "Ann Vox");
+        juce::MemoryBlock kept;
+        folder_of_project.getChildFile(juce::String(mine)).loadFileAsData(kept);
+        check(std::string(static_cast<const char*>(vox.getData()), vox.getSize()) == ben_vox && mine != "Audio Files/Vox 1.wav" &&
+                  juce::String(mine).startsWith("Audio Files/Vox 1 (") &&
+                  std::string(static_cast<const char*>(kept.getData()), kept.getSize()) == ann_vox &&
+                  clip_file(session, "Ben Vox") == "Audio Files/Vox 1.wav",
+              "two vocals at one path: Ben's is at \"Vox 1.wav\", Ann's kept as \"" + juce::String(mine) + "\", both used");
+        const auto m3 = shared::manifest_from_json(store.manifest(id, 3));
+        check(m3.size() == 5 && shared::find_media(m3, mine) && shared::find_media(m3, mine)->sha256 == hash::sha256_hex(ann_vox),
+              "revision 3 lists all five files; Ann's vocal was uploaded");
+    }
     o = run([&](collab::Done d) { sync.sync(d); });
     check(o.ok && o.message.startsWith("In sync") && store.head(id) == 3, "a second Sync has nothing to do: " + o.message);
 
@@ -6748,7 +6889,13 @@ void collab_checks(MainWindow& window, const juce::File& dir)
         sp->getTopLevelComponent()->setSize(900, 560);
         shoot(*sp->getTopLevelComponent(), dir, "77-shared-projects");
 
-        // Opening it on another computer (here, another folder).
+        // Opening it on another computer (here, another folder). The harp
+        // arrives damaged first: it is refused, and a later Sync fetches it.
+        const auto harp_key = "media/" + id + "/" + juce::String(hash::sha256_hex(harp_wav));
+        {
+            const juce::ScopedLock sl(store.lock);
+            store.uploads[harp_key] = "damaged";
+        }
         const auto elsewhere = root.getChildFile("Elsewhere");
         elsewhere.createDirectory();
         collab::Outcome opened;
@@ -6759,9 +6906,27 @@ void collab_checks(MainWindow& window, const juce::File& dir)
         });
         wait_for([&] { return got; }, 20000);
         const auto there = elsewhere.getChildFile("Night Cue").getChildFile("Night Cue.vcc2");
-        check(opened.ok && session.path() == there.getFullPathName().toStdString() && has_track(session, "Harp") &&
+        check(session.path() == there.getFullPathName().toStdString() && has_track(session, "Harp") &&
                   shared::read_link(session.path()).has_value() && session.data().site == collab::Controller::site(),
               "Open Shared Project downloads the latest revision, opens it, and it syncs from there: " + opened.message);
+        const auto there_dir = there.getParentDirectory();
+        juce::MemoryBlock t2;
+        there_dir.getChildFile("Audio Files/Theme.wav").loadFileAsData(t2);
+        check(std::string(static_cast<const char*>(t2.getData()), t2.getSize()) == theme &&
+                  there_dir.getChildFile("Picture/Reel 1.mov").loadFileAsString() == "picture bytes stand in for a movie",
+              "the theme and the picture came with it");
+        check(!opened.ok && opened.message.contains("arrived damaged") && !there_dir.getChildFile("Audio Files/Harp.wav").exists() &&
+                  !there_dir.getChildFile("Audio Files/Harp.wav.part").exists(),
+              "a file that does not match its SHA-256 is refused and nothing is left behind: " + opened.message);
+        {
+            const juce::ScopedLock sl(store.lock);
+            store.uploads[harp_key] = harp_wav;
+        }
+        o = run([&](collab::Done d) { sync.sync(d); });
+        juce::MemoryBlock h2;
+        there_dir.getChildFile("Audio Files/Harp.wav").loadFileAsData(h2);
+        check(o.ok && std::string(static_cast<const char*>(h2.getData()), h2.getSize()) == harp_wav && store.head(id) == 4,
+              "the next Sync fetches it, with nothing to push: " + o.message);
         sp->getTopLevelComponent()->setVisible(false);
     }
 

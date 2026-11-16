@@ -331,6 +331,37 @@ std::optional<juce::MemoryBlock> Account::get_bytes(const juce::String& url, int
     return data;
 }
 
+bool Account::download_to_file(const juce::String& url, const juce::File& file, juce::String* error)
+{
+    juce::WebInputStream stream(juce::URL(url), false);
+    stream.withConnectionTimeout(30000);
+    if (!stream.connect(nullptr) || stream.getStatusCode() < 200 || stream.getStatusCode() >= 300) {
+        if (error) *error = "the download was refused (" + juce::String(stream.getStatusCode()) + ")";
+        return false;
+    }
+    file.getParentDirectory().createDirectory();
+    juce::TemporaryFile temp(file);
+    {
+        juce::FileOutputStream out(temp.getFile());
+        if (!out.openedOk()) {
+            if (error) *error = "could not write " + file.getFullPathName();
+            return false;
+        }
+        const auto expected = stream.getTotalLength();
+        const auto written = out.writeFromInputStream(stream, -1);
+        out.flush();
+        if (out.getStatus().failed() || (expected > 0 && written != expected)) {
+            if (error) *error = "the download was cut off";
+            return false;
+        }
+    }
+    if (!temp.overwriteTargetFileWithTemporary()) {
+        if (error) *error = "could not replace " + file.getFullPathName() + " (is it open elsewhere?)";
+        return false;
+    }
+    return true;
+}
+
 void Account::sign_out()
 {
     const juce::ScopedLock sl(lock_);

@@ -5,6 +5,8 @@
 #include "AppResources.h"
 #include "licensing/Account.h"
 #include "vcc/core/Files.h"
+#include "vcc/core/Hash.h"
+#include "vcc/session/Relink.h"
 
 namespace vcc::desktop::collab {
 
@@ -40,6 +42,7 @@ struct Fetched {
     bool ok = false;
     juce::String error;
     std::string text;
+    shared::Manifest media;
 };
 
 Fetched fetch_revision(const juce::String& project_id, int number)
@@ -58,6 +61,7 @@ Fetched fetch_revision(const juce::String& project_id, int number)
         return f;
     }
     f.text = data->toString().toStdString();
+    f.media = shared::manifest_from_json(link.body["media"]);
     const auto expected = str(link.body, "sha256");
     if (expected.isNotEmpty() && sha256(f.text) != expected) {
         f.error = "Revision " + juce::String(number) + " arrived damaged; try again";
@@ -76,7 +80,7 @@ struct Pushed {
 
 /// Uploads the document and pushes it as the revision after `base`.
 Pushed push_revision(const juce::String& project_id, int base, const std::string& text, const juce::String& message,
-                     std::uint32_t site)
+                     std::uint32_t site, const shared::Manifest& media)
 {
     Pushed p;
     auto& a = Account::get();
@@ -96,7 +100,8 @@ Pushed push_revision(const juce::String& project_id, int base, const std::string
                                       {"sizeBytes", static_cast<long long>(text.size())},
                                       {"sha256", sha256(text).toStdString()},
                                       {"site", static_cast<long long>(site)},
-                                      {"path", slot.body.get_string("path")}});
+                                      {"path", slot.body.get_string("path")},
+                                      {"media", shared::manifest_to_json(media)}});
     if (r.status == 409) {
         p.head = static_cast<int>(r.body.get_int("head", -1));
         p.error = r.error;
@@ -109,6 +114,88 @@ Pushed push_revision(const juce::String& project_id, int base, const std::string
     p.accepted = true;
     p.revision = static_cast<int>(r.body.get_int("revision"));
     return p;
+}
+
+juce::String plural(int n, const char* one, const char* many) { return juce::String(n) + " " + (n == 1 ? one : many); }
+
+/// Uploads the files of `manifest` the server does not have yet. Empty on success, else why not.
+juce::String upload_media(const juce::String& project_id, const shared::Manifest& manifest, const std::string& project_file,
+                          const std::function<void(const juce::String&)>& progress)
+{
+    auto& a = Account::get();
+    for (std::size_t from = 0; from < manifest.size(); from += 1000) {
+        json::Array files;
+        std::map<std::string, const shared::MediaEntry*> by_sha;
+        for (std::size_t i = from; i < std::min(manifest.size(), from + 1000); ++i) {
+            files.push_back(json::Object{{"sha256", manifest[i].sha256}, {"sizeBytes", static_cast<long long>(manifest[i].size)}});
+            by_sha[manifest[i].sha256] = &manifest[i];
+        }
+        const auto r = a.api("POST", "/api/collab/projects/" + project_id + "/media", json::Object{{"files", json::Value(std::move(files))}});
+        if (!r.ok()) return r.error;
+        const auto& missing = r.body["missing"].as_array();
+        int n = 0;
+        for (const auto& m : missing) {
+            const auto it = by_sha.find(m.get_string("sha256"));
+            if (it == by_sha.end()) continue;
+            const auto& e = *it->second;
+            progress("Uploading " + juce::String(++n) + " of " + juce::String(static_cast<int>(missing.size())) + ": " + juce::String(e.path));
+            juce::MemoryBlock data;
+            if (!juce::File(shared::media_file(project_file, e.path)).loadFileAsData(data) || data.getSize() != e.size)
+                return juce::String(e.path) + " could not be read (or changed while syncing)";
+            if (juce::SHA256(data.getData(), data.getSize()).toHexString().toStdString() != e.sha256)
+                return juce::String(e.path) + " changed while syncing: sync again";
+            const auto up = a.put_bytes(str(m, "url"), data);
+            if (!up.ok()) return juce::String(e.path) + ": " + up.error;
+        }
+    }
+    return {};
+}
+
+/// Downloads these media files into the project folder, each checked against
+/// its SHA-256 before it replaces anything. Returns the failures.
+juce::StringArray download_media(const juce::String& project_id, const shared::Manifest& entries, const std::string& project_file,
+                                 shared::HashCache& cache, const std::function<void(const juce::String&)>& progress)
+{
+    juce::StringArray failed;
+    auto& a = Account::get();
+    int n = 0;
+    for (const auto& e : entries) {
+        progress("Downloading " + juce::String(++n) + " of " + juce::String(static_cast<int>(entries.size())) + ": " + juce::String(e.path));
+        const auto link = a.api("GET", "/api/collab/projects/" + project_id + "/media/" + juce::String(e.sha256));
+        if (!link.ok()) {
+            failed.add(juce::String(e.path) + ": " + link.error);
+            continue;
+        }
+        const juce::File target(shared::media_file(project_file, e.path));
+        const auto part = target.getSiblingFile(target.getFileName() + ".part");
+        juce::String error;
+        if (!a.download_to_file(str(link.body, "url"), part, &error)) {
+            failed.add(juce::String(e.path) + ": " + error);
+            continue;
+        }
+        if (hash::sha256_file(part.getFullPathName().toStdString()) != e.sha256) {
+            part.deleteFile();
+            failed.add(juce::String(e.path) + ": arrived damaged");
+            continue;
+        }
+        if (!part.moveFileTo(target)) {
+            part.deleteFile();
+            failed.add(juce::String(e.path) + ": could not be put in place (is it open elsewhere?)");
+            continue;
+        }
+        cache.note(e.path, e.sha256);
+    }
+    cache.save();
+    return failed;
+}
+
+/// "2 media files are missing here" and the like, for the summary.
+juce::String media_notes(const shared::Listed& l)
+{
+    juce::String s;
+    if (!l.missing.empty()) s << " " << plural(static_cast<int>(l.missing.size()), "media file is", "media files are") << " missing here and not shared.";
+    if (!l.too_large.empty()) s << " " << plural(static_cast<int>(l.too_large.size()), "file is", "files are") << " over 2 GB and not shared.";
+    return s;
 }
 
 struct DetailReply {
@@ -125,7 +212,6 @@ DetailReply fetch_detail(const juce::String& id)
     return d;
 }
 
-juce::String plural(int n, const char* one, const char* many) { return juce::String(n) + " " + (n == 1 ? one : many); }
 
 }  // namespace
 
@@ -301,6 +387,13 @@ void Controller::refresh(Done done)
                             });
 }
 
+void Controller::progress(const juce::String& text)
+{
+    juce::MessageManager::callAsync([this, alive = alive_, text] {
+        if (*alive && context_) context_->status(text);
+    });
+}
+
 void Controller::share(const juce::String& name, Done done)
 {
     if (busy_ || !context_) return done({false, "Busy: another shared-project operation is running"});
@@ -310,34 +403,22 @@ void Controller::share(const juce::String& name, Done done)
     if (!Account::get().signed_in()) return done({false, "Sign in first (Help > Account and Licence...)"});
     busy_ = true;
     context_->session.set_site(site());
-    const auto text = shared::document_text(context_->session.project().to_json());
-    struct Shared {
-        juce::String id, error;
-        int revision = 0;
-    };
-    background<Shared>(
-        alive_,
-        [name, text] {
-            Shared s;
-            const auto created = Account::get().api("POST", "/api/collab/projects", json::Object{{"name", name.toStdString()}});
-            if (!created.ok()) {
-                s.error = created.error;
-                return s;
-            }
-            s.id = str(created.body, "id");
-            const auto pushed = push_revision(s.id, 0, text, "Shared", site());
-            if (!pushed.accepted) s.error = pushed.error;
-            s.revision = pushed.revision;
-            return s;
-        },
-        [this, done = std::move(done), path, name, text](Shared s) mutable {
-            if (s.error.isNotEmpty() || s.revision < 1) return finish(done, {false, "Not shared: " + s.error});
-            shared::Link l{s.id.toStdString(), name.toStdString(), "owner", s.revision, site()};
+    background<Account::Reply>(
+        alive_, [name] { return Account::get().api("POST", "/api/collab/projects", json::Object{{"name", name.toStdString()}}); },
+        [this, done = std::move(done), path, name](Account::Reply r) mutable {
+            if (!r.ok()) return finish(done, {false, "Not shared: " + r.error});
+            // Revision 0 here; the first sync gathers the media and pushes revision 1.
+            shared::Link l{str(r.body, "id").toStdString(), name.toStdString(), "owner", 0, site(), {}};
             std::string error;
-            if (!shared::write_link(path, l, &error) || !shared::write_base(path, text, &error))
+            if (!shared::write_link(path, l, &error))
                 return finish(done, {false, "Shared, but the sharing file could not be written: " + juce::String(error)});
-            refresh();
-            finish(done, {true, "Shared \"" + name + "\": invite people from My shared projects on vc-composer.com"});
+            step_pull(
+                [this, done = std::move(done), name](Outcome o) mutable {
+                    if (o.ok) o.message = "Shared \"" + name + "\". " + o.message + " Invite people from My shared projects on vc-composer.com";
+                    else o.message = "Shared, but not uploaded yet: " + o.message + ". Sync again to finish";
+                    if (done) done(o);
+                },
+                0);
         });
 }
 
@@ -346,27 +427,54 @@ void Controller::open_shared(const ProjectSummary& project, const juce::File& fo
 {
     if (busy_) return done({false, "Busy: another shared-project operation is running"});
     if (project.head < 1) return done({false, "Nothing has been pushed to \"" + project.name + "\" yet"});
+    const auto safe = juce::File::createLegalFileName(project.name).trim();
+    const auto dir = folder.getChildFile(safe.isEmpty() ? juce::String("Shared Project") : safe);
+    const auto file = dir.getChildFile(dir.getFileName() + ".vcc2");
+    if (file.existsAsFile() && !shared::read_link(file.getFullPathName().toStdString()))
+        return done({false, file.getFullPathName() + " already exists and is not this shared project: choose another folder"});
     busy_ = true;
-    background<Fetched>(
-        alive_, [project] { return fetch_revision(project.id, project.head); },
-        [this, project, folder, open = std::move(open), done = std::move(done)](Fetched f) mutable {
-            if (!f.ok) return finish(done, {false, f.error});
-            const auto safe = juce::File::createLegalFileName(project.name).trim();
-            const auto dir = folder.getChildFile(safe.isEmpty() ? juce::String("Shared Project") : safe);
-            const auto file = dir.getChildFile(dir.getFileName() + ".vcc2");
-            if (file.existsAsFile() && !shared::read_link(file.getFullPathName().toStdString()))
-                return finish(done, {false, file.getFullPathName() + " already exists and is not this shared project: choose another folder"});
+    struct Opened {
+        juce::String error;
+        juce::StringArray failed;
+        int fetched = 0;
+    };
+    const auto p = file.getFullPathName().toStdString();
+    background<Opened>(
+        alive_,
+        [this, project, dir, p] {
+            Opened o;
+            const auto f = fetch_revision(project.id, project.head);
+            if (!f.ok) {
+                o.error = f.error;
+                return o;
+            }
             dir.createDirectory();
-            const auto p = file.getFullPathName().toStdString();
             std::string error;
-            shared::Link l{project.id.toStdString(), project.name.toStdString(), project.role.toStdString(), project.head, site()};
+            shared::Link l{project.id.toStdString(), project.name.toStdString(), project.role.toStdString(), project.head, site(), f.media};
             if (!files::write_file_atomic(p, f.text, &error) || !shared::write_base(p, f.text, &error) ||
-                !shared::write_link(p, l, &error))
-                return finish(done, {false, "Could not write " + file.getFullPathName() + ": " + juce::String(error)});
+                !shared::write_link(p, l, &error)) {
+                o.error = "Could not write " + juce::String(p) + ": " + juce::String(error);
+                return o;
+            }
+            // Its audio and picture, before it opens.
+            const auto doc = project::Project::from_json(*json::parse(f.text));
+            if (doc) {
+                shared::HashCache cache(p);
+                const auto fetch = shared::to_fetch(doc->data(), f.media, p, cache);
+                o.fetched = static_cast<int>(fetch.size());
+                o.failed = download_media(project.id, fetch, p, cache, [this](const juce::String& t) { progress(t); });
+            }
+            return o;
+        },
+        [this, project, file, open = std::move(open), done = std::move(done)](Opened o) mutable {
+            if (o.error.isNotEmpty()) return finish(done, {false, o.error});
             busy_ = false;
             if (!open(file)) return finish(done, {false, "Downloaded to " + file.getFullPathName() + "; not opened"});
-            finish(done, {true, "Opened \"" + project.name + "\" (revision " + juce::String(project.head) + ") from " +
-                                    file.getParentDirectory().getFullPathName()});
+            juce::String m = "Opened \"" + project.name + "\" (revision " + juce::String(project.head) + ") from " +
+                             file.getParentDirectory().getFullPathName();
+            if (o.fetched > 0) m << " with " << plural(o.fetched - o.failed.size(), "media file", "media files");
+            if (!o.failed.isEmpty()) m << "; " << o.failed.size() << " could not be downloaded (Sync tries again): " << o.failed[0];
+            finish(done, {o.failed.isEmpty(), m});
         });
 }
 
@@ -375,54 +483,72 @@ void Controller::sync(Done done)
     if (busy_ || !context_) return done({false, "Busy: another shared-project operation is running"});
     if (!link()) return done({false, "This project is not shared: File > Share Project... first"});
     busy_ = true;
-    sync_round(std::move(done), 0);
+    step_pull(std::move(done), 0);
 }
 
-void Controller::sync_round(Done done, int attempt)
+/// Pull: the server's head, if newer, merged in. First, this copy's media is
+/// gathered into the project folder, and a file of mine that clashes with
+/// theirs (same path, other content) is kept apart under a new name.
+void Controller::step_pull(Done done, int attempt)
 {
     const auto l = *link();
+    const auto path = path_;
     const juce::String id(l.project_id);
-    const int base = l.base;
+    auto data = std::make_shared<project::ProjectData>(context_->session.data());
     struct Pulled {
         DetailReply detail;
         std::optional<Fetched> head;
+        std::map<std::string, std::string> relinks;  ///< Gathered and kept apart: stored -> file.
+        juce::String error;
     };
     background<Pulled>(
         alive_,
-        [id, base] {
+        [id, l, path, data] {
             Pulled p;
             p.detail = fetch_detail(id);
-            if (p.detail.detail && p.detail.detail->head > base) p.head = fetch_revision(id, p.detail.detail->head);
+            if (!p.detail.detail) return p;
+            if (p.detail.detail->head > l.base) p.head = fetch_revision(id, p.detail.detail->head);
+            // Gather what lies outside the project folder.
+            const auto copies = shared::plan_gather(*data, path);
+            std::string error;
+            if (!shared::run_copies(copies, &error)) {
+                p.error = juce::String(error);
+                return p;
+            }
+            p.relinks = shared::relinks_of(copies);
+            if (!p.relinks.empty()) session::relink::apply(*data, p.relinks, path);
+            if (p.head && p.head->ok) {
+                shared::HashCache cache(path);
+                const auto ours = shared::list_media(*data, path, cache, l.base_media);
+                cache.save();
+                const auto apart = shared::separate_clashes(ours.manifest, l.base_media, p.head->media, path, l.site, &error);
+                if (!error.empty()) p.error = juce::String(error);
+                for (const auto& [stored, file] : apart) p.relinks[stored] = file;
+            }
             return p;
         },
-        [this, done = std::move(done), attempt, path = path_](Pulled p) mutable {
+        [this, done = std::move(done), attempt, path](Pulled p) mutable {
             if (!context_ || context_->session.path() != path) return finish(done, {false, "Sync stopped: another project was opened"});
             if (!p.detail.detail) return finish(done, {false, "Not synced: " + p.detail.error});
+            if (p.error.isNotEmpty()) return finish(done, {false, "Not synced: " + p.error});
             detail_ = std::move(*p.detail.detail);
             apply_locks();
-            auto l = *link();
-            l.role = detail_.role.toStdString();
-            auto after_pull = [this, done, attempt, path](shared::Link link) mutable {
-                // Push what is new here, if this role writes.
-                const auto base_doc = shared::read_base(path);
-                const bool changed = !base_doc || shared::changed_since(*base_doc, context_->session.project().to_json());
-                if (!changed) return finish(done, {true, "In sync with revision " + juce::String(link.base) + " of \"" + juce::String(link.name) + "\""});
-                if (!shared::can_push(link.role))
-                    return finish(done, {true, "Brought in revision " + juce::String(link.base) +
-                                                   ". Your changes stay on this computer: a " +
-                                                   juce::String(shared::role_label(link.role)).toLowerCase() + " does not push"});
-                push(link, std::move(done), attempt);
-            };
+            if (!p.relinks.empty())
+                context_->session.edit("Gather media for sharing", [&](project::ProjectData& d) {
+                    return session::relink::apply(d, p.relinks, path) > 0;
+                });
+            auto current = *link();
+            current.role = detail_.role.toStdString();
             if (!p.head) {
-                shared::write_link(path, l);
-                return after_pull(l);
+                shared::write_link(path, current);
+                return step_fetch(std::move(done), attempt, {});
             }
             if (!p.head->ok) return finish(done, {false, "Not synced: " + p.head->error});
             const auto theirs = json::parse(p.head->text);
             if (!theirs) return finish(done, {false, "Not synced: revision " + juce::String(detail_.head) + " is not a project file"});
             auto result = std::make_shared<project::MergeResult>(
                 shared::pull(shared::read_base(path), context_->session.project().to_json(), *theirs));
-            auto adopt = [this, result, l, text = p.head->text, head = detail_.head, done, after_pull,
+            auto adopt = [this, result, l = current, text = p.head->text, media = p.head->media, head = detail_.head, done, attempt,
                           path](std::optional<std::vector<bool>> choice) mutable {
                 if (!choice) return finish(done, {false, "Sync cancelled: nothing changed"});
                 if (!context_ || context_->session.path() != path) return finish(done, {false, "Sync stopped: another project was opened"});
@@ -432,14 +558,15 @@ void Controller::sync_round(Done done, int attempt)
                     return finish(done, {false, "Not synced: " + juce::String(error)});
                 auto link = l;
                 link.base = head;
+                link.base_media = media;
                 // The new base and the project that includes it are written together.
                 if (!shared::write_base(path, text, &error) || !shared::write_link(path, link, &error) ||
                     !context_->session.save(&error))
                     return finish(done, {false, "Synced, but not saved: " + juce::String(error)});
                 const int asked = static_cast<int>(result->conflicts.size());
-                context_->status("Brought in revision " + juce::String(head) +
-                                 (asked > 0 ? " (" + plural(asked, "conflict", "conflicts") + " decided)" : juce::String()));
-                after_pull(link);
+                step_fetch(std::move(done), attempt,
+                           "Brought in revision " + juce::String(head) +
+                               (asked > 0 ? " (" + plural(asked, "conflict", "conflicts") + " decided)" : juce::String()));
             };
             if (result->clean()) return adopt(std::vector<bool>{});
             if (!ask_conflicts) return adopt(std::vector<bool>(result->conflicts.size(), false));
@@ -447,28 +574,104 @@ void Controller::sync_round(Done done, int attempt)
         });
 }
 
-void Controller::push(const shared::Link& l, Done done, int attempt)
+/// Fetch: the media the project uses that this computer lacks (theirs, new
+/// or changed; or an earlier download that failed).
+void Controller::step_fetch(Done done, int attempt, juce::String pulled)
 {
-    const auto text = shared::document_text(context_->session.project().to_json());
-    const auto message = juce::String(context_->session.project().undo_label());
-    background<Pushed>(
-        alive_, [l, text, message] { return push_revision(juce::String(l.project_id), l.base, text, message, site()); },
-        [this, l, text, done = std::move(done), attempt, path = path_](Pushed p) mutable {
+    const auto l = *link();
+    const auto path = path_;
+    auto data = std::make_shared<project::ProjectData>(context_->session.data());
+    struct Got {
+        int wanted = 0;
+        juce::StringArray failed;
+    };
+    background<Got>(
+        alive_,
+        [this, l, path, data] {
+            Got g;
+            shared::HashCache cache(path);
+            const auto fetch = shared::to_fetch(*data, l.base_media, path, cache);
+            g.wanted = static_cast<int>(fetch.size());
+            g.failed = fetch.empty() ? juce::StringArray() : download_media(juce::String(l.project_id), fetch, path, cache,
+                                                                            [this](const juce::String& t) { progress(t); });
+            cache.save();
+            return g;
+        },
+        [this, done = std::move(done), attempt, pulled, path](Got g) mutable {
             if (!context_ || context_->session.path() != path) return finish(done, {false, "Sync stopped: another project was opened"});
-            if (!p.accepted && p.head >= 0) {
+            if (g.wanted > 0) {
+                pulled << (pulled.isEmpty() ? "" : "; ") << plural(g.wanted - g.failed.size(), "media file", "media files") << " downloaded";
+                if (!g.failed.isEmpty()) pulled << ", " << g.failed.size() << " not (Sync tries again): " << g.failed[0];
+            }
+            if (pulled.isNotEmpty()) context_->status(pulled);
+            step_push(std::move(done), attempt, pulled);
+        });
+}
+
+/// Push: this copy's project and media, if anything changed since the base
+/// and this role writes. Refused because somebody pushed meanwhile: pull again.
+void Controller::step_push(Done done, int attempt, juce::String pulled)
+{
+    const auto l = *link();
+    const auto path = path_;
+    const auto doc = context_->session.project().to_json();
+    const auto text = shared::document_text(doc);
+    const auto base_doc = shared::read_base(path);
+    const bool doc_changed = !base_doc || shared::changed_since(*base_doc, doc);
+    const auto message = juce::String(context_->session.project().undo_label());
+    auto data = std::make_shared<project::ProjectData>(context_->session.data());
+    struct Sent {
+        bool tried = false;
+        Pushed pushed;
+        shared::Manifest manifest;
+        juce::String notes, error;
+    };
+    background<Sent>(
+        alive_,
+        [this, l, path, text, doc_changed, message, data] {
+            Sent s;
+            shared::HashCache cache(path);
+            const auto listed = shared::list_media(*data, path, cache, l.base_media,
+                                                   [](std::uint64_t) { return true; });
+            cache.save();
+            s.manifest = listed.manifest;
+            s.notes = media_notes(listed);
+            if (!doc_changed && shared::same_media(s.manifest, l.base_media)) return s;
+            if (!shared::can_push(l.role)) return s;
+            s.tried = true;
+            s.error = upload_media(juce::String(l.project_id), s.manifest, path, [this](const juce::String& t) { progress(t); });
+            if (s.error.isNotEmpty()) return s;
+            s.pushed = push_revision(juce::String(l.project_id), l.base, text, message, site(), s.manifest);
+            return s;
+        },
+        [this, l, text, done = std::move(done), attempt, pulled, path](Sent s) mutable {
+            if (!context_ || context_->session.path() != path) return finish(done, {false, "Sync stopped: another project was opened"});
+            const auto lead = pulled.isEmpty() ? juce::String() : pulled + ". ";
+            if (!s.tried) {
+                if (!shared::can_push(l.role) && (l.base == 0 || shared::changed_since(*shared::read_base(path), context_->session.project().to_json())))
+                    return finish(done, {true, lead + "Your changes stay on this computer: a " +
+                                                   juce::String(shared::role_label(l.role)).toLowerCase() + " does not push." + s.notes});
+                return finish(done, {true, lead + "In sync with revision " + juce::String(l.base) + " of \"" + juce::String(l.name) + "\"." + s.notes});
+            }
+            if (s.error.isNotEmpty()) return finish(done, {false, lead + "Not pushed: " + s.error});
+            if (!s.pushed.accepted && s.pushed.head >= 0) {
                 // Somebody pushed while this was merging: pull their work too.
                 if (attempt >= 3) return finish(done, {false, "Not pushed: others keep pushing; Sync again in a moment"});
-                return sync_round(std::move(done), attempt + 1);
+                return step_pull(std::move(done), attempt + 1);
             }
-            if (!p.accepted) return finish(done, {false, "Not pushed: " + p.error});
+            if (!s.pushed.accepted) return finish(done, {false, lead + "Not pushed: " + s.pushed.error});
             auto link = l;
-            link.base = p.revision;
+            link.base = s.pushed.revision;
+            link.base_media = s.manifest;
             std::string error;
             if (!shared::write_base(path, text, &error) || !shared::write_link(path, link, &error))
                 return finish(done, {false, "Pushed, but the sharing file could not be written: " + juce::String(error)});
             if (context_->session.dirty()) context_->session.save(&error);
-            detail_.head = p.revision;
-            finish(done, {true, "Synced: your changes are revision " + juce::String(p.revision) + " of \"" + juce::String(l.name) + "\""});
+            detail_.head = s.pushed.revision;
+            refresh();
+            finish(done, {true, lead + "Synced: your changes are revision " + juce::String(s.pushed.revision) + " of \"" +
+                                    juce::String(l.name) + "\" (" + plural(static_cast<int>(s.manifest.size()), "media file", "media files") +
+                                    ")." + s.notes});
         });
 }
 

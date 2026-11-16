@@ -75,6 +75,8 @@ public:
     /// Raw transfers to and from a short-lived signed storage link.
     Reply put_bytes(const juce::String& url, const juce::MemoryBlock& data);
     std::optional<juce::MemoryBlock> get_bytes(const juce::String& url, int* status = nullptr);
+    /// Streams a download into `file` (written whole or not at all). False on failure.
+    bool download_to_file(const juce::String& url, const juce::File& file, juce::String* error = nullptr);
 
     juce::String device_fingerprint();
     static juce::String platform();

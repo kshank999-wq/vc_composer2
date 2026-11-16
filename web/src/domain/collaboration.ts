@@ -116,6 +116,33 @@ export const decideLock = (
   return { ok: false, heldBy: existing.name, until: existing.expiresAt };
 };
 
+/** The largest media file a shared project takes (the desktop holds one in memory to upload it). */
+export const MEDIA_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * A media path as a shared project stores it: relative to the project's
+ * folder, inside it. Another computer writes the file there, so nothing
+ * that could climb out ("..", absolute, a drive) is accepted.
+ */
+export const isSafeMediaPath = (path: string): boolean => {
+  if (path.length === 0 || path.length > 400) return false;
+  if (path.startsWith('/') || path.includes('\\') || /^[a-zA-Z]:/.test(path) || path.includes('\0')) return false;
+  return path.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
+};
+
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
+export const mediaEntrySchema = z.object({
+  path: z.string().refine(isSafeMediaPath, 'A media path stays inside the project folder'),
+  sha256: sha256Schema,
+  sizeBytes: z.number().int().min(1).max(MEDIA_MAX_BYTES),
+});
+export type MediaEntry = z.infer<typeof mediaEntrySchema>;
+
+/** Which of these files the server still needs (before a push). */
+export const mediaQuerySchema = z.object({
+  files: z.array(z.object({ sha256: sha256Schema, sizeBytes: z.number().int().min(1).max(MEDIA_MAX_BYTES) })).min(1).max(1000),
+});
+
 export const projectNameSchema = z.string().trim().min(1, 'Name the project').max(200);
 export const pushSchema = z.object({
   base: z.number().int().min(0),
@@ -124,6 +151,11 @@ export const pushSchema = z.object({
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   site: z.number().int().min(1).max(0xffffff),
   path: z.string().regex(/^[0-9a-f-]{36}\/[0-9a-f-]{36}\.vcc2$/),
+  media: z
+    .array(mediaEntrySchema)
+    .max(5000)
+    .default([])
+    .refine((m) => new Set(m.map((e) => e.path)).size === m.length, 'Each media path once'),
 });
 export const inviteSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
