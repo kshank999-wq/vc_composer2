@@ -93,8 +93,9 @@ export async function POST(request: Request): Promise<Response> {
         // promotion-code box is deliberately not offered: on an account shared
         // with other products it would accept their codes too.
         ...(offer ? { discounts: [{ promotion_code: offer.promotionCodeId }] } : {}),
-        // Stripe Tax works out VAT and sales tax wherever the customer is.
-        automatic_tax: { enabled: true },
+        // Stripe Tax works out VAT and sales tax wherever the customer is
+        // (off in a sandbox, which cannot hold a head-office address).
+        automatic_tax: { enabled: env.stripeAutomaticTax },
         // **Required rather than `auto`, because this is a subscription.** A
         // renewal is re-rated from the address saved on the Customer, and one
         // saved without an address leaves every renewal invoice stuck in

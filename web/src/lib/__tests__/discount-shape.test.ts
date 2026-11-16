@@ -149,7 +149,7 @@ describe('the webhook gates fulfilment on the domain reading', () => {
  */
 describe('what Stripe Tax is given to work from', () => {
   it('collects an address on the subscription', () => {
-    expect(ROUTE).toContain('automatic_tax: { enabled: true }');
+    expect(ROUTE).toContain('automatic_tax: { enabled: env.stripeAutomaticTax }');
     expect(ROUTE).toContain("billing_address_collection: 'required'");
   });
 

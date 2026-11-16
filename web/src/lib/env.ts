@@ -92,6 +92,15 @@ export const env = {
   get resendFrom(): string {
     return optional('RESEND_FROM_ADDRESS', 'VC Composer <noreply@vc-composer.com>');
   },
+  /**
+   * Whether Checkout asks Stripe Tax to work out sales tax and VAT. On unless
+   * STRIPE_AUTOMATIC_TAX is "off" (or "false"/"0"): a Stripe sandbox cannot
+   * hold the head-office address Stripe Tax needs, so testing turns it off.
+   */
+  get stripeAutomaticTax(): boolean {
+    const v = optional('STRIPE_AUTOMATIC_TAX', 'on').trim().toLowerCase();
+    return !['off', 'false', '0', 'no'].includes(v);
+  },
   get releaseBucket(): string {
     return optional('RELEASE_BUCKET', 'releases');
   },

@@ -65,3 +65,20 @@ describe('env.siteUrl', () => {
     }
   });
 });
+
+describe('STRIPE_AUTOMATIC_TAX', () => {
+  it('is on unless set to off', async () => {
+    const { env } = await import('../env');
+    const before = process.env.STRIPE_AUTOMATIC_TAX;
+    delete process.env.STRIPE_AUTOMATIC_TAX;
+    expect(env.stripeAutomaticTax).toBe(true);
+    for (const v of ['off', 'OFF', 'false', '0', 'no']) {
+      process.env.STRIPE_AUTOMATIC_TAX = v;
+      expect(env.stripeAutomaticTax).toBe(false);
+    }
+    process.env.STRIPE_AUTOMATIC_TAX = 'on';
+    expect(env.stripeAutomaticTax).toBe(true);
+    if (before === undefined) delete process.env.STRIPE_AUTOMATIC_TAX;
+    else process.env.STRIPE_AUTOMATIC_TAX = before;
+  });
+});
