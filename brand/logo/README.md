@@ -10,7 +10,26 @@ Art Deco gold on black, with the deep red accent, matching VC Writer's
 brand (`kshank999-wq/VCWriter`, `brand/`).
 
 These were saved from copies of the artwork shared in chat. Replace them with
-the original full-resolution PNGs, under the same names, if those are sharper.
+the original full-resolution PNGs, under the same names, if those are sharper,
+then run `python3 brand/make-assets.py` to cut everything below again.
+
+## Where the logos appear (`brand/make-assets.py`)
+
+| Where | Logo | File |
+| --- | --- | --- |
+| Desktop app, top-left corner (above Composer / Producer) | Horizontal | `resources/brand/logo-horizontal.png`, embedded |
+| Desktop app, Help > About | Stacked | `resources/brand/logo-stacked.png`, embedded |
+| Website header and footer | Horizontal | `web/public/brand/logo-horizontal.png` |
+| Website home page, beside the headline | Stacked | `web/public/brand/logo-stacked.png` |
+| Link previews (Open Graph, X/Twitter) | Horizontal on black, 1200 × 630 | `web/src/app/opengraph-image.png`, `twitter-image.png` |
+| Emails (header; its alt text reads "VC COMPOSER" when images are blocked) | Horizontal | `web/public/brand/logo-email.png` |
+| Windows installer wizard | Stacked (side), monogram (corner) | `packaging/windows/wizard-*.bmp` |
+| iPad app header | Horizontal | `ipad/VCComposerPad/Assets.xcassets/Logo.imageset` |
+| README | Horizontal | this folder |
+
+The website, emails and the app's About box use the logo's palette: gold
+`#d6a743` (bright `#ebc46a`) on warm black `#0f0e0c`, with the red `#b52a2a`
+used sparingly.
 
 ## App icons (`brand/icons`)
 

@@ -42,6 +42,10 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\VC Composer.exe
 ; The installer's own icon (brand/icons).
 SetupIconFile=..\..\brand\icons\VC-Composer.ico
+; The logo in the wizard: the side panel and the corner, each at 100% and 250%
+; scale (brand/make-assets.py makes them).
+WizardImageFile=wizard-side-164x314.bmp,wizard-side-410x797.bmp
+WizardSmallImageFile=wizard-corner-55.bmp,wizard-corner-138.bmp
 ChangesAssociations=yes
 LicenseFile={#SourceDir}\licenses\EULA.txt
 

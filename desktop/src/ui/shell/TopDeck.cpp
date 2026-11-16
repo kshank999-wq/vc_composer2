@@ -1,5 +1,7 @@
 #include "ui/shell/TopDeck.h"
 
+#include "AppResources.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -351,23 +353,17 @@ void TopDeck::paint(juce::Graphics&) {}
 
 void TopDeck::paintOverChildren(juce::Graphics& g)
 {
-    // The brand: "VC" in silk, "COMPOSER" bright, with a lit LED after it.
+    // The brand: the VC Composer logo, as large as the plate allows above
+    // the Composer | Producer switch.
     {
         const auto b = nameplate_.getBounds().toFloat();
-        auto brand = juce::Rectangle<float>(b.getX() + 22.0f, b.getY() + 12.0f, b.getWidth() - 44.0f, 32.0f);
-        hw::paint::silk(g, "VC", brand.removeFromLeft(26.0f).withTrimmedTop(8.0f), 11.0f);
-        const auto word = hw::fonts::silk(24.0f, 0.22f, true);
-        g.setColour(hw::tok::text_bright);
-        g.setFont(word);
-        g.drawText("COMPOSER", brand, juce::Justification::centredLeft, false);
-        const float word_w = juce::GlyphArrangement::getStringWidth(word, "COMPOSER");
-        const auto& theme = hw::Theme::get();
-        const juce::Rectangle<float> led(brand.getX() + word_w + 8.0f, brand.getCentreY() - 3.0f, 6.0f, 6.0f);
-        juce::Path p;
-        p.addEllipse(led);
-        juce::DropShadow(theme.led_glow(), 8, {}).drawForPath(g, p);
-        g.setColour(theme.led());
-        g.fillPath(p);
+        const auto area = juce::Rectangle<float>(b.getX() + 14.0f, b.getY() + 5.0f, b.getWidth() - 28.0f, 46.0f);
+        const auto logo = brand_logo_horizontal();
+        if (logo.isValid()) {
+            g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+            g.drawImageWithin(logo, juce::roundToInt(area.getX()), juce::roundToInt(area.getY()), juce::roundToInt(area.getWidth()),
+                              juce::roundToInt(area.getHeight()), juce::RectanglePlacement::centred);
+        }
     }
     // Session labels.
     for (auto [lcd, text] : {std::pair<hw::Lcd*, const char*>{&tempo_, "Tempo"}, {&meter_, "Meter"}, {&key_, "Key"}})

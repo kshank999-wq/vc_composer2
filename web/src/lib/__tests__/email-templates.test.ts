@@ -49,12 +49,20 @@ describe('email templates', () => {
     expect(licenseReminder(inputs)).toMatchObject({ template: 'license_reminder', version: 1 });
   });
 
-  it('use only inline styles and no images, because email clients strip and block them', () => {
+  it('use only inline styles, because email clients strip style sheets', () => {
     const html = purchaseConfirmation({ ...inputs, platform: 'windows' }).html;
     expect(html).not.toContain('<style');
     expect(html).not.toContain('<link');
     expect(html).not.toContain('class=');
-    expect(html).not.toContain('<img');
+  });
+
+  it('show one image, the hosted logo, whose alt text still reads as the name when images are blocked', () => {
+    const html = purchaseConfirmation({ ...inputs, platform: 'windows' }).html;
+    const images = html.match(/<img [^>]*>/g) ?? [];
+    expect(images).toHaveLength(1);
+    expect(images[0]).toMatch(/src="https:\/\/[^"]+\/brand\/logo-email\.png"/);
+    expect(images[0]).toContain('alt="VC COMPOSER"');
+    expect(images[0]).toContain('width="300"');
   });
 
   it('write previews when asked', () => {

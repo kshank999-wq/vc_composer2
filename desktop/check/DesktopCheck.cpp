@@ -6655,6 +6655,51 @@ private:
     int port_ = 0;
 };
 
+/// The VC Composer logo: in the window's corner and in the about box.
+void brand_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    check(brand_logo_horizontal().isValid() && brand_logo_stacked().isValid(), "both logos are embedded and decode");
+    auto* content = window.getContentComponent();
+    window.setSize(1680, 1050);
+    pump(300);
+    // The corner, at twice the size so the lettering can be judged.
+    const auto corner = content->createComponentSnapshot({0, 0, 560, 120}, true, 2.0f);
+    int gold = 0;
+    for (int y = 0; y < 210; ++y)
+        for (int x = 0; x < 560; ++x) {
+            const auto c = corner.getPixelAt(x, y);
+            gold += c.getRed() > 170 && c.getGreen() > 120 && c.getBlue() < 110 && c.getRed() > c.getBlue() + 80;
+        }
+    check(gold > 2000, "the logo is drawn in the window's top-left corner (" + juce::String(gold) + " gold pixels)");
+    {
+        juce::FileOutputStream out(dir.getChildFile("79-logo-corner.png"));
+        if (out.openedOk()) {
+            out.setPosition(0);
+            out.truncate();
+            juce::PNGImageFormat().writeImageToStream(corner, out);
+        }
+    }
+    ctx.commands.invokeDirectly(cmd::about, false);
+    juce::Component* about = nullptr;
+    wait_for([&] {
+        for (int i = 0; i < juce::Desktop::getInstance().getNumComponents() && !about; ++i)
+            if (auto* c = juce::Desktop::getInstance().getComponent(i))
+                about = c->findChildWithID("about_panel") ? c : nullptr;
+        if (!about)
+            for (int i = 0; i < juce::Desktop::getInstance().getNumComponents() && !about; ++i)
+                if (auto* w = dynamic_cast<juce::DialogWindow*>(juce::Desktop::getInstance().getComponent(i)))
+                    if (w->getContentComponent() && w->getContentComponent()->getComponentID() == "about_panel") about = w;
+        return about != nullptr;
+    }, 3000);
+    check(about != nullptr, "Help > About VC Composer opens with the logo");
+    if (auto* w = dynamic_cast<juce::DialogWindow*>(about)) {
+        shoot(*w->getContentComponent(), dir, "80-about");
+        w->exitModalState(0);
+        pump(200);
+    }
+}
+
 /// A short WAV file's bytes (a sine at `hz`), for media that must be real audio.
 std::string wav_bytes(double hz)
 {
@@ -8828,7 +8873,8 @@ int main(int argc, char** argv)
                 {"articulation_checks", articulation_checks},
                 {"articulation_template_checks", articulation_template_checks},
                 {"usage_checks", usage_checks},
-                {"collab_checks", collab_checks}};
+                {"collab_checks", collab_checks},
+                {"brand_checks", brand_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -9494,6 +9540,8 @@ int main(int argc, char** argv)
         account_checks(window, dir);
         section("collab_checks");
         collab_checks(window, dir);
+        section("brand_checks");
+        brand_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

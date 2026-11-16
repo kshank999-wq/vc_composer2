@@ -25,14 +25,15 @@ export interface RenderedEmail {
   version: number;
 }
 
-// The app's palette, as literals because email has no CSS variables.
-const BACKGROUND = '#1e2126';
-const PANEL = '#262a31';
-const BORDER = '#363b44';
-const TEXT = '#e6e8eb';
-const MUTED = '#9aa1ab';
-const ACCENT = '#4f9de8';
-const WARM = '#e8a33d';
+// The brand's palette (the site's), as literals because email has no CSS variables.
+const BACKGROUND = '#0f0e0c';
+const PANEL = '#1a1815';
+const BORDER = '#332e27';
+const TEXT = '#ede7da';
+const MUTED = '#a9a191';
+const ACCENT = '#d6a743';
+const WARM = '#ebc46a';
+const ACCENT_INK = '#140f06';
 
 const FONT = "system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif";
 const MONO = "ui-monospace, 'SF Mono', Menlo, Consolas, monospace";
@@ -63,8 +64,8 @@ const shell = (title: string, body: string): string => `<!doctype html>
       <td align="center" style="padding:32px 16px">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560" style="max-width:560px;width:100%">
           <tr>
-            <td style="padding:4px 0 18px;font-family:${FONT};font-size:15px;font-weight:700;letter-spacing:0.08em;color:${TEXT}">
-              VC COMPOSER
+            <td align="center" style="padding:4px 0 18px;font-family:${FONT};font-size:15px;font-weight:700;letter-spacing:0.08em;color:${TEXT}">
+              <img src="${env.siteUrl}/brand/logo-email.png" width="300" height="96" alt="VC COMPOSER" style="display:block;border:0;width:300px;max-width:100%;height:auto;color:${TEXT}">
             </td>
           </tr>
           <tr>
@@ -106,7 +107,7 @@ const primaryLink = (url: string, label: string): string => `
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 20px">
     <tr>
       <td style="background:${ACCENT};border-radius:4px">
-        <a href="${url}" style="display:inline-block;padding:12px 24px;font-family:${FONT};font-size:14px;font-weight:600;color:#0d1117;text-decoration:none">${label}</a>
+        <a href="${url}" style="display:inline-block;padding:12px 24px;font-family:${FONT};font-size:14px;font-weight:600;color:${ACCENT_INK};text-decoration:none">${label}</a>
       </td>
     </tr>
   </table>`;

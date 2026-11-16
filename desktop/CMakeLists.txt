@@ -74,7 +74,10 @@ juce_add_binary_data(vcc_content_templates_data HEADER_NAME "VccContentTemplates
     NAMESPACE vcc_content_templates SOURCES ${vcc_content_templates})
 juce_add_binary_data(vcc_content_library_data HEADER_NAME "VccContentLibrary.h"
     NAMESPACE vcc_content_library SOURCES ${vcc_content_library})
-foreach(t vcc_music_font_data vcc_ui_font_data vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_content_library_data)
+# The VC Composer logo (resources/brand, made by brand/make-assets.py).
+juce_add_binary_data(vcc_brand_data HEADER_NAME "VccBrandData.h" NAMESPACE vcc_brand_data
+    SOURCES "${PROJECT_SOURCE_DIR}/resources/brand/logo-horizontal.png" "${PROJECT_SOURCE_DIR}/resources/brand/logo-stacked.png")
+foreach(t vcc_brand_data vcc_music_font_data vcc_ui_font_data vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_content_library_data)
     set_target_properties(${t} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endforeach()
 
@@ -116,7 +119,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 target_link_libraries(vcc_desktop
     PUBLIC vcc_ui_notation vcc_session vcc_licensing vcc_library vcc_media vcc_picture vcc_cues vcc_templates vcc_project vcc_theory vcc_ostinato vcc_engine vcc_audio vcc_juce
-    PRIVATE vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_content_library_data vcc_ui_font_data)
+    PRIVATE vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_content_library_data vcc_ui_font_data
+            vcc_brand_data)
 
 juce_add_gui_app(VCComposer2
     PRODUCT_NAME "VC Composer"

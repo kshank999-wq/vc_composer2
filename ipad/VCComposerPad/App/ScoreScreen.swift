@@ -39,6 +39,13 @@ struct ScoreScreen: View {
 
     private var header: some View {
         HStack(spacing: 16) {
+            Image("Logo")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 34)
+                .accessibilityLabel("VC Composer")
+                .accessibilityIdentifier("logo")
+
             Menu {
                 ForEach(tracks, id: \.identifier) { t in
                     Button(t.name) { trackId = t.identifier; entry.selection = [] }

@@ -1654,16 +1654,64 @@ void MainComponent::new_bus(bool fx)
     }), true);
 }
 
+namespace {
+
+/// Help > About VC Composer: the logo, the version and the credits.
+class AboutPanel final : public juce::Component {
+public:
+    AboutPanel()
+    {
+        setComponentID("about_panel");
+        setTitle("About VC Composer");
+        text_.setText(juce::String("Version ") + JUCE_APPLICATION_VERSION_STRING +
+                          (preview::is_preview() ? " (" + preview::status() + ")" : juce::String()) +
+                          "\n\nA notation-first scoring workstation by VC Software.\n\n"
+                          "Built with JUCE (commercial JUCE 8 licence).\n"
+                          "Music font: Bravura, SIL Open Font License 1.1.\n"
+                          "Sounds marked \"Placeholder\" are the built-in stand-in until a library is assigned.",
+                      juce::dontSendNotification);
+        text_.setJustificationType(juce::Justification::centredTop);
+        text_.setColour(juce::Label::textColourId, colours::text);
+        text_.setMinimumHorizontalScale(1.0f);
+        addAndMakeVisible(text_);
+        ok_.onClick = [this] {
+            if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState(0);
+        };
+        addAndMakeVisible(ok_);
+        setSize(520, 560);
+    }
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff0a0908));  // the logo's own black
+        const auto logo = brand_logo_stacked();
+        if (logo.isValid()) {
+            g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+            g.drawImageWithin(logo, 40, 20, getWidth() - 80, 300, juce::RectanglePlacement::centred);
+        }
+    }
+    void resized() override
+    {
+        text_.setBounds(24, 330, getWidth() - 48, getHeight() - 330 - 56);
+        ok_.setBounds(getWidth() / 2 - 50, getHeight() - 48, 100, 30);
+    }
+
+private:
+    juce::Label text_;
+    juce::TextButton ok_{"OK"};
+};
+
+}  // namespace
+
 void MainComponent::show_about()
 {
-    juce::AlertWindow::showMessageBoxAsync(
-        juce::MessageBoxIconType::InfoIcon, "VC Composer",
-        juce::String("Version ") + JUCE_APPLICATION_VERSION_STRING +
-            (preview::is_preview() ? " (" + preview::status() + ")" : juce::String()) +
-            "\n\nA notation-first scoring workstation by VC Software.\n\n"
-            "Built with JUCE (commercial JUCE 8 licence).\n"
-            "Music font: Bravura, SIL Open Font License 1.1.\n"
-            "Sounds marked \"Placeholder\" are the built-in stand-in until a library is assigned.");
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned(new AboutPanel());
+    o.dialogTitle = "About VC Composer";
+    o.dialogBackgroundColour = juce::Colour(0xff0a0908);
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = false;
+    o.launchAsync();
 }
 
 // --- Commands ----------------------------------------------------------------------------------------

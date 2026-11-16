@@ -1,5 +1,6 @@
 #include "AppResources.h"
 
+#include "VccBrandData.h"
 #include "VccContentInstruments.h"
 #include "VccContentRoot.h"
 #include "VccContentTemplates.h"
@@ -64,6 +65,16 @@ MusicFontResources& music_font()
         return m;
     }();
     return r;
+}
+
+juce::Image brand_logo_horizontal()
+{
+    return juce::ImageCache::getFromMemory(vcc_brand_data::logohorizontal_png, vcc_brand_data::logohorizontal_pngSize);
+}
+
+juce::Image brand_logo_stacked()
+{
+    return juce::ImageCache::getFromMemory(vcc_brand_data::logostacked_png, vcc_brand_data::logostacked_pngSize);
 }
 
 }  // namespace vcc::desktop

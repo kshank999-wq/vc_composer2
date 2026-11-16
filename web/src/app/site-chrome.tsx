@@ -1,4 +1,6 @@
+import Image from 'next/image';
 import Link from 'next/link';
+import logo from '../../public/brand/logo-horizontal.png';
 import { currentAdmin } from '@/lib/admin';
 import { COMPANY_LINKS, COMPANY_NAME, COMPANY_URL, SITE_NAME } from '@/lib/site';
 
@@ -16,20 +18,6 @@ const isAdminVisitor = async (): Promise<boolean> => {
   }
 };
 
-/** The mark beside the wordmark: a staff and a note, drawn inline. */
-function Mark() {
-  return (
-    <svg className="wordmark-mark" viewBox="0 0 64 64" aria-hidden="true">
-      <rect width="64" height="64" rx="12" fill="#262a31" />
-      <g stroke="#4f9de8" strokeWidth="2.5" strokeLinecap="round">
-        <path d="M12 20h40M12 28h40M12 36h40M12 44h40" />
-      </g>
-      <ellipse cx="28" cy="40" rx="7" ry="5" fill="#e8a33d" transform="rotate(-20 28 40)" />
-      <path d="M34 38V14" stroke="#e8a33d" strokeWidth="3" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 /** The site's header and footer. */
 export async function SiteChrome({ children }: { children: React.ReactNode }) {
   const admin = await isAdminVisitor();
@@ -40,10 +28,7 @@ export async function SiteChrome({ children }: { children: React.ReactNode }) {
         <div className="shell">
           <nav aria-label="Main">
             <Link href="/" className="wordmark" aria-label={`${SITE_NAME} home`}>
-              <Mark />
-              <span>
-                VC COMPOSER
-              </span>
+              <Image src={logo} alt="VC Composer" priority sizes="160px" />
             </Link>
             <Link href="/#features">Features</Link>
             <Link href="/download">Subscribe &amp; download</Link>
@@ -57,6 +42,7 @@ export async function SiteChrome({ children }: { children: React.ReactNode }) {
       <main className="shell">{children}</main>
       <footer className="site-footer">
         <div className="shell">
+          <Image src={logo} alt="VC Composer" className="footer-logo" sizes="130px" />
           <p>
             © {new Date().getFullYear()} {COMPANY_NAME}. {SITE_NAME} for Windows and macOS.
           </p>

@@ -1,3 +1,5 @@
+<p align="center"><img src="brand/logo/VC-Composer-Horizontal-Transparent.png" alt="VC Composer" width="560"></p>
+
 # VC Composer
 
 A standalone, notation-first scoring workstation for film, TV and game

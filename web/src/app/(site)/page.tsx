@@ -1,4 +1,6 @@
+import Image from 'next/image';
 import Link from 'next/link';
+import stackedLogo from '../../../public/brand/logo-stacked.png';
 
 /**
  * The front page.
@@ -6,8 +8,8 @@ import Link from 'next/link';
  * **Every claim here is something the app does today**, drawn from the
  * architecture and roadmap (docs/00) and the "Done" steps of the UI build
  * order (docs/05) in the main repository. Nothing on the roadmap's "not yet"
- * list appears (collaboration sync and roles are said to be coming, on their
- * own page), there are no testimonials, and no prices: the price lives in
+ * list appears (collaboration has its own page), there are no testimonials,
+ * and no prices: the price lives in
  * Stripe and is shown on the buying page.
  *
  * The five headlines under "Built for the full orchestral session" are the
@@ -162,10 +164,10 @@ function StaffArt() {
   return (
     <svg className="staff-art" viewBox="0 0 1100 160" role="img" aria-label="A bar of music on a staff above a row of mixer meters">
       {lines.map((line) => (
-        <line key={line} x1="40" x2="1060" y1={40 + line * 10} y2={40 + line * 10} stroke="#4a505b" strokeWidth="1.2" />
+        <line key={line} x1="40" x2="1060" y1={40 + line * 10} y2={40 + line * 10} stroke="#4b443a" strokeWidth="1.2" />
       ))}
       {[460, 830, 1060].map((x) => (
-        <line key={x} x1={x} x2={x} y1="40" y2="80" stroke="#4a505b" strokeWidth="1.5" />
+        <line key={x} x1={x} x2={x} y1="40" y2="80" stroke="#4b443a" strokeWidth="1.5" />
       ))}
       {notes.map((note) => (
         <g key={note.x}>
@@ -174,10 +176,10 @@ function StaffArt() {
             cy={note.y}
             rx="7.5"
             ry="5.5"
-            fill={note.warm ? '#e8a33d' : '#e6e8eb'}
+            fill={note.warm ? '#ebc46a' : '#ede7da'}
             transform={`rotate(-20 ${note.x} ${note.y})`}
           />
-          <line x1={note.x + 6.5} x2={note.x + 6.5} y1={note.y} y2={note.y - 32} stroke={note.warm ? '#e8a33d' : '#e6e8eb'} strokeWidth="1.6" />
+          <line x1={note.x + 6.5} x2={note.x + 6.5} y1={note.y} y2={note.y - 32} stroke={note.warm ? '#ebc46a' : '#ede7da'} strokeWidth="1.6" />
         </g>
       ))}
       {Array.from({ length: 34 }, (_, at) => {
@@ -190,7 +192,7 @@ function StaffArt() {
             width="18"
             height={height}
             rx="2"
-            fill={at % 7 === 3 ? '#e8a33d' : '#4f9de8'}
+            fill={at % 7 === 3 ? '#b52a2a' : '#d6a743'}
             opacity={0.35 + ((at * 13) % 10) / 20}
           />
         );
@@ -203,20 +205,31 @@ export default function HomePage() {
   return (
     <>
       <section className="home-hero">
-        <span className="eyebrow">For film, TV and game composers</span>
-        <h1>VC Composer, a notation-first scoring workstation.</h1>
-        <p>
-          Write on staves and hear your sample libraries play it. Edit the mirrored MIDI, mix on a hardware-style
-          console, score to picture with timecode, hits and cues, run a director review, and export the parts, the
-          MusicXML, the MIDI and the stems. One desktop application, on Windows and macOS. Not a plug-in.
-        </p>
-        <div className="actions">
-          <Link href="/download" className="button">
-            Subscribe and download
-          </Link>
-          <Link href="/download#preview" className="button secondary">
-            Try the free preview
-          </Link>
+        <div className="home-hero-top">
+          <div>
+            <span className="eyebrow">For film, TV and game composers</span>
+            <h1>VC Composer, a notation-first scoring workstation.</h1>
+            <p>
+              Write on staves and hear your sample libraries play it. Edit the mirrored MIDI, mix on a hardware-style
+              console, score to picture with timecode, hits and cues, run a director review, and export the parts, the
+              MusicXML, the MIDI and the stems. One desktop application, on Windows and macOS. Not a plug-in.
+            </p>
+            <div className="actions">
+              <Link href="/download" className="button">
+                Subscribe and download
+              </Link>
+              <Link href="/download#preview" className="button secondary">
+                Try the free preview
+              </Link>
+            </div>
+          </div>
+          <Image
+            src={stackedLogo}
+            alt="The VC Composer logo"
+            className="home-hero-logo"
+            priority
+            sizes="(max-width: 720px) 300px, 380px"
+          />
         </div>
         <StaffArt />
       </section>
@@ -304,8 +317,11 @@ export default function HomePage() {
 
       <section className="cta-band">
         <div>
-          <h2>Collaboration is coming</h2>
-          <p>Working on one project with your team will be a separate subscription.</p>
+          <h2>Collaboration</h2>
+          <p>
+            Share a project, audio and picture included, with your orchestrator, music editor and director: sync with
+            merge, roles and part locks. Its own subscription, per editor seat; reviewers join free.
+          </p>
         </div>
         <Link href="/collaboration" className="button secondary">
           Read more
