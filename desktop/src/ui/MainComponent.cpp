@@ -5,6 +5,7 @@
 #include "ui/review/Review.h"
 #include "ui/review/Relink.h"
 #include "ui/NewProjectWizard.h"
+#include "ui/console/MixTools.h"
 #include "ui/library/ArticulationMapWindow.h"
 #include "ui/library/LibraryBrowser.h"
 #include "vcc/theory/Chord.h"
@@ -336,6 +337,7 @@ MainComponent::MainComponent(AppContext& context)
         status_age_ = 0;
     };
     context_.show_plugin_window = [this](const std::string& id) { show_plugin_window(id); };
+    restore_monitor(context_);
     context_.show_insert_window = [this](const std::string& owner, int slot) { show_insert_window(owner, slot); };
     context_.capture_plugin_states = [this] { capture_plugin_states(); };
     context_.show_comment = [this](const std::string& id) { review::show_comments(context_, id); };
@@ -697,6 +699,15 @@ void MainComponent::timerCallback()
 {
     const Ticks tick = context_.engine.position();
     const bool playing = context_.engine.playing();
+    // Save on transport stop (Main Spec §12): a saved project, changed, saves
+    // when playback stops (never while recording or playing).
+    if (was_playing_ && !playing && !context_.engine.recording() && hw::ui_settings().getBoolValue("save_on_stop", false) &&
+        !context_.session.path().empty() && context_.session.dirty()) {
+        std::string error;
+        if (context_.session.save(&error)) context_.status("Saved on stop");
+        else context_.status("Could not save on stop: " + juce::String(error));
+    }
+    was_playing_ = playing;
     deck_.update_position();
     const auto& sel = context_.session.selection();
     deck_.set_range(sel.from, sel.to);
@@ -1213,7 +1224,7 @@ void MainComponent::show_insert_window(const std::string& owner, int slot)
 
 void MainComponent::show_audio_settings()
 {
-    auto* selector = new juce::AudioDeviceSelectorComponent(context_.engine.devices(), 0, 2, 0, 2, true, false, true, false);
+    auto* selector = new juce::AudioDeviceSelectorComponent(context_.engine.devices(), 0, 2, 0, 8, true, false, true, false);
     selector->setSize(520, 420);
     juce::DialogWindow::LaunchOptions o;
     o.content.setOwned(selector);
@@ -1577,7 +1588,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::showCircleOfFifths, cmd::toggleStaffTools, cmd::detachStaffTools, cmd::showRouting,
                 cmd::showControlSurfaces, cmd::jogForward, cmd::jogBack, cmd::showReview,
                 cmd::collectPackage, cmd::openPackage, cmd::showComments, cmd::addComment, cmd::relinkMedia,
-                cmd::articulationMap, cmd::missingInstruments});
+                cmd::articulationMap, cmd::missingInstruments, cmd::mixTools, cmd::bounceInPlace, cmd::saveOnStop,
+                cmd::monitorDim});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1661,6 +1673,19 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.setInfo("Producer View", "", "View", workspace_ == Workspace::Sequencer ? juce::ApplicationCommandInfo::isTicked : 0);
             break;
         case cmd::showMixer: info.setInfo("Mixer", "", "View", 0); info.addDefaultKeypress('m', cmdKey); break;
+        case cmd::mixTools: info.setInfo("Groups, VCAs and Monitor...", "VCA faders, mix groups, monitor dim/mono, cue mixes", "Track", 0); break;
+        case cmd::bounceInPlace:
+            info.setInfo("Bounce in Place", "Renders the selected track (with its strip and inserts) onto itself", "Track",
+                         has_track ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            break;
+        case cmd::saveOnStop:
+            info.setInfo("Save on Transport Stop", "Saves the project whenever playback stops", "File",
+                         hw::ui_settings().getBoolValue("save_on_stop", false) ? juce::ApplicationCommandInfo::isTicked : 0);
+            break;
+        case cmd::monitorDim:
+            info.setInfo("Dim Monitor", "Lowers what the speakers play (never an export)", "Transport",
+                         context_.engine.monitor().dim ? juce::ApplicationCommandInfo::isTicked : 0);
+            break;
         case cmd::showControlGallery: info.setInfo("Control Gallery", "", "View", 0); break;
         case cmd::showReview:
             info.setInfo("Director Review...", "A/B/C: compare snapshots or a track's versions, approve one", "View", 0);
@@ -1819,6 +1844,23 @@ bool MainComponent::perform(const InvocationInfo& info)
             break;
         case cmd::collectPackage: review::show_package(context_); break;
         case cmd::relinkMedia: review::show_relink(context_); break;
+        case cmd::mixTools: show_mix_tools(context_); break;
+        case cmd::bounceInPlace: context_.status(bounce_in_place(context_, s.selected_track())); break;
+        case cmd::saveOnStop: {
+            auto& ui = hw::ui_settings();
+            ui.setValue("save_on_stop", !ui.getBoolValue("save_on_stop", false));
+            ui.saveIfNeeded();
+            context_.commands.commandStatusChanged();
+            break;
+        }
+        case cmd::monitorDim: {
+            auto m = context_.engine.monitor();
+            m.dim = !m.dim;
+            context_.engine.set_monitor(m);
+            context_.status(m.dim ? "Monitor dimmed " + juce::String(m.dim_db, 0) + " dB" : juce::String("Monitor at full level"));
+            context_.commands.commandStatusChanged();
+            break;
+        }
         case cmd::articulationMap:
             if (!s.selected_track().empty()) show_articulation_map(context_, s.selected_track());
             break;
@@ -1928,7 +1970,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addCommandItem(c, cmd::importAudio);
             m.addCommandItem(c, cmd::importMusicXml);
             m.addSeparator();
-            for (auto id : {cmd::save, cmd::saveAs, cmd::saveAsTemplate, cmd::collectPackage, cmd::relinkMedia}) m.addCommandItem(c, id);
+            for (auto id : {cmd::save, cmd::saveAs, cmd::saveOnStop, cmd::saveAsTemplate, cmd::collectPackage, cmd::relinkMedia})
+                m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::exportStems, cmd::exportMidi, cmd::exportMusicXml, cmd::exportFullScorePdf, cmd::exportPartsPdf,
                             cmd::exportScoreSvg})
@@ -1968,15 +2011,16 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             for (auto id : {cmd::toggleLoop, cmd::toggleRecord, cmd::togglePunch}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::toggleMetronome, cmd::addHit}) m.addCommandItem(c, id);
+            for (auto id : {cmd::toggleMetronome, cmd::addHit, cmd::monitorDim}) m.addCommandItem(c, id);
             break;
         case 4:
             for (auto id : {cmd::addTrack, cmd::addAudioTrack}) m.addCommandItem(c, id);
             for (auto id : {cmd::addAuxBus, cmd::addGroupBus}) m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::duplicateVersion, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::articulationMap,
-                            cmd::missingInstruments, cmd::removeTrack})
+                            cmd::missingInstruments, cmd::bounceInPlace, cmd::removeTrack})
                 m.addCommandItem(c, id);
+            m.addCommandItem(c, cmd::mixTools);
             m.addSeparator();
             m.addItem("Check Instrument Ranges...", [this] { TrackPanel::show_range_report(context_, {}); });
             m.addSeparator();

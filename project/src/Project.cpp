@@ -104,6 +104,35 @@ PictureVersion* ProjectData::active_picture() noexcept
     return nullptr;
 }
 
+double ProjectData::vca_trim_db(const std::string& track_id) const noexcept
+{
+    double db = 0.0;
+    for (const auto& v : vcas)
+        if (std::find(v.members.begin(), v.members.end(), track_id) != v.members.end()) db += v.gain_db;
+    return db;
+}
+
+bool ProjectData::vca_muted(const std::string& track_id) const noexcept
+{
+    for (const auto& v : vcas)
+        if (v.mute && std::find(v.members.begin(), v.members.end(), track_id) != v.members.end()) return true;
+    return false;
+}
+
+std::vector<std::string> ProjectData::linked_tracks(const std::string& track_id, const std::string& control) const
+{
+    std::vector<std::string> out{track_id};
+    for (const auto& g : mix_groups) {
+        if (!g.active || std::find(g.members.begin(), g.members.end(), track_id) == g.members.end()) continue;
+        const bool linked = control == "gain" ? g.link_gain : control == "mute" ? g.link_mute
+                            : control == "solo" ? g.link_solo : control == "arm" ? g.link_arm : false;
+        if (!linked) continue;
+        for (const auto& m : g.members)
+            if (std::find(out.begin(), out.end(), m) == out.end() && find_track(m)) out.push_back(m);
+    }
+    return out;
+}
+
 const Track* ProjectData::find_track(const std::string& id) const noexcept
 {
     for (const auto& t : tracks)
@@ -1029,6 +1058,21 @@ json::Value Project::to_json() const
     for (const auto& m : d.markers)
         markers.emplace_back(json::Object{{"id", m.id}, {"kind", m.kind}, {"seconds", m.seconds}, {"label", m.label},
                                           {"cue_id", m.cue_id}, {"streamer_seconds", m.streamer_seconds}});
+    if (!d.vcas.empty()) {
+        json::Array vcas;
+        for (const auto& v : d.vcas)
+            vcas.emplace_back(json::Object{{"id", v.id}, {"name", v.name}, {"gain_db", v.gain_db}, {"mute", v.mute},
+                                           {"members", string_array(v.members)}});
+        root.set("vcas", vcas);
+    }
+    if (!d.mix_groups.empty()) {
+        json::Array groups;
+        for (const auto& g : d.mix_groups)
+            groups.emplace_back(json::Object{{"id", g.id}, {"name", g.name}, {"members", string_array(g.members)},
+                                             {"active", g.active}, {"link_gain", g.link_gain}, {"link_mute", g.link_mute},
+                                             {"link_solo", g.link_solo}, {"link_arm", g.link_arm}});
+        root.set("mix_groups", groups);
+    }
     {
         json::Array stems;
         for (const auto& st : d.stems)
@@ -1368,6 +1412,29 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
     }
     d.active_picture_id = doc.get_string("active_picture_id");
     if (!d.active_picture_id.empty() && !d.active_picture()) return fail("active picture not found");
+    for (const auto& j : doc.get("vcas") ? doc.get("vcas")->as_array() : json::Array{}) {
+        Vca v;
+        v.id = j.get_string("id");
+        if (!unique(v.id)) return fail("missing or duplicate VCA id '" + v.id + "'");
+        v.name = j.get_string("name");
+        v.gain_db = std::clamp(j.get_double("gain_db"), -96.0, 12.0);
+        v.mute = j.get_bool("mute");
+        v.members = j.get_string_array("members");
+        d.vcas.push_back(std::move(v));
+    }
+    for (const auto& j : doc.get("mix_groups") ? doc.get("mix_groups")->as_array() : json::Array{}) {
+        MixGroup g;
+        g.id = j.get_string("id");
+        if (!unique(g.id)) return fail("missing or duplicate mix group id '" + g.id + "'");
+        g.name = j.get_string("name");
+        g.members = j.get_string_array("members");
+        g.active = j.get_bool("active", true);
+        g.link_gain = j.get_bool("link_gain", true);
+        g.link_mute = j.get_bool("link_mute", true);
+        g.link_solo = j.get_bool("link_solo", true);
+        g.link_arm = j.get_bool("link_arm", false);
+        d.mix_groups.push_back(std::move(g));
+    }
     for (const auto& j : doc.get("stems") ? doc.get("stems")->as_array() : json::Array{}) {
         StemDef st;
         st.id = j.get_string("id");

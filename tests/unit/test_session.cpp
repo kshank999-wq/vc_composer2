@@ -453,3 +453,65 @@ TEST_CASE("new project setup: template defaults overridden, timecode and sample 
     REQUIRE(s.create_project(tpl).ok);
     CHECK(s.data().tempo.bpm_at(0) > 0);
 }
+
+TEST_CASE("mix groups link faders, mutes, solos and arms; VCAs trim members and travel with the project")
+{
+    Session s(catalogs());
+    s.new_empty();
+    const auto a = s.add_track("Violins I", "strings.violins_1");
+    const auto b = s.add_track("Violins II", "strings.violins_2");
+    const auto c = s.add_track("Horn", "brass.horn_f");
+    const auto grp = s.add_mix_group("Violins", {a, b, "nope"});
+    REQUIRE(!grp.empty());
+    CHECK_EQ(s.data().mix_groups.front().members.size(), 2u);  // unknown tracks are left out
+    s.set_gain(b, -6.0);  // relative: a starts at 0
+    CHECK_NEAR(s.data().find_track(a)->gain_db, -6.0, 1e-9);
+    s.set_gain(a, -3.0);
+    CHECK_NEAR(s.data().find_track(b)->gain_db, -3.0, 1e-9);
+    CHECK_NEAR(s.data().find_track(c)->gain_db, 0.0, 1e-9);
+    s.set_mute(a, true);
+    CHECK(s.data().find_track(b)->mute);
+    CHECK(!s.data().find_track(c)->mute);
+    s.undo();
+    CHECK(!s.data().find_track(a)->mute);
+    CHECK(!s.data().find_track(b)->mute);
+    s.set_record_armed(a, true);
+    CHECK(!s.data().find_track(b)->record_armed);  // arm is not linked by default
+    s.update_mix_group(grp, "Link arm", [](project::MixGroup& g) { g.link_arm = true; });
+    s.set_record_armed(a, false);
+    s.set_record_armed(a, true);
+    CHECK(s.data().find_track(b)->record_armed);
+    s.update_mix_group(grp, "Group off", [](project::MixGroup& g) { g.active = false; });
+    s.set_solo(a, true);
+    CHECK(!s.data().find_track(b)->solo);
+
+    const auto vca = s.add_vca("Strings", {a, b});
+    REQUIRE(!vca.empty());
+    s.set_vca_gain(vca, -10.0);
+    CHECK_NEAR(s.data().vca_trim_db(a), -10.0, 1e-9);
+    CHECK_NEAR(s.data().vca_trim_db(c), 0.0, 1e-9);
+    CHECK_NEAR(s.data().find_track(a)->gain_db, -3.0, 1e-9);  // the member's own fader is untouched
+    s.update_vca(vca, "Mute VCA", [](project::Vca& v) { v.mute = true; });
+    CHECK(s.data().vca_muted(b));
+    CHECK(!s.data().vca_muted(c));
+
+    const auto cue = s.add_bus("Drummer cans", "cue");
+    REQUIRE(!cue.empty());
+    CHECK_EQ(s.data().find_bus(cue)->output, std::string("hw:1"));
+    CHECK(s.add_send(c, cue, true, -6.0));
+
+    const std::string path = std::string(VCC_TEST_TMP_DIR) + "/groups.vcc2";
+    REQUIRE(s.save_as(path));
+    Session r(catalogs());
+    REQUIRE(r.open(path));
+    REQUIRE(r.data().vcas.size() == 1u);
+    CHECK(r.data().vcas[0].mute);
+    CHECK_NEAR(r.data().vcas[0].gain_db, -10.0, 1e-9);
+    REQUIRE(r.data().mix_groups.size() == 1u);
+    CHECK(!r.data().mix_groups[0].active);
+    CHECK(r.data().mix_groups[0].link_arm);
+    CHECK_EQ(r.data().find_bus(cue)->kind, std::string("cue"));
+    CHECK(s.remove_vca(vca));
+    CHECK(s.remove_mix_group(grp));
+    CHECK(s.data().vcas.empty());
+}

@@ -89,9 +89,19 @@ TEST_CASE("a print lands on the track's own audio lane as one undo step, the las
     CHECK(s.data().find_track(t)->playback == "both");
     CHECK(s.data().find_track(t)->active_version()->audio_clips.empty());
 
-    // Not onto an audio track.
+    // On an audio track it is a bounce in place: the clips it covers move to
+    // a take lane, and the track keeps playing audio.
     const auto a = s.add_audio_track("Vox", false);
-    CHECK(s.place_prints({{a, clip}}, false, true).empty());
+    project::AudioClip original = clip;
+    original.file = "Audio Files/Vox_01.wav";
+    REQUIRE(s.add_audio_clips({{a, original}}, "Record", false).size() == 1u);
+    CHECK(s.place_prints({{a, clip}}, true, true).size() == 1u);
+    CHECK_EQ(s.undo_label(), std::string("Bounce in place"));
+    const auto& clips = s.data().find_track(a)->active_version()->audio_clips;
+    REQUIRE(clips.size() == 2u);
+    CHECK_EQ(clips[0].lane, 0);
+    CHECK_EQ(clips[0].file, clip.file);
+    CHECK_EQ(clips[1].lane, 1);
 }
 
 TEST_CASE("a MIDI track sends to an external device, saved and undoable")

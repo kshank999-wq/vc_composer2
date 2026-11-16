@@ -42,6 +42,7 @@
 #include "ui/review/Review.h"
 #include "ui/review/Relink.h"
 #include "ui/NewProjectWizard.h"
+#include "ui/console/MixTools.h"
 #include "ui/library/ArticulationMapWindow.h"
 #include "ui/library/LibraryBrowser.h"
 #include "vcc/project/ArticulationMap.h"
@@ -5724,6 +5725,140 @@ void wizard_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// Groups, VCAs, monitor, cue mixes, bounce in place, save on stop (Main
+/// Spec §12), heard through the engine offline.
+void mix_tools_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& engine = ctx.engine;
+    engine.stop();
+    session.new_empty();
+    const auto folder = dir.getChildFile("mixtools-check");
+    folder.deleteRecursively();
+    folder.createDirectory();
+    session.save_as(folder.getChildFile("Mix.vcc2").getFullPathName().toStdString());
+    engine.prepare_offline(48000.0, 512);
+    Rig rig(engine);
+    const auto a = session.add_audio_track("Tone A", false);
+    const auto b = session.add_audio_track("Tone B", false);
+    session.update_track_mix(a, "monitor", [](project::Track& t) { t.monitor = "input"; });
+    rig.run(0.2, Rig::sine(220.0, 0.5f, 0));
+    const double base = rig.run(0.3, Rig::sine(220.0, 0.5f, 0)).rms;
+
+    const auto vca = session.add_vca("Strings", {a, b});
+    session.set_vca_gain(vca, -12.0);
+    rig.run(0.2, Rig::sine(220.0, 0.5f, 0));
+    const double trimmed = rig.run(0.3, Rig::sine(220.0, 0.5f, 0)).rms;
+    const double drop = juce::Decibels::gainToDecibels(trimmed / base);
+    check(std::abs(drop + 12.0) < 0.6 && std::abs(session.data().find_track(a)->gain_db) < 1e-9,
+          "a VCA at -12 dB trims its member by 12 dB (" + juce::String(drop, 2) + " dB), its fader untouched");
+    session.update_vca(vca, "Mute VCA", [](project::Vca& v) { v.mute = true; });
+    rig.run(0.2, Rig::sine(220.0, 0.5f, 0));
+    check(rig.run(0.3, Rig::sine(220.0, 0.5f, 0)).rms < base * 0.001, "the VCA's mute silences its members");
+    session.update_vca(vca, "Unmute VCA", [](project::Vca& v) {
+        v.mute = false;
+        v.gain_db = 0.0;
+    });
+
+    const auto grp = session.add_mix_group("Tones", {a, b});
+    session.set_gain(a, -6.0);
+    check(std::abs(session.data().find_track(b)->gain_db + 6.0) < 1e-9 && session.undo_label().rfind("Gain", 0) == 0,
+          "moving one grouped fader moves the other by the same amount, in one undo step");
+    session.undo();
+    session.update_mix_group(grp, "Group off", [](project::MixGroup& g) { g.active = false; });
+
+    // The monitor path never reaches a render.
+    auto mon = engine.monitor();
+    mon.dim = true;
+    mon.mono = true;
+    engine.set_monitor(mon);
+    rig.run(0.2, Rig::sine(220.0, 0.5f, 0));
+    const double dimmed_render = rig.run(0.3, Rig::sine(220.0, 0.5f, 0)).rms;
+    check(std::abs(dimmed_render - base) < base * 0.02, "Dim and Mono change what the speakers hear, never a render");
+    mon.dim = false;
+    mon.mono = false;
+    engine.set_monitor(mon);
+
+    // A cue mix takes a pre-fader send and stays out of the master.
+    const auto cue = session.add_bus("Cans", "cue");
+    session.add_send(a, cue, true, 0.0);
+    rig.run(0.2, Rig::sine(220.0, 0.5f, 0));
+    const double with_cue = rig.run(0.3, Rig::sine(220.0, 0.5f, 0)).rms;
+    check(!cue.empty() && std::abs(with_cue - base) < base * 0.02,
+          "a cue mix's send does not reach the master (headphones only)");
+
+    // Bounce in place: an audio track's clip, boosted by its EQ, rendered onto it.
+    session.update_track_mix(a, "monitor", [](project::Track& t) { t.monitor = "auto"; });
+    const auto wav = folder.getChildFile("Audio Files/Hit.wav");
+    wav.getParentDirectory().createDirectory();
+    {
+        juce::AudioBuffer<float> buf(1, 48000);
+        for (int i = 0; i < buf.getNumSamples(); ++i) buf.setSample(0, i, 0.25f * std::sin(static_cast<float>(i) * 0.03f));
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(wav);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(24));
+        if (writer) writer->writeFromAudioSampleBuffer(buf, 0, buf.getNumSamples());
+    }
+    project::AudioClip clip;
+    clip.name = "Hit";
+    clip.file = "Audio Files/Hit.wav";
+    clip.length = 1.0;
+    clip.channels = 1;
+    clip.file_sample_rate = 48000.0;
+    session.add_audio_clips({{b, clip}}, "Import", false);
+    session.update_track_mix(b, "eq", [](project::Track& t) {
+        t.strip.eq_on = true;
+        t.strip.lf.gain_db = 6.0;
+    });
+    session.select_track(b);
+    session.set_selection({b, 0, session.data().tempo.tick_at_seconds(1.0), {}});
+    const auto said = bounce_in_place(ctx, b);
+    const auto* tb = session.data().find_track(b);
+    int lane0 = 0, lane1 = 0;
+    for (const auto& c : tb->active_version()->audio_clips) (c.lane == 0 ? lane0 : lane1) += c.lane <= 1 ? 1 : 0;
+    check(session.undo_label() == "Bounce in place" && lane0 == 1 && lane1 == 1 && tb->printed_fx &&
+              lane_clip(session, b, 0)->file != "Audio Files/Hit.wav",
+          "Bounce in Place renders the clip through its EQ onto the track, the original kept on a take lane: " + said);
+    session.undo();
+    check(lane_clip(session, b, 0) && lane_clip(session, b, 0)->file == "Audio Files/Hit.wav" && !lane_clip(session, b, 1),
+          "Undo puts the original clip back");
+
+    // Save on transport stop.
+    auto& ui = hw::ui_settings();
+    const bool was = ui.getBoolValue("save_on_stop", false);
+    ui.setValue("save_on_stop", true);
+    session.rename_project("Saved on stop");
+    check(session.dirty(), "the project has unsaved changes");
+    engine.play();
+    pump(200);
+    engine.stop();
+    wait_for([&] { return !session.dirty(); }, 3000);
+    check(!session.dirty(), "Save on Transport Stop saves when playback stops");
+    ui.setValue("save_on_stop", was);
+
+    // The window.
+    show_mix_tools(ctx, 0);
+    MixToolsPanel* panel = nullptr;
+    wait_for([&] { return (panel = mix_tools_panel()) != nullptr; });
+    if (panel) {
+        session.select_track(a);
+        panel->add_vca();
+        panel->add_group();
+        pump(150);
+        check(session.data().vcas.size() == 2u && session.data().mix_groups.size() == 2u,
+              "+ VCA and + Group in the window add them for the selected track");
+        shoot(*panel->getTopLevelComponent(), dir, "61-groups-vcas");
+        panel->show_tab(1);
+        pump(100);
+        shoot(*panel->getTopLevelComponent(), dir, "62-monitor-cues");
+        panel->getTopLevelComponent()->setVisible(false);
+    } else {
+        check(false, "Track > Groups, VCAs and Monitor opens the window");
+    }
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -6237,7 +6372,7 @@ void accessibility_checks(MainWindow& window, const juce::File& dir)
     pump(150);
     report("Producer view", main);
     for (auto id : {cmd::showCircleOfFifths, cmd::showRouting, cmd::showReview, cmd::showComments, cmd::collectPackage,
-                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap}) {
+                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap, cmd::mixTools}) {
         ctx.commands.invokeDirectly(id, false);
         pump(200);
     }
@@ -7567,6 +7702,8 @@ int main(int argc, char** argv)
         articulation_map_checks(window, dir);
         section("wizard_checks");
         wizard_checks(window, dir);
+        section("mix_tools_checks");
+        mix_tools_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

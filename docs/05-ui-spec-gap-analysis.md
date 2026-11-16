@@ -1639,3 +1639,28 @@ macOS, Linux and Windows. What it took:
     over an existing project, and refuses an unknown key, a bad meter,
     tempo or timecode before anything is written. Tests: `test_session`;
     `wizard_checks` in the desktop check.
+41. **Mixer: VCAs, mix groups, monitor path, cue mixes, bounce in place,
+    save on stop. Done** (November 16, 2026; Main Spec §12). Track >
+    Groups, VCAs and Monitor...:
+    - **VCA faders** (`ProjectData::vcas`): a fader and mute per VCA, added
+      to each member's fader after its automation, never summing audio;
+      members from a checklist; saved with the project, heard by exports.
+    - **Mix groups** (`ProjectData::mix_groups`): moving one member's fader
+      moves the others by the same amount (one undo step); mutes, solos
+      and record arms follow as linked; a group can be switched off.
+    - **Monitor**: Dim (by a set amount; also Transport > Dim Monitor),
+      Mono, Mute and which output pair the speakers are on. The device
+      output only: renders, prints and exports never hear it. Remembered.
+    - **Cue mixes**: a bus of kind "cue" fed by pre-fader sends, out to its
+      own device outputs (3-4, 5-6, 7-8), never the master; a send level
+      per track in the window. Audio Settings now allows up to 8 outputs.
+    - **Bounce in Place** (Track menu): the selected track - an audio
+      track's clips through its strip and inserts, or an instrument's
+      sound - rendered onto it, the clips it replaces moved to a take lane;
+      one undo step.
+    - **Save on Transport Stop** (File menu): a saved project with changes
+      saves when playback stops (never while recording).
+    - **Tests**: `test_session` (groups, VCAs, cue buses, saving);
+      `mix_tools_checks` in the desktop check (VCA -12 dB, mute, group
+      fader, monitor never in renders, cue isolation, bounce and undo,
+      save on stop, the window).

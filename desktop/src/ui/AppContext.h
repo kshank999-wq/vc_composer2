@@ -124,6 +124,10 @@ enum : juce::CommandID {
     articulationMap,
     missingInstruments,
     newProjectWizard,
+    mixTools,
+    bounceInPlace,
+    saveOnStop,
+    monitorDim,
 };
 }  // namespace cmd
 

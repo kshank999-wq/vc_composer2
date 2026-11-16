@@ -61,6 +61,7 @@
 
 #include "audio/SurfaceInput.h"
 #include <atomic>
+#include <cmath>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -179,6 +180,31 @@ public:
     MidiOutRouter& midi_router() noexcept { return *midi_router_; }
     /// A control surface's MIDI: offered every incoming message first.
     SurfaceInput& surface_input() noexcept { return surface_input_; }
+
+    // --- Monitor path (Main Spec §12) -------------------------------------------
+    /// What the speakers hear, never what renders and exports write: dim,
+    /// mono fold, mute, and which output pair (0 = outputs 1-2) carries the
+    /// mix. Cue buses keep their own outputs.
+    struct Monitor {
+        bool dim = false;
+        double dim_db = -20.0;
+        bool mono = false;
+        bool mute = false;
+        int pair = 0;
+    };
+    void set_monitor(const Monitor& m) noexcept
+    {
+        monitor_dim_.store(m.dim);
+        monitor_dim_gain_.store(static_cast<float>(std::pow(10.0, m.dim_db / 20.0)));
+        monitor_dim_db_ = m.dim_db;
+        monitor_mono_.store(m.mono);
+        monitor_mute_.store(m.mute);
+        monitor_pair_.store(m.pair);
+    }
+    Monitor monitor() const noexcept
+    {
+        return {monitor_dim_.load(), monitor_dim_db_, monitor_mono_.load(), monitor_mute_.load(), monitor_pair_.load()};
+    }
 
     // --- Learn (Articulation Map window) -----------------------------------------
     /// The next note-on, controller or program change from any MIDI input is
@@ -598,6 +624,10 @@ private:
     std::atomic<int> live_track_index_{-1};
     SurfaceInput surface_input_;
     std::atomic<bool> learn_armed_{false};
+    std::atomic<bool> monitor_dim_{false}, monitor_mono_{false}, monitor_mute_{false};
+    std::atomic<float> monitor_dim_gain_{0.1f};
+    std::atomic<int> monitor_pair_{0};
+    double monitor_dim_db_ = -20.0;
     std::atomic<std::uint32_t> learned_{0};
     // Varispeed: the mix rendered into this at rate x the block, then resampled.
     void process_varispeed(float* const* outputs, int num_outputs, int num_samples) noexcept;

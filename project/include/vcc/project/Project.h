@@ -365,8 +365,10 @@ struct Track {
 struct Bus {
     std::string id;
     std::string name;
-    std::string kind = "group";  ///< "group", "fx", "master".
-    std::string output;          ///< Bus id or "master"/"" for the master bus itself.
+    std::string kind = "group";  ///< "group", "fx", "cue" (a headphone mix), "master".
+    /// Bus id or "master"/"" for the master bus itself; a cue bus's device
+    /// outputs, "hw:1" = outputs 3-4, "hw:2" = 5-6, "hw:3" = 7-8.
+    std::string output;
     std::vector<Send> sends;
     std::vector<InsertSlot> inserts;
     double gain_db = 0.0;
@@ -379,6 +381,28 @@ struct Bus {
     std::string color;  ///< Empty: the console's colour for the bus kind.
     std::vector<AutomationLane> automation;
     std::string automation_mode = "read";
+};
+
+/// A VCA fader (Main Spec §12): moves its member tracks' levels together
+/// without summing their audio (each keeps its own fader, automation,
+/// sends and routing); its mute mutes them. Exports hear it like playback.
+struct Vca {
+    std::string id;
+    std::string name;
+    double gain_db = 0.0;  ///< Added to every member's fader.
+    bool mute = false;
+    std::vector<std::string> members;  ///< Track ids.
+};
+
+/// A mix group (Main Spec §12 "groups"): moving one member's fader moves
+/// the others by the same amount; mutes, solos and record arms follow too,
+/// as the group says. Inactive, it is kept but does nothing.
+struct MixGroup {
+    std::string id;
+    std::string name;
+    std::vector<std::string> members;  ///< Track ids.
+    bool active = true;
+    bool link_gain = true, link_mute = true, link_solo = true, link_arm = false;
 };
 
 /// A stem (Main Spec §16): a named part of the mix printed to its own file,
@@ -553,11 +577,19 @@ struct ProjectData {
     /// Chord symbols, sorted by tick, at most one per tick.
     std::vector<ChordMark> chords;
     std::vector<StemDef> stems;
+    std::vector<Vca> vcas;
+    std::vector<MixGroup> mix_groups;
     std::vector<Snapshot> snapshots;
     std::vector<std::string> applied_templates;
 
     const Track* find_track(const std::string& id) const noexcept;
     Track* find_track(const std::string& id) noexcept;
+    /// What the track's VCAs add to its fader (dB), and whether one mutes it.
+    double vca_trim_db(const std::string& track_id) const noexcept;
+    bool vca_muted(const std::string& track_id) const noexcept;
+    /// The tracks moving with `track_id` for a linked control ("gain",
+    /// "mute", "solo", "arm"): its active groups' members, itself first.
+    std::vector<std::string> linked_tracks(const std::string& track_id, const std::string& control) const;
     const Cue* find_cue(const std::string& id) const noexcept;
     Cue* find_cue(const std::string& id) noexcept;
     const PictureVersion* active_picture() const noexcept;

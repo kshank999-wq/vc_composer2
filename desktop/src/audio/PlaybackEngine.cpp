@@ -46,6 +46,7 @@ struct StripParams {
     std::array<float, kMaxSends> send_l{}, send_r{};
     // Raw settings.
     double gain_db = 0.0, pan = 0.0;
+    double trim_db = 0.0;  ///< VCAs: added to the fader after its automation.
     bool mute = false, solo_ok = true, mono = false;
     int num_sends = 0;
     std::array<double, kMaxSends> send_db{}, send_pan{};
@@ -150,6 +151,7 @@ struct PlaybackSnapshot {
         std::vector<std::shared_ptr<InsertProcessor>> inserts;
         std::vector<int> sends;  // destination bus per send (-1 = none), aligned with StripParams
         int output = -1;         // bus index; -1 = the device (master bus only)
+        int device_pair = -1;    // a cue bus: its own outputs (pair 1 = outputs 3-4), not the mix
         std::vector<AutoParam> autos;
         // Delay compensation per routing edge (0 = none).
         int out_delay = 0;
@@ -208,6 +210,7 @@ struct PlaybackSnapshot {
     std::vector<std::pair<std::int64_t, bool>> clicks;  // sample, downbeat
     std::size_t click_cursor = 0;
     juce::AudioBuffer<float> out;  // the master bus's output: what the device plays
+    juce::AudioBuffer<float> cue_out;  // cue buses' outputs: channels 2.. (pair 1 = 2, 3)
     int live_track = -1;
     /// Sidechain taps (one per track, then per bus; sized only for sources)
     /// and the order tracks are processed in (key sources first).
@@ -386,6 +389,14 @@ MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Trac
             sends.assign(b->sends.size(), -1);  // the master feeds the device only
             continue;
         }
+        if (b->kind == "cue") {
+            // A cue mix (headphones): fed by sends, out to its own device outputs.
+            for (const auto& s : b->sends) {
+                juce::ignoreUnused(s);
+                sends.push_back(-1);
+            }
+            continue;
+        }
         int out = find(b->output);
         if (out < 0 || out == i || reachable(out, i)) out = p.master;  // a loop is ignored
         p.bus_output[static_cast<std::size_t>(i)] = out;
@@ -470,7 +481,7 @@ MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Trac
             p.bus_forced_mute.push_back(false);
             continue;
         }
-        const bool safe = i == p.master || b->kind == "fx";
+        const bool safe = i == p.master || b->kind == "fx" || b->kind == "cue";
         const bool ok = !any_solo || safe || bus_solo(b) || down[static_cast<std::size_t>(i)] ||
                         feeds_soloed_bus(p.bus_output[static_cast<std::size_t>(i)]);
         const bool forced = over && over->mute_effects && b->kind == "fx";
@@ -485,7 +496,7 @@ MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Trac
 void finalize(StripParams& p) noexcept
 {
     const bool audible = p.solo_ok && !p.mute;
-    const float fader = audible ? db_to_gain(p.gain_db) : 0.0f;
+    const float fader = audible ? db_to_gain(p.gain_db + p.trim_db) : 0.0f;
     const auto [pl, pr] = pan_gains(p.pan, p.mono);
     p.out_l = fader * pl;
     p.out_r = fader * pr;
@@ -713,6 +724,11 @@ void process_strip(PlaybackSnapshot& s, PlaybackSnapshot::Strip& strip, juce::Au
     if (p.strip.comp_on) store_min(d.gr_db, d.channel.gain_reduction_db());
     if (p.strip.gate_on && d.channel.gate_closed()) d.gate_closed.store(true, std::memory_order_relaxed);
 
+    if (strip.device_pair >= 1 && strip.device_pair <= 3 && s.cue_out.getNumSamples() >= n) {
+        s.cue_out.addFrom(2 * strip.device_pair, 0, buf, 0, 0, n);
+        s.cue_out.addFrom(2 * strip.device_pair + 1, 0, buf, 1, 0, n);
+        return;
+    }
     juce::AudioBuffer<float>& dest = strip.output >= 0 && strip.output < static_cast<int>(s.buses.size())
                                          ? s.buses[static_cast<std::size_t>(strip.output)].buffer
                                          : s.out;
@@ -1196,8 +1212,11 @@ void PlaybackEngine::sync_processors()
 
     for (std::size_t k = 0; k < plan.tracks.size(); ++k) {
         const project::Track& t = *plan.tracks[k];
-        strip_for(t.id).params.write(
-            make_params(t.strip, t.gain_db, t.pan, t.mute, plan.track_solo_ok[k], is_mono_track(t), t.sends));
+        auto params = make_params(t.strip, t.gain_db, t.pan, t.mute || d.vca_muted(t.id), plan.track_solo_ok[k],
+                                  is_mono_track(t), t.sends);
+        params.trim_db = d.vca_trim_db(t.id);
+        finalize(params);
+        strip_for(t.id).params.write(params);
         sync_inserts(t.id, t.inserts);
     }
     for (std::size_t i = 0; i < plan.buses.size(); ++i) {
@@ -1238,6 +1257,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
     snap->sample_rate = sample_rate_;
     snap->max_block = block_size_;
     snap->out.setSize(2, block_size_);
+    snap->cue_out.setSize(8, block_size_);
 
     auto make_strip = [&](const std::string& id, std::vector<int> sends, int output) {
         PlaybackSnapshot::Strip st;
@@ -1258,6 +1278,10 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
     for (std::size_t i = 0; i < plan.buses.size(); ++i) {
         auto& sb = snap->buses[i];
         sb.strip = make_strip(plan.bus_ids[i], plan.bus_sends[i], plan.bus_output[i]);
+        if (const project::Bus* b = plan.buses[i]; b && b->kind == "cue") {
+            const auto hw = juce::String(b->output);
+            sb.strip.device_pair = hw.startsWith("hw:") ? juce::jlimit(1, 3, hw.substring(3).getIntValue()) : 1;
+        }
         sb.buffer.setSize(2, block_size_);
     }
     snap->bus_order = plan.order;
@@ -2615,6 +2639,7 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
 
     if (s && n <= s->max_block) {
         s->out.clear(0, n);
+        s->cue_out.clear(0, n);
         for (auto& b : s->buses) b.buffer.clear(0, n);
         for (std::size_t oi = 0; oi < s->tracks.size(); ++oi) {
             // Key sources first (sidechain), else the plan's order.
@@ -2687,8 +2712,11 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
                 }
             }
             if (tapped) {
-                // The print: the instrument's signal, with the strip's
-                // processing and inserts when asked, never the fader.
+                // The print: the instrument's signal - an audio track's
+                // clips (bounce in place) - with the strip's processing and
+                // inserts when asked, never the fader.
+                if (!t.instrument && playing)
+                    for (const auto& clip : t.clips) render_clip(clip, buf.getWritePointer(0), buf.getWritePointer(1), pos, n, t.mono);
                 if (s->tap_post_inserts) {
                     StripDsp& dsp = *t.strip.dsp;
                     const StripParams& p = dsp.use_eff ? dsp.eff : dsp.params.latest();
@@ -2762,8 +2790,31 @@ void PlaybackEngine::process_chunk(const float* const* inputs, int num_inputs, f
             // Keep the click cursor in step while it is off.
             while (s->click_cursor < s->clicks.size() && s->clicks[s->click_cursor].first < heard_pos + n) ++s->click_cursor;
         }
-        for (int ch = 0; ch < num_outputs && ch < 2; ++ch)
-            if (outputs[ch]) juce::FloatVectorOperations::add(outputs[ch] + offset, s->out.getReadPointer(ch), n);
+        // The monitor path (Main Spec §12): what the speakers hear - dimmed,
+        // folded to mono, muted, or on another output pair. Never a render's.
+        if (prepared_offline_) {
+            for (int ch = 0; ch < num_outputs && ch < 2; ++ch)
+                if (outputs[ch]) juce::FloatVectorOperations::add(outputs[ch] + offset, s->out.getReadPointer(ch), n);
+        } else {
+            const float g = monitor_mute_.load(std::memory_order_relaxed) ? 0.0f
+                            : monitor_dim_.load(std::memory_order_relaxed) ? monitor_dim_gain_.load(std::memory_order_relaxed)
+                                                                           : 1.0f;
+            const int base = 2 * juce::jlimit(0, 3, monitor_pair_.load(std::memory_order_relaxed));
+            const bool mono = monitor_mono_.load(std::memory_order_relaxed);
+            for (int k = 0; k < 2; ++k) {
+                const int ch = base + k;
+                if (ch >= num_outputs || !outputs[ch] || g == 0.0f) continue;
+                if (mono) {
+                    juce::FloatVectorOperations::addWithMultiply(outputs[ch] + offset, s->out.getReadPointer(0), 0.5f * g, n);
+                    juce::FloatVectorOperations::addWithMultiply(outputs[ch] + offset, s->out.getReadPointer(1), 0.5f * g, n);
+                } else {
+                    juce::FloatVectorOperations::addWithMultiply(outputs[ch] + offset, s->out.getReadPointer(k), g, n);
+                }
+            }
+            // Cue mixes on their own outputs, whatever the monitor does.
+            for (int ch = 2; ch < num_outputs && ch < s->cue_out.getNumChannels(); ++ch)
+                if (outputs[ch]) juce::FloatVectorOperations::add(outputs[ch] + offset, s->cue_out.getReadPointer(ch), n);
+        }
         // The master's loudness while it plays (never a print's tap).
         if (loudness_reset_.exchange(false)) loudness_.reset();
         if (playing && s->tap_track < 0) {

@@ -331,6 +331,20 @@ public:
     bool set_midi_output(const std::string& track_id, const std::string& device);
     /// Record-arms a track. Not an undo step and does not dirty the project.
     void set_record_armed(const std::string& track_id, bool armed);
+
+    // --- VCAs and mix groups (Main Spec §12) ------------------------------------
+    /// A VCA over `members` (track ids). Returns its id.
+    std::string add_vca(const std::string& name, const std::vector<std::string>& members);
+    /// Its fader: one coalesced undo step per gesture, like a track fader.
+    bool set_vca_gain(const std::string& vca_id, double gain_db);
+    /// Rename, mute, members... (one undo step named `label`).
+    bool update_vca(const std::string& vca_id, const std::string& label, const std::function<void(project::Vca&)>& change);
+    bool remove_vca(const std::string& vca_id);
+    /// A mix group over `members`: fader, mute and solo linked (arm off).
+    std::string add_mix_group(const std::string& name, const std::vector<std::string>& members);
+    bool update_mix_group(const std::string& group_id, const std::string& label,
+                          const std::function<void(project::MixGroup&)>& change);
+    bool remove_mix_group(const std::string& group_id);
     /// Places clips (one recording pass, or an import) as one undo step. With
     /// `as_takes`, clips already on lane 0 that a new clip overlaps move to
     /// the next free take lane, so nothing recorded is ever lost. Ids are

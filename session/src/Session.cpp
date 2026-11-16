@@ -437,10 +437,17 @@ bool Session::rename_track(const std::string& id, const std::string& name)
 bool Session::set_gain(const std::string& id, double gain_db)
 {
     gain_db = std::clamp(gain_db, -96.0, 12.0);
-    if (!project_.edit_coalescing("Gain " + id, on_track(id, [&](project::Track& t) {
-            t.gain_db = gain_db;
+    const project::Track* self = data().find_track(id);
+    if (!self) return false;
+    // A mix group moves every member's fader by the same amount.
+    const double delta = gain_db - self->gain_db;
+    const auto linked = data().linked_tracks(id, "gain");
+    if (!project_.edit_coalescing("Gain " + id, [&](project::ProjectData& d) {
+            for (const auto& m : linked)
+                if (project::Track* t = d.find_track(m))
+                    t->gain_db = m == id ? gain_db : std::clamp(t->gain_db + delta, -96.0, 12.0);
             return true;
-        })))
+        }))
         return false;
     document_changed();
     return true;
@@ -460,20 +467,127 @@ bool Session::set_pan(const std::string& id, double pan)
 
 bool Session::set_mute(const std::string& id, bool mute)
 {
-    return edit(mute ? "Mute" : "Unmute", on_track(id, [&](project::Track& t) {
-        if (t.mute == mute) return false;
-        t.mute = mute;
-        return true;
-    }));
+    const auto linked = data().linked_tracks(id, "mute");
+    return edit(mute ? "Mute" : "Unmute", [&](project::ProjectData& d) {
+        bool any = false;
+        for (const auto& m : linked)
+            if (project::Track* t = d.find_track(m); t && t->mute != mute) {
+                t->mute = mute;
+                any = true;
+            }
+        return any;
+    });
 }
 
 bool Session::set_solo(const std::string& id, bool solo)
 {
-    return edit(solo ? "Solo" : "Unsolo", on_track(id, [&](project::Track& t) {
-        if (t.solo == solo) return false;
-        t.solo = solo;
+    const auto linked = data().linked_tracks(id, "solo");
+    return edit(solo ? "Solo" : "Unsolo", [&](project::ProjectData& d) {
+        bool any = false;
+        for (const auto& m : linked)
+            if (project::Track* t = d.find_track(m); t && t->solo != solo) {
+                t->solo = solo;
+                any = true;
+            }
+        return any;
+    });
+}
+
+// --- VCAs and mix groups (Main Spec §12) ---------------------------------------------------
+
+std::string Session::add_vca(const std::string& name, const std::vector<std::string>& members)
+{
+    std::string id;
+    edit("Add VCA " + name, [&](project::ProjectData& d) {
+        project::Vca v;
+        v.id = project_.ids().next("vca");
+        v.name = name.empty() ? "VCA " + std::to_string(d.vcas.size() + 1) : name;
+        for (const auto& m : members)
+            if (d.find_track(m)) v.members.push_back(m);
+        id = v.id;
+        d.vcas.push_back(std::move(v));
         return true;
-    }));
+    });
+    return id;
+}
+
+bool Session::update_vca(const std::string& vca_id, const std::string& label, const std::function<void(project::Vca&)>& change)
+{
+    return edit(label, [&](project::ProjectData& d) {
+        for (auto& v : d.vcas)
+            if (v.id == vca_id) {
+                change(v);
+                v.gain_db = std::clamp(v.gain_db, -96.0, 12.0);
+                return true;
+            }
+        return false;
+    });
+}
+
+bool Session::set_vca_gain(const std::string& vca_id, double gain_db)
+{
+    gain_db = std::clamp(gain_db, -96.0, 12.0);
+    if (!project_.edit_coalescing("VCA " + vca_id, [&](project::ProjectData& d) {
+            for (auto& v : d.vcas)
+                if (v.id == vca_id) {
+                    v.gain_db = gain_db;
+                    return true;
+                }
+            return false;
+        }))
+        return false;
+    document_changed();
+    return true;
+}
+
+bool Session::remove_vca(const std::string& vca_id)
+{
+    return edit("Remove VCA", [&](project::ProjectData& d) {
+        const auto before = d.vcas.size();
+        d.vcas.erase(std::remove_if(d.vcas.begin(), d.vcas.end(), [&](const project::Vca& v) { return v.id == vca_id; }),
+                     d.vcas.end());
+        return d.vcas.size() != before;
+    });
+}
+
+std::string Session::add_mix_group(const std::string& name, const std::vector<std::string>& members)
+{
+    std::string id;
+    edit("Add mix group " + name, [&](project::ProjectData& d) {
+        project::MixGroup g;
+        g.id = project_.ids().next("grp");
+        g.name = name.empty() ? "Group " + std::to_string(d.mix_groups.size() + 1) : name;
+        for (const auto& m : members)
+            if (d.find_track(m)) g.members.push_back(m);
+        id = g.id;
+        d.mix_groups.push_back(std::move(g));
+        return true;
+    });
+    return id;
+}
+
+bool Session::update_mix_group(const std::string& group_id, const std::string& label,
+                               const std::function<void(project::MixGroup&)>& change)
+{
+    return edit(label, [&](project::ProjectData& d) {
+        for (auto& g : d.mix_groups)
+            if (g.id == group_id) {
+                change(g);
+                return true;
+            }
+        return false;
+    });
+}
+
+bool Session::remove_mix_group(const std::string& group_id)
+{
+    return edit("Remove mix group", [&](project::ProjectData& d) {
+        const auto before = d.mix_groups.size();
+        d.mix_groups.erase(std::remove_if(d.mix_groups.begin(), d.mix_groups.end(),
+                                          [&](const project::MixGroup& g) { return g.id == group_id; }),
+                           d.mix_groups.end());
+        return d.mix_groups.size() != before;
+    });
 }
 
 bool Session::set_output_bus(const std::string& id, const std::string& bus_id)
@@ -1537,14 +1651,15 @@ bool Session::update_bus(const std::string& bus_id, const std::string& label,
 
 std::string Session::add_bus(const std::string& name, const std::string& kind)
 {
-    if (kind != "group" && kind != "fx") return {};
+    if (kind != "group" && kind != "fx" && kind != "cue") return {};
     const std::string id = project_.ids().next("bus");
     const bool ok = edit("Add bus " + name, [&](project::ProjectData& d) {
         project::Bus b;
         b.id = id;
-        b.name = d.unique_bus_name(name.empty() ? (kind == "fx" ? "FX" : "Group") : name);
+        b.name = d.unique_bus_name(name.empty() ? (kind == "fx" ? "FX" : kind == "cue" ? "Cue" : "Group") : name);
         b.kind = kind;
-        b.output = d.find_bus("bus-master") ? "bus-master" : "";
+        // A cue mix (headphones) goes to its own device outputs, never the master.
+        b.output = kind == "cue" ? "hw:1" : d.find_bus("bus-master") ? "bus-master" : "";
         if (kind == "fx") {
             project::InsertSlot reverb;
             reverb.kind = "reverb";
@@ -1623,8 +1738,10 @@ void Session::set_record_armed(const std::string& id, bool armed)
 {
     const project::Track* t = data().find_track(id);
     if (!t || t->record_armed == armed) return;
+    const auto linked = data().linked_tracks(id, "arm");
     project_.modify_unrecorded([&](project::ProjectData& d) {
-        if (project::Track* x = d.find_track(id)) x->record_armed = armed;
+        for (const auto& m : linked)
+            if (project::Track* x = d.find_track(m)) x->record_armed = armed;
     });
     notify(Change::Document);
 }
@@ -1747,18 +1864,24 @@ std::vector<std::string> Session::place_prints(const std::vector<std::pair<std::
 {
     std::vector<std::string> ids;
     for (std::size_t i = 0; i < prints.size(); ++i) ids.push_back(project_.ids().next("clip"));
-    const std::string label = prints.size() == 1 ? "Print to audio" : "Print " + std::to_string(prints.size()) + " tracks to audio";
+    bool all_audio = true;
+    for (const auto& p : prints)
+        if (const auto* t = data().find_track(p.first); !t || t->kind != project::TrackKind::Audio) all_audio = false;
+    const std::string label = all_audio ? std::string("Bounce in place")
+                              : prints.size() == 1 ? "Print to audio" : "Print " + std::to_string(prints.size()) + " tracks to audio";
     const bool ok = !prints.empty() && edit(label, [&](project::ProjectData& d) {
         for (std::size_t i = 0; i < prints.size(); ++i) {
             project::Track* t = d.find_track(prints[i].first);
             project::TrackVersion* v = t ? t->active_version() : nullptr;
-            if (!v || t->kind == project::TrackKind::Audio || t->kind == project::TrackKind::Aux) return false;
+            if (!v || t->kind == project::TrackKind::Aux) return false;
             project::AudioClip c = prints[i].second;
             if (c.length <= 0.0 || c.file.empty()) return false;
             c.id = ids[i];
+            // An audio track's bounce in place: the clips it replaces move to
+            // a take lane (nothing is lost; undo puts them back).
             place_clip(*v, std::move(c), true);
             t->printed_fx = printed_fx;
-            if (play_audio) t->playback = "audio";
+            if (play_audio && t->kind != project::TrackKind::Audio) t->playback = "audio";
         }
         return true;
     });

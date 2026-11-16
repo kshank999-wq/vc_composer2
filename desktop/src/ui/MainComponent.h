@@ -188,6 +188,7 @@ private:
     std::unique_ptr<MixerComponent> full_console_;
     Workspace before_mixer_ = Workspace::Producer;  ///< Where Cmd/Ctrl+M returns to.
     TrackPanel tracks_;
+    bool was_playing_ = false;
     juce::StretchableLayoutManager layout_;
     std::unique_ptr<juce::StretchableLayoutResizerBar> divider_;
     ComposerView composer_;

@@ -90,9 +90,8 @@ bool PrintJob::begin_track()
 {
     auto& item = items_[static_cast<std::size_t>(index_)];
     const auto* t = context_.session.data().find_track(item.track_id);
-    if (!t || t->kind == project::TrackKind::Audio || t->kind == project::TrackKind::Aux ||
-        t->kind == project::TrackKind::Reference) {
-        item.message = "not an instrument or MIDI track";
+    if (!t || t->kind == project::TrackKind::Aux || t->kind == project::TrackKind::Reference) {
+        item.message = "not an instrument, MIDI or audio track";
         return false;
     }
     if (!t->midi_output.empty()) {
