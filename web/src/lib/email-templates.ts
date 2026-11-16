@@ -138,7 +138,7 @@ export const purchaseConfirmation = (input: PurchaseEmailInput): RenderedEmail =
        ${note('Your licence covers both Windows and macOS. Sign in to your account at any time to download the current build, see the computers it is activated on, or manage your subscription.')}`,
     ),
     text: [
-      'VC COMPOSER 2',
+      'VC COMPOSER',
       '',
       'Thank you for subscribing to VC Composer.',
       '',
@@ -172,7 +172,7 @@ export const licenseReminder = (input: LicenseReminderInput): RenderedEmail => (
      ${note('This was asked for from your account. If that was not you, nothing has changed: this email only repeats a licence you already hold.')}`,
   ),
   text: [
-    'VC COMPOSER 2',
+    'VC COMPOSER',
     '',
     'Here is your VC Composer licence.',
     '',
@@ -222,7 +222,7 @@ export const licenseGranted = (input: LicenseGrantedInput): RenderedEmail => {
        ${note(escapeHtml(how))}`,
     ),
     text: [
-      'VC COMPOSER 2',
+      'VC COMPOSER',
       '',
       what,
       '',
