@@ -185,3 +185,10 @@ desktop binary, not set here.
   (any long random string). Then redeploy.
 - **Supabase Auth:** Site URL `https://vc-composer.com`; redirect URL
   `https://vc-composer.com/auth/callback`.
+
+## Testing in a Stripe sandbox
+
+A sandbox cannot hold the head-office address Stripe Tax needs, so set
+`STRIPE_AUTOMATIC_TAX=off` while the site uses sandbox keys (it is set that
+way now). When you switch to the live account's keys and its business
+details are filled in, delete the variable (or set it to `on`) and redeploy.
