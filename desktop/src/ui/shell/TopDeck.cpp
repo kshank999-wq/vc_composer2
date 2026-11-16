@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "vcc/picture/Picture.h"
+
 namespace vcc::desktop::shell {
 
 namespace {
@@ -164,12 +166,8 @@ TopDeck::TopDeck(AppContext& context) : context_(context)
     main_.set_caption(juce::String::fromUTF8("Main  \xc2\xb7  Bars|Beats"));
     main_.setComponentID("counter_main");
     sub_.set_caption(juce::String::fromUTF8("Sub  \xc2\xb7  Min:Sec"));
-    sub_.setTooltip("Click for timecode / minutes and seconds");
-    sub_.set_on_click([this] {
-        show_timecode_ = !show_timecode_;
-        sub_.set_caption(juce::String::fromUTF8(show_timecode_ ? "Sub  \xc2\xb7  Timecode" : "Sub  \xc2\xb7  Min:Sec"));
-        update_position();
-    });
+    sub_.setTooltip("Click for minutes and seconds / timecode / feet and frames");
+    sub_.set_on_click([this] { set_sub_mode((sub_mode_ + 1) % 3); });
     for (auto* l : {&main_, &range_, &sub_}) addAndMakeVisible(*l);
 
     // Session readouts and keys.
@@ -247,13 +245,25 @@ void TopDeck::update_from_document()
     key_.set_text(k);
 }
 
+void TopDeck::set_sub_mode(int mode)
+{
+    sub_mode_ = std::clamp(mode, 0, 2);
+    static const char* const names[] = {"Sub  \xc2\xb7  Min:Sec", "Sub  \xc2\xb7  Timecode", "Sub  \xc2\xb7  Feet+Frames"};
+    sub_.set_caption(juce::String::fromUTF8(names[sub_mode_]));
+    update_position();
+}
+
+juce::String TopDeck::sub_text() const { return sub_.text(); }
+
 void TopDeck::update_position()
 {
     const auto& d = context_.session.data();
     auto& engine = context_.engine;
     const Ticks tick = engine.position();
     main_.set_text(bars_beats_ticks(d.meter, tick));
-    if (show_timecode_) {
+    if (sub_mode_ == 2) {
+        sub_.set_text(picture::feet_frames(engine.position_seconds(), d.frame_rate));
+    } else if (sub_mode_ == 1) {
         std::int64_t start_frames = 0;
         if (auto tc = Timecode::parse(d.start_timecode))
             if (auto f = timecode_to_frames(*tc, d.frame_rate)) start_frames = *f;

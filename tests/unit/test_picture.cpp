@@ -105,3 +105,61 @@ TEST_CASE("changed regions between cuts are found and merged")
     CHECK_EQ(r[1].note, std::string("length differs"));
     CHECK(changed_regions(a, a, 1.0, 0.0).empty());
 }
+
+TEST_CASE("feet and frames count 35mm and 16mm footage")
+{
+    CHECK_EQ(feet_frames(0.0, FrameRate::Fps24), std::string("0+00"));
+    CHECK_EQ(feet_frames(60.0, FrameRate::Fps24), std::string("90+00"));  // 1440 frames
+    CHECK_EQ(feet_frames(1.0, FrameRate::Fps24), std::string("1+08"));
+    CHECK_EQ(feet_frames(-1.0, FrameRate::Fps24), std::string("-1+08"));
+    CHECK_EQ(feet_frames(60.0, FrameRate::Fps24, 40), std::string("36+00"));
+    CHECK_NEAR(*feet_frames_seconds("90+00", FrameRate::Fps24), 60.0, 1e-9);
+    CHECK_NEAR(*feet_frames_seconds("1+8", FrameRate::Fps24), 1.0, 1e-9);
+    CHECK_NEAR(*feet_frames_seconds("-1+08", FrameRate::Fps24), -1.0, 1e-9);
+    CHECK_NEAR(*feet_frames_seconds("3", FrameRate::Fps24), 2.0, 1e-9);
+    CHECK(!feet_frames_seconds("1+16", FrameRate::Fps24));
+    CHECK(!feet_frames_seconds("1+", FrameRate::Fps24));
+    CHECK(!feet_frames_seconds("x", FrameRate::Fps24));
+    // Round trip at a fractional rate, frame by frame.
+    for (int f = 0; f < 200; f += 7) {
+        const double s = f / frames_per_second(FrameRate::Fps23_976);
+        CHECK_NEAR(*feet_frames_seconds(feet_frames(s, FrameRate::Fps23_976), FrameRate::Fps23_976), s, 1e-9);
+    }
+}
+
+TEST_CASE("the tempo finder puts every hit on the beat when one tempo can")
+{
+    // Hits on beats 4, 9 and 17 at 96 bpm, from a start at 2 s, each off by
+    // a fraction of a frame as a spotted hit would be.
+    const double beat = 60.0 / 96.0;
+    const std::vector<double> hits = {2.0 + 4 * beat + 0.004, 2.0 + 9 * beat - 0.006, 2.0 + 17 * beat + 0.003,
+                                      1.0 /* before the start: ignored */};
+    TempoSearch search;
+    search.min_bpm = 80;
+    search.max_bpm = 140;
+    search.fps = 24.0;
+    search.tolerance_frames = 0.5;
+    const auto found = find_tempos(2.0, hits, search);
+    REQUIRE(!found.empty());
+    CHECK_EQ(found[0].hits_on, 3);
+    CHECK_NEAR(found[0].bpm, 96.0, 0.05);
+    CHECK(found[0].worst_frames <= 0.5);
+    CHECK_EQ(found[0].hit_ticks[0], 4 * kTicksPerQuarter);
+    CHECK_EQ(found[0].hit_ticks[2], 17 * kTicksPerQuarter);
+    CHECK_EQ(found[0].hit_ticks[3], Ticks{-1});
+    // Every candidate is distinct and ranked.
+    for (std::size_t i = 1; i < found.size(); ++i) {
+        CHECK(found[i].hits_on <= found[i - 1].hits_on);
+        for (std::size_t j = 0; j < i; ++j) CHECK(std::abs(found[i].bpm - found[j].bpm) >= 0.1);
+    }
+    // On eighths, half the tempo also fits.
+    search.grid = kTicksPerQuarter / 2;
+    search.min_bpm = 40;
+    search.max_bpm = 60;
+    const auto eighths = find_tempos(2.0, hits, search);
+    REQUIRE(!eighths.empty());
+    CHECK_EQ(eighths[0].hits_on, 3);
+    CHECK_NEAR(eighths[0].bpm, 48.0, 0.05);
+    // No hits after the start: nothing to find.
+    CHECK(find_tempos(5.0, {1.0, 2.0}, search).empty());
+}

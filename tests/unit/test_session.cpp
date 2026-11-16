@@ -782,3 +782,25 @@ TEST_CASE("percussion map: a drum kit's staff positions show their noteheads and
     CHECK_EQ(r.data().find_track(kit)->percussion_map, std::string("gm_kit"));
     CHECK(!s.set_percussion_map(kit, "no_such_map"));
 }
+
+TEST_CASE("steady tempo from the tempo finder: one tempo between two points, the rest kept")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    REQUIRE(s.set_tempo(120.0));
+    REQUIRE(s.set_steady_tempo(4 * kTicksPerWhole, 0, 100.0));
+    REQUIRE(s.set_steady_tempo(8 * kTicksPerWhole, 0, 140.0));
+    // Bars 3-10 at 96: the change at bar 5 goes, bar 9's 140 stays after 10.
+    REQUIRE(s.set_steady_tempo(2 * kTicksPerWhole, 10 * kTicksPerWhole, 96.0));
+    const auto& t = s.data().tempo;
+    CHECK_NEAR(t.bpm_at(0), 120.0, 1e-9);
+    CHECK_NEAR(t.bpm_at(2 * kTicksPerWhole), 96.0, 1e-9);
+    CHECK_NEAR(t.bpm_at(4 * kTicksPerWhole), 96.0, 1e-9);
+    CHECK_NEAR(t.bpm_at(9 * kTicksPerWhole), 96.0, 1e-9);
+    CHECK_NEAR(t.bpm_at(10 * kTicksPerWhole), 140.0, 1e-9);
+    CHECK_EQ(s.undo_label(), std::string("Tempo 96.00"));
+    // To the end: every later change goes.
+    REQUIRE(s.set_steady_tempo(kTicksPerWhole, 0, 72.0));
+    CHECK_NEAR(s.data().tempo.bpm_at(20 * kTicksPerWhole), 72.0, 1e-9);
+    CHECK(!s.set_steady_tempo(0, 0, 900.0));
+}

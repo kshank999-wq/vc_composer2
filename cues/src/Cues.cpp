@@ -128,14 +128,21 @@ std::string next_code(const project::ProjectData& d, const std::string& reel_id)
 
 std::string cue_sheet_csv(const project::ProjectData& d)
 {
-    std::string out = "Cue,Title,Reel,Scene,In,Out,Duration,Usage,Composer,Status,Revision\r\n";
+    std::string out = "Cue,Title,Reel,Scene,In,Out,Duration,Usage,Composer,Status,Revision,Footage In,Footage Length\r\n";
     for (const auto* c : list(d)) {
         const CueTimes t = times_of(*c, d);
         const std::string composer = c->composer.empty() ? d.production.composer : c->composer;
+        // 35mm feet+frames, from the spotted timecodes when there are some.
+        const double in_s = c->spot_in.empty() ? t.start_seconds
+                                               : picture::project_seconds_for_timecode(d, c->spot_in).value_or(t.start_seconds);
+        const double out_s = c->spot_out.empty() ? t.end_seconds
+                                                 : picture::project_seconds_for_timecode(d, c->spot_out).value_or(t.end_seconds);
         const std::string fields[] = {c->code, c->title, reel_name(d, c->reel_id), scene_name(d, c->scene_id),
                                       c->spot_in.empty() ? t.in_tc : c->spot_in,
                                       c->spot_out.empty() ? t.out_tc : c->spot_out, t.duration, c->usage, composer,
-                                      c->status, std::to_string(c->revision)};
+                                      c->status, std::to_string(c->revision),
+                                      picture::feet_frames(in_s, d.frame_rate),
+                                      picture::feet_frames(std::max(0.0, out_s - in_s), d.frame_rate)};
         for (std::size_t i = 0; i < std::size(fields); ++i) out += (i ? "," : "") + csv(fields[i]);
         out += "\r\n";
     }

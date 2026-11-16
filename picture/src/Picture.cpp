@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <bitset>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace vcc::picture {
 
@@ -142,6 +144,122 @@ std::vector<project::FlaggedRegion> changed_regions(const std::vector<std::uint6
         if (!out.empty() && s - out.back().end_seconds <= step + 1e-9) out.back().end_seconds = e;
         else out.push_back({s, e, j >= std::min(a.size(), b.size()) ? "length differs" : "picture changed"});
         i = j;
+    }
+    return out;
+}
+
+std::string feet_frames(double seconds, FrameRate rate, int per_foot)
+{
+    per_foot = std::max(1, per_foot);
+    const auto frames = static_cast<std::int64_t>(std::floor(std::abs(seconds) * frames_per_second(rate) + 1e-6));
+    char text[48];
+    std::snprintf(text, sizeof text, "%s%lld+%02lld", seconds < 0.0 && frames > 0 ? "-" : "",
+                  static_cast<long long>(frames / per_foot), static_cast<long long>(frames % per_foot));
+    return text;
+}
+
+std::optional<double> feet_frames_seconds(const std::string& text, FrameRate rate, int per_foot)
+{
+    if (text.empty() || per_foot < 1) return std::nullopt;
+    std::size_t i = 0;
+    const bool negative = text[0] == '-';
+    if (negative) ++i;
+    auto number = [&](long long& out) {
+        const std::size_t from = i;
+        out = 0;
+        while (i < text.size() && text[i] >= '0' && text[i] <= '9') out = out * 10 + (text[i++] - '0');
+        return i > from && i - from <= 9;
+    };
+    long long feet = 0, frames = 0;
+    if (!number(feet)) return std::nullopt;
+    if (i < text.size()) {
+        if (text[i] != '+') return std::nullopt;
+        ++i;
+        if (!number(frames) || frames >= per_foot) return std::nullopt;
+    }
+    if (i != text.size()) return std::nullopt;
+    const double s = static_cast<double>(feet * per_foot + frames) / frames_per_second(rate);
+    return negative ? -s : s;
+}
+
+std::vector<TempoCandidate> find_tempos(double start, const std::vector<double>& hits, const TempoSearch& search)
+{
+    std::vector<TempoCandidate> out;
+    const double lo = std::max(1.0, std::min(search.min_bpm, search.max_bpm));
+    const double hi = std::max(search.min_bpm, search.max_bpm);
+    const double fps = search.fps > 0.0 ? search.fps : 24.0;
+    const double tol = std::max(0.01, search.tolerance_frames);
+    const double grid_quarters = static_cast<double>(std::max<Ticks>(1, search.grid)) / kTicksPerQuarter;
+    double reach = 0.0;
+    for (const double h : hits) reach = std::max(reach, h - start);
+    if (reach <= 0.0) return out;
+
+    // Every hit, at one tempo: on or not, and its error.
+    auto evaluate = [&](double bpm) {
+        TempoCandidate c;
+        c.bpm = bpm;
+        const double g = 60.0 / bpm * grid_quarters;
+        double sse = 0.0;
+        for (const double h : hits) {
+            const double dt = h - start;
+            if (dt <= 0.0) {
+                c.error_frames.push_back(0.0);
+                c.hit_ticks.push_back(-1);
+                continue;
+            }
+            const double n = std::round(dt / g);
+            const double e = (dt - n * g) * fps;
+            c.error_frames.push_back(e);
+            c.hit_ticks.push_back(static_cast<Ticks>(n) * std::max<Ticks>(1, search.grid));
+            if (std::abs(e) <= tol + 1e-9) {
+                ++c.hits_on;
+                c.worst_frames = std::max(c.worst_frames, std::abs(e));
+                sse += e * e;
+            }
+        }
+        return std::make_pair(c, sse);
+    };
+    // A step small enough that the farthest hit moves a quarter of the
+    // tolerance from one tempo to the next.
+    const double step = std::max(0.0005, tol * lo / (4.0 * reach * fps));
+    struct Scored {
+        double bpm;
+        int on;
+        double sse;
+    };
+    std::vector<Scored> scored;
+    for (double bpm = lo; bpm <= hi + 1e-9; bpm += step) {
+        const auto e = evaluate(bpm);
+        if (e.first.hits_on > 0) scored.push_back({bpm, e.first.hits_on, e.second});
+    }
+    std::sort(scored.begin(), scored.end(), [](const Scored& a, const Scored& b) {
+        return a.on != b.on ? a.on > b.on : a.sse < b.sse;
+    });
+    for (const auto& s : scored) {
+        if (out.size() >= std::max<std::size_t>(1, search.max_results)) break;
+        // Least squares over the hits on: the grid length that puts them
+        // nearest their beats.
+        TempoCandidate c = evaluate(s.bpm).first;
+        double num = 0.0, den = 0.0;
+        const double g = 60.0 / s.bpm * grid_quarters;
+        for (std::size_t i = 0; i < hits.size(); ++i) {
+            const double dt = hits[i] - start;
+            if (dt <= 0.0 || std::abs(c.error_frames[i]) > tol + 1e-9) continue;
+            const double n = std::round(dt / g);
+            num += n * dt;
+            den += n * n;
+        }
+        if (den > 0.0) {
+            const double fitted = 60.0 * grid_quarters / (num / den);
+            if (fitted >= lo - 1e-9 && fitted <= hi + 1e-9) {
+                TempoCandidate better = evaluate(fitted).first;
+                if (better.hits_on >= c.hits_on) c = std::move(better);
+            }
+        }
+        const bool seen = std::any_of(out.begin(), out.end(), [&](const TempoCandidate& o) {
+            return std::abs(o.bpm - c.bpm) < 0.1;
+        });
+        if (!seen) out.push_back(std::move(c));
     }
     return out;
 }

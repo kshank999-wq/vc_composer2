@@ -107,6 +107,14 @@ TEST_CASE("cue sheet CSV, spotting notes and file naming")
     CHECK(csv.find("Cue,Title,Reel") == 0);
     CHECK(csv.find("\"Opening \"\"Night\"\"\"") != std::string::npos);  // RFC 4180 quoting
     CHECK(csv.find("Reel 1") != std::string::npos);
+    CHECK(csv.find("Revision,Footage In,Footage Length\r\n") != std::string::npos);
+    {
+        const auto t = cues::times_of(*s.data().find_cue(a), s.data());
+        const auto rate = s.data().frame_rate;
+        CHECK(t.end_seconds > t.start_seconds);
+        CHECK(csv.find("," + picture::feet_frames(t.start_seconds, rate) + "," +
+                       picture::feet_frames(t.end_seconds - t.start_seconds, rate) + "\r\n") != std::string::npos);
+    }
     std::string notes = cues::spotting_notes(s.data());
     CHECK(notes.find("1M1") != std::string::npos);
     CHECK(notes.find("door slam") != std::string::npos);

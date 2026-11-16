@@ -1720,3 +1720,29 @@ macOS, Linux and Windows. What it took:
     - **Tests**: `test_session` (lyrics, explode/implode, repeats through
       MusicXML and unroll, percussion map), `test_musicxml`, the printed
       part's multi-bar rests; `notation_tools_checks` in the desktop check.
+44. **Picture: tempo finder, picture + score export, feet+frames. Done**
+    (November 16, 2026; Main Spec §13).
+    - **Transport > Tempo Finder...**: from the selection's start (or the
+      playhead), the steady tempos at which the chosen hit and sync points
+      fall on the beat - quarters, eighths, triplets, dotted quarters... -
+      within a tolerance in frames, best first, each the least-squares fit
+      of its hits (`picture::find_tempos`). Use applies it from the start
+      through the last hit, the tempo after it kept (`Session::
+      set_steady_tempo`, one undo step).
+    - **File > Export Picture with Score...**: the active cut (whole, the
+      selection or a cue) with the stereo score mix rendered through its own
+      offline engine, timecode and bar|beat burned in, streamers into the
+      hits and a punch on them, a watermark, at 960/1280/1920 or the
+      picture's size, as .mp4 or .mov with a timecode track
+      (`vcc/media/VideoEncoder.h`). Licence gate: only the platform H.264
+      (VideoToolbox, Media Foundation) or FFmpeg's native MPEG-4 Part 2 and
+      AAC - never libx264/libx265.
+    - **Feet+frames**: the transport's sub counter cycles min:sec, timecode
+      and 35mm feet+frames (16 frames a foot, counted from the project's
+      start timecode); the cue sheet CSV gains Footage In and Footage
+      Length. `picture::feet_frames` also counts 16mm (40 a foot).
+    - **Tests**: `test_picture` (footage both ways, tempo finder on
+      quarters and eighths), `test_session` (steady tempo), `test_cues`
+      (footage columns), `test_video_encoder` (a written movie decodes back
+      frame for frame with rate, timecode and sound, as .mov and .mp4);
+      `picture_tools_checks` in the desktop check.

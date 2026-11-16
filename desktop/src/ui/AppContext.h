@@ -141,6 +141,8 @@ enum : juce::CommandID {
     unrollRepeats,
     editShortcuts,
     printPreview,
+    exportPicture,
+    tempoFinder,
 };
 }  // namespace cmd
 

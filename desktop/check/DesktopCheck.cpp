@@ -44,6 +44,7 @@
 #include "ui/review/Relink.h"
 #include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
+#include "ui/PictureTools.h"
 #include "ui/PrintPreview.h"
 #include "ui/ShortcutEditor.h"
 #include "ui/console/MixTools.h"
@@ -58,6 +59,7 @@
 #include "ui/composer/LaneParts.h"
 #include "ui/VideoWindow.h"
 #include "vcc/media/VideoDecoder.h"
+#include "vcc/media/VideoEncoder.h"
 #include "vcc/audio/Loudness.h"
 #include "vcc/music/MidiFile.h"
 #include "vcc/project/Automation.h"
@@ -6082,6 +6084,137 @@ void notation_tools_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// Picture tools (Main Spec §13): feet+frames on the counter, the tempo
+/// finder landing hits on the beat, and the picture exported with the score
+/// mix, timecode burned in, decoded back.
+void picture_tools_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+
+    // The counter in feet and frames: one minute is 90 feet at 24 fps.
+    session.set_frame_rate(FrameRate::Fps24);
+    session.set_tempo(120.0);
+    ctx.engine.locate(session.data().tempo.tick_at_seconds(60.0));
+    main.deck().set_sub_mode(2);
+    check(main.deck().sub_text() == "90+00", "the sub counter shows 35mm feet+frames: " + main.deck().sub_text());
+    main.deck().set_sub_mode(1);
+    check(main.deck().sub_text().startsWith("01:01:00"), "and timecode: " + main.deck().sub_text());
+    main.deck().set_sub_mode(0);
+
+    // Hits at bar 3 beat 1, bar 5 beat 3 and bar 8 beat 2 of a 96 bpm cue
+    // starting at 2 s; the project is at 120.
+    const double beat = 60.0 / 96.0;
+    for (const int b : {8, 18, 29}) session.add_marker(2.0 + b * beat + 0.003, "hit", "hit " + std::to_string(b));
+    const Ticks start = session.data().tempo.tick_at_seconds(2.0);
+    show_tempo_finder(ctx);
+    TempoFinder* finder = nullptr;
+    wait_for([&] { return (finder = tempo_finder()) != nullptr; });
+    if (!finder) {
+        check(false, "Transport > Tempo Finder opens");
+        return;
+    }
+    finder->set_start(start);
+    finder->set_range(80, 130);
+    finder->set_tolerance(0.5);
+    const auto& found = finder->find();
+    check(finder->hit_count() == 3 && !found.empty() && found[0].hits_on == 3 && std::abs(found[0].bpm - 96.0) < 0.05,
+          "the tempo finder's best fit puts all three hits on the beat at " +
+              (found.empty() ? juce::String("-") : juce::String(found[0].bpm, 2)) + " bpm");
+    shoot(*finder->getTopLevelComponent(), dir, "66-tempo-finder");
+    const auto said = finder->use(0);
+    bool all_on = true;
+    for (const auto& m : session.data().markers) {
+        const auto pos = picture::locate_in_music(session.data(), m.seconds);
+        all_on = all_on && std::abs(pos.offset_frames) < 0.5;
+    }
+    check(all_on && std::abs(session.data().tempo.bpm_at(start) - 96.0) < 0.05 && session.undo_label().rfind("Tempo", 0) == 0,
+          "Use sets the tempo from the start and every hit lands on a beat: " + said);
+    finder->getTopLevelComponent()->setVisible(false);
+
+    // Picture with score: a short movie, a track that plays, exported and decoded.
+    juce::ChildProcess probe;
+    const bool tool = probe.start("ffmpeg -version") && probe.readAllProcessOutput().contains("ffmpeg");
+    if (!media::available() || !media::encoding_available() || !tool) {
+        std::printf("  skip  picture export (no FFmpeg in this build or no ffmpeg tool to make a test movie)\n");
+        return;
+    }
+    const auto movie = dir.getChildFile("check-cut.mov");
+    movie.deleteFile();
+    juce::ChildProcess make;
+    make.start(juce::StringArray{"ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                                 "testsrc2=size=640x360:rate=24:d=6", "-c:v", "mpeg4", "-q:v", "4", "-timecode",
+                                 "01:00:00:00", movie.getFullPathName()});
+    make.waitForProcessToFinish(60000);
+    juce::String error;
+    check(import_picture_file(ctx, movie, error), "the cut imports " + error);
+    const auto track = session.add_track("Strings", "strings.violins_1");
+    notation::Score sc = session.data().find_track(track)->active_version()->score;
+    for (int b = 0; b < 3; ++b) {
+        notation::ScoreNote n;
+        n.start_tick = b * kTicksPerWhole;
+        n.duration = notation::whole();
+        n.pitch = notation::spell_midi_note(67, {});
+        sc.insert_note(0, n);
+    }
+    session.commit_score(track, sc, "Write");
+    PictureExportRequest rq;
+    rq.file = dir.getChildFile("review.mp4");
+    rq.file.deleteFile();
+    const auto [from, to] = picture_range(ctx);
+    rq.start_seconds = from;
+    rq.end_seconds = from + 3.0;
+    rq.max_width = 480;
+    int calls = 0;
+    rq.progress = [&calls](double) {
+        ++calls;
+        return true;
+    };
+    const auto res = export_picture(ctx, rq);
+    check(res.ok && res.frames == 72 && calls == 72 && res.peak > 1.0e-3f && !res.codec.containsIgnoreCase("x264"),
+          "Export Picture with Score writes 72 frames with the score's sound: " + res.message);
+    media::VideoDecoder back;
+    std::string err;
+    if (back.open(rq.file.getFullPathName().toStdString(), &err)) {
+        const auto& i = back.info();
+        check(i.width == 480 && i.height == 270 && i.frame_count == 72 && i.has_audio && i.timecode == "01:00:00:00",
+              "the movie decodes back: " + juce::String(i.width) + "x" + juce::String(i.height) + ", " +
+                  juce::String(i.frame_count) + " frames, timecode " + juce::String(i.timecode));
+        media::Frame f;
+        if (back.frame(36, f)) {
+            // The timecode box at the bottom centre: dark, with white digits.
+            int dark = 0, white = 0;
+            const int y0 = static_cast<int>(f.height - 30.0 * f.height / 360.0);
+            for (int y = y0; y < y0 + 10; ++y)
+                for (int x = f.width / 2 - 60; x < f.width / 2 + 60; ++x) {
+                    const auto* p = &f.rgba[static_cast<std::size_t>((y * f.width + x) * 4)];
+                    const int v = (p[0] + p[1] + p[2]) / 3;
+                    dark += v < 50;
+                    white += v > 200;
+                }
+            check(dark > 300 && white > 20, "the timecode is burned in (" + juce::String(dark) + " dark, " + juce::String(white) +
+                                                " white pixels in its box)");
+            juce::Image shot(juce::Image::RGB, f.width, f.height, false);
+            for (int y = 0; y < f.height; ++y)
+                for (int x = 0; x < f.width; ++x) {
+                    const auto* p = &f.rgba[static_cast<std::size_t>((y * f.width + x) * 4)];
+                    shot.setPixelAt(x, y, juce::Colour(p[0], p[1], p[2]));
+                }
+            juce::PNGImageFormat png;
+            auto out = dir.getChildFile("67-picture-export.png");
+            out.deleteFile();
+            juce::FileOutputStream stream(out);
+            png.writeImageToStream(shot, stream);
+        }
+    } else {
+        check(false, "the exported movie opens: " + juce::String(err));
+    }
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -6595,7 +6728,7 @@ void accessibility_checks(MainWindow& window, const juce::File& dir)
     pump(150);
     report("Producer view", main);
     for (auto id : {cmd::showCircleOfFifths, cmd::showRouting, cmd::showReview, cmd::showComments, cmd::collectPackage,
-                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap, cmd::mixTools, cmd::midiInputFilter, cmd::editShortcuts, cmd::printPreview}) {
+                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap, cmd::mixTools, cmd::midiInputFilter, cmd::editShortcuts, cmd::printPreview, cmd::tempoFinder}) {
         ctx.commands.invokeDirectly(id, false);
         pump(200);
     }
@@ -7931,6 +8064,8 @@ int main(int argc, char** argv)
         edit_tools_checks(window, dir);
         section("notation_tools_checks");
         notation_tools_checks(window, dir);
+        section("picture_tools_checks");
+        picture_tools_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

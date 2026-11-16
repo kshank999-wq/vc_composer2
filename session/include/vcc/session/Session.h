@@ -306,6 +306,10 @@ public:
     /// so that `target_tick` sounds exactly on the marker (one undo step).
     bool fit_tempo_to_marker(const std::string& marker_id, Ticks target_tick, Ticks from_tick,
                              std::string* error = nullptr);
+    /// Tempo finder result: a steady `bpm` from `from_tick` to `until_tick`
+    /// (changes between them removed; the tempo in force after `until_tick`
+    /// kept), or to the end when `until_tick` <= `from_tick`. One undo step.
+    bool set_steady_tempo(Ticks from_tick, Ticks until_tick, double bpm);
 
     // --- Chord symbols (the ruler's Chords row; MusicXML <harmony>; printed) ---------------
     /// Sets the chord symbol at `tick` ("Chord symbol"); empty text removes

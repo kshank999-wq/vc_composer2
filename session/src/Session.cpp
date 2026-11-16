@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <sstream>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -1098,6 +1099,28 @@ bool Session::fit_tempo_to_marker(const std::string& marker_id, Ticks target_tic
     if (!fitted) return false;
     return edit("Fit tempo to " + (marker->label.empty() ? marker->kind : marker->label), [&](project::ProjectData& d) {
         d.tempo = *fitted;
+        return true;
+    });
+}
+
+bool Session::set_steady_tempo(Ticks from, Ticks until, double bpm)
+{
+    if (!(bpm >= 20.0 && bpm <= 400.0) || from < 0) return false;
+    const TempoMap& old = data().tempo;
+    const bool bounded = until > from;
+    const double after = old.bpm_at(until);
+    TempoMap next(old.bpm_at(0));
+    for (const auto& c : old.changes()) {
+        if (c.tick >= from && (!bounded || c.tick <= until)) continue;
+        next.set(c.tick, c.bpm);
+    }
+    next.set(from, bpm);
+    if (bounded && std::abs(after - bpm) > 1e-9) next.set(until, after);
+    std::ostringstream label;
+    label.precision(2);
+    label << std::fixed << "Tempo " << bpm;
+    return edit(label.str(), [&](project::ProjectData& d) {
+        d.tempo = next;
         return true;
     });
 }

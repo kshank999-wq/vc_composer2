@@ -70,7 +70,14 @@ private:
     hw::Lcd tempo_{{}, 16.0f}, meter_{{}, 16.0f}, key_{{}, 16.0f}, peak_{{}, 10.0f};
     hw::Meter master_l_{hw::Meter::Orientation::Horizontal, 30}, master_r_{hw::Meter::Orientation::Horizontal, 30};
     hw::Led midi_in_{hw::tok::meter_green};
-    bool show_timecode_ = false;
+    int sub_mode_ = 0;  ///< 0 min:sec, 1 timecode, 2 feet+frames (35mm).
+
+public:
+    /// The sub counter's mode, as the click cycles it (the desktop check sets it).
+    void set_sub_mode(int mode);
+    juce::String sub_text() const;
+
+private:
     Ticks range_from_ = 0, range_to_ = 0;
     float peak_hold_db_ = -100.0f;
     int peak_age_ = 0;

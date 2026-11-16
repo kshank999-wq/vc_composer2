@@ -6,6 +6,7 @@
 #include "ui/review/Relink.h"
 #include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
+#include "ui/PictureTools.h"
 #include "ui/PrintPreview.h"
 #include "ui/ScoreTools.h"
 #include "ui/ShortcutEditor.h"
@@ -1598,7 +1599,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::articulationMap, cmd::missingInstruments, cmd::mixTools, cmd::bounceInPlace, cmd::saveOnStop,
                 cmd::monitorDim, cmd::reverseClips, cmd::timeStretchClips, cmd::groupClips, cmd::ungroupClips,
                 cmd::captureMidi, cmd::midiInputFilter, cmd::lyrics, cmd::explodeTracks, cmd::implodeTracks, cmd::addRepeat,
-                cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview});
+                cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1717,6 +1718,13 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::addRepeat: info.setInfo("Repeat and Endings...", "Repeat bars, with first and second endings", "Edit", 0); break;
         case cmd::unrollRepeats: info.setInfo("Unroll Repeats", "Writes the repeats out into the bars", "Edit", 0); break;
         case cmd::editShortcuts: info.setInfo("Edit Shortcuts...", "Keys for every command; your own profiles", "Edit", 0); break;
+        case cmd::exportPicture:
+            info.setInfo("Export Picture with Score...", "The cut with the score mix, timecode and watermark, for director review",
+                         "File", context_.session.data().active_picture() ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            break;
+        case cmd::tempoFinder:
+            info.setInfo("Tempo Finder...", "Steady tempos that put the hit points on the beat", "Transport", 0);
+            break;
         case cmd::printPreview:
             info.setInfo("Print Preview...", "The full score or a part as it will print", "File", 0);
             info.addDefaultKeypress('p', cmdKey | shift);
@@ -1904,6 +1912,8 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::addRepeat: ask_repeat(context_); break;
         case cmd::unrollRepeats: context_.status(unroll(context_)); break;
         case cmd::printPreview: show_print_preview(context_); break;
+        case cmd::exportPicture: show_picture_export(context_); break;
+        case cmd::tempoFinder: show_tempo_finder(context_); break;
         case cmd::editShortcuts:
             show_shortcut_editor(context_, [this](const std::string& name) { use_shortcut_profile(name); });
             break;
@@ -2036,8 +2046,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
                             cmd::relinkMedia})
                 m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::exportStems, cmd::exportMidi, cmd::exportMusicXml, cmd::exportFullScorePdf, cmd::exportPartsPdf,
-                            cmd::exportScoreSvg})
+            for (auto id : {cmd::exportStems, cmd::exportPicture, cmd::exportMidi, cmd::exportMusicXml, cmd::exportFullScorePdf,
+                            cmd::exportPartsPdf, cmd::exportScoreSvg})
                 m.addCommandItem(c, id);
             break;
         case 1:
@@ -2079,7 +2089,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             for (auto id : {cmd::toggleLoop, cmd::toggleRecord, cmd::togglePunch}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::toggleMetronome, cmd::addHit, cmd::monitorDim, cmd::captureMidi}) m.addCommandItem(c, id);
+            for (auto id : {cmd::toggleMetronome, cmd::addHit, cmd::tempoFinder, cmd::monitorDim, cmd::captureMidi}) m.addCommandItem(c, id);
             break;
         case 4:
             for (auto id : {cmd::addTrack, cmd::addAudioTrack}) m.addCommandItem(c, id);
