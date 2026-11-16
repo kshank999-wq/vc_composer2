@@ -33,6 +33,17 @@ std::string expression_map_key(const Track& track);
 /// "natural" when none applies (Memory Management spec §4: expanded
 /// articulation tracks split on exactly what playback selects).
 std::string articulation_group(const notation::ExpressionMap& map, notation::ArticulationMask articulations);
+/// Which of a part's articulation tracks (`groups`) plays a note, so that
+/// every note plays exactly once: the map's choice when it has a track;
+/// else the first written articulation that has one (tracks that each load
+/// their own patch split on what is written); else the natural track (or,
+/// with none, the first).
+std::string articulation_route(const notation::ExpressionMap& map, notation::ArticulationMask articulations,
+                               const std::vector<std::string>& groups);
+/// A part's articulation tracks, ready to insert after it: each a copy of
+/// the part (instrument, map, routing, mix) named "<part> - <Sound>",
+/// playing its MIDI, with an empty version that `sync_scores` fills.
+std::vector<Track> make_articulation_tracks(const Track& part, const std::vector<std::string>& groups, IdAllocator& ids);
 /// "Staccato", "Natural".
 std::string articulation_group_name(const std::string& group);
 

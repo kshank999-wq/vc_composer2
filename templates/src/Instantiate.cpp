@@ -6,6 +6,7 @@
 
 #include "vcc/templates/Templates.h"
 
+#include "vcc/project/ArticulationMap.h"
 #include "vcc/project/Percussion.h"
 
 namespace vcc::templates {
@@ -356,7 +357,14 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
             t.versions.push_back({track_ids[i].second, "Version 1", {}, score_for_instrument(def, t.name), {}, {}, {},
                                   std::nullopt, {}, {}, false});
             t.active_version_id = track_ids[i].second;
+            // Expanded mode: the part, then a track per sound, as Expand makes them.
+            std::vector<project::Track> sounds;
+            if (!tt.articulation_tracks.empty()) {
+                t.articulations_expanded = true;
+                sounds = project::make_articulation_tracks(t, tt.articulation_tracks, ids);
+            }
             d.tracks.push_back(std::move(t));
+            for (auto& c : sounds) d.tracks.push_back(std::move(c));
         }
 
         if (opt.mode != InstantiateMode::Merge && opt.apply_project_defaults) {
@@ -431,6 +439,7 @@ Template save_user_template(const project::Project& proj, const std::string& tem
     for (const auto& tr : d.tracks) {
         if (tr.kind != project::TrackKind::Instrument && tr.kind != project::TrackKind::MidiOnly) continue;
         if (tr.instrument_standard_id.empty()) continue;  // nothing to describe it by
+        if (!tr.articulation_parent.empty()) continue;    // described by its part
         TemplateTrack tt;
         tt.id = snake(tr.name);
         while (!used.insert(tt.id).second) tt.id += "_2";
@@ -438,6 +447,9 @@ Template save_user_template(const project::Project& proj, const std::string& tem
         tt.instrument_standard_id = tr.instrument_standard_id;
         tt.role = tr.role.empty() ? "melody" : tr.role;
         tt.articulation_map = tr.articulation_intents;
+        if (tr.articulations_expanded)
+            for (const auto& c : d.tracks)
+                if (c.articulation_parent == tr.id) tt.articulation_tracks.push_back(c.articulation_group);
         tt.fallback_instruments = tr.fallback_instruments;
         tt.plugin_requirements = tr.plugin_requirements;
         tt.gain_db = tr.gain_db;

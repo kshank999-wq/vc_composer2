@@ -39,6 +39,12 @@ public:
     void show_automation(const std::string& owner_id, bool show);
     bool automation_shown(const std::string& owner_id) const;
     void hide_all_automation();
+    /// An expanded part's articulation tracks folded under it, or shown (Memory
+    /// Management spec §4.2; a view setting, they still play).
+    void set_part_folded(const std::string& part_id, bool folded);
+    bool part_folded(const std::string& part_id) const;
+    /// How many track rows show (folded articulation tracks do not).
+    int shown_track_rows() const;
     /// Pencil: dragging in an automation lane draws freehand (key P).
     bool pencil_mode() const;
     void set_pencil_mode(bool on);

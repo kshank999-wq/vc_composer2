@@ -1,0 +1,1030 @@
+{
+  "schema_version": 1,
+  "pack": "orchestral",
+  "content_version": "1.0.0",
+  "templates": [
+    {
+      "template_id": "cinematic.orchestra.consolidated",
+      "schema_version": 1,
+      "content_version": "1.0.0",
+      "display_name": "Orchestra — Consolidated (one track per part)",
+      "category": "cinematic",
+      "subcategory": "orchestra",
+      "tags": [
+        "orchestra",
+        "orchestral",
+        "full orchestra",
+        "strings",
+        "woodwinds",
+        "brass",
+        "articulations",
+        "consolidated",
+        "starting point"
+      ],
+      "locale": "en",
+      "variant": "large_orchestra",
+      "description": "A standard symphonic setup with one track per part: the staff and its Producer track switch articulations through the articulation map. The lightest way to work; expand any part later.",
+      "treatment": "Pairs of woodwinds, four horns, three trumpets, three trombones and tuba, timpani, harp and a five-part string section, seated and panned as on a scoring stage.",
+      "recommended_key_modes": [
+        {
+          "tonic": "D",
+          "mode": "major"
+        },
+        {
+          "tonic": "C",
+          "mode": "minor"
+        }
+      ],
+      "tempo_range_bpm": [
+        60,
+        140
+      ],
+      "meter_options": [
+        "4/4",
+        "3/4",
+        "6/8"
+      ],
+      "default_length_bars": 64,
+      "buses": [
+        {
+          "id": "bus_woodwinds",
+          "name": "Woodwinds",
+          "kind": "group",
+          "output": "master",
+          "sends": [
+            {
+              "to": "fx_hall",
+              "level_db": -12
+            }
+          ],
+          "insert_suggestions": [
+            "eq"
+          ]
+        },
+        {
+          "id": "bus_brass",
+          "name": "Brass",
+          "kind": "group",
+          "output": "master",
+          "sends": [
+            {
+              "to": "fx_hall",
+              "level_db": -12
+            }
+          ],
+          "insert_suggestions": [
+            "eq"
+          ]
+        },
+        {
+          "id": "bus_percussion",
+          "name": "Percussion",
+          "kind": "group",
+          "output": "master",
+          "sends": [
+            {
+              "to": "fx_hall",
+              "level_db": -14
+            }
+          ],
+          "insert_suggestions": [
+            "eq"
+          ]
+        },
+        {
+          "id": "bus_keys",
+          "name": "Harp & Keys",
+          "kind": "group",
+          "output": "master",
+          "sends": [
+            {
+              "to": "fx_hall",
+              "level_db": -12
+            }
+          ],
+          "insert_suggestions": [
+            "eq"
+          ]
+        },
+        {
+          "id": "bus_strings",
+          "name": "Strings",
+          "kind": "group",
+          "output": "master",
+          "sends": [
+            {
+              "to": "fx_hall",
+              "level_db": -10
+            }
+          ],
+          "insert_suggestions": [
+            "eq"
+          ]
+        },
+        {
+          "id": "fx_hall",
+          "name": "Scoring Hall",
+          "kind": "fx",
+          "output": "master",
+          "insert_suggestions": [
+            "reverb"
+          ]
+        }
+      ],
+      "tracks": [
+        {
+          "id": "flutes",
+          "name": "Flutes",
+          "instrument_standard_id": "woodwinds.flute",
+          "role": "melody",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "woodwinds.piccolo"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -4.0,
+            "pan": -0.15
+          },
+          "output_bus_id": "bus_woodwinds"
+        },
+        {
+          "id": "oboes",
+          "name": "Oboes",
+          "instrument_standard_id": "woodwinds.oboe",
+          "role": "countermelody",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "woodwinds.english_horn"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -4.0,
+            "pan": -0.05
+          },
+          "output_bus_id": "bus_woodwinds"
+        },
+        {
+          "id": "clarinets",
+          "name": "Clarinets",
+          "instrument_standard_id": "woodwinds.clarinet_bb",
+          "role": "harmony",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "woodwinds.bass_clarinet"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -4.0,
+            "pan": 0.1
+          },
+          "output_bus_id": "bus_woodwinds"
+        },
+        {
+          "id": "bassoons",
+          "name": "Bassoons",
+          "instrument_standard_id": "woodwinds.bassoon",
+          "role": "bass",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "woodwinds.contrabassoon"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -4.0,
+            "pan": 0.2
+          },
+          "output_bus_id": "bus_woodwinds"
+        },
+        {
+          "id": "horns",
+          "name": "Horns",
+          "instrument_standard_id": "brass.horn_section",
+          "role": "harmony",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "marcato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "brass.horn_f"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -3.0,
+            "pan": -0.3
+          },
+          "output_bus_id": "bus_brass"
+        },
+        {
+          "id": "trumpets",
+          "name": "Trumpets",
+          "instrument_standard_id": "brass.trumpet_section",
+          "role": "melody",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "marcato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "brass.trumpet_bb"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -5.0,
+            "pan": 0.15
+          },
+          "output_bus_id": "bus_brass"
+        },
+        {
+          "id": "trombones",
+          "name": "Trombones",
+          "instrument_standard_id": "brass.trombone_section",
+          "role": "harmony",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "marcato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "brass.trombone"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -5.0,
+            "pan": 0.3
+          },
+          "output_bus_id": "bus_brass"
+        },
+        {
+          "id": "tuba",
+          "name": "Tuba",
+          "instrument_standard_id": "brass.tuba",
+          "role": "bass",
+          "articulation_map": [
+            "sustain",
+            "staccato",
+            "marcato"
+          ],
+          "fallback_instruments": [
+            "brass.cimbasso"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -6.0,
+            "pan": 0.35
+          },
+          "output_bus_id": "bus_brass"
+        },
+        {
+          "id": "timpani",
+          "name": "Timpani",
+          "instrument_standard_id": "percussion.timpani",
+          "role": "percussion",
+          "articulation_map": [
+            "roll",
+            "hit"
+          ],
+          "fallback_instruments": [
+            "percussion.low_drums_ensemble"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -6.0,
+            "pan": 0.0
+          },
+          "output_bus_id": "bus_percussion"
+        },
+        {
+          "id": "harp",
+          "name": "Harp",
+          "instrument_standard_id": "keys.harp",
+          "role": "texture",
+          "articulation_map": [
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "keys.piano"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -6.0,
+            "pan": -0.35
+          },
+          "output_bus_id": "bus_keys"
+        },
+        {
+          "id": "violins_1",
+          "name": "Violins I",
+          "instrument_standard_id": "strings.violins_1",
+          "role": "melody",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "spiccato",
+            "pizzicato",
+            "tremolo",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "strings.string_ensemble"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -2.0,
+            "pan": -0.5
+          },
+          "output_bus_id": "bus_strings"
+        },
+        {
+          "id": "violins_2",
+          "name": "Violins II",
+          "instrument_standard_id": "strings.violins_2",
+          "role": "harmony",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "spiccato",
+            "pizzicato",
+            "tremolo",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "strings.string_ensemble"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -3.0,
+            "pan": -0.25
+          },
+          "output_bus_id": "bus_strings"
+        },
+        {
+          "id": "violas",
+          "name": "Violas",
+          "instrument_standard_id": "strings.violas",
+          "role": "harmony",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "spiccato",
+            "pizzicato",
+            "tremolo",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "strings.string_ensemble"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -3.0,
+            "pan": 0.1
+          },
+          "output_bus_id": "bus_strings"
+        },
+        {
+          "id": "celli",
+          "name": "Celli",
+          "instrument_standard_id": "strings.celli",
+          "role": "bass",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "spiccato",
+            "pizzicato",
+            "tremolo",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "strings.string_ensemble"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -2.0,
+            "pan": 0.3
+          },
+          "output_bus_id": "bus_strings"
+        },
+        {
+          "id": "basses",
+          "name": "Basses",
+          "instrument_standard_id": "strings.basses",
+          "role": "bass",
+          "articulation_map": [
+            "sustain",
+            "staccato",
+            "pizzicato",
+            "tremolo"
+          ],
+          "fallback_instruments": [
+            "strings.celli"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -4.0,
+            "pan": 0.45
+          },
+          "output_bus_id": "bus_strings"
+        }
+      ],
+      "license_metadata": {
+        "content_license": "VC original",
+        "author": "VC Composer content",
+        "notes": ""
+      }
+    },
+    {
+      "template_id": "cinematic.orchestra.expanded",
+      "schema_version": 1,
+      "content_version": "1.0.0",
+      "display_name": "Orchestra — Expanded (a track per articulation)",
+      "category": "cinematic",
+      "subcategory": "orchestra",
+      "tags": [
+        "orchestra",
+        "orchestral",
+        "full orchestra",
+        "strings",
+        "woodwinds",
+        "brass",
+        "articulations",
+        "expanded",
+        "starting point"
+      ],
+      "locale": "en",
+      "variant": "large_orchestra",
+      "description": "A standard symphonic setup with each part's articulations on tracks of their own (Violins I - Staccato, - Pizzicato...): one staff per part in Composer, a track per sound in Producer for editing, mixing and stems. Uses more memory.",
+      "treatment": "Pairs of woodwinds, four horns, three trumpets, three trombones and tuba, timpani, harp and a five-part string section, seated and panned as on a scoring stage.",
+      "recommended_key_modes": [
+        {
+          "tonic": "D",
+          "mode": "major"
+        },
+        {
+          "tonic": "C",
+          "mode": "minor"
+        }
+      ],
+      "tempo_range_bpm": [
+        60,
+        140
+      ],
+      "meter_options": [
+        "4/4",
+        "3/4",
+        "6/8"
+      ],
+      "default_length_bars": 64,
+      "buses": [
+        {
+          "id": "bus_woodwinds",
+          "name": "Woodwinds",
+          "kind": "group",
+          "output": "master",
+          "sends": [
+            {
+              "to": "fx_hall",
+              "level_db": -12
+            }
+          ],
+          "insert_suggestions": [
+            "eq"
+          ]
+        },
+        {
+          "id": "bus_brass",
+          "name": "Brass",
+          "kind": "group",
+          "output": "master",
+          "sends": [
+            {
+              "to": "fx_hall",
+              "level_db": -12
+            }
+          ],
+          "insert_suggestions": [
+            "eq"
+          ]
+        },
+        {
+          "id": "bus_percussion",
+          "name": "Percussion",
+          "kind": "group",
+          "output": "master",
+          "sends": [
+            {
+              "to": "fx_hall",
+              "level_db": -14
+            }
+          ],
+          "insert_suggestions": [
+            "eq"
+          ]
+        },
+        {
+          "id": "bus_keys",
+          "name": "Harp & Keys",
+          "kind": "group",
+          "output": "master",
+          "sends": [
+            {
+              "to": "fx_hall",
+              "level_db": -12
+            }
+          ],
+          "insert_suggestions": [
+            "eq"
+          ]
+        },
+        {
+          "id": "bus_strings",
+          "name": "Strings",
+          "kind": "group",
+          "output": "master",
+          "sends": [
+            {
+              "to": "fx_hall",
+              "level_db": -10
+            }
+          ],
+          "insert_suggestions": [
+            "eq"
+          ]
+        },
+        {
+          "id": "fx_hall",
+          "name": "Scoring Hall",
+          "kind": "fx",
+          "output": "master",
+          "insert_suggestions": [
+            "reverb"
+          ]
+        }
+      ],
+      "tracks": [
+        {
+          "id": "flutes",
+          "name": "Flutes",
+          "instrument_standard_id": "woodwinds.flute",
+          "role": "melody",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "woodwinds.piccolo"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -4.0,
+            "pan": -0.15
+          },
+          "output_bus_id": "bus_woodwinds",
+          "articulation_tracks": [
+            "natural",
+            "staccato"
+          ]
+        },
+        {
+          "id": "oboes",
+          "name": "Oboes",
+          "instrument_standard_id": "woodwinds.oboe",
+          "role": "countermelody",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "woodwinds.english_horn"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -4.0,
+            "pan": -0.05
+          },
+          "output_bus_id": "bus_woodwinds",
+          "articulation_tracks": [
+            "natural",
+            "staccato"
+          ]
+        },
+        {
+          "id": "clarinets",
+          "name": "Clarinets",
+          "instrument_standard_id": "woodwinds.clarinet_bb",
+          "role": "harmony",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "woodwinds.bass_clarinet"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -4.0,
+            "pan": 0.1
+          },
+          "output_bus_id": "bus_woodwinds",
+          "articulation_tracks": [
+            "natural",
+            "staccato"
+          ]
+        },
+        {
+          "id": "bassoons",
+          "name": "Bassoons",
+          "instrument_standard_id": "woodwinds.bassoon",
+          "role": "bass",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "woodwinds.contrabassoon"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -4.0,
+            "pan": 0.2
+          },
+          "output_bus_id": "bus_woodwinds",
+          "articulation_tracks": [
+            "natural",
+            "staccato"
+          ]
+        },
+        {
+          "id": "horns",
+          "name": "Horns",
+          "instrument_standard_id": "brass.horn_section",
+          "role": "harmony",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "marcato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "brass.horn_f"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -3.0,
+            "pan": -0.3
+          },
+          "output_bus_id": "bus_brass",
+          "articulation_tracks": [
+            "natural",
+            "staccato",
+            "marcato"
+          ]
+        },
+        {
+          "id": "trumpets",
+          "name": "Trumpets",
+          "instrument_standard_id": "brass.trumpet_section",
+          "role": "melody",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "marcato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "brass.trumpet_bb"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -5.0,
+            "pan": 0.15
+          },
+          "output_bus_id": "bus_brass",
+          "articulation_tracks": [
+            "natural",
+            "staccato",
+            "marcato"
+          ]
+        },
+        {
+          "id": "trombones",
+          "name": "Trombones",
+          "instrument_standard_id": "brass.trombone_section",
+          "role": "harmony",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "marcato",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "brass.trombone"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -5.0,
+            "pan": 0.3
+          },
+          "output_bus_id": "bus_brass",
+          "articulation_tracks": [
+            "natural",
+            "staccato",
+            "marcato"
+          ]
+        },
+        {
+          "id": "tuba",
+          "name": "Tuba",
+          "instrument_standard_id": "brass.tuba",
+          "role": "bass",
+          "articulation_map": [
+            "sustain",
+            "staccato",
+            "marcato"
+          ],
+          "fallback_instruments": [
+            "brass.cimbasso"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -6.0,
+            "pan": 0.35
+          },
+          "output_bus_id": "bus_brass",
+          "articulation_tracks": [
+            "natural",
+            "staccato"
+          ]
+        },
+        {
+          "id": "timpani",
+          "name": "Timpani",
+          "instrument_standard_id": "percussion.timpani",
+          "role": "percussion",
+          "articulation_map": [
+            "roll",
+            "hit"
+          ],
+          "fallback_instruments": [
+            "percussion.low_drums_ensemble"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -6.0,
+            "pan": 0.0
+          },
+          "output_bus_id": "bus_percussion"
+        },
+        {
+          "id": "harp",
+          "name": "Harp",
+          "instrument_standard_id": "keys.harp",
+          "role": "texture",
+          "articulation_map": [
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "keys.piano"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -6.0,
+            "pan": -0.35
+          },
+          "output_bus_id": "bus_keys"
+        },
+        {
+          "id": "violins_1",
+          "name": "Violins I",
+          "instrument_standard_id": "strings.violins_1",
+          "role": "melody",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "spiccato",
+            "pizzicato",
+            "tremolo",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "strings.string_ensemble"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -2.0,
+            "pan": -0.5
+          },
+          "output_bus_id": "bus_strings",
+          "articulation_tracks": [
+            "natural",
+            "staccato",
+            "pizzicato",
+            "tremolo"
+          ]
+        },
+        {
+          "id": "violins_2",
+          "name": "Violins II",
+          "instrument_standard_id": "strings.violins_2",
+          "role": "harmony",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "spiccato",
+            "pizzicato",
+            "tremolo",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "strings.string_ensemble"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -3.0,
+            "pan": -0.25
+          },
+          "output_bus_id": "bus_strings",
+          "articulation_tracks": [
+            "natural",
+            "staccato",
+            "pizzicato",
+            "tremolo"
+          ]
+        },
+        {
+          "id": "violas",
+          "name": "Violas",
+          "instrument_standard_id": "strings.violas",
+          "role": "harmony",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "spiccato",
+            "pizzicato",
+            "tremolo",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "strings.string_ensemble"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -3.0,
+            "pan": 0.1
+          },
+          "output_bus_id": "bus_strings",
+          "articulation_tracks": [
+            "natural",
+            "staccato",
+            "pizzicato",
+            "tremolo"
+          ]
+        },
+        {
+          "id": "celli",
+          "name": "Celli",
+          "instrument_standard_id": "strings.celli",
+          "role": "bass",
+          "articulation_map": [
+            "legato",
+            "staccato",
+            "spiccato",
+            "pizzicato",
+            "tremolo",
+            "sustain"
+          ],
+          "fallback_instruments": [
+            "strings.string_ensemble"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -2.0,
+            "pan": 0.3
+          },
+          "output_bus_id": "bus_strings",
+          "articulation_tracks": [
+            "natural",
+            "staccato",
+            "pizzicato",
+            "tremolo"
+          ]
+        },
+        {
+          "id": "basses",
+          "name": "Basses",
+          "instrument_standard_id": "strings.basses",
+          "role": "bass",
+          "articulation_map": [
+            "sustain",
+            "staccato",
+            "pizzicato",
+            "tremolo"
+          ],
+          "fallback_instruments": [
+            "strings.celli"
+          ],
+          "plugin_requirements": [
+            "sampler"
+          ],
+          "default_gain_pan": {
+            "gain_db": -4.0,
+            "pan": 0.45
+          },
+          "output_bus_id": "bus_strings",
+          "articulation_tracks": [
+            "natural",
+            "staccato",
+            "pizzicato",
+            "tremolo"
+          ]
+        }
+      ],
+      "license_metadata": {
+        "content_license": "VC original",
+        "author": "VC Composer content",
+        "notes": ""
+      }
+    }
+  ]
+}

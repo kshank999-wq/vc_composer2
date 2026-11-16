@@ -1990,30 +1990,8 @@ std::vector<std::string> Session::expand_articulations(const std::string& track_
         if (it == d.tracks.end()) return false;
         it->articulations_expanded = true;
         const project::Track parent = *it;
-        std::vector<project::Track> children;
-        for (const auto& g : wanted) {
-            project::Track c = parent;
-            c.id = project_.ids().next("trk");
-            c.name = parent.name + " - " + project::articulation_group_name(g);
-            c.articulations_expanded = false;
-            c.articulation_parent = parent.id;
-            c.articulation_group = g;
-            c.derived_key.clear();
-            c.automation.clear();
-            c.print_signature.clear();
-            c.instrument_unloaded = false;
-            c.playback = "midi";
-            c.record_armed = false;
-            c.folder_id = parent.folder_id;
-            project::TrackVersion v;
-            v.id = project_.ids().next("ver");
-            v.name = "Version 1";
-            if (const auto* pv = parent.active_version()) v.score = pv->score;  // filtered by sync_scores
-            c.versions = {std::move(v)};
-            c.active_version_id = c.versions.front().id;
-            ids.push_back(c.id);
-            children.push_back(std::move(c));
-        }
+        auto children = project::make_articulation_tracks(parent, wanted, project_.ids());
+        for (const auto& c : children) ids.push_back(c.id);
         d.tracks.insert(std::next(it), children.begin(), children.end());
         return true;
     });

@@ -1821,7 +1821,33 @@ macOS, Linux and Windows. What it took:
       tracks `ARTIC`, named `└ STACCATO`. **Consolidate to One Track**, from
       the part or any of its tracks, removes them and the part plays every
       sound again. Each is one undo step; removing the part removes them.
+    - **Which track plays a note**: the map's choice when that sound has a
+      track; else the first articulation written on it that has one (so
+      tracks that each load their own patch, with no keyswitches, split on
+      what is written); else the Natural track. A sound left unticked when
+      expanding plays on Natural, never nowhere.
+    - **Folding** (Producer): an expanded part's row has a key with its
+      track count (`4 ▾`); it folds the articulation tracks under the part
+      and shows them again. A view setting: folded tracks still play.
+    - **Composer** (spec §8): each staff header's second line says what its
+      Producer track plays: its sound, `EXPANDED: 4 ARTIC. TRACKS`, or the
+      print's state (`FROZEN`, `STALE`...). Its menu has *Show in Producer*
+      and *Expand Articulations to Tracks...* / *Consolidate to One Track*.
+    - **Templates for both modes** (spec §4.3): *Orchestra - Consolidated
+      (one track per part)* and *Orchestra - Expanded (a track per
+      articulation)* (Cinematic > Orchestra; `content/templates/orchestral.json`):
+      the same 15 parts, buses and seating; expanded, strings get Natural,
+      Staccato, Pizzicato and Tremolo tracks, brass Natural, Staccato and
+      Marcato, woodwinds Natural and Staccato (timpani and harp stay one
+      track). A template track's `articulation_tracks` lists the sounds it
+      opens expanded with; *Save as Template* records them, so a user's
+      own expanded setup comes back expanded.
+    - **The print lane** stays part of its instrument's row (the MIDI above,
+      the print below, one header), so the linked pair always moves, folds
+      and is selected together; its state label is on the lane.
     - **Tests**: `test_session` (freeze states, stale signatures; expand,
-      play once, follow edits, save/reopen, consolidate);
-      `freeze_checks` and `articulation_checks` in the desktop check, with
-      the test plug-in in its own process (process counts are checked).
+      play once, follow edits, save/reopen, consolidate); `test_templates`
+      (both orchestra templates, routing by what is written, saving an
+      expanded template); `freeze_checks`, `articulation_checks` and
+      `articulation_template_checks` in the desktop check, with the test
+      plug-in in its own process (process counts are checked).

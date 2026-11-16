@@ -70,8 +70,17 @@ void TrackHeader::refresh()
 {
     const auto* t = context_.session.data().find_track(track_);
     if (!t) return;
-    const auto sound = !t->instrument_plugin.empty() ? t->instrument_plugin.name : t->assignment.patch_display;
-    scribble_.set_text(juce::String(t->name).toUpperCase() + "\n" + juce::String(sound).toUpperCase());
+    // The second line: what the linked Producer track plays - its sound, or,
+    // for a part expanded to articulation tracks, how many play it; a print
+    // that replaces the instrument says so (FROZEN, STALE...).
+    juce::String sound = !t->instrument_plugin.empty() ? juce::String(t->instrument_plugin.name)
+                                                       : juce::String(t->assignment.patch_display);
+    if (t->articulations_expanded)
+        sound = "Expanded: " + juce::String(static_cast<int>(context_.session.articulation_tracks(track_).size())) +
+                " artic. tracks";
+    else if (context_.track_state)
+        if (const auto state = context_.track_state(track_); state.isNotEmpty() && state != "LIVE") sound = state;
+    scribble_.set_text(juce::String(t->name).toUpperCase() + "\n" + sound.toUpperCase());
     rec_.setToggleState(t->record_armed, juce::dontSendNotification);
     solo_.setToggleState(t->solo, juce::dontSendNotification);
     mute_.setToggleState(t->mute, juce::dontSendNotification);
@@ -187,6 +196,19 @@ void TrackHeader::show_menu()
     m.addItem("New phrase at the playhead (one bar)", true, false, [this, bar] {
         const auto& meter = context_.session.data().meter;
         context_.session.add_phrase(track_, "Phrase", meter.bar_start(bar), meter.bar_start(bar + 1));
+    });
+    m.addSeparator();
+    // Its Producer track(s): consolidated (one track switches articulations)
+    // or expanded (a track per sound).
+    const auto* t = d.find_track(track_);
+    const bool expanded = t && t->articulations_expanded;
+    m.addItem("Show in Producer", [this] {
+        context_.session.select_track(track_);
+        context_.commands.invokeDirectly(cmd::showSequencer, true);
+    });
+    m.addItem(expanded ? "Consolidate to One Track" : "Expand Articulations to Tracks...", [this, expanded] {
+        context_.session.select_track(track_);
+        context_.commands.invokeDirectly(expanded ? cmd::consolidateArticulations : cmd::expandArticulations, true);
     });
     m.addSeparator();
     m.addItem("Track...", [this] { TrackPanel::show_track_menu(context_, track_); });

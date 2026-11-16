@@ -6858,6 +6858,75 @@ void articulation_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// Templates for both articulation modes (Memory Management spec §4.3, §8):
+/// the expanded orchestra opens with the same staves as the consolidated one,
+/// each part followed by its sound tracks in Producer; Composer says which
+/// mode a staff is in; a part's tracks fold under it.
+void articulation_template_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    auto rows_in_composer = [&](const std::string& name) {
+        juce::String text;
+        std::function<void(juce::Component&)> walk = [&](juce::Component& c) {
+            if (auto* h = dynamic_cast<composer_ui::TrackHeader*>(&c); h && h->scribble().text().startsWith(juce::String(name).toUpperCase() + "\n"))
+                text = h->scribble().text();
+            for (auto* k : c.getChildren()) walk(*k);
+        };
+        walk(main.composer());
+        return text;
+    };
+
+    session.new_from_template("cinematic.orchestra.consolidated");
+    const auto consolidated_staves = session.staff_tracks().size();
+    const auto consolidated_tracks = session.music_tracks().size();
+    session.new_from_template("cinematic.orchestra.expanded");
+    pump(300);
+    const auto staves = session.staff_tracks().size();
+    const auto tracks = session.music_tracks().size();
+    check(consolidated_staves == 15 && consolidated_tracks == 15 && staves == 15 && tracks == 15 + 39,
+          "the orchestra opens with 15 staves either way: " + juce::String(static_cast<int>(consolidated_tracks)) +
+              " tracks consolidated, " + juce::String(static_cast<int>(tracks)) + " expanded");
+
+    std::string violins;
+    for (const auto* t : session.staff_tracks())
+        if (t->name == "Violins I") violins = t->id;
+    session.select_track(violins);
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(400);
+    const auto linked = rows_in_composer("Violins I");
+    const auto timpani = rows_in_composer("Timpani");
+    shoot(main, dir, "75-expanded-template-composer");
+    check(linked.endsWith("EXPANDED: 4 ARTIC. TRACKS") && timpani.isNotEmpty() && !timpani.contains("EXPANDED"),
+          "Composer's staff header says the Violins I play through 4 articulation tracks; Timpani plays its own sound");
+
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(400);
+    auto& seq = main.sequencer();
+    const int shown = seq.shown_track_rows();
+    shoot(main, dir, "75-expanded-template-producer");
+    seq.set_part_folded(violins, true);
+    pump(200);
+    const int folded = seq.shown_track_rows();
+    shoot(main, dir, "75-folded-part");
+    seq.set_part_folded(violins, false);
+    pump(100);
+    check(shown == 54 && folded == 50 && seq.shown_track_rows() == 54 && !seq.part_folded(violins),
+          "Producer shows each part with its sound tracks (" + juce::String(shown) +
+              " rows); folding Violins I hides its four, and they come back (" + juce::String(folded) + " folded)");
+
+    // Consolidated from Composer's menu side: the same command, one track again.
+    session.select_track(violins);
+    ctx.commands.invokeDirectly(cmd::consolidateArticulations, false);
+    pump(100);
+    check(session.music_tracks().size() == 50 && rows_in_composer("Violins I").isNotEmpty() &&
+              !session.data().find_track(violins)->articulations_expanded,
+          "consolidating one part of the expanded template leaves the rest expanded");
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -8723,6 +8792,8 @@ int main(int argc, char** argv)
         freeze_checks(window, dir);
         section("articulation_checks");
         articulation_checks(window, dir);
+        section("articulation_template_checks");
+        articulation_template_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

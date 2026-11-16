@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <map>
 #include <set>
 
 #include "vcc/core/Files.h"
 #include "vcc/ostinato/Ostinato.h"
+#include "vcc/project/Render.h"
 #include "vcc/templates/Shelf.h"
 #include "vcc/templates/Templates.h"
 #include "vcc/theory/Progression.h"
@@ -415,4 +417,79 @@ TEST_CASE("the template shelf keeps favorites and the ten most recent, and saves
     CHECK(shelf.favorites().empty());
     CHECK_EQ(shelf.recent().front(), std::string("t11"));
     CHECK(templates::TemplateShelf::from_json(json::Value()).recent().empty());
+}
+
+TEST_CASE("orchestral templates: consolidated and expanded open with the same parts, linked")
+{
+    project::Project consolidated, expanded;
+    REQUIRE(instantiate(consolidated, tpl("cinematic.orchestra.consolidated"), content().instruments, {}).ok);
+    REQUIRE(instantiate(expanded, tpl("cinematic.orchestra.expanded"), content().instruments, {}).ok);
+    auto parts = [](const project::Project& p) {
+        std::vector<std::string> names;
+        for (const auto& t : p.data().tracks)
+            if (t.kind == project::TrackKind::Instrument && t.articulation_parent.empty()) names.push_back(t.name);
+        return names;
+    };
+    // The same 15 staves either way.
+    CHECK_EQ(parts(consolidated).size(), 15u);
+    CHECK(parts(consolidated) == parts(expanded));
+    int children = 0;
+    for (const auto& t : consolidated.data().tracks) CHECK(!t.articulations_expanded && t.articulation_parent.empty());
+    // Expanded: each part is followed by its sounds, routed and mixed as the part.
+    const auto& tracks = expanded.data().tracks;
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        if (tracks[i].articulation_parent.empty()) continue;
+        ++children;
+        const auto* part = expanded.data().find_track(tracks[i].articulation_parent);
+        REQUIRE(part != nullptr);
+        CHECK(part->articulations_expanded);
+        CHECK_EQ(tracks[i].output_bus_id, part->output_bus_id);
+        CHECK_EQ(tracks[i].instrument_standard_id, part->instrument_standard_id);
+        CHECK(tracks[i - 1].id == part->id || tracks[i - 1].articulation_parent == part->id);  // right after it
+    }
+    CHECK_EQ(children, 4 * 5 + 2 * 4 + 3 * 3 + 2);
+    const auto* vln = [&]() -> const project::Track* {
+        for (const auto& t : tracks)
+            if (t.name == "Violins I - Pizzicato") return &t;
+        return nullptr;
+    }();
+    REQUIRE(vln != nullptr);
+    CHECK_EQ(vln->articulation_group, std::string("pizzicato"));
+    // Timpani and harp stay one track.
+    for (const auto& t : tracks)
+        if (t.name == "Timpani" || t.name == "Harp") CHECK(!t.articulations_expanded);
+
+    // Placeholder sounds select nothing by keyswitch: a part's tracks split on
+    // what is written, and a sound with no track plays on Natural.
+    auto* part = expanded.data().find_track(vln->articulation_parent);
+    notation::Score sc = part->active_version()->score;
+    int beat = 0;
+    for (auto art : {notation::Articulation::Staccato, notation::Articulation::Pizzicato, notation::Articulation::Accent,
+                     notation::Articulation::Spiccato}) {
+        notation::ScoreNote n;
+        n.start_tick = beat++ * kTicksPerQuarter;
+        n.duration = notation::quarter();
+        n.pitch = notation::spell_midi_note(67, {});
+        n.articulations = notation::to_mask(art);
+        sc.insert_note(0, n);
+    }
+    const std::string part_id = part->id;
+    REQUIRE(expanded.edit("Write", [&](project::ProjectData& d) {
+        d.find_track(part_id)->active_version()->score = sc;
+        return true;
+    }));
+    std::map<std::string, std::size_t> by_sound;
+    for (const auto& t : expanded.data().tracks)
+        if (t.articulation_parent == part_id) by_sound[t.articulation_group] = project::render_track(t).notes.size();
+    CHECK_EQ(by_sound["staccato"], 1u);
+    CHECK_EQ(by_sound["pizzicato"], 1u);
+    CHECK_EQ(by_sound["natural"], 2u);  // the accent and the spiccato (no track of its own)
+    CHECK_EQ(by_sound["tremolo"], 0u);
+
+    // Saved as a user template, the expanded parts stay expanded.
+    const Template saved = save_user_template(expanded, "user.orchestra", "My Orchestra", "");
+    CHECK_EQ(saved.tracks.size(), 15u);
+    const std::vector<std::string> strings_sounds = {"natural", "staccato", "pizzicato", "tremolo"};
+    for (const auto& t : saved.tracks)
+        if (t.name == "Violins I") CHECK(t.articulation_tracks == strings_sounds);
 }

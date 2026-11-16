@@ -105,6 +105,8 @@ struct LaneView {
     bool printed_fx = false;
     juce::String articulation;  ///< An articulation track: its sound ("Staccato").
     bool expanded = false;      ///< A part expanded to articulation tracks: they play it.
+    int articulation_count = 0; ///< An expanded part: how many tracks it has.
+    bool folded = false;        ///< An expanded part whose tracks are hidden here.
     std::vector<int> inserts;  ///< Per insert slot: 0 empty, 1 active, 2 bypassed.
     juce::String route;        ///< "IN 1 > MASTER".
     // Automation (Main Spec §12).
@@ -331,6 +333,9 @@ struct Model final : AutomationTimeline {
     }
     /// The track whose piano roll is open inline (one at a time; it follows the selection).
     std::string expanded;
+    /// Expanded parts whose articulation tracks are folded away (a view
+    /// setting: they still play).
+    std::set<std::string> folded_parts;
     /// Rows the user resized: track id, or id + "#x" for its expanded height.
     std::map<std::string, int> heights;
     std::function<void()> expanded_changed;
@@ -483,9 +488,11 @@ struct Model final : AutomationTimeline {
         lanes.clear();
         int number = 0;
         for (const auto* t : session.music_tracks()) {
+            ++number;
+            if (!t->articulation_parent.empty() && folded_parts.count(t->articulation_parent)) continue;
             LaneView l;
             l.id = t->id;
-            l.number = ++number;
+            l.number = number;
             l.midi_only = t->kind == project::TrackKind::MidiOnly;
             l.mute = t->mute;
             l.solo = t->solo;
@@ -506,6 +513,10 @@ struct Model final : AutomationTimeline {
             if (!t->articulation_parent.empty())
                 l.articulation = juce::String(project::articulation_group_name(t->articulation_group));
             l.expanded = t->articulations_expanded;
+            if (l.expanded) {
+                l.articulation_count = static_cast<int>(session.articulation_tracks(t->id).size());
+                l.folded = folded_parts.count(t->id) > 0;
+            }
             l.colour = colour_from_hex(t->color);
             l.reference = t->kind == project::TrackKind::Reference;
             l.channel = t->midi_channel;
@@ -1927,6 +1938,10 @@ private:
             m_.set_expanded(m_.is_expanded(l) ? std::string() : id);
             return true;
         }
+        if (p.fold.contains(pt)) {
+            set_part_folded(id, !l.folded);
+            return true;
+        }
         if (l.bus) return false;
         if (p.rec.contains(pt)) {
             session.set_record_armed(id, !l.armed);
@@ -2073,6 +2088,22 @@ private:
         return n;
     }
 
+public:
+    /// An expanded part's articulation tracks folded away, or shown again.
+    void set_part_folded(const std::string& part, bool folded)
+    {
+        if (folded) m_.folded_parts.insert(part);
+        else m_.folded_parts.erase(part);
+        auto& session = m_.ctx.session;
+        if (const auto* sel = session.data().find_track(session.selected_track()); folded && sel && sel->articulation_parent == part)
+            session.select_track(part);
+        m_.rebuild();
+        update_scroll();
+        layout_automation(true);
+        repaint();
+    }
+
+private:
     void toggle_takes(const std::string& track)
     {
         if (!m_.show_takes.erase(track)) m_.show_takes.insert(track);
@@ -2399,6 +2430,7 @@ private:
     struct HeaderParts {
         juce::Rectangle<int> chevron, tag, number, name, rec, solo, mute, input, volume, resize;
         juce::Rectangle<int> takes;  ///< An instrument track with MIDI or audio takes: show or hide them.
+        juce::Rectangle<int> fold;   ///< An expanded part: fold or show its articulation tracks.
         std::array<juce::Rectangle<int>, 3> source;  ///< MIDI, Audio, Both.
         // Expanded only.
         juce::Rectangle<int> route, inserts, print, freeze, roll, score;
@@ -2412,6 +2444,7 @@ private:
         p.tag = {26, y + 8, 44, 16};
         p.number = {74, y + 6, 24, 20};
         p.name = {102, y + 6, kHeader - 110, 20};
+        if (l.expanded) p.fold = p.name.removeFromRight(40).translated(4, 0).withTrimmedLeft(4);
         if (!l.bus) {
             p.rec = {26, y + 30, 22, 18};
             p.solo = {51, y + 30, 22, 18};
@@ -2503,10 +2536,17 @@ private:
         // An articulation track reads as a branch of its part: an elbow, then
         // the sound; the part says its notes play on the tracks below.
         const juce::String shown = l.articulation.isNotEmpty() ? juce::String::fromUTF8("\xe2\x94\x94 ") + l.articulation
-                                   : l.expanded ? l.name + juce::String::fromUTF8(" \xe2\x96\xbe")
-                                                : l.name;
+                                                               : l.name;
         hw::paint::lcd_text(g, shown.toUpperCase(), p.name.toFloat().reduced(5.0f, 0.0f), 11.0f, juce::Justification::centredLeft,
-                            l.reference || l.expanded ? 0.7f : 1.0f);
+                            l.reference ? 0.7f : 1.0f);
+        if (!p.fold.isEmpty()) {
+            // The part's articulation tracks: how many, and a key to fold them.
+            hw::paint::keycap(g, p.fold.toFloat(), !l.folded, {});
+            g.setColour(hw::tok::text);
+            g.setFont(hw::fonts::silk(9.5f, 0.04f));
+            g.drawText(juce::String(l.articulation_count) + juce::String::fromUTF8(l.folded ? " \xe2\x96\xb8" : " \xe2\x96\xbe"),
+                       p.fold, juce::Justification::centred, false);
+        }
         paint_automation_button(g, l, row, m_.show_automation.count(l.id) > 0);
         if (l.bus) return;
         // R S M I, and the volume.
@@ -4982,6 +5022,7 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
             const auto* sel = model.selected_lane();
             model.expanded = sel && model.has_audio_lane(*sel) ? sel->id : std::string();
             model.heights.clear();
+            model.folded_parts.clear();
             toolbar.roll_button().setToggleState(!model.expanded.empty(), juce::dontSendNotification);
         }
         lanes.update_scroll();
@@ -5024,6 +5065,26 @@ void SequencerView::show_automation(const std::string& owner_id, bool show)
 {
     impl_->deferred.flush();
     impl_->model.set_automation_shown(owner_id, show);
+}
+
+void SequencerView::set_part_folded(const std::string& part_id, bool folded)
+{
+    impl_->deferred.flush();
+    impl_->lanes.set_part_folded(part_id, folded);
+}
+
+bool SequencerView::part_folded(const std::string& part_id) const
+{
+    return impl_->model.folded_parts.count(part_id) > 0;
+}
+
+int SequencerView::shown_track_rows() const
+{
+    impl_->deferred.flush();
+    int n = 0;
+    for (const auto& l : impl_->model.lanes)
+        if (!l.bus) ++n;
+    return n;
 }
 
 bool SequencerView::automation_shown(const std::string& owner_id) const

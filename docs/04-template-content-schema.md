@@ -127,6 +127,7 @@ nothing is lost.
 | `instrument_standard_id` | ✔ | A registry `id`. |
 | `role` | ✔ | `melody`, `countermelody`, `harmony`, `bass`, `pad`, `texture`, `ostinato`, `rhythm`, `percussion`, `drone`, `fx`, `solo`, `continuo`, `vocal`. |
 | `articulation_map` | | Intent IDs; the first is the default articulation. |
+| `articulation_tracks` | | Expanded mode: the part opens with a track per sound named here (`natural` or a notated articulation such as `staccato`, `pizzicato`), each playing the notes written for it. Empty: one consolidated track. |
 | `fallback_instruments` | | Ordered registry IDs to try when no patch maps the primary instrument. |
 | `plugin_requirements` | | Generic capability strings only (`"sampler"`, `"synth"`, `"drum_sampler"`, `"granular"`). Never a product name. |
 | `group_id` | | Folder override; defaults to the instrument family. |

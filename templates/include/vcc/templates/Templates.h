@@ -89,6 +89,10 @@ struct TemplateTrack {
     std::string instrument_standard_id;
     std::string role;
     std::vector<std::string> articulation_map;
+    /// Expanded mode (Memory Management spec §4.3): the part opens expanded,
+    /// with a track per sound named here ("natural", "staccato"...). Empty:
+    /// consolidated, one track plays every articulation.
+    std::vector<std::string> articulation_tracks;
     std::vector<std::string> fallback_instruments;
     std::vector<std::string> plugin_requirements;
     std::string group_id;

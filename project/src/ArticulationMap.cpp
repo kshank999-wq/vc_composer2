@@ -188,6 +188,47 @@ std::string articulation_group(const notation::ExpressionMap& map, notation::Art
     return "natural";
 }
 
+std::string articulation_route(const notation::ExpressionMap& map, notation::ArticulationMask articulations,
+                               const std::vector<std::string>& groups)
+{
+    if (groups.empty()) return "natural";
+    auto has = [&](const std::string& g) { return std::find(groups.begin(), groups.end(), g) != groups.end(); };
+    const std::string chosen = articulation_group(map, articulations);
+    if (chosen != "natural" && has(chosen)) return chosen;
+    for (const auto& g : groups) {
+        notation::Articulation a;
+        if (g != "natural" && notation::articulation_from_string(g, a) && notation::has_articulation(articulations, a)) return g;
+    }
+    return has("natural") ? std::string("natural") : groups.front();
+}
+
+std::vector<Track> make_articulation_tracks(const Track& part, const std::vector<std::string>& groups, IdAllocator& ids)
+{
+    std::vector<Track> out;
+    for (const auto& g : groups) {
+        Track c = part;
+        c.id = ids.next("trk");
+        c.name = part.name + " - " + articulation_group_name(g);
+        c.articulations_expanded = false;
+        c.articulation_parent = part.id;
+        c.articulation_group = g;
+        c.derived_key.clear();
+        c.automation.clear();
+        c.print_signature.clear();
+        c.instrument_unloaded = false;
+        c.playback = "midi";
+        c.record_armed = false;
+        TrackVersion v;
+        v.id = ids.next("ver");
+        v.name = "Version 1";
+        if (const auto* pv = part.active_version()) v.score = pv->score;  // filtered by sync_scores
+        c.versions = {std::move(v)};
+        c.active_version_id = c.versions.front().id;
+        out.push_back(std::move(c));
+    }
+    return out;
+}
+
 std::string articulation_group_name(const std::string& group)
 {
     if (group.empty()) return group;

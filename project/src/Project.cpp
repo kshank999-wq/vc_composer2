@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <map>
 #include <set>
 
 #include "vcc/core/Files.h"
@@ -275,6 +276,9 @@ void ProjectData::sync_scores()
         }
     }
     // Articulation tracks: the parent's notes of their sound, kept in step.
+    std::map<std::string, std::vector<std::string>> siblings;  // parent -> its tracks' groups
+    for (const auto& t : tracks)
+        if (!t.articulation_parent.empty()) siblings[t.articulation_parent].push_back(t.articulation_group);
     for (auto& child : tracks) {
         if (child.articulation_parent.empty()) continue;
         const Track* parent = find_track(child.articulation_parent);
@@ -285,14 +289,18 @@ void ProjectData::sync_scores()
         std::uint64_t perf = pv->performance.size();
         for (const auto& [id, ov] : pv->performance)
             perf = perf * 1099511628211ull + id * 31u + static_cast<std::uint64_t>(ov.onset * 7 + ov.length * 13 + ov.velocity * 17 + ov.cc);
+        const auto& groups = siblings[child.articulation_parent];
+        std::string group_list;
+        for (const auto& g : groups) group_list += g + ",";
         const std::string source_key = std::to_string(pv->score.revision()) + "|" + expression_map_key(*parent) + "|" +
-                                       child.articulation_group + "|" + std::to_string(perf);
+                                       child.articulation_group + "|" + group_list + "|" + std::to_string(perf);
         if (child.derived_key == source_key) continue;
         notation::Score derived = pv->score;
         std::vector<notation::EventId> drop;
         for (std::size_t s = 0; s < derived.staff_count(); ++s)
             for (const auto& n : derived.notes(s))
-                if (!n.is_rest && articulation_group(map, n.articulations) != child.articulation_group) drop.push_back(n.id);
+                if (!n.is_rest && articulation_route(map, n.articulations, groups) != child.articulation_group)
+                    drop.push_back(n.id);
         for (const auto id : drop) derived.remove_note(id);
         cv->score = std::move(derived);
         cv->performance = pv->performance;

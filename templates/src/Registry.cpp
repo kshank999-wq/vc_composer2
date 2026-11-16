@@ -6,6 +6,7 @@
 
 #include "vcc/core/Files.h"
 #include "vcc/core/Time.h"
+#include "vcc/notation/Markings.h"
 #include "vcc/templates/Templates.h"
 
 namespace vcc::templates {
@@ -298,6 +299,16 @@ std::optional<Template> TemplateRegistry::parse(const json::Value& j, const std:
         if (!articulations_.empty())
             for (const auto& a : tt.articulation_map)
                 if (!contains(articulations_, a)) warn(tw + "articulation '" + a + "' not in vocabulary");
+        tt.articulation_tracks = k.get_string_array("articulation_tracks");
+        {
+            std::set<std::string> seen;
+            for (const auto& g : tt.articulation_tracks) {
+                notation::Articulation a;
+                if (g != "natural" && !notation::articulation_from_string(g, a))
+                    err(tw + "articulation track '" + g + "' is not a notated articulation (or natural)");
+                if (!seen.insert(g).second) err(tw + "articulation track '" + g + "' listed twice");
+            }
+        }
         tt.fallback_instruments = k.get_string_array("fallback_instruments");
         for (const auto& f : tt.fallback_instruments)
             if (!instruments_.find(f)) err(tw + "unknown fallback instrument '" + f + "'");
@@ -522,6 +533,7 @@ json::Value Template::to_json() const
                         {"role", t.role}, {"articulation_map", arr(t.articulation_map)},
                         {"fallback_instruments", arr(t.fallback_instruments)},
                         {"plugin_requirements", arr(t.plugin_requirements)}};
+        if (!t.articulation_tracks.empty()) to.set("articulation_tracks", arr(t.articulation_tracks));
         if (!t.group_id.empty()) to.set("group_id", t.group_id);
         if (!t.output_bus_id.empty()) to.set("output_bus_id", t.output_bus_id);
         to.set("default_gain_pan", json::Object{{"gain_db", t.gain_db}, {"pan", t.pan}});
