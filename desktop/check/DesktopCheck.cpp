@@ -45,6 +45,7 @@
 #include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
 #include "ui/PictureTools.h"
+#include "ui/TemplateBrowser.h"
 #include "ui/PrintPreview.h"
 #include "ui/ShortcutEditor.h"
 #include "ui/console/MixTools.h"
@@ -6215,6 +6216,78 @@ void picture_tools_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// Template shelf and packages (Templates Supplement §3): star a template,
+/// find it under Favorites and Recent, export custom templates with their
+/// sounds as a package, delete, and import it back.
+void template_shelf_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    auto& registry = *session.catalogs().templates;
+    std::string built_in;
+    for (const auto* t : registry.list())
+        if (t->built_in && t->instantiable() && t->tracks.size() <= 12) {
+            built_in = t->template_id;
+            break;
+        }
+    show_template_browser(ctx, false);
+    TemplateBrowser* browser = nullptr;
+    wait_for([&] { return (browser = template_browser()) != nullptr; });
+    if (!browser || built_in.empty()) {
+        check(false, "the template browser opens with a template to try");
+        return;
+    }
+    const bool was_favorite = template_shelf().is_favorite(built_in);
+    if (was_favorite) template_shelf().set_favorite(built_in, false);
+    browser->show_category("All categories");
+    check(browser->select(built_in), "the browser lists " + juce::String(built_in));
+    browser->toggle_favorite();
+    check(template_shelf().is_favorite(built_in), "Favorite stars the selected template");
+    browser->show_category("Favorites");
+    check(browser->select(built_in) && browser->shown_count() >= 1, "Favorites lists it");
+    browser->show_category("All categories");
+    browser->select(built_in);
+    browser->add();
+    check(!session.data().tracks.empty() && template_shelf().recent().front() == built_in,
+          "Add to Project adds its tracks and puts it first in Recent");
+    browser->show_category("Recent");
+    check(browser->shown_count() >= 1 && browser->select(built_in), "Recent lists it");
+
+    // A custom template, exported with the sounds, deleted, imported back.
+    const std::string custom = "user.check_strings_package";
+    auto tpl = templates::save_user_template(session.project(), custom, "Check Strings", "Made by the desktop check");
+    std::string error;
+    check(registry.add_user_template(tpl, &error), "a custom template saves " + juce::String(error));
+    const auto package = dir.getChildFile("check.vcctemplates");
+    package.deleteFile();
+    const auto exported = export_template_package_file(ctx, {custom, built_in}, package, true);
+    check(package.existsAsFile() && exported.startsWith("Exported 2 template(s)"), exported);
+    check(delete_custom_template(ctx, custom) && registry.get(custom) == nullptr, "Delete Custom Template removes it");
+    check(!delete_custom_template(ctx, built_in) && registry.get(built_in) != nullptr, "a built-in template cannot be deleted");
+    const auto imported = import_template_package_file(ctx, package);
+    const auto* back = registry.get(custom);
+    const auto* copy = registry.get("user." + built_in);
+    check(imported.startsWith("Imported 2 template(s)") && back && !back->built_in && copy && !copy->built_in &&
+              back->tracks.size() == tpl.tracks.size(),
+          "Import Package brings the custom template back and the built-in one in as a copy: " + imported);
+    browser->show_category("Custom");
+    check(browser->select(custom) && browser->select("user." + built_in), "both are under Custom");
+    browser->select(custom);
+    browser->getTopLevelComponent()->setSize(1040, 660);
+    shoot(*browser->getTopLevelComponent(), dir, "68-template-packages");
+
+    // Leave the composer's folder as it was.
+    delete_custom_template(ctx, custom);
+    delete_custom_template(ctx, "user." + built_in);
+    template_shelf().set_favorite(built_in, was_favorite);
+    save_template_shelf();
+    browser->show_category("All categories");
+    browser->getTopLevelComponent()->setVisible(false);
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -8066,6 +8139,8 @@ int main(int argc, char** argv)
         notation_tools_checks(window, dir);
         section("picture_tools_checks");
         picture_tools_checks(window, dir);
+        section("template_shelf_checks");
+        template_shelf_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

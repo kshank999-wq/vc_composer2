@@ -461,6 +461,17 @@ bool TemplateRegistry::add_user_template(const Template& t, std::string* error)
     return true;
 }
 
+bool TemplateRegistry::remove_user_template(const std::string& id)
+{
+    for (auto it = items_.begin(); it != items_.end(); ++it)
+        if (it->template_id == id) {
+            if (it->built_in) return false;
+            items_.erase(it);
+            return true;
+        }
+    return false;
+}
+
 json::Value TemplateRegistry::export_pack(const std::vector<std::string>& ids, const std::string& name) const
 {
     json::Array arr;

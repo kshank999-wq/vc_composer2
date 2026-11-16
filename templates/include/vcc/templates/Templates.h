@@ -184,6 +184,9 @@ public:
 
     /// Adds or replaces a user (non built-in) template. Built-ins cannot be replaced.
     bool add_user_template(const Template& t, std::string* error = nullptr);
+    /// Removes a user template; built-ins cannot be removed.
+    bool remove_user_template(const std::string& template_id);
+    const InstrumentRegistry& instruments() const noexcept { return instruments_; }
 
     /// Exports templates as a pack document, and imports one with validation.
     json::Value export_pack(const std::vector<std::string>& template_ids, const std::string& pack_name) const;

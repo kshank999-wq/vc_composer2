@@ -1746,3 +1746,22 @@ macOS, Linux and Windows. What it took:
       (footage columns), `test_video_encoder` (a written movie decodes back
       frame for frame with rate, timecode and sound, as .mov and .mp4);
       `picture_tools_checks` in the desktop check.
+45. **Templates: favorites, recent, packages. Done** (November 16, 2026;
+    Templates Supplement §3).
+    - **Favorites and Recent** in the template browser's category list:
+      Favorite stars the selected template (a star on its row); Create and
+      Add put it first in Recent (ten kept). Saved per composer in
+      `template-shelf.json` (`vcc/templates/Shelf.h`).
+    - **Share... > Export as a Package / Export All Custom Templates**: a
+      `.vcctemplates` file with the templates and the composer's saved
+      patches for their instruments (plug-in settings left out), so a
+      colleague with the same plug-ins gets the same sounds
+      (`vcc/library/TemplatePackage.h`).
+    - **Share... > Import Package**: every template validated; a built-in
+      id comes in as a copy (`user.<id>`, "(imported)"), a custom one of
+      the same id is replaced; the patches join the library. Imported
+      templates are saved with the composer's own.
+    - **Share... > Delete Custom Template** (built-ins cannot be deleted).
+    - **Tests**: `test_templates` (shelf), `test_library` (package round
+      trip, copies of built-ins, replacing, broken templates);
+      `template_shelf_checks` in the desktop check.

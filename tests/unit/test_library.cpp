@@ -4,6 +4,7 @@
 
 #include "vcc/core/Files.h"
 #include "vcc/library/Library.h"
+#include "vcc/library/TemplatePackage.h"
 #include "vcc/session/Session.h"
 #include "vcc_test.h"
 
@@ -223,4 +224,77 @@ TEST_CASE("library: saved patches persist, travel in mapping packs and drive tem
     packed.import_pack(lib.export_pack("with map"));
     REQUIRE(packed.patches().size() == 1u);
     CHECK(packed.patches()[0].articulation_map.has_value());
+}
+
+TEST_CASE("template packages: custom templates travel with the patches that play them")
+{
+    // The sender: a custom template made from a built-in, a patch for its
+    // celli, and one patch for an instrument it does not use.
+    auto sender = session::Catalogs::load_from_directory(VCC_CONTENT_DIR);
+    auto lib = make();
+    const templates::Template* base = nullptr;
+    for (const auto* t : sender->templates->list())
+        for (const auto& tt : t->tracks)
+            if (tt.instrument_standard_id == "strings.celli" && !base) base = t;
+    REQUIRE(base != nullptr);
+    templates::Template mine = *base;
+    mine.template_id = "user.my_strings";
+    mine.display_name = "My Strings";
+    REQUIRE(sender->templates->add_user_template(mine));
+    library::UserPatch celli;
+    celli.display = "Celli - warm";
+    celli.plugin = {"VST3", "VST3-BBC-id", "BBC Symphony Orchestra", "Spitfire Audio", "c3RhdGU="};
+    celli.instrument_id = "strings.celli";
+    lib.add_patch(celli);
+    library::UserPatch harp = celli;
+    harp.display = "Harp";
+    harp.instrument_id = "harp.harp";
+    lib.add_patch(harp);
+
+    library::PackageOptions o;
+    o.name = "Strings for Sam";
+    o.author = "K. Composer";
+    o.created = "2026-11-16T10:00:00Z";
+    // A built-in goes in too: it comes back as a copy, never over the original.
+    const auto doc = library::export_template_package(*sender->templates, &lib, {"user.my_strings", base->template_id, "no.such"}, o);
+    const auto summary = library::describe_template_package(json::parse(json::write(doc)).value());
+    REQUIRE(summary.has_value());
+    CHECK_EQ(summary->name, std::string("Strings for Sam"));
+    CHECK_EQ(summary->template_names.size(), 2u);
+    CHECK_EQ(summary->patches, 1);  // the celli, not the harp
+    CHECK(doc["patches"]["patches"].at(0)["plugin"].get("state") == nullptr);  // settings stay home unless asked
+
+    // The receiver.
+    auto receiver = session::Catalogs::load_from_directory(VCC_CONTENT_DIR);
+    library::Library theirs(receiver->instruments);
+    const std::size_t before = receiver->templates->all().size();
+    auto r = library::import_template_package(doc, *receiver->templates, &theirs);
+    REQUIRE(r.ok);
+    CHECK_EQ(r.template_ids.size(), 2u);
+    CHECK_EQ(r.patches, 1);
+    CHECK_EQ(receiver->templates->all().size(), before + 2);
+    const auto* copy = receiver->templates->get("user." + base->template_id);
+    REQUIRE(copy != nullptr);
+    CHECK(!copy->built_in);
+    CHECK(copy->display_name.find("(imported)") != std::string::npos);
+    CHECK(receiver->templates->get(base->template_id)->built_in);
+    const auto* got = receiver->templates->get("user.my_strings");
+    REQUIRE(got != nullptr);
+    CHECK_EQ(got->tracks.size(), base->tracks.size());
+    // Again: the custom one is replaced, nothing doubles.
+    r = library::import_template_package(doc, *receiver->templates, &theirs);
+    CHECK(r.ok && r.replaced == 2);
+    CHECK_EQ(receiver->templates->all().size(), before + 2);
+    CHECK_EQ(theirs.patches().size(), 1u);
+    // Removing: custom yes, built-in no.
+    CHECK(receiver->templates->remove_user_template("user.my_strings"));
+    CHECK(!receiver->templates->remove_user_template(base->template_id));
+
+    // Not a package, or a broken template: said, not imported.
+    CHECK(!library::import_template_package(json::Value::make_object(), *receiver->templates, &theirs).ok);
+    json::Value bad = doc;
+    json::Value broken = json::Object{{"template_id", "user.broken"}, {"display_name", "Broken"}};
+    bad.set("templates", json::Object{{"schema_version", 1}, {"pack", "x"}, {"templates", json::Array{broken}}});
+    const auto br = library::import_template_package(bad, *receiver->templates, nullptr);
+    CHECK(!br.ok && !br.error.empty());
 }

@@ -3,6 +3,7 @@
 
 #include "vcc/core/Files.h"
 #include "vcc/ostinato/Ostinato.h"
+#include "vcc/templates/Shelf.h"
 #include "vcc/templates/Templates.h"
 #include "vcc/theory/Progression.h"
 #include "vcc_test.h"
@@ -389,4 +390,29 @@ TEST_CASE("T10 importing a malformed pack reports diagnostics and loads only val
     int errors = 0;
     for (const auto& x : d) errors += x.level == Diagnostic::Level::Error;
     CHECK(errors >= 5);
+}
+
+TEST_CASE("the template shelf keeps favorites and the ten most recent, and saves them")
+{
+    templates::TemplateShelf shelf;
+    shelf.set_favorite("cinematic.epic", true);
+    shelf.set_favorite("cinematic.epic", true);
+    shelf.set_favorite("modern.lofi", true);
+    CHECK(shelf.is_favorite("modern.lofi"));
+    CHECK_EQ(shelf.favorites().size(), 2u);
+    shelf.set_favorite("modern.lofi", false);
+    CHECK(!shelf.is_favorite("modern.lofi"));
+    for (int i = 0; i < 12; ++i) shelf.used("t" + std::to_string(i));
+    shelf.used("t5");
+    CHECK_EQ(shelf.recent().size(), templates::TemplateShelf::kRecentLimit);
+    CHECK_EQ(shelf.recent().front(), std::string("t5"));
+    CHECK_EQ(shelf.recent()[1], std::string("t11"));
+    const auto back = templates::TemplateShelf::from_json(json::parse(json::write(shelf.to_json())).value());
+    CHECK(back.favorites() == shelf.favorites());
+    CHECK(back.recent() == shelf.recent());
+    shelf.forget("cinematic.epic");
+    shelf.forget("t5");
+    CHECK(shelf.favorites().empty());
+    CHECK_EQ(shelf.recent().front(), std::string("t11"));
+    CHECK(templates::TemplateShelf::from_json(json::Value()).recent().empty());
 }

@@ -4,7 +4,11 @@
 #include <map>
 #include <set>
 
+#include "AppResources.h"
 #include "ui/Dialogs.h"
+#include "ui/library/LibraryBrowser.h"
+#include "vcc/core/Files.h"
+#include "vcc/library/TemplatePackage.h"
 #include "ui/Theme.h"
 
 namespace vcc::desktop {
@@ -16,7 +20,7 @@ constexpr int kLeftWidth = 360;
 const std::vector<std::pair<std::string, juce::String>>& categories()
 {
     static const std::vector<std::pair<std::string, juce::String>> c = {
-        {"", "All categories"}, {"cinematic", "Cinematic"}, {"regional", "Regional"}, {"era", "Era"},
+        {"", "All categories"}, {"*favorites", "Favorites"}, {"*recent", "Recent"}, {"cinematic", "Cinematic"}, {"regional", "Regional"}, {"era", "Era"},
         {"composer", "Composer"}, {"modern", "Modern"},   {"custom", "Custom"}};
     return c;
 }
@@ -69,7 +73,112 @@ juce::String join(const std::vector<juce::String>& items, const juce::String& se
 
 const juce::String kDot = juce::String::fromUTF8(" · ");
 
+juce::File shelf_file() { return user_data_directory().getChildFile("template-shelf.json"); }
+juce::File user_template_folder() { return user_data_directory().getChildFile("Templates"); }
+
+/// Saves one custom template as its own pack file (as Save as Template does).
+void write_custom_template(AppContext& c, const std::string& id)
+{
+    auto folder = user_template_folder();
+    folder.createDirectory();
+    const auto pack = c.session.catalogs().templates->export_pack({id}, "user");
+    files::write_file_atomic(folder.getChildFile(juce::File::createLegalFileName(juce::String(id)) + ".json").getFullPathName().toStdString(),
+                             json::write(pack));
+}
+
+TemplateBrowser*& browser_slot()
+{
+    static TemplateBrowser* b = nullptr;
+    return b;
+}
+TemplateBrowser* open_browser() { return browser_slot(); }
+
 }  // namespace
+
+
+TemplateBrowser* template_browser() { return open_browser(); }
+
+templates::TemplateShelf& template_shelf()
+{
+    static templates::TemplateShelf shelf = [] {
+        const auto text = shelf_file().loadFileAsString().toStdString();
+        const auto doc = json::parse(text);
+        return doc ? templates::TemplateShelf::from_json(*doc) : templates::TemplateShelf{};
+    }();
+    return shelf;
+}
+
+void save_template_shelf()
+{
+    shelf_file().getParentDirectory().createDirectory();
+    files::write_file_atomic(shelf_file().getFullPathName().toStdString(), json::write(template_shelf().to_json()));
+}
+
+juce::String export_template_package_file(AppContext& c, const std::vector<std::string>& ids, const juce::File& file,
+                                          bool with_patches)
+{
+    library::PackageOptions o;
+    o.name = file.getFileNameWithoutExtension().toStdString();
+    o.author = c.session.data().production.composer;
+    o.created = session::Session::now_utc();
+    o.include_patches = with_patches;
+    const auto doc = library::export_template_package(*c.session.catalogs().templates,
+                                                      c.library ? &c.library->lib() : nullptr, ids, o);
+    const auto summary = library::describe_template_package(doc);
+    if (!summary || summary->template_names.empty()) return "Nothing to export";
+    if (!files::write_file_atomic(file.getFullPathName().toStdString(), json::write(doc)))
+        return "Could not write " + file.getFullPathName();
+    return "Exported " + juce::String(static_cast<int>(summary->template_names.size())) + " template(s)" +
+           (summary->patches > 0 ? " and " + juce::String(summary->patches) + " sound(s)" : juce::String()) + " to " +
+           file.getFileName();
+}
+
+juce::String import_template_package_file(AppContext& c, const juce::File& file)
+{
+    const auto doc = json::parse(file.loadFileAsString().toStdString());
+    if (!doc) return file.getFileName() + " is not a template package";
+    auto r = library::import_template_package(*doc, *c.session.catalogs().templates, c.library ? &c.library->lib() : nullptr);
+    if (!r.ok) return "Nothing imported: " + utf8(r.error);
+    for (const auto& id : r.template_ids) write_custom_template(c, id);
+    if (c.library && r.patches > 0) c.library->changed();
+    if (auto* b = open_browser()) {
+        b->reload();
+        b->select(r.template_ids.front());
+    }
+    juce::String text = "Imported " + juce::String(static_cast<int>(r.template_ids.size())) + " template(s)";
+    if (r.replaced > 0) text << " (" << r.replaced << " replaced)";
+    if (r.patches > 0) text << " and " << r.patches << " sound(s)";
+    if (!r.warnings.empty()) text << "; " << static_cast<int>(r.warnings.size()) << " note(s): " << utf8(r.warnings.front());
+    return text;
+}
+
+bool delete_custom_template(AppContext& c, const std::string& id)
+{
+    const auto* t = c.session.catalogs().templates->get(id);
+    if (!t || t->built_in) return false;
+    // Its file: the pack in the user folder that holds it (rewritten without
+    // it when it held others too).
+    for (const auto& f : user_template_folder().findChildFiles(juce::File::findFiles, false, "*.json")) {
+        auto doc = json::parse(f.loadFileAsString().toStdString());
+        if (!doc || !doc->get("templates") || !doc->get("templates")->is_array()) continue;
+        json::Array kept;
+        bool held = false;
+        for (const auto& j : doc->get("templates")->as_array()) {
+            if (j.get_string("template_id") == id) held = true;
+            else kept.push_back(j);
+        }
+        if (!held) continue;
+        if (kept.empty()) f.deleteFile();
+        else {
+            doc->set("templates", kept);
+            files::write_file_atomic(f.getFullPathName().toStdString(), json::write(*doc));
+        }
+    }
+    c.session.catalogs().templates->remove_user_template(id);
+    template_shelf().forget(id);
+    save_template_shelf();
+    return true;
+}
 
 // --- Preview pane ---------------------------------------------------------------------------
 
@@ -374,7 +483,13 @@ TemplateBrowser::TemplateBrowser(AppContext& c, bool for_new_project) : context_
     preview_view_.setScrollBarsShown(true, false);
     addAndMakeVisible(preview_view_);
 
-    for (auto* b : {&audition_, &stop_, &create_, &add_}) addAndMakeVisible(*b);
+    browser_slot() = this;
+    setComponentID("template_browser");
+    for (auto* b : {&audition_, &stop_, &create_, &add_, &favorite_, &share_}) addAndMakeVisible(*b);
+    favorite_.setTooltip("Star this template: Favorites lists the starred ones");
+    favorite_.onClick = [this] { toggle_favorite(); };
+    share_.setTooltip("Export templates as a package to share, import one, or delete a custom template");
+    share_.onClick = [this] { share_menu(); };
     audition_.setTooltip("Plays a short MIDI sketch of the template's suggested harmony (nothing is written)");
     stop_.setTooltip("Stop the audition");
     create_.setTooltip("Start a new project from this template");
@@ -390,7 +505,89 @@ TemplateBrowser::TemplateBrowser(AppContext& c, bool for_new_project) : context_
     setSize(1040, 660);
 }
 
-TemplateBrowser::~TemplateBrowser() { list_.setModel(nullptr); }
+TemplateBrowser::~TemplateBrowser()
+{
+    if (browser_slot() == this) browser_slot() = nullptr;
+    list_.setModel(nullptr);
+}
+
+void TemplateBrowser::reload() { filter(); }
+
+bool TemplateBrowser::select(const std::string& id)
+{
+    for (std::size_t i = 0; i < shown_.size(); ++i)
+        if (shown_[i]->template_id == id) {
+            list_.selectRow(static_cast<int>(i));
+            return true;
+        }
+    return false;
+}
+
+void TemplateBrowser::show_category(const juce::String& name)
+{
+    for (std::size_t i = 0; i < categories().size(); ++i)
+        if (categories()[i].second == name) category_.setSelectedId(static_cast<int>(i) + 1, juce::sendNotificationSync);
+}
+
+void TemplateBrowser::toggle_favorite()
+{
+    const auto* t = chosen();
+    if (!t) return;
+    auto& shelf = template_shelf();
+    const bool on = !shelf.is_favorite(t->template_id);
+    shelf.set_favorite(t->template_id, on);
+    save_template_shelf();
+    context_.status((on ? "Starred " : "Unstarred ") + utf8(t->display_name));
+    const int cat = category_.getSelectedId() - 1;
+    if (cat >= 0 && categories()[static_cast<std::size_t>(cat)].first == "*favorites") filter();
+    list_.repaint();
+    update_buttons();
+}
+
+void TemplateBrowser::share_menu()
+{
+    const auto* t = chosen();
+    std::vector<std::string> custom;
+    for (const auto& x : context_.session.catalogs().templates->all())
+        if (!x.built_in) custom.push_back(x.template_id);
+    juce::PopupMenu m;
+    const std::string id = t ? t->template_id : std::string();
+    auto save_as = [this](std::vector<std::string> ids, const juce::String& suggested) {
+        auto chooser = std::make_shared<juce::FileChooser>(
+            "Export a template package",
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                .getChildFile(juce::File::createLegalFileName(suggested) + ".vcctemplates"),
+            "*.vcctemplates");
+        chooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
+                             [this, ids, chooser](const juce::FileChooser& fc) {
+                                 auto file = fc.getResult();
+                                 if (file == juce::File()) return;
+                                 file = file.withFileExtension("vcctemplates");
+                                 context_.status(export_template_package_file(context_, ids, file, true));
+                             });
+    };
+    m.addItem("Export \"" + (t ? utf8(t->display_name) : juce::String("-")) + "\" as a Package...", t != nullptr,
+              false, [save_as, id, name = t ? utf8(t->display_name) : juce::String()] { save_as({id}, name); });
+    m.addItem("Export All Custom Templates...", !custom.empty(), false, [save_as, custom] { save_as(custom, "My templates"); });
+    m.addItem("Import Package...", [this] {
+        auto chooser = std::make_shared<juce::FileChooser>("Import a template package",
+                                                           juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+                                                           "*.vcctemplates;*.json");
+        chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                             [this, chooser](const juce::FileChooser& fc) {
+                                 if (fc.getResult().existsAsFile())
+                                     context_.status(import_template_package_file(context_, fc.getResult()));
+                             });
+    });
+    m.addSeparator();
+    m.addItem("Delete Custom Template", t != nullptr && !t->built_in, false, [this, id] {
+        if (delete_custom_template(context_, id)) {
+            context_.status("Deleted the custom template");
+            filter();
+        }
+    });
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&share_));
+}
 
 void TemplateBrowser::set_for_new_project(bool for_new_project)
 {
@@ -432,12 +629,16 @@ void TemplateBrowser::resized()
 
     r.removeFromLeft(1);
     auto bar = r.removeFromBottom(52).reduced(14, 11);
-    audition_.setBounds(bar.removeFromLeft(100));
+    audition_.setBounds(bar.removeFromLeft(88));
     bar.removeFromLeft(6);
-    stop_.setBounds(bar.removeFromLeft(70));
-    create_.setBounds(bar.removeFromRight(140));
+    stop_.setBounds(bar.removeFromLeft(58));
+    bar.removeFromLeft(6);
+    favorite_.setBounds(bar.removeFromLeft(96));
+    bar.removeFromLeft(6);
+    share_.setBounds(bar.removeFromLeft(76));
+    create_.setBounds(bar.removeFromRight(136));
     bar.removeFromRight(8);
-    add_.setBounds(bar.removeFromRight(140));
+    add_.setBounds(bar.removeFromRight(136));
     preview_view_.setBounds(r);
     show_selected();
 }
@@ -452,9 +653,15 @@ void TemplateBrowser::paintListBoxItem(int row, juce::Graphics& g, int w, int h,
     g.fillAll(selected ? colours::accent.withAlpha(0.28f) : (row % 2 ? colours::panel : colours::panel.brighter(0.025f)));
     g.setColour(category_colour(*t).withAlpha(ok ? 1.0f : 0.4f));
     g.fillRect(0, 6, 3, h - 12);
+    const bool star = template_shelf().is_favorite(t->template_id);
+    if (star) {
+        g.setColour(colours::accent_warm);
+        g.setFont(juce::FontOptions(15.0f));
+        g.drawText(juce::String::fromUTF8("\xe2\x98\x85"), w - 26, 3, 20, h / 2, juce::Justification::bottomRight, false);
+    }
     g.setColour(ok ? colours::text : colours::text_dim.withAlpha(0.6f));
     g.setFont(juce::FontOptions(14.0f));
-    g.drawText(utf8(t->display_name), 12, 3, w - 18, h / 2, juce::Justification::bottomLeft, true);
+    g.drawText(utf8(t->display_name), 12, 3, w - (star ? 40 : 18), h / 2, juce::Justification::bottomLeft, true);
     g.setFont(juce::FontOptions(11.5f));
     if (!ok) {
         g.setColour(colours::missing.withAlpha(0.8f));
@@ -484,17 +691,29 @@ void TemplateBrowser::filter()
     templates::TemplateFilter f;
     f.query = search_.getText().trim().toStdString();
     const int cat = category_.getSelectedId() - 1;
-    const bool custom = cat >= 0 && categories()[static_cast<std::size_t>(cat)].first == "custom";
-    if (cat > 0 && !custom) f.category = categories()[static_cast<std::size_t>(cat)].first;
+    const std::string key = cat >= 0 ? categories()[static_cast<std::size_t>(cat)].first : std::string();
+    const bool custom = key == "custom";
+    const bool favorites = key == "*favorites", recent = key == "*recent";
+    if (cat > 0 && !custom && !favorites && !recent) f.category = key;
     const int v = variant_.getSelectedId() - 2;
     if (v >= 0 && v < static_cast<int>(variants_.size())) f.variant = variants_[static_cast<std::size_t>(v)];
     static const char* sizes[] = {"", "", "small", "medium", "large"};
     if (size_.getSelectedId() >= 2) f.ensemble_size = sizes[size_.getSelectedId()];
 
     shown_.clear();
-    for (const auto* t : context_.session.catalogs().templates->list(f))
-        if (!custom || !t->built_in) shown_.push_back(t);
-    count_.setText(shown_.empty() ? juce::String("No templates match")
+    const auto listed = context_.session.catalogs().templates->list(f);
+    if (recent) {
+        // In the order used, newest first.
+        for (const auto& id : template_shelf().recent())
+            for (const auto* t : listed)
+                if (t->template_id == id) shown_.push_back(t);
+    } else {
+        for (const auto* t : listed)
+            if ((!custom || !t->built_in) && (!favorites || template_shelf().is_favorite(t->template_id))) shown_.push_back(t);
+    }
+    count_.setText(shown_.empty() ? juce::String(favorites ? "No favorites yet: select a template and press Favorite"
+                                                 : recent  ? "No templates used yet"
+                                                           : "No templates match")
                                   : juce::String(static_cast<int>(shown_.size())) + (shown_.size() == 1 ? " template" : " templates"),
                    juce::dontSendNotification);
     list_.updateContent();
@@ -529,6 +748,10 @@ void TemplateBrowser::update_buttons()
     create_.setEnabled(ok);
     add_.setEnabled(ok);
     audition_.setEnabled(t != nullptr);
+    favorite_.setEnabled(t != nullptr);
+    const bool starred = t && template_shelf().is_favorite(t->template_id);
+    favorite_.setButtonText(juce::String::fromUTF8(starred ? "\xe2\x98\x85 Favorite" : "\xe2\x98\x86 Favorite"));
+    favorite_.setTitle(starred ? "Remove from favorites" : "Add to favorites");
 }
 
 void TemplateBrowser::audition()
@@ -626,6 +849,10 @@ void TemplateBrowser::create()
     const std::string id = t->template_id;
     const juce::String name = utf8(t->display_name);
     auto r = context_.session.new_from_template(id);
+    if (r.ok) {
+        template_shelf().used(id);
+        save_template_shelf();
+    }
     if (!r.ok) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Create Project",
                                                "Could not create a project from " + name + ":\n" + utf8(r.error));
@@ -643,7 +870,12 @@ void TemplateBrowser::add()
     const auto* t = chosen();
     if (!t || !t->instantiable()) return;
     const juce::String name = utf8(t->display_name);
-    auto r = context_.session.add_template(t->template_id);
+    const std::string id = t->template_id;
+    auto r = context_.session.add_template(id);
+    if (r.ok) {
+        template_shelf().used(id);
+        save_template_shelf();
+    }
     if (!r.ok) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Add to Project",
                                                "Could not add " + name + ":\n" + utf8(r.error));

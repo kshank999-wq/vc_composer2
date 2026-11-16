@@ -7,8 +7,26 @@
 #include <vector>
 
 #include "ui/AppContext.h"
+#include "vcc/templates/Shelf.h"
 
 namespace vcc::desktop {
+
+/// The composer's favorite and recent templates (saved in the user folder).
+templates::TemplateShelf& template_shelf();
+void save_template_shelf();
+
+/// Writes the templates (and, when asked, the saved patches that play them)
+/// as a .vcctemplates package; what happened.
+juce::String export_template_package_file(AppContext& context, const std::vector<std::string>& template_ids,
+                                          const juce::File& file, bool with_patches);
+/// Imports a package: its templates become the composer's (saved), its
+/// patches join the library. What happened.
+juce::String import_template_package_file(AppContext& context, const juce::File& file);
+/// Removes a custom template and its file.
+bool delete_custom_template(AppContext& context, const std::string& template_id);
+/// The open browser, if any.
+class TemplateBrowser;
+TemplateBrowser* template_browser();
 
 class TemplateBrowser final : public juce::Component, private juce::ListBoxModel {
 public:
@@ -16,6 +34,16 @@ public:
     ~TemplateBrowser() override;
 
     void set_for_new_project(bool for_new_project);
+    /// Lists again (after templates were imported or removed).
+    void reload();
+    /// Selects a template by id (the desktop check).
+    bool select(const std::string& template_id);
+    /// "Favorites" / "Recent" / "Custom" / "All categories"...
+    void show_category(const juce::String& name);
+    int shown_count() const noexcept { return static_cast<int>(shown_.size()); }
+    void toggle_favorite();
+    void create();
+    void add();
 
     void paint(juce::Graphics&) override;
     void resized() override;
@@ -33,9 +61,8 @@ private:
     void show_selected();
     const templates::Template* chosen() const;
     void audition();
-    void create();
-    void add();
     void update_buttons();
+    void share_menu();
 
     AppContext& context_;
     bool for_new_project_;
@@ -45,7 +72,8 @@ private:
     juce::ListBox list_;
     std::unique_ptr<Preview> preview_;
     juce::Viewport preview_view_;
-    juce::TextButton audition_{"Audition"}, stop_{"Stop"}, create_{"Create Project"}, add_{"Add to Project"};
+    juce::TextButton audition_{"Audition"}, stop_{"Stop"}, create_{"Create Project"}, add_{"Add to Project"},
+        favorite_{"Favorite"}, share_{"Share..."};
     std::vector<const templates::Template*> shown_;
     std::vector<std::string> variants_;
 };
