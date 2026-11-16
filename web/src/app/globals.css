@@ -546,6 +546,59 @@ a:focus-visible {
   font-size: 0.95rem;
 }
 
+.claims {
+  list-style: none;
+  margin: 24px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.claim {
+  background: var(--panel);
+  padding: 24px 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 12px 40px;
+  align-items: start;
+}
+
+.claim h3 {
+  margin: 0;
+  font-size: 1.35rem;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.claim p {
+  margin: 0;
+  color: var(--text);
+}
+
+.claim .proof {
+  margin-top: 10px;
+  color: var(--muted);
+  padding-left: 12px;
+  border-left: 2px solid var(--warm);
+}
+
+.footnote {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-top: 12px;
+}
+
+@media (max-width: 760px) {
+  .claim {
+    grid-template-columns: 1fr;
+    padding: 20px;
+  }
+}
+
 .cta-band {
   background: var(--panel);
   border: 1px solid var(--border);

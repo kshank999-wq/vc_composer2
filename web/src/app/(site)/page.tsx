@@ -9,7 +9,55 @@ import Link from 'next/link';
  * list appears (collaboration sync and roles are said to be coming, on their
  * own page), there are no testimonials, and no prices: the price lives in
  * Stripe and is shown on the buying page.
+ *
+ * The five headlines under "Built for the full orchestral session" are the
+ * Memory Management spec's (§11), each checked against what shipped (docs/05,
+ * steps 46-49). "Video" is left out of the unlimited-tracks headline: the
+ * app has one picture track with cut versions, not stacked video tracks, and
+ * only audio and MIDI were stress-tested. The footnote is the spec's own
+ * wording, so the claim never implies unlimited real-time playback.
  */
+
+const CLAIMS: ReadonlyArray<{ headline: string; body: string; proof: string }> = [
+  {
+    headline: 'Unlimited Audio & MIDI Tracks*',
+    body:
+      'No edition tiers and no track ceiling: nothing in the app, the project file or the licence counts your tracks. ' +
+      'Build the whole template, every section and every stem, and let your computer be the only limit.',
+    proof: 'Tested with 1,024 instrument and 2,048 audio tracks in one project: it saves in a fifth of a second and opens in a third.',
+  },
+  {
+    headline: 'Compose Once. Your MIDI Is Already in Producer.',
+    body:
+      'Every staff you write is already a playing MIDI track in the Producer view, with the same notes, durations, dynamics ' +
+      'and articulations, and nothing to enter twice. Switch views while it plays: the playhead, the selection and the transport carry on.',
+    proof:
+      'Change a written note in Producer and VC Composer asks: apply it to the score, or keep it as a Producer override. ' +
+      'The page never silently disagrees with what you hear.',
+  },
+  {
+    headline: 'Write with One Articulation Track—or Break It Out Into Dedicated Tracks.',
+    body:
+      'Keep a part on one track that switches articulations by keyswitch, controller or channel, or expand it into a track per ' +
+      'sound (Violins I Staccato, Pizzicato, Tremolo) for editing, mixing and stems. The score keeps one staff either way.',
+    proof: 'Every note plays exactly once, Consolidate puts the part back, and the orchestral templates come in both forms.',
+  },
+  {
+    headline: 'Freeze Instruments to Free Up CPU and RAM.',
+    body:
+      'Freeze prints a track to audio through its instrument and inserts. Freeze & Unload then closes the instrument and gives ' +
+      'its memory back, keeping its settings for when you unfreeze. Freeze one track, a part’s articulations or a whole family at once.',
+    proof:
+      'Each instrument runs in a process of its own, so the memory really is returned, and a print that no longer matches the music is marked stale.',
+  },
+  {
+    headline: 'See CPU and RAM Usage While You Compose or Produce.',
+    body:
+      'The audio engine’s load, VC Composer’s memory and your computer’s sit at the bottom right of both views. ' +
+      'Open Instrument Usage for every instrument’s memory and engine load, sorted the way you need, with Freeze, Suspend and Reload to hand.',
+    proof: 'Measured, not guessed: where a plug-in’s memory cannot be told apart from another’s, it says so.',
+  },
+];
 
 const FEATURES: ReadonlyArray<{ title: string; lede: string; points: string[]; warm?: boolean }> = [
   {
@@ -26,8 +74,8 @@ const FEATURES: ReadonlyArray<{ title: string; lede: string; points: string[]; w
     title: 'One score, mirrored as MIDI',
     lede: 'Composer and Producer are two views of one project. Switching keeps the playhead and selection.',
     points: [
-      'Piano-roll edits are written back into the score, or kept as performance overrides',
-      'Overrides change how a note plays, never how it is printed',
+      'Change a written note in Producer and choose: apply it to the score, or keep it as a Producer override',
+      'Overrides change how a note plays, never how it is printed, and Composer marks them',
       'Played-in MIDI is notated with quantize, voices and spelling, as one undo step',
       'Every instrument track carries its own audio lane: print the score to audio in place',
     ],
@@ -176,7 +224,7 @@ export default function HomePage() {
       <section aria-label="In numbers">
         <div className="figures">
           <div className="figure">
-            <strong>203</strong>
+            <strong>205</strong>
             <span>templates: cinematic, modern, regional, era and composer palettes</span>
           </div>
           <div className="figure">
@@ -192,6 +240,30 @@ export default function HomePage() {
             <span>Windows and macOS, one licence covering both</span>
           </div>
         </div>
+      </section>
+
+      <section id="sessions" aria-labelledby="sessions-title">
+        <span className="eyebrow">Big sessions, everyday computers</span>
+        <h2 id="sessions-title">Built for the full orchestral session</h2>
+        <p className="lede">
+          Large templates are where most setups make you choose between the score and the session. VC Composer is built so you
+          do not have to.
+        </p>
+        <ol className="claims">
+          {CLAIMS.map((claim) => (
+            <li key={claim.headline} className="claim">
+              <h3>{claim.headline}</h3>
+              <div>
+                <p>{claim.body}</p>
+                <p className="proof">{claim.proof}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <p className="footnote" id="track-footnote">
+          * No software-imposed track-count limits. Performance depends on your computer, plugins, storage and project
+          configuration.
+        </p>
       </section>
 
       <section id="features">
