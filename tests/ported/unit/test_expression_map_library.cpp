@@ -266,6 +266,6 @@ VCC_TEST(a_map_in_the_file_named_like_a_built_in_is_left_out_and_said)
 
 // The case that carried this library through the companion application's
 // settings file was not ported: that file belonged to the Pro Tools
-// companion. VC Composer 2 persists these through its own settings layer.
+// companion. VC Composer persists these through its own settings layer.
 
 VCC_TEST_MAIN("composer/ExpressionMapLibrary")

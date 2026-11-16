@@ -91,9 +91,9 @@ juce::PropertiesFile& ui_settings()
 {
     static juce::PropertiesFile file([] {
         juce::PropertiesFile::Options o;
-        o.applicationName = "VC Composer 2 Interface";
+        o.applicationName = "VC Composer Interface";
         o.filenameSuffix = ".settings";
-        o.folderName = "VC Composer 2";
+        o.folderName = "VC Composer";
         // The headless check keeps its settings in a throwaway folder.
         if (const auto dir = juce::SystemStats::getEnvironmentVariable("VCC_SETTINGS_DIR", {}); dir.isNotEmpty())
             o.folderName = dir;

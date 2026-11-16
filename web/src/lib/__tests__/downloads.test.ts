@@ -76,7 +76,7 @@ const builds: Row[] = [
     channel: 'stable',
     active: true,
     version: '2.0.0',
-    artifact_key: 'windows/2.0.0/VC-Composer-2-Setup.exe',
+    artifact_key: 'windows/2.0.0/VC-Composer-Setup.exe',
     sha256: 'aa',
     minimum_os_version: '10.0.17763',
   },
@@ -85,7 +85,7 @@ const builds: Row[] = [
     channel: 'preview',
     active: true,
     version: '0.1.0',
-    artifact_key: 'windows/0.1.0/VC-Composer-2-Preview-Setup.exe',
+    artifact_key: 'windows/0.1.0/VC-Composer-Preview-Setup.exe',
     sha256: 'bb',
     minimum_os_version: '10.0.17763',
   },
@@ -118,7 +118,7 @@ describe('the free preview channel', () => {
     expect(answer).toEqual({
       status: 200,
       body: {
-        url: 'https://storage.test/releases/windows/0.1.0/VC-Composer-2-Preview-Setup.exe?ttl=900',
+        url: 'https://storage.test/releases/windows/0.1.0/VC-Composer-Preview-Setup.exe?ttl=900',
         version: '0.1.0',
         sha256: 'bb',
         minimumOsVersion: '10.0.17763',
@@ -153,7 +153,7 @@ describe('the free preview channel', () => {
   it('never hands out the stable build in place of a preview', async () => {
     const stub = stubClient({ licenses: [], release_builds: builds });
     await issueDownload({ platform: 'windows', channel: 'preview', userId: USER }, deps(stub.client));
-    expect(stub.signed).toEqual(['releases/windows/0.1.0/VC-Composer-2-Preview-Setup.exe']);
+    expect(stub.signed).toEqual(['releases/windows/0.1.0/VC-Composer-Preview-Setup.exe']);
   });
 });
 
@@ -162,7 +162,7 @@ describe('the stable channel', () => {
     const stub = stubClient({ licenses: [licence()], release_builds: builds });
     const answer = await issueDownload({ platform: 'windows', channel: 'stable', userId: USER }, deps(stub.client));
     expect(answer.status).toBe(200);
-    expect(stub.signed).toEqual(['releases/windows/2.0.0/VC-Composer-2-Setup.exe']);
+    expect(stub.signed).toEqual(['releases/windows/2.0.0/VC-Composer-Setup.exe']);
   });
 
   it('refuses a signed-in account with no licence, and signs nothing', async () => {

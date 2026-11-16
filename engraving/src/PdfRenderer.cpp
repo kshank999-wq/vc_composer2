@@ -651,7 +651,7 @@ std::string render_pdf(const std::vector<PdfDocumentPart>& parts, const PdfOptio
                                std::to_string(items.back()) + " 0 R /Count " + std::to_string(items.size()) + " >>");
     w.object(catalog, "<< /Type /Catalog /Pages " + std::to_string(pages_id) + " 0 R /Outlines " +
                           std::to_string(outlines) + " 0 R" + (items.empty() ? "" : " /PageMode /UseOutlines") + " >>");
-    std::string meta = "<< /Producer (VC Composer 2)";
+    std::string meta = "<< /Producer (VC Composer)";
     if (!options.title.empty()) meta += " /Title " + info_string(options.title);
     if (!options.author.empty()) meta += " /Author " + info_string(options.author);
     if (!options.creation_date.empty()) meta += " /CreationDate " + literal(options.creation_date);

@@ -1,4 +1,4 @@
-// The ported notation engine inside VC Composer 2 projects (Main Spec §8,
+// The ported notation engine inside VC Composer projects (Main Spec §8,
 // §20, §22 work orders 21-22): written scores live in track versions, are
 // set up from the instrument registry, follow the project's meter and key,
 // survive save/reopen, and render to the MIDI the Sequencer and export see.

@@ -1,4 +1,4 @@
-# VC Composer 2 desktop application (JUCE).
+# VC Composer desktop application (JUCE).
 #
 # Layout:
 #   vcc_juce          JUCE modules, compiled once, shared by the app and its tests
@@ -36,7 +36,7 @@ target_compile_definitions(vcc_juce PUBLIC
     JUCE_MODAL_LOOPS_PERMITTED=1
     # MP3 decoding (importing MP3s, checking MP3 masters): the patents have expired.
     JUCE_USE_MP3AUDIOFORMAT=1
-    JUCE_APPLICATION_NAME_STRING="VC Composer 2"
+    JUCE_APPLICATION_NAME_STRING="VC Composer"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
 target_compile_definitions(vcc_juce INTERFACE $<TARGET_PROPERTY:vcc_juce,COMPILE_DEFINITIONS>)
 target_include_directories(vcc_juce INTERFACE $<TARGET_PROPERTY:vcc_juce,INCLUDE_DIRECTORIES>)
@@ -119,13 +119,13 @@ target_link_libraries(vcc_desktop
     PRIVATE vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_content_library_data vcc_ui_font_data)
 
 juce_add_gui_app(VCComposer2
-    PRODUCT_NAME "VC Composer 2"
+    PRODUCT_NAME "VC Composer"
     COMPANY_NAME "VC Software"
     BUNDLE_ID "com.vccomposer.vccomposer2"
     VERSION "${PROJECT_VERSION}"
     DOCUMENT_EXTENSIONS vcc2
     MICROPHONE_PERMISSION_ENABLED TRUE
-    MICROPHONE_PERMISSION_TEXT "VC Composer 2 records audio and MIDI input.")
+    MICROPHONE_PERMISSION_TEXT "VC Composer records audio and MIDI input.")
 target_sources(VCComposer2 PRIVATE app/Main.cpp)
 target_link_libraries(VCComposer2 PRIVATE vcc_desktop)
 

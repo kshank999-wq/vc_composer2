@@ -1,12 +1,12 @@
 // File reading and crash-safe writing.
 //
 // Main Spec §12/§17: "crash-resilient journaling", "atomic saves". Every save
-// in VC Composer 2 goes through write_file_atomic: the bytes go to a temporary
+// in VC Composer goes through write_file_atomic: the bytes go to a temporary
 // file beside the target, are flushed to disk, and only then replace the
 // target in one rename. A crash, full disk or I/O error at any point leaves
 // the previous file exactly as it was.
 //
-// One implementation serves both the VC Composer 2 API (write_file_atomic)
+// One implementation serves both the VC Composer API (write_file_atomic)
 // and the original VC Composer API (write_file_atomically), which the ported
 // notation and MIDI-file code use. Error messages never contain the path:
 // a film title in a folder name should not end up in a log or a bug report.

@@ -165,7 +165,7 @@ std::string report_text(const project::ProjectData& d, const Inventory& inv, con
              " resolved (they travel in the project)\n";
     }
     r += "\nNeeded on the receiving machine (never bundled: licensed per machine):\n";
-    if (inv.dependencies.empty()) r += "  Nothing beyond VC Composer 2.\n";
+    if (inv.dependencies.empty()) r += "  Nothing beyond VC Composer.\n";
     const char* titles[] = {"Instrument plug-ins", "Effect plug-ins", "Sample libraries"};
     for (int k = 0; k < 3; ++k) {
         bool header = false;

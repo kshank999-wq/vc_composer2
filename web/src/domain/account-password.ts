@@ -24,5 +24,5 @@ export const PASSWORD_STANDING_WORDS: Record<PasswordStanding, string> = {
 
 export const describePasswordStanding = (standing: PasswordStanding): string =>
   standing === 'set'
-    ? 'You can sign in with your email and password on any device, including from the VC Composer 2 app.'
+    ? 'You can sign in with your email and password on any device, including from the VC Composer app.'
     : 'You sign in with an emailed link. Set a password to sign in with your email and password anywhere, which is easier from the desktop app and from a phone.';

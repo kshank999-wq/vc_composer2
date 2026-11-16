@@ -820,7 +820,7 @@ void MainComponent::open_file(const juce::File& file)
     if (session::Session::has_newer_autosave(path)) {
         const bool recover = juce::AlertWindow::showOkCancelBox(
             juce::MessageBoxIconType::QuestionIcon, "Recover unsaved work?",
-            "VC Composer 2 found an autosave of this project that is newer than the saved file. Open the autosave?",
+            "VC Composer found an autosave of this project that is newer than the saved file. Open the autosave?",
             "Open autosave", "Open saved file", this, nullptr);
         if (recover) path += ".autosave";
     }
@@ -1586,7 +1586,7 @@ void MainComponent::new_bus(bool fx)
 void MainComponent::show_about()
 {
     juce::AlertWindow::showMessageBoxAsync(
-        juce::MessageBoxIconType::InfoIcon, "VC Composer 2",
+        juce::MessageBoxIconType::InfoIcon, "VC Composer",
         juce::String("Version ") + JUCE_APPLICATION_VERSION_STRING +
             (preview::is_preview() ? " (" + preview::status() + ")" : juce::String()) +
             "\n\nA notation-first scoring workstation by VC Software.\n\n"
@@ -1838,7 +1838,7 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.setInfo("Reload Crashed Plug-ins", "Starts crashed plug-ins again from their last state", "Tools", 0);
             break;
         case cmd::account: info.setInfo("Account and Licence...", "Sign in, activate this computer, see the licence", "Help", 0); break;
-        case cmd::about: info.setInfo("About VC Composer 2", "", "Help", 0); break;
+        case cmd::about: info.setInfo("About VC Composer", "", "Help", 0); break;
         default: break;
     }
 }

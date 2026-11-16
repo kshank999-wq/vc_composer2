@@ -14,7 +14,7 @@ can reach.
   the files as a GitHub pre-release (and, once the website is live, they are
   uploaded to it for signed-in users).
 
-Windows: run `VC-Composer-2-Preview-<version>-Windows-Setup.exe`. Until the
+Windows: run `VC-Composer-Preview-<version>-Windows-Setup.exe`. Until the
 Azure signing secrets are in place, SmartScreen says "Windows protected your
 PC": choose *More info* > *Run anyway*. A portable zip is there too.
 
@@ -55,6 +55,6 @@ Work through these in order; each line says what should happen.
 ## 3. Report back
 
 For each plug-in that misbehaves: its name, vendor and version, the step,
-what happened. Attach, from `%APPDATA%\VC Composer 2` (Windows) or
-`~/Library/Application Support/VC Composer 2` (macOS), the files ending in
+what happened. Attach, from `%APPDATA%\VC Composer` (Windows) or
+`~/Library/Application Support/VC Composer` (macOS), the files ending in
 `.log` and the plug-in scan list, plus the project if it is involved.

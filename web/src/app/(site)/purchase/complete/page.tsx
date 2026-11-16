@@ -72,7 +72,7 @@ export default async function PurchaseCompletePage({
   return (
     <>
       <div className="hero">
-        <h1>Thank you for subscribing to VC Composer 2</h1>
+        <h1>Thank you for subscribing to VC Composer</h1>
         <p>We have emailed your licence and a link to your downloads to {session.customer_details?.email ?? 'your address'}.</p>
       </div>
 

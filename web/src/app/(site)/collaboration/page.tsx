@@ -3,7 +3,7 @@ import Link from 'next/link';
 
 export const metadata: Metadata = {
   title: 'Collaboration',
-  description: 'Collaboration in VC Composer 2 is coming, as a separate subscription.',
+  description: 'Collaboration in VC Composer is coming, as a separate subscription.',
 };
 
 /**
@@ -26,7 +26,7 @@ export default function CollaborationPage() {
         <span className="eyebrow">Coming soon</span>
         <h1>Collaboration</h1>
         <p>
-          Working on one VC Composer 2 project with your orchestrator, your music editor and your director is coming.
+          Working on one VC Composer project with your orchestrator, your music editor and your director is coming.
           It will be a separate subscription from the desktop licence, so you only pay for it if your team uses it.
         </p>
       </div>
@@ -58,7 +58,7 @@ export default function CollaborationPage() {
 
       <div className="actions">
         <Link href="/download" className="button">
-          Subscribe to VC Composer 2
+          Subscribe to VC Composer
         </Link>
         <Link href="/download#preview" className="button secondary">
           Try the free preview

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding='UTF-8' standalone='no' ?>
 <!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
-<!-- Written for VC Composer 2 tests in the style of Sibelius output:
+<!-- Written for VC Composer tests in the style of Sibelius output:
      divisions of 480, a transposing part, a pickup bar. -->
 <score-partwise>
   <work>

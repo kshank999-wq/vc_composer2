@@ -9,7 +9,7 @@ mkdir -p "$OUT"
 cp "$ROOT/packaging/licenses/EULA.txt" "$OUT/"
 N="$OUT/THIRD-PARTY-NOTICES.txt"
 {
-  echo "VC Composer 2 - third-party software"
+  echo "VC Composer - third-party software"
   echo "===================================="
   echo
   echo "JUCE - used under a commercial JUCE licence held by VC Software."

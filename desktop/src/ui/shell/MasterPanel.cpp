@@ -133,7 +133,7 @@ MasterPanel::MasterPanel(AppContext& context) : hw::Panel("Master"), context_(co
             return;
         }
         const auto& path = context_.session.path();
-        juce::File folder = path.empty() ? juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("VC Composer 2")
+        juce::File folder = path.empty() ? juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("VC Composer")
                                          : juce::File(juce::String(path)).getParentDirectory().getChildFile("Bounces");
         const juce::String ext = formats_[1]->getToggleState() ? ".flac" : formats_[2]->getToggleState() ? ".mp3" : ".wav";
         const auto name = juce::File::createLegalFileName(juce::String(context_.session.title())) + "_master" + ext;

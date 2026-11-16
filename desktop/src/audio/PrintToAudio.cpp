@@ -19,7 +19,7 @@ juce::File audio_folder(const AppContext& context)
     const auto folder = context.session.audio_folder();
     if (!folder.empty()) return juce::File(juce::String(folder));
     return juce::File::getSpecialLocation(juce::File::userMusicDirectory)
-        .getChildFile("VC Composer 2")
+        .getChildFile("VC Composer")
         .getChildFile("Untitled Audio Files");
 }
 }  // namespace

@@ -1166,11 +1166,11 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         if (error) *error = why;
         return std::nullopt;
     };
-    if (input.get_string("format") != "vc-composer-2-project") return fail("not a VC Composer 2 project file");
+    if (input.get_string("format") != "vc-composer-2-project") return fail("not a VC Composer project file");
     json::Value doc = input;
     int version = static_cast<int>(doc.get_int("schema_version", 0));
     if (version > kProjectSchemaVersion)
-        return fail("project was saved by a newer VC Composer 2 (schema " + std::to_string(version) +
+        return fail("project was saved by a newer VC Composer (schema " + std::to_string(version) +
                     "); this build reads up to schema " + std::to_string(kProjectSchemaVersion));
     if (version < 1) return fail("unknown project schema version " + std::to_string(version));
     while (version < kProjectSchemaVersion) {

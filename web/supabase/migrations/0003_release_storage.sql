@@ -1,4 +1,4 @@
--- VC Composer 2: the private bucket installers live in.
+-- VC Composer: the private bucket installers live in.
 --
 -- Consolidated from VC Writer's 0004 (storage), keeping only `releases`: this
 -- site stores no project assets and no voice captures.

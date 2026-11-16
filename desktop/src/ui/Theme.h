@@ -1,4 +1,4 @@
-// The look of VC Composer 2: a dark studio theme around a light "paper"
+// The look of VC Composer: a dark studio theme around a light "paper"
 // notation surface, with family colours carried from the template content.
 #pragma once
 

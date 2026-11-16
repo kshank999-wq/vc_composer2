@@ -438,7 +438,7 @@ TEST_CASE("export: a transposing part and a grand staff, checked element by elem
     CHECK_EQ(root.attribute("version"), std::string("4.0"));
     CHECK_EQ(root.child_text("movement-title"), std::string("Export Test"));
     const Element* enc = root.child("identification")->child("encoding");
-    CHECK_EQ(enc->child_text("software"), std::string("VC Composer 2"));
+    CHECK_EQ(enc->child_text("software"), std::string("VC Composer"));
     CHECK_EQ(enc->child_text("encoding-date"), std::string("2026-11-12"));
     CHECK_EQ(root.child("identification")->child_text("creator"), std::string("A. Tester"));
 

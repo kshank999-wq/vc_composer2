@@ -4,7 +4,7 @@ import { COMPANY_LINKS, COMPANY_NAME, SUPPORT_EMAIL } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: 'Privacy',
-  description: 'What the VC Composer 2 website stores, who processes it, and how to delete your account.',
+  description: 'What the VC Composer website stores, who processes it, and how to delete your account.',
 };
 
 /**
@@ -33,8 +33,8 @@ export default function PrivacyPage() {
       <div className="prose">
         <h2>What this covers</h2>
         <p>
-          This website, where you subscribe to VC Composer 2, download it and manage your account, and the requests the
-          VC Composer 2 desktop application makes to it to activate a licence, check that licence, and look for updates.{' '}
+          This website, where you subscribe to VC Composer, download it and manage your account, and the requests the
+          VC Composer desktop application makes to it to activate a licence, check that licence, and look for updates.{' '}
           {COMPANY_NAME}&rsquo;s own <a href={COMPANY_LINKS.privacy}>privacy policy</a> covers the company as a whole.
         </p>
 

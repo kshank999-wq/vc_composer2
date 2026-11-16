@@ -2,7 +2,7 @@
   "name": "vc-composer-web",
   "version": "0.1.0",
   "private": true,
-  "description": "vc-composer.com: marketing site, accounts, Stripe checkout, licence delivery and installer downloads for VC Composer 2",
+  "description": "vc-composer.com: marketing site, accounts, Stripe checkout, licence delivery and installer downloads for VC Composer",
   "engines": {
     "node": ">=20"
   },

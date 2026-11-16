@@ -2230,7 +2230,7 @@ std::unique_ptr<RecordPass> PlaybackEngine::make_pass(juce::String& error)
     juce::File folder{juce::String(session_.audio_folder())};
     if (session_.audio_folder().empty())
         folder = juce::File::getSpecialLocation(juce::File::userMusicDirectory)
-                     .getChildFile("VC Composer 2")
+                     .getChildFile("VC Composer")
                      .getChildFile("Untitled Audio Files");
     if (!armed.empty() && !folder.createDirectory()) {
         problems.add("cannot create the recording folder " + folder.getFullPathName());

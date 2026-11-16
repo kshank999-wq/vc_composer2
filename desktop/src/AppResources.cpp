@@ -25,7 +25,7 @@ void add_all(std::map<std::string, std::string>& docs, const char* folder, int c
 
 juce::File user_data_directory()
 {
-    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("VC Composer 2");
+    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("VC Composer");
     dir.createDirectory();
     return dir;
 }

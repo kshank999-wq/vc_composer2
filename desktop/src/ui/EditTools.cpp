@@ -21,7 +21,7 @@ juce::File processed_file(const AppContext& context, const juce::String& clip_na
     juce::File folder{juce::String(context.session.audio_folder())};
     if (context.session.audio_folder().empty())
         folder = juce::File::getSpecialLocation(juce::File::userMusicDirectory)
-                     .getChildFile("VC Composer 2")
+                     .getChildFile("VC Composer")
                      .getChildFile("Untitled Audio Files");
     folder.createDirectory();
     juce::String base = juce::File::createLegalFileName(clip_name).replaceCharacters(" ./", "___").trimCharactersAtEnd("_");

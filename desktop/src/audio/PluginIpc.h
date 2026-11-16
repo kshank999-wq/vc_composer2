@@ -1,4 +1,4 @@
-// What VC Composer 2 and its plug-in host process (vcc_plugin_host) share.
+// What VC Composer and its plug-in host process (vcc_plugin_host) share.
 //
 // Control messages (load, prepare, state, editor) travel over JUCE's
 // child-process connection. Audio does not: each hosted instance has a

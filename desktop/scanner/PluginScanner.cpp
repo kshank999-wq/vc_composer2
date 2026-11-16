@@ -1,6 +1,6 @@
 // vcc_plugin_scanner: loads one plug-in file in its own process and reports
 // what it contains (Main Spec §20: "a failed scan cannot crash the whole
-// project"). VC Composer 2 runs one of these per plug-in file; if the plug-in
+// project"). VC Composer runs one of these per plug-in file; if the plug-in
 // crashes, hangs or corrupts memory while it is loaded, only this process
 // dies and the app records why.
 //

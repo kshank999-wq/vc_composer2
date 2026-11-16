@@ -30,7 +30,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
   if (readError) return NextResponse.json({ error: 'That build could not be read' }, { status: 500 });
   if (!build) return NextResponse.json({ error: 'No such build' }, { status: 404 });
 
-  const fileName = build.artifact_key.split('/').pop() ?? 'VC-Composer-2-installer';
+  const fileName = build.artifact_key.split('/').pop() ?? 'VC-Composer-installer';
   const { data: signed, error: signError } = await client.storage
     .from(env.releaseBucket)
     .createSignedUrl(build.artifact_key, env.releaseDownloadTtlSeconds, { download: fileName });

@@ -5,7 +5,7 @@
  * product stamp cannot drift between pages, emails and the webhook. The site's
  * own address is not here: `env.siteUrl` (NEXT_PUBLIC_SITE_URL) decides it.
  */
-export const SITE_NAME = 'VC Composer 2';
+export const SITE_NAME = 'VC Composer';
 export const PRODUCT_SHORT_NAME = 'VC Composer';
 export const COMPANY_NAME = 'VC Software';
 export const COMPANY_URL = 'https://vc-software.com';

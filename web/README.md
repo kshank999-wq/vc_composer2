@@ -1,6 +1,6 @@
 # vc-composer.com
 
-The VC Composer 2 storefront: the marketing site, accounts, Stripe
+The VC Composer storefront: the marketing site, accounts, Stripe
 subscriptions, licence delivery, installer downloads (licensed stable builds
 and a free preview), and the admin console. It is the commerce half of VC
 Writer's site, ported and renamed; the desktop app (the rest of this

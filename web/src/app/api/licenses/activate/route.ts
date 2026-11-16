@@ -36,7 +36,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const userId = await resolveUserId(request);
-  if (!userId) return NextResponse.json({ error: 'Sign in to activate VC Composer 2' }, { status: 401 });
+  if (!userId) return NextResponse.json({ error: 'Sign in to activate VC Composer' }, { status: 401 });
 
   const result = await activateDevice({ userId, ...parsed.data });
 

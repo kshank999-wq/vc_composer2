@@ -1,6 +1,6 @@
 # Desktop-facing API
 
-The VC Composer 2 desktop app talks to this site through four endpoints. The
+The VC Composer desktop app talks to this site through four endpoints. The
 shapes below are what the code in `src/app/api/` does today, and they match VC
 Writer's endpoints of the same names, so a client written against either
 works against both (the only additions are the optional `channel` query
@@ -86,7 +86,7 @@ Activation also stamps `last_seen_at` and the app version on the device record.
 | Status | Body | When |
 | --- | --- | --- |
 | 400 | `{ "error": "A device is required" }` | body missing or fails the rules above |
-| 401 | `{ "error": "Sign in to activate VC Composer 2" }` | no or invalid token |
+| 401 | `{ "error": "Sign in to activate VC Composer" }` | no or invalid token |
 | 429 | `{ "error": "Too many requests from this address. Try again shortly." }` + `Retry-After` header | rate limited |
 
 ---
@@ -193,7 +193,7 @@ with nothing live is simply absent. `minimumOsVersion`, `releaseNotes` and
 
 ```json
 {
-  "url": "https://<project>.supabase.co/storage/v1/object/sign/releases/windows/2.0.1/VC-Composer-2-Setup.exe?token=…",
+  "url": "https://<project>.supabase.co/storage/v1/object/sign/releases/windows/2.0.1/VC-Composer-Setup.exe?token=…",
   "version": "2.0.1",
   "sha256": "e3b0c442…",
   "minimumOsVersion": "10.0.17763",
@@ -208,7 +208,7 @@ not empty.
 | Status | Body | When |
 | --- | --- | --- |
 | 400 | `{ "error": "Unknown channel. Use \"stable\" or \"preview\"." }` | any other `channel` |
-| 401 | `{ "error": "Sign in to download VC Composer 2" }` (or "…the VC Composer 2 preview") | not signed in |
+| 401 | `{ "error": "Sign in to download VC Composer" }` (or "…the VC Composer preview") | not signed in |
 | 403 | `{ "error": "Your account does not have a Windows 10 / 11 download. Subscribe, or try the free preview." }` | stable without a live licence for the platform |
 | 404 | `{ "error": "Unknown platform" }` | `{platform}` is not `windows` or `macos` |
 | 404 | `{ "error": "No published build for … yet" }` / `"No preview build for … is available right now"` | nothing live on that channel |

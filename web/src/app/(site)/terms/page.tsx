@@ -5,7 +5,7 @@ import { COMPANY_LINKS, COMPANY_NAME, SUPPORT_EMAIL } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: 'Terms of Use',
-  description: 'What a VC Composer 2 subscription gives you, the free preview, and what happens to your work if you stop.',
+  description: 'What a VC Composer subscription gives you, the free preview, and what happens to your work if you stop.',
 };
 
 /** Typed rather than rendered from the build, so a redeploy does not claim the terms changed. */
@@ -17,7 +17,7 @@ export default function TermsPage() {
       <div className="hero hero-compact">
         <h1>Terms of Use</h1>
         <p>
-          What you may do with VC Composer 2, what we undertake, and what happens to your work if you stop paying. Last
+          What you may do with VC Composer, what we undertake, and what happens to your work if you stop paying. Last
           updated {UPDATED}.
         </p>
       </div>
@@ -25,7 +25,7 @@ export default function TermsPage() {
       <div className="prose">
         <h2>What this covers</h2>
         <p>
-          These terms apply to VC Composer 2, the desktop application for Windows and macOS, and to this website.
+          These terms apply to VC Composer, the desktop application for Windows and macOS, and to this website.
           Using either means accepting them. How your information is handled is in{' '}
           <Link href="/privacy">the privacy policy</Link>. {COMPANY_NAME}&rsquo;s own{' '}
           <a href={COMPANY_LINKS.terms}>terms</a> apply alongside these.
@@ -39,7 +39,7 @@ export default function TermsPage() {
 
         <h2>The subscription</h2>
         <p>
-          A subscription gives you a licence to use VC Composer 2. It is yours personally, or your organisation&rsquo;s
+          A subscription gives you a licence to use VC Composer. It is yours personally, or your organisation&rsquo;s
           where an organisation bought it, and it covers a set number of computers. Your{' '}
           <Link href="/account">account page</Link> lists the computers it is on and lets you free a seat from one you
           no longer have.
@@ -73,13 +73,13 @@ export default function TermsPage() {
 
         <h2>Plug-ins and libraries</h2>
         <p>
-          VC Composer 2 hosts instrument and effect plug-ins and sample libraries that you obtain and license from their
+          VC Composer hosts instrument and effect plug-ins and sample libraries that you obtain and license from their
           makers. Their terms are between you and them, and a project package never bundles them.
         </p>
 
         <h2>What we do not promise</h2>
         <p>
-          We work hard to keep VC Composer 2 reliable, and the application saves crash-safely, but software has faults.
+          We work hard to keep VC Composer reliable, and the application saves crash-safely, but software has faults.
           Keep backups of work that matters. To the extent the law allows, our liability is limited to what you paid
           us in the twelve months before the claim.
         </p>

@@ -8,7 +8,7 @@ import { PlatformChoice } from './platform-choice';
 
 export const metadata: Metadata = {
   title: 'Subscribe & download',
-  description: 'Subscribe to VC Composer 2 and download it for Windows or macOS, or try the free preview.',
+  description: 'Subscribe to VC Composer and download it for Windows or macOS, or try the free preview.',
 };
 
 // The price comes from Stripe on each render rather than being baked into the
@@ -68,7 +68,7 @@ export default async function DownloadPage({
   return (
     <>
       <div className="hero">
-        <h1>Subscribe to VC Composer 2</h1>
+        <h1>Subscribe to VC Composer</h1>
         <p>
           Monthly or yearly, on Windows and macOS both. Choose a plan and the computer you are installing on first;
           your licence covers the other, so you can switch any time.
@@ -86,7 +86,7 @@ export default async function DownloadPage({
       <section id="preview" className="preview-panel">
         <h2>Free preview</h2>
         <p>
-          Try VC Composer 2 before you subscribe. The preview is free for anyone with an account: sign in with your
+          Try VC Composer before you subscribe. The preview is free for anyone with an account: sign in with your
           email address, no card needed, and download it for Windows or macOS.
         </p>
         <p className="muted small">

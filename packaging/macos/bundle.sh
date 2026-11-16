@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Makes "VC Composer 2.app" self-contained and, when a Developer ID is set
+# Makes "VC Composer.app" self-contained and, when a Developer ID is set
 # up, signs, notarizes and staples it, then wraps it in a .dmg.
 #   packaging/macos/bundle.sh <app> <ffmpeg-prefix> <out.dmg>
 # Signing (all optional; without them the .dmg is unsigned, for testing):
@@ -43,7 +43,7 @@ if [ -n "${MACOS_SIGNING_IDENTITY:-}" ]; then
     sign() { codesign --force --timestamp --options runtime --entitlements "$HERE/entitlements.plist" \
                       --sign "$MACOS_SIGNING_IDENTITY" "$@"; }
     for f in "$FRAMEWORKS"/*.dylib; do sign "$f"; done
-    for f in "$MACOS"/*; do [ "$(basename "$f")" = "VC Composer 2" ] || sign "$f"; done
+    for f in "$MACOS"/*; do [ "$(basename "$f")" = "VC Composer" ] || sign "$f"; done
     sign "$APP"
     codesign --verify --deep --strict --verbose=2 "$APP"
 else
@@ -55,7 +55,7 @@ rm -f "$DMG"
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "VC Composer 2" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+hdiutil create -volname "VC Composer" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 
 if [ -n "${MACOS_SIGNING_IDENTITY:-}" ] && [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ]; then
     codesign --force --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$DMG"

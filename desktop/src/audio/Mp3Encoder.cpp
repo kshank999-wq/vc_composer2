@@ -89,7 +89,7 @@ bool Mp3Encoder::available(juce::String* why)
     const auto& l = lame();
     if (!l.ok && why) {
 #if JUCE_WINDOWS
-        *why = "MP3 needs LAME (free): put libmp3lame.dll beside VC Composer 2";
+        *why = "MP3 needs LAME (free): put libmp3lame.dll beside VC Composer";
 #elif JUCE_MAC
         *why = "MP3 needs LAME (free): brew install lame";
 #else
@@ -144,7 +144,7 @@ bool Mp3Encoder::open(const juce::File& file, int sample_rate, int kbps, const j
     l.id3tag_init(gf_);
     l.id3tag_add_v2(gf_);
     if (title.isNotEmpty()) l.id3tag_set_title(gf_, title.toRawUTF8());
-    l.id3tag_set_comment(gf_, "VC Composer 2");
+    l.id3tag_set_comment(gf_, "VC Composer");
     if (l.init_params(gf_) < 0) {
         error = "LAME refused those settings (" + juce::String(kbps) + " kbps, " + juce::String(sample_rate) + " Hz)";
         return false;

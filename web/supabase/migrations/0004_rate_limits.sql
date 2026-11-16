@@ -1,4 +1,4 @@
--- VC Composer 2: rate limiting for the routes anyone on the internet can call
+-- VC Composer: rate limiting for the routes anyone on the internet can call
 -- (checkout, activation, discount checks, emailed sign-in links).
 --
 -- Postgres rather than a separate store: the traffic is small, the table stays

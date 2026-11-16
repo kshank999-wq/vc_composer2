@@ -1,4 +1,4 @@
--- VC Composer 2: accounts.
+-- VC Composer: accounts.
 --
 -- One profile row per Supabase auth user, created by a trigger on signup so a
 -- signup that drops its follow-up request can never leave an account without

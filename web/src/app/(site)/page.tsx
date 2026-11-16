@@ -156,7 +156,7 @@ export default function HomePage() {
     <>
       <section className="home-hero">
         <span className="eyebrow">For film, TV and game composers</span>
-        <h1>VC Composer 2, a notation-first scoring workstation.</h1>
+        <h1>VC Composer, a notation-first scoring workstation.</h1>
         <p>
           Write on staves and hear your sample libraries play it. Edit the mirrored MIDI, mix on a hardware-style
           console, score to picture with timecode, hits and cues, run a director review, and export the parts, the

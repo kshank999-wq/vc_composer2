@@ -3,7 +3,7 @@
  * Publish an installer to the release catalogue, inactive.
  *
  *   node scripts/publish-release.mjs --platform windows --channel preview \
- *     --version 0.1.0 --min-os 10.0.17763 "VC Composer 2 Setup.exe"
+ *     --version 0.1.0 --min-os 10.0.17763 "VC Composer Setup.exe"
  *
  * What it does, in order:
  *   1. hashes the file (SHA-256) and measures it;

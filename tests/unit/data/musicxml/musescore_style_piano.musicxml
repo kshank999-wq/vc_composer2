@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
-<!-- Written for VC Composer 2 tests in the style of MuseScore output:
+<!-- Written for VC Composer tests in the style of MuseScore output:
      a grand staff, two voices, backup/forward, key/time/clef changes. -->
 <score-partwise version="4.0">
   <work>

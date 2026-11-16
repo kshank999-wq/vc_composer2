@@ -10,7 +10,7 @@ export const metadata: Metadata = {
     template: `%s · ${SITE_NAME}`,
   },
   description:
-    'VC Composer 2 is a notation-first scoring workstation for film, TV and game composers: write on staves, hear your libraries, mix, score to picture and deliver. Windows and macOS.',
+    'VC Composer is a notation-first scoring workstation for film, TV and game composers: write on staves, hear your libraries, mix, score to picture and deliver. Windows and macOS.',
   openGraph: {
     title: SITE_NAME,
     description: 'A notation-first scoring workstation for film, TV and game composers. Windows and macOS.',

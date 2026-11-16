@@ -6,7 +6,7 @@
 namespace vcc::desktop {
 
 MainWindow::MainWindow(const juce::String& file, bool show_welcome)
-    : juce::DocumentWindow("VC Composer 2", colours::background, juce::DocumentWindow::allButtons)
+    : juce::DocumentWindow("VC Composer", colours::background, juce::DocumentWindow::allButtons)
 {
     juce::LookAndFeel::setDefaultLookAndFeel(&theme_);
     catalogs_ = load_embedded_catalogs();
@@ -73,7 +73,7 @@ MainWindow::~MainWindow()
 void MainWindow::update_title()
 {
     const auto p = preview::status();
-    setName(juce::String(session_->title()) + " - VC Composer 2" + (p.isEmpty() ? juce::String() : " (" + p + ")"));
+    setName(juce::String(session_->title()) + " - VC Composer" + (p.isEmpty() ? juce::String() : " (" + p + ")"));
 }
 
 bool MainWindow::ask_to_close()

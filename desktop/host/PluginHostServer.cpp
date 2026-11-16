@@ -1,4 +1,4 @@
-// vcc_plugin_host: runs plug-in instances for VC Composer 2 outside the app
+// vcc_plugin_host: runs plug-in instances for VC Composer outside the app
 // (Main Spec §20), so a plug-in that crashes, hangs or corrupts memory takes
 // only this process down. How many instances share one process is the app's
 // hosting mode: one per instance (safest), one per plug-in, one per

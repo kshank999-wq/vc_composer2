@@ -30,9 +30,9 @@ describe('email templates', () => {
     }
   });
 
-  it('speak as VC Composer 2 and never as another product', () => {
+  it('speak as VC Composer and never as another product', () => {
     for (const email of [purchaseConfirmation({ ...inputs, platform: 'macos' }), licenseReminder(inputs)]) {
-      expect(email.subject).toContain('VC Composer 2');
+      expect(email.subject).toContain('VC Composer');
       expect(email.html).toContain('VC COMPOSER');
       expect(`${email.html}${email.text}`).not.toMatch(/VC Writer|vc-writer/i);
     }
@@ -76,7 +76,7 @@ describe('a given licence', () => {
       expiresAt: '2027-06-30T23:59:59.000Z',
       accountUrl: 'https://vc-composer.com/account',
     });
-    expect(email.subject).toBe('Your VC Composer 2 academic licence');
+    expect(email.subject).toBe('Your VC Composer academic licence');
     expect(email.text).toContain('covers 25 computers until June 30, 2027');
     expect(email.html).toContain('Hillside &lt;High&gt;');
     expect(email.html).not.toContain('<High>');

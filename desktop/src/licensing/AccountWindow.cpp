@@ -169,7 +169,7 @@ bool may_save(AppContext& context)
     if (preview::ended()) {
         juce::AlertWindow::showMessageBoxAsync(
             juce::MessageBoxIconType::InfoIcon, "This preview has ended",
-            "This preview of VC Composer 2 ended on " + preview::expires() +
+            "This preview of VC Composer ended on " + preview::expires() +
                 ". Projects still open, play, print and export; to save, download the latest version from vc-composer.com.");
         return false;
     }

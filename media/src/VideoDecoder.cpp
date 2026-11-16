@@ -265,7 +265,7 @@ VideoDecoder::VideoDecoder() : impl_(std::make_unique<Impl>()) {}
 VideoDecoder::~VideoDecoder() = default;
 bool VideoDecoder::open(const std::string&, std::string* error)
 {
-    if (error) *error = "this build of VC Composer 2 has no video decoder (built without FFmpeg)";
+    if (error) *error = "this build of VC Composer has no video decoder (built without FFmpeg)";
     return false;
 }
 void VideoDecoder::close() {}

@@ -70,7 +70,7 @@ export function Devices() {
   if (devices.length === 0) {
     return (
       <p className="lede">
-        No computers yet. VC Composer 2 activates the first time you sign in to it on a computer.
+        No computers yet. VC Composer activates the first time you sign in to it on a computer.
       </p>
     );
   }

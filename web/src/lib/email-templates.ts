@@ -129,9 +129,9 @@ export const purchaseConfirmation = (input: PurchaseEmailInput): RenderedEmail =
   return {
     template: 'purchase_confirmation',
     version: 1,
-    subject: 'Your VC Composer 2 licence and download',
+    subject: 'Your VC Composer licence and download',
     html: shell(
-      'Thank you for subscribing to VC Composer 2',
+      'Thank you for subscribing to VC Composer',
       `<p style="margin:0 0 8px">${ready}</p>
        ${serialBlock(input.serial)}
        ${primaryLink(input.accountUrl, 'Go to your downloads')}
@@ -140,7 +140,7 @@ export const purchaseConfirmation = (input: PurchaseEmailInput): RenderedEmail =
     text: [
       'VC COMPOSER 2',
       '',
-      'Thank you for subscribing to VC Composer 2.',
+      'Thank you for subscribing to VC Composer.',
       '',
       ready,
       '',
@@ -164,9 +164,9 @@ export interface LicenseReminderInput {
 export const licenseReminder = (input: LicenseReminderInput): RenderedEmail => ({
   template: 'license_reminder',
   version: 1,
-  subject: 'Your VC Composer 2 licence',
+  subject: 'Your VC Composer licence',
   html: shell(
-    'Here is your VC Composer 2 licence',
+    'Here is your VC Composer licence',
     `${serialBlock(input.serial)}
      ${primaryLink(input.accountUrl, 'Go to your downloads')}
      ${note('This was asked for from your account. If that was not you, nothing has changed: this email only repeats a licence you already hold.')}`,
@@ -174,7 +174,7 @@ export const licenseReminder = (input: LicenseReminderInput): RenderedEmail => (
   text: [
     'VC COMPOSER 2',
     '',
-    'Here is your VC Composer 2 licence.',
+    'Here is your VC Composer licence.',
     '',
     `Your licence: ${input.serial}`,
     '',
@@ -205,15 +205,15 @@ const sayDate = (iso: string): string =>
 export const licenseGranted = (input: LicenseGrantedInput): RenderedEmail => {
   const what =
     input.kind === 'master'
-      ? `A master licence for VC Composer 2. It covers ${input.seats} and does not expire.`
-      : `An academic licence for VC Composer 2${input.grantedTo ? `, for ${input.grantedTo}` : ''}. It covers ${input.seats}${
+      ? `A master licence for VC Composer. It covers ${input.seats} and does not expire.`
+      : `An academic licence for VC Composer${input.grantedTo ? `, for ${input.grantedTo}` : ''}. It covers ${input.seats}${
           input.expiresAt ? ` until ${sayDate(input.expiresAt)}` : ' and does not expire'
         }.`;
-  const how = `Sign in at ${siteHost()} with this email address (an emailed sign-in link is fine, no password is needed) to download VC Composer 2 for Windows or macOS. It activates the first time you sign in on a computer.`;
+  const how = `Sign in at ${siteHost()} with this email address (an emailed sign-in link is fine, no password is needed) to download VC Composer for Windows or macOS. It activates the first time you sign in on a computer.`;
   return {
     template: 'license_granted',
     version: 1,
-    subject: input.kind === 'master' ? 'Your VC Composer 2 master licence' : 'Your VC Composer 2 academic licence',
+    subject: input.kind === 'master' ? 'Your VC Composer master licence' : 'Your VC Composer academic licence',
     html: shell(
       input.kind === 'master' ? 'Your master licence' : 'Your academic licence',
       `<p style="margin:0 0 16px">${escapeHtml(what)}</p>

@@ -136,7 +136,7 @@ export default async function AccountPage() {
         {liveLicenses.length === 0 ? (
           <p className="lede">
             No active licence{endedLicenses.length > 0 ? ' (your previous one has ended)' : ''}.{' '}
-            <Link href="/download">Subscribe to VC Composer 2</Link> to get one, or download the free preview below.
+            <Link href="/download">Subscribe to VC Composer</Link> to get one, or download the free preview below.
           </p>
         ) : (
           <div className="grid">

@@ -1,4 +1,4 @@
--- VC Composer 2: commerce, licensing and release delivery.
+-- VC Composer: commerce, licensing and release delivery.
 --
 -- Entitlement is server-authoritative. Nothing in this file is writable by a
 -- signed-in user: orders, licences, builds and activations are written only by

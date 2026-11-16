@@ -131,7 +131,7 @@ NewProjectWizard::NewProjectWizard(AppContext& context) : context_(context)
              &about_, &music_label_, &tonic_, &mode_, &meter_, &tempo_, &picture_label_, &frame_rate_, &start_tc_, &sample_rate_,
              &picture_file_, &choose_picture_, &clear_picture_, &status_, &create_, &cancel_})
         addAndMakeVisible(*c);
-    set_folder(juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VC Composer 2"));
+    set_folder(juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("VC Composer"));
     fill_moods();
     fill_templates();
 }

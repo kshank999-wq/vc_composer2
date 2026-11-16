@@ -1,4 +1,4 @@
-// vcc - command-line front end to the VC Composer 2 engines.
+// vcc - command-line front end to the VC Composer engines.
 //
 // This is a development and audition tool, not the product UI: it lets the
 // template catalog, Chord Explorer and Ostinato Creator be exercised and
@@ -316,7 +316,7 @@ int cmd_export_midi(const Args& a)
 void usage()
 {
     std::puts(
-        "vcc - VC Composer 2 engine tool\n"
+        "vcc - VC Composer engine tool\n"
         "  vcc templates [query] [--category cinematic|regional|era|composer|modern]\n"
         "  vcc template <id>\n"
         "  vcc new <template_id> <project.json> [--key \"D minor\"]\n"

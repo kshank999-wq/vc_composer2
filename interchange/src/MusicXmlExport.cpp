@@ -1383,7 +1383,7 @@ std::string Exporter::run()
     w.open("identification");
     if (!data_.production.composer.empty()) w.leaf("creator", data_.production.composer, {{"type", "composer"}});
     w.open("encoding");
-    w.leaf("software", "VC Composer 2");
+    w.leaf("software", "VC Composer");
     if (!opts_.encoding_date.empty()) w.leaf("encoding-date", opts_.encoding_date);
     w.empty("supports", {{"element", "accidental"}, {"type", "yes"}});
     w.empty("supports", {{"element", "transpose"}, {"type", opts_.concert_pitch ? "no" : "yes"}});

@@ -88,7 +88,7 @@ jobs:
         run: |
           app="build/desktop/VCComposer2_artefacts/Release"
           mkdir -p stage
-          cp "$app/VC Composer 2.exe" "$app/vcc_plugin_scanner.exe" "$app/vcc_plugin_host.exe" stage/
+          cp "$app/VC Composer.exe" "$app/vcc_plugin_scanner.exe" "$app/vcc_plugin_host.exe" stage/
           cp /c/ffmpeg/bin/*.dll stage/
           packaging/collect-notices.sh stage/licenses
           cp /c/ffmpeg/LICENSE.txt stage/licenses/FFmpeg-LICENSE.txt 2>/dev/null || true
@@ -115,7 +115,7 @@ jobs:
           $defs = @("/DAppVersion=${{ steps.version.outputs.version }}", "/DSourceDir=$PWD\stage", "/DOutputDir=$PWD\dist")
           if ("${{ env.PREVIEW }}" -eq "true") { $defs += "/DPreview=1" }
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" @defs packaging\windows\VCComposer2.iss
-          Compress-Archive -Path stage\* -DestinationPath "dist\VC-Composer-2-${{ steps.version.outputs.version }}-Windows-portable.zip"
+          Compress-Archive -Path stage\* -DestinationPath "dist\VC-Composer-${{ steps.version.outputs.version }}-Windows-portable.zip"
       - name: Sign the installer
         if: env.HAS_SIGNING == 'true'
         uses: azure/trusted-signing-action@v0.5.1
@@ -183,11 +183,11 @@ jobs:
           rm cert.p12
       - name: Bundle, sign, notarize, disk image
         run: |
-          app="build/desktop/VCComposer2_artefacts/Release/VC Composer 2.app"
+          app="build/desktop/VCComposer2_artefacts/Release/VC Composer.app"
           packaging/collect-notices.sh "$app/Contents/Resources/licenses" "$HOME/ffmpeg-lgpl/share/licenses"
           tag=""; [ "$PREVIEW" = "true" ] && tag="Preview-"
           mkdir -p dist
-          packaging/macos/bundle.sh "$app" "$HOME/ffmpeg-lgpl" "dist/VC-Composer-2-${tag}${{ steps.version.outputs.version }}-macOS.dmg"
+          packaging/macos/bundle.sh "$app" "$HOME/ffmpeg-lgpl" "dist/VC-Composer-${tag}${{ steps.version.outputs.version }}-macOS.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: macos

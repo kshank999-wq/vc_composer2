@@ -3,7 +3,7 @@ import { z } from 'zod';
 /**
  * Shared shapes for the commerce domain.
  *
- * VC Composer 2 ships for Windows and macOS. A platform is data rather than a
+ * VC Composer ships for Windows and macOS. A platform is data rather than a
  * hard-coded pair of branches, so every gate reads it from the same enum.
  */
 

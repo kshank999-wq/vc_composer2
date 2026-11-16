@@ -1,6 +1,6 @@
-# VC Composer 2: architecture and roadmap
+# VC Composer: architecture and roadmap
 
-VC Composer 2 is a standalone, notation-first scoring workstation for film,
+VC Composer is a standalone, notation-first scoring workstation for film,
 TV and game composers. It is not a plug-in. The product definition is
 `docs/spec/VC_Composer_2_Development_Spec_v1.0.md` (the "Main Spec") plus
 `docs/spec/VC_Composer_2_Templates_Supplement_v1.0.md` (the "Supplement").
@@ -213,7 +213,7 @@ Spec test coverage at this stage:
 ## Repository layout
 
 ```
-core/ theory/ ostinato/ project/ templates/   VC Composer 2 domain libraries (include/ + src/)
+core/ theory/ ostinato/ project/ templates/   VC Composer domain libraries (include/ + src/)
 music/ audio/ notation/ engraving/ editing/
 composer/ engine/                             ported from the original VC Composer
 resources/fonts/Bravura                       SMuFL music font (SIL OFL)

@@ -40,7 +40,7 @@ The account is shared with VC Writer and other products. This site acts
 **only** on objects stamped `metadata.product = vc-composer` and ignores the
 rest, so nothing here touches another product's sales.
 
-1. **Product**: create "VC Composer 2" with metadata `product` = `vc-composer`.
+1. **Product**: create "VC Composer" with metadata `product` = `vc-composer`.
 2. **Prices**: two recurring prices on it, one monthly and one yearly. Copy
    their ids into `STRIPE_PRICE_ID_MONTHLY` and `STRIPE_PRICE_ID_YEARLY`. The
    site reads the amounts live from Stripe; there are no prices in the code.
@@ -59,9 +59,9 @@ rest, so nothing here touches another product's sales.
    per product is expected: each product's webhook ignores the others' events.)
 5. **Customer Portal** (Settings > Billing > Customer portal): enable it, allow
    updating payment methods, cancelling, viewing invoices, and switching
-   between the monthly and yearly VC Composer 2 prices. Set the default return
+   between the monthly and yearly VC Composer prices. Set the default return
    URL to `https://vc-composer.com/account`. Note the portal configuration is
-   account-wide: list only VC Composer 2's prices under "products" for plan
+   account-wide: list only VC Composer's prices under "products" for plan
    switching if other products share it, or create a dedicated configuration.
 6. `STRIPE_SECRET_KEY`: the account's secret key (or a restricted key with
    write access to Checkout Sessions, Customers, Billing Portal, Coupons and
@@ -135,9 +135,9 @@ cd web
 export SUPABASE_URL=https://<project-ref>.supabase.co
 export SUPABASE_SERVICE_ROLE_KEY=...   # never commit; prefer a CI secret
 node scripts/publish-release.mjs --platform windows --channel preview \
-  --version 0.1.0 --min-os 10.0.17763 "path/to/VC Composer 2 Setup.exe"
+  --version 0.1.0 --min-os 10.0.17763 "path/to/VC Composer Setup.exe"
 node scripts/publish-release.mjs --platform macos --channel preview \
-  --version 0.1.0 --min-os 11.0 "path/to/VC Composer 2.dmg"
+  --version 0.1.0 --min-os 11.0 "path/to/VC Composer.dmg"
 ```
 
 Add `--dry-run` to see the key, size and SHA-256 without touching anything.

@@ -32,7 +32,7 @@ const bodySchema = z.object({
 });
 
 /**
- * Start a Stripe Checkout session for a VC Composer 2 subscription.
+ * Start a Stripe Checkout session for a VC Composer subscription.
  *
  * Price and entitlement are decided server-side; the client only names the
  * plan and platform. Nothing here grants anything: the licence is issued by

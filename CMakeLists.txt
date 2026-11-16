@@ -1,4 +1,4 @@
-# VC Composer 2 - notation-first scoring workstation.
+# VC Composer - notation-first scoring workstation.
 #
 # The libraries here hold every piece of musical and project logic. They
 # depend on nothing but the C++17 standard library, so they build and test
@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(VCComposer2
     VERSION 0.1.0
-    DESCRIPTION "VC Composer 2 - scoring workstation"
+    DESCRIPTION "VC Composer - scoring workstation"
     LANGUAGES C CXX
 )
 
@@ -31,7 +31,7 @@ option(VCC_BUILD_TESTS "Build the test suites" ON)
 option(VCC_BUILD_TOOLS "Build the vcc command-line tool" ON)
 option(VCC_BUILD_DESKTOP "Build the desktop application (needs JUCE)" OFF)
 # JUCE is never vendored. Point VCC_JUCE_DIR at a checkout, or let the build
-# fetch the pinned release. VC Composer 2 uses JUCE under the commercial
+# fetch the pinned release. VC Composer uses JUCE under the commercial
 # JUCE 8 licence (docs/01-decisions-and-license-gates.md, D13).
 set(VCC_JUCE_DIR "" CACHE PATH "Path to a JUCE source tree")
 set(VCC_JUCE_VERSION "8.0.9" CACHE STRING "JUCE release fetched when VCC_JUCE_DIR is empty")
@@ -61,7 +61,7 @@ add_subdirectory(engraving)
 add_subdirectory(composer)
 add_subdirectory(editing)
 add_subdirectory(engine)
-# VC Composer 2
+# VC Composer
 add_subdirectory(theory)
 add_subdirectory(ostinato)
 add_subdirectory(project)

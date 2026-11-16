@@ -10,9 +10,9 @@ namespace {
 juce::PropertiesFile::Options property_options()
 {
     juce::PropertiesFile::Options o;
-    o.applicationName = "VC Composer 2";
+    o.applicationName = "VC Composer";
     o.filenameSuffix = ".settings";
-    o.folderName = "VC Composer 2";
+    o.folderName = "VC Composer";
     // An absolute folder here keeps the plug-in list somewhere else (the
     // headless check uses a throwaway one, never the user's).
     if (const auto dir = juce::SystemStats::getEnvironmentVariable("VCC_SETTINGS_DIR", {}); dir.isNotEmpty())

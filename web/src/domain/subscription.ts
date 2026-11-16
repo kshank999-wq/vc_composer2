@@ -4,7 +4,7 @@ import type { License, LicenseGrant, LicenseStatus } from './commerce';
 /**
  * The desktop subscription.
  *
- * VC Composer 2 is sold as two recurring plans. **A subscription is not a
+ * VC Composer is sold as two recurring plans. **A subscription is not a
  * second kind of entitlement**: it is an ordinary licence row with its expiry
  * written down. Every gate in the site asks `licenseLive` (activation, the
  * download route, the account page, the admin console), so pointing a lapse at
@@ -188,7 +188,7 @@ export interface WritingStanding {
 
 /** What an installation that has never been activated says. */
 export const NOT_ACTIVATED_NOTICE =
-  'This computer is not activated yet. Sign in and activate VC Composer 2 to edit. Until then your projects open, play and export, but cannot be changed.';
+  'This computer is not activated yet. Sign in and activate VC Composer to edit. Until then your projects open, play and export, but cannot be changed.';
 
 /** Why it ended, in the customer's terms. */
 const lapseWords = (standing: DeskStanding): string => {

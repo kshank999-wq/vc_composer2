@@ -1,4 +1,4 @@
-# VC Composer 2
+# VC Composer
 
 A standalone, notation-first scoring workstation for film, TV and game
 composers. You write on staves, hear expressive library playback, edit the
@@ -45,7 +45,7 @@ export, MusicXML and PDF export, and collaboration sync. See
 
 ## The desktop app
 
-`desktop/` is the VC Composer 2 application, built on JUCE 8 under the
+`desktop/` is the VC Composer application, built on JUCE 8 under the
 commercial JUCE licence. It contains:
 
 - the Composer (score) and Sequencer workspaces;
@@ -72,8 +72,8 @@ Picture import needs FFmpeg's development libraries at build time (on macOS
 without video decoding. Shipping builds need an LGPL-configured FFmpeg
 (docs/01).
 
-The app is `build/desktop/VCComposer2_artefacts/Release/`: `VC Composer 2.app`
-on macOS, `VC Composer 2.exe` on Windows, `VC Composer 2` on Linux.
+The app is `build/desktop/VCComposer2_artefacts/Release/`: `VC Composer.app`
+on macOS, `VC Composer.exe` on Windows, `VC Composer` on Linux.
 
 On Linux, install the JUCE dependencies first:
 
