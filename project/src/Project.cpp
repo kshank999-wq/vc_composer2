@@ -486,7 +486,7 @@ InsertResult Project::insert_notes(const std::string& track_id, Ticks start, Tic
     std::sort(notes.begin(), notes.end());
     bool ok = edit("Insert " + (source.empty() ? std::string("notes") : source) + " on " + t->name, [&](ProjectData& d) {
         TrackVersion* ver = d.find_track(track_id)->active_version();
-        MidiRegion region{region_id, start, end, 0, notes, source, {}};
+        MidiRegion region{region_id, start, end, 0, notes, source, {}, {}};
         if (occupied && policy == CollisionPolicy::Replace) {
             for (auto& reg : ver->regions) {
                 if (reg.lane != 0 || !(reg.start < end && reg.end > start)) continue;
@@ -937,6 +937,7 @@ json::Value Project::to_json() const
                 json::Object ro{{"id", r.id}, {"start", r.start}, {"end", r.end},
                                 {"lane", r.lane}, {"source", r.source},
                                 {"notes", notes_to_json(r.notes)}};
+                if (!r.group_id.empty()) ro.set("group_id", r.group_id);
                 if (!r.controllers.empty()) {
                     json::Array cc;
                     for (const auto& e : r.controllers)
@@ -980,6 +981,8 @@ json::Value Project::to_json() const
                                                     {"muted", c.muted},
                                                     {"channels", c.channels},
                                                     {"file_sample_rate", c.file_sample_rate}});
+                for (std::size_t i = 0; i < v.audio_clips.size(); ++i)
+                    if (!v.audio_clips[i].group_id.empty()) clips[i].set("group_id", v.audio_clips[i].group_id);
                 vo.set("audio_clips", clips);
             }
             if (!v.phrases.empty()) {
@@ -1263,6 +1266,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
                 r.end = rj.get_int("end");
                 r.lane = static_cast<int>(rj.get_int("lane"));
                 r.source = rj.get_string("source");
+                r.group_id = rj.get_string("group_id");
                 std::string err;
                 if (const auto* nj = rj.get("notes"); nj && !notes_from_json(*nj, r.notes, err))
                     return fail("region " + r.id + ": " + err);
@@ -1297,6 +1301,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
                 c.file = cj.get_string("file");
                 c.start_seconds = cj.get_double("start_seconds");
                 c.source_offset = cj.get_double("source_offset");
+                c.group_id = cj.get_string("group_id");
                 c.length = cj.get_double("length");
                 c.gain_db = cj.get_double("gain_db");
                 c.fade_in = cj.get_double("fade_in");

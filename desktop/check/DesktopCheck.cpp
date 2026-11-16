@@ -41,6 +41,7 @@
 #include "ui/surface/ControlSurface.h"
 #include "ui/review/Review.h"
 #include "ui/review/Relink.h"
+#include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
 #include "ui/console/MixTools.h"
 #include "ui/library/ArticulationMapWindow.h"
@@ -5859,6 +5860,126 @@ void mix_tools_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// Editing (Main Spec §9): reverse and time stretch write new files and
+/// repoint clips (undo goes back), grouped clips move together, Capture
+/// MIDI keeps what was played, the input filter drops what it should.
+void edit_tools_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& engine = ctx.engine;
+    engine.stop();
+    session.new_empty();
+    const auto folder = dir.getChildFile("edit-check");
+    folder.deleteRecursively();
+    folder.createDirectory();
+    session.save_as(folder.getChildFile("Edit.vcc2").getFullPathName().toStdString());
+    const auto wav = folder.getChildFile("Audio Files/Ramp.wav");
+    wav.getParentDirectory().createDirectory();
+    const int len = 48000;
+    {
+        juce::AudioBuffer<float> buf(1, len);
+        for (int i = 0; i < len; ++i) buf.setSample(0, i, 0.5f * static_cast<float>(i) / static_cast<float>(len) +
+                                                        0.1f * std::sin(static_cast<float>(i) * 0.05f));
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(wav);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(24));
+        if (writer) writer->writeFromAudioSampleBuffer(buf, 0, len);
+    }
+    const auto track = session.add_audio_track("Ramp", false);
+    project::AudioClip clip;
+    clip.name = "Ramp";
+    clip.file = "Audio Files/Ramp.wav";
+    clip.length = 1.0;
+    clip.channels = 1;
+    clip.file_sample_rate = 48000.0;
+    clip.fade_in = 0.1;
+    const auto id = session.add_audio_clips({{track, clip}}, "Import", false).front();
+    auto current = [&]() -> project::AudioClip {
+        for (const auto& c : session.data().find_track(track)->active_version()->audio_clips)
+            if (c.id == id) return c;
+        return {};
+    };
+    auto first_and_last = [&](const project::AudioClip& c) {
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> r(formats.createReaderFor(juce::File(juce::String(session.resolve_audio_path(c.file)))));
+        juce::AudioBuffer<float> b(1, 8);
+        std::pair<float, float> out{0.0f, 0.0f};
+        if (!r) return out;
+        r->read(&b, 0, 1, 0, true, false);
+        out.first = b.getSample(0, 0);
+        r->read(&b, 0, 1, r->lengthInSamples - 1, true, false);
+        out.second = b.getSample(0, 0);
+        return out;
+    };
+    const auto said = reverse_clips(ctx, {{track, id}});
+    const auto rev = current();
+    const auto ends = first_and_last(rev);
+    check(rev.file != clip.file && ends.first > 0.4f && std::abs(ends.second) < 0.05f && rev.fade_out > 0.09 &&
+              rev.fade_in < 0.01 && session.undo_label() == "Reverse" && wav.existsAsFile(),
+          "Reverse writes the clip backwards to a new file (loud end first), swaps its fades, keeps the original: " + said);
+    session.undo();
+    check(current().file == clip.file, "Undo points the clip back at the original file");
+    const auto stretched_msg = stretch_clips(ctx, {{track, id}}, 1.5);
+    const auto st = current();
+    check(std::abs(st.length - 1.5) < 0.01 && std::abs(st.fade_in - 0.15) < 1e-6 && st.file != clip.file,
+          "Time stretch to 150% makes the clip 1.5 s, its fade scaled: " + stretched_msg);
+    session.undo();
+
+    // Groups.
+    const auto other = session.add_audio_track("Other", false);
+    clip.start_seconds = 2.0;
+    const auto id2 = session.add_audio_clips({{other, clip}}, "Import", false).front();
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(80);
+    main.sequencer().select_clip(track, id);
+    check(main.sequencer().selected_clips().size() == 1u, "the Producer view reports its selected clips");
+    session.group_items({{track, id}, {other, id2}});
+    session.nudge_audio_clips(track, {id}, 0.5);
+    double other_start = -1.0;
+    for (const auto& c : session.data().find_track(other)->active_version()->audio_clips)
+        if (c.id == id2) other_start = c.start_seconds;
+    check(std::abs(other_start - 2.5) < 1e-9, "a grouped clip on another track moves with the nudged one");
+
+    // Capture MIDI.
+    const auto piano = session.add_track("Piano", "keys.piano");
+    session.select_track(piano);
+    engine.clear_live_history();
+    engine.accept_live(juce::MidiMessage::noteOn(1, 60, 0.8f));
+    engine.accept_live(juce::MidiMessage::noteOff(1, 60));
+    engine.accept_live(juce::MidiMessage::noteOn(1, 64, 0.8f));
+    engine.accept_live(juce::MidiMessage::noteOff(1, 64));
+    ctx.commands.invokeDirectly(cmd::captureMidi, false);
+    const auto& regions = session.data().find_track(piano)->active_version()->regions;
+    check(session.undo_label() == "Capture MIDI" && regions.size() == 1u && regions.front().notes.size() == 2u,
+          "Capture MIDI turns what was just played into a region on the selected track");
+
+    // Input filter.
+    PlaybackEngine::InputFilter f;
+    f.channels = 1;  // channel 1 only
+    f.velocity_min = 20;
+    f.pitch_bend = false;
+    engine.set_input_filter(f);
+    check(engine.accept_live(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100))) &&
+              !engine.accept_live(juce::MidiMessage::noteOn(2, 60, static_cast<juce::uint8>(100))) &&
+              !engine.accept_live(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(10))) &&
+              !engine.accept_live(juce::MidiMessage::pitchWheel(1, 9000)) &&
+              engine.accept_live(juce::MidiMessage::controllerEvent(1, 1, 64)),
+          "the MIDI input filter passes channel 1 and drops other channels, soft notes and pitch bend");
+    engine.set_input_filter({});
+    show_midi_input_filter(ctx);
+    juce::Component* panel = nullptr;
+    wait_for([&] { return (panel = midi_input_filter_panel()) != nullptr; });
+    if (panel) {
+        shoot(*panel->getTopLevelComponent(), dir, "63-midi-filter");
+        panel->getTopLevelComponent()->setVisible(false);
+    }
+    engine.clear_live_history();
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -6372,7 +6493,7 @@ void accessibility_checks(MainWindow& window, const juce::File& dir)
     pump(150);
     report("Producer view", main);
     for (auto id : {cmd::showCircleOfFifths, cmd::showRouting, cmd::showReview, cmd::showComments, cmd::collectPackage,
-                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap, cmd::mixTools}) {
+                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap, cmd::mixTools, cmd::midiInputFilter}) {
         ctx.commands.invokeDirectly(id, false);
         pump(200);
     }
@@ -7704,6 +7825,8 @@ int main(int argc, char** argv)
         wizard_checks(window, dir);
         section("mix_tools_checks");
         mix_tools_checks(window, dir);
+        section("edit_tools_checks");
+        edit_tools_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

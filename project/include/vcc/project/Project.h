@@ -86,6 +86,7 @@ struct MidiRegion {
     /// Controllers played in or drawn (sustain, modulation...), absolute
     /// ticks; they play on the track's channel, like the notes.
     std::vector<ControllerEvent> controllers;
+    std::string group_id;  ///< Grouped with clips and regions sharing it: they move together.
 };
 
 /// A piece of an audio file placed on the timeline (Main Spec §11). Audio is
@@ -107,6 +108,9 @@ struct AudioClip {
     bool muted = false;
     int channels = 0;             ///< Of the file, for display (1 or 2).
     double file_sample_rate = 0.0;
+    /// Grouped with clips and regions sharing it (Main Spec §9 "region
+    /// groups"): moving or nudging one moves them all.
+    std::string group_id;
     double end_seconds() const noexcept { return start_seconds + length; }
 };
 

@@ -435,6 +435,12 @@ public:
     /// The same change to several clips, as one undo step.
     bool update_audio_clips(const std::vector<ClipRef>& clips, const std::string& label,
                             const std::function<void(project::AudioClip&)>& change);
+    /// Groups clips and MIDI regions, (track id, clip or region id), so a
+    /// move or nudge of one moves them all (Main Spec §9 "region groups").
+    /// One undo step "Group"; returns the group id (empty for fewer than 2).
+    std::string group_items(const std::vector<ClipRef>& items);
+    /// Dissolves the groups these items belong to ("Ungroup").
+    bool ungroup_items(const std::vector<ClipRef>& items);
 
     // --- Clip editing (one undo step each) ---------------------------------------------
     /// Splits the clips of these tracks that `at` (project seconds) falls

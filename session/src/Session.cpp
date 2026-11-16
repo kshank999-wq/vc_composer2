@@ -1911,26 +1911,102 @@ std::vector<std::string> Session::add_audio_clips(
     return ids;
 }
 
+namespace {
+/// Moves the rest of a clip group (Main Spec §9 "region groups") by
+/// `seconds`: clips on the active versions of every track, and MIDI regions
+/// by the ticks that time spans where they start. `moved` were moved already.
+void move_group(project::ProjectData& d, const std::string& group, double seconds, const std::set<std::string>& moved)
+{
+    if (group.empty() || std::abs(seconds) < 1e-12) return;
+    for (auto& t : d.tracks) {
+        project::TrackVersion* v = t.active_version();
+        if (!v) continue;
+        for (auto& c : v->audio_clips)
+            if (c.group_id == group && !moved.count(c.id)) c.start_seconds = std::max(0.0, c.start_seconds + seconds);
+        for (auto& r : v->regions) {
+            if (r.group_id != group || moved.count(r.id)) continue;
+            const Ticks to = std::max<Ticks>(0, d.tempo.tick_at_seconds(d.tempo.seconds_at(r.start) + seconds));
+            const Ticks delta = to - r.start;
+            r.start += delta;
+            r.end += delta;
+            for (auto& n : r.notes) n.start += delta;
+            for (auto& cc : r.controllers) cc.tick += delta;
+        }
+    }
+}
+}  // namespace
+
 bool Session::update_audio_clip(const std::string& track_id, const std::string& clip_id, const std::string& label,
                                 const std::function<void(project::AudioClip&)>& change)
 {
-    if (!project_.edit_coalescing(label, on_track(track_id, [&](project::Track& t) {
-            project::TrackVersion* v = t.active_version();
+    if (!project_.edit_coalescing(label, [&](project::ProjectData& d) {
+            project::Track* t = d.find_track(track_id);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
             if (!v) return false;
             for (auto& c : v->audio_clips)
                 if (c.id == clip_id) {
+                    const double before = c.start_seconds;
                     change(c);
                     c.id = clip_id;
                     c.source_offset = std::max(0.0, c.source_offset);
                     c.fade_in = std::clamp(c.fade_in, 0.0, c.length);
                     c.fade_out = std::clamp(c.fade_out, 0.0, c.length - c.fade_in);
-                    return c.length > 0.0 && !c.file.empty();
+                    if (c.length <= 0.0 || c.file.empty()) return false;
+                    const auto group = c.group_id;
+                    const double by = c.start_seconds - before;
+                    move_group(d, group, by, {clip_id});
+                    return true;
                 }
             return false;
-        })))
+        }))
         return false;
     document_changed();
     return true;
+}
+
+std::string Session::group_items(const std::vector<ClipRef>& items)
+{
+    if (items.size() < 2) return {};
+    const std::string id = project_.ids().next("cgrp");
+    const bool ok = edit("Group", [&](project::ProjectData& d) {
+        int n = 0;
+        for (const auto& [track, item] : items) {
+            project::Track* t = d.find_track(track);
+            project::TrackVersion* v = t ? t->active_version() : nullptr;
+            if (!v) continue;
+            for (auto& c : v->audio_clips)
+                if (c.id == item) c.group_id = id, ++n;
+            for (auto& r : v->regions)
+                if (r.id == item) r.group_id = id, ++n;
+        }
+        return n >= 2;
+    });
+    return ok ? id : std::string();
+}
+
+bool Session::ungroup_items(const std::vector<ClipRef>& items)
+{
+    std::set<std::string> groups;
+    for (const auto& t : data().tracks)
+        if (const auto* v = t.active_version())
+            for (const auto& [track, item] : items) {
+                if (track != t.id) continue;
+                for (const auto& c : v->audio_clips)
+                    if (c.id == item && !c.group_id.empty()) groups.insert(c.group_id);
+                for (const auto& r : v->regions)
+                    if (r.id == item && !r.group_id.empty()) groups.insert(r.group_id);
+            }
+    if (groups.empty()) return false;
+    return edit("Ungroup", [&](project::ProjectData& d) {
+        for (auto& t : d.tracks)
+            for (auto& v : t.versions) {
+                for (auto& c : v.audio_clips)
+                    if (groups.count(c.group_id)) c.group_id.clear();
+                for (auto& r : v.regions)
+                    if (groups.count(r.group_id)) r.group_id.clear();
+            }
+        return true;
+    });
 }
 
 bool Session::remove_audio_clips(const std::vector<ClipRef>& clips)
@@ -1960,6 +2036,9 @@ bool Session::update_audio_clips(const std::vector<ClipRef>& clips, const std::s
     if (clips.empty()) return false;
     return edit(label, [&](project::ProjectData& d) {
         bool any = false;
+        std::set<std::string> moved;
+        std::vector<std::pair<std::string, double>> group_moves;
+        for (const auto& clip : clips) moved.insert(clip.second);
         for (const auto& clip : clips) {
             const auto& track = clip.first;
             const auto& id = clip.second;
@@ -1968,11 +2047,16 @@ bool Session::update_audio_clips(const std::vector<ClipRef>& clips, const std::s
             if (!v) continue;
             for (auto& c : v->audio_clips)
                 if (c.id == id) {
+                    const double before = c.start_seconds;
                     change(c);
                     c.id = id;
                     any = true;
+                    if (!c.group_id.empty() && std::abs(c.start_seconds - before) > 1e-12 &&
+                        std::none_of(group_moves.begin(), group_moves.end(), [&](const auto& g) { return g.first == c.group_id; }))
+                        group_moves.emplace_back(c.group_id, c.start_seconds - before);
                 }
         }
+        for (const auto& [group, by] : group_moves) move_group(d, group, by, moved);
         return any;
     });
 }
@@ -2478,8 +2562,9 @@ bool Session::delete_audio_range(const std::vector<std::string>& track_ids, doub
 bool Session::nudge_audio_clips(const std::string& track_id, const std::vector<std::string>& clip_ids, double seconds)
 {
     if (clip_ids.empty() || seconds == 0.0) return false;
-    return project_.edit_coalescing("Nudge clip", on_track(track_id, [&](project::Track& t) {
-        project::TrackVersion* v = t.active_version();
+    return project_.edit_coalescing("Nudge clip", [&](project::ProjectData& d) {
+        project::Track* tp = d.find_track(track_id);
+        project::TrackVersion* v = tp ? tp->active_version() : nullptr;
         if (!v) return false;
         // The group moves together; it stops at zero.
         double earliest = 1e300;
@@ -2488,10 +2573,16 @@ bool Session::nudge_audio_clips(const std::string& track_id, const std::vector<s
         if (earliest == 1e300) return false;
         const double by = std::max(seconds, -earliest);
         if (std::abs(by) < 1e-9) return false;
+        std::set<std::string> groups;
         for (auto& c : v->audio_clips)
-            if (std::find(clip_ids.begin(), clip_ids.end(), c.id) != clip_ids.end()) c.start_seconds += by;
+            if (std::find(clip_ids.begin(), clip_ids.end(), c.id) != clip_ids.end()) {
+                c.start_seconds += by;
+                if (!c.group_id.empty()) groups.insert(c.group_id);
+            }
+        const std::set<std::string> moved(clip_ids.begin(), clip_ids.end());
+        for (const auto& g : groups) move_group(d, g, by, moved);
         return true;
-    })) && (document_changed(), true);
+    }) && (document_changed(), true);
 }
 
 std::string Session::replace_audio_clips(const std::string& track_id, const std::vector<std::string>& clip_ids,

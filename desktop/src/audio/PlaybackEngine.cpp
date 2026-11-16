@@ -930,6 +930,8 @@ public:
         if (engine_.surface_input().take(source ? source->getIdentifier() : juce::String(), m)) return;
         // The Articulation Map window learning a keyswitch, controller or program.
         if (engine_.offer_learn(m)) return;
+        // The input filter, and the retrospective record of what was played.
+        if (!engine_.accept_live(m)) return;
         // The deck's Octave keys shift what a MIDI keyboard plays.
         juce::MidiMessage shifted = m;
         if ((m.isNoteOn() || m.isNoteOff()) && engine_.live_octave() != 0) {
@@ -1112,8 +1114,66 @@ void PlaybackEngine::prepare_all(double sr, int bs)
 
 void PlaybackEngine::request_rebuild() { rebuild_pending_ = true; }
 
+bool PlaybackEngine::accept_live(const juce::MidiMessage& m) noexcept
+{
+    const auto f = unpack(input_filter_.load(std::memory_order_relaxed));
+    if (!passes(f, m)) return false;
+    if (m.getRawDataSize() >= 1 && m.getRawDataSize() <= 3 && !m.isActiveSense() && !m.isMidiClock()) {
+        LiveEvent e;
+        const auto* d = m.getRawData();
+        e.bytes[0] = d[0];
+        e.bytes[1] = m.getRawDataSize() > 1 ? d[1] : 0;
+        e.bytes[2] = m.getRawDataSize() > 2 ? d[2] : 0;
+        e.wall_ms = juce::Time::getMillisecondCounterHiRes();
+        e.position = playing() && !recording() ? position_samples_.load(std::memory_order_relaxed) : -1;
+        live_log_.push(e);  // dropped when full: the history is a convenience
+    }
+    return true;
+}
+
+bool PlaybackEngine::passes(const InputFilter& f, const juce::MidiMessage& m) noexcept
+{
+    const int ch = m.getChannel();
+    if (ch >= 1 && ch <= 16 && !(f.channels & (1u << (ch - 1)))) return false;
+    if (m.isNoteOnOrOff()) {
+        if (!f.notes) return false;
+        if (m.getNoteNumber() < f.note_low || m.getNoteNumber() > f.note_high) return false;
+        if (m.isNoteOn() && m.getVelocity() < f.velocity_min) return false;
+        return true;
+    }
+    if (m.isController()) return f.controllers;
+    if (m.isPitchWheel()) return f.pitch_bend;
+    if (m.isAftertouch() || m.isChannelPressure()) return f.aftertouch;
+    if (m.isProgramChange()) return f.program;
+    return true;
+}
+
+std::vector<PlaybackEngine::LiveEvent> PlaybackEngine::live_history()
+{
+    drain_live_log();
+    return {live_history_.begin(), live_history_.end()};
+}
+
+void PlaybackEngine::clear_live_history()
+{
+    drain_live_log();
+    live_history_.clear();
+}
+
+void PlaybackEngine::drain_live_log()
+{
+    LiveEvent e;
+    while (live_log_.pop(e)) live_history_.push_back(e);
+    // Keep the last ten minutes, at most 20,000 events.
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    while (!live_history_.empty() &&
+           (live_history_.size() > 20000 || now - live_history_.front().wall_ms > 10.0 * 60.0 * 1000.0))
+        live_history_.pop_front();
+}
+
 void PlaybackEngine::timerCallback()
 {
+    drain_live_log();
     // A scrub grain has played: back to where it started from.
     if (grain_active_ && juce::Time::getMillisecondCounterHiRes() >= grain_until_ms_) {
         grain_active_ = false;

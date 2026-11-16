@@ -1664,3 +1664,29 @@ macOS, Linux and Windows. What it took:
       `mix_tools_checks` in the desktop check (VCA -12 dB, mute, group
       fader, monitor never in renders, cue isolation, bounce and undo,
       save on stop, the window).
+42. **Editing: reverse, time stretch, clip groups, Capture MIDI, input
+    filter. Done** (November 16, 2026; Main Spec §9).
+    - **Reverse / Time Stretch Clips** (Edit menu, on the Producer view's
+      selected clips): each clip's audio is processed into a new file in
+      Audio Files and the clip repointed, all as one undo step; the
+      original recording is never changed. Reverse swaps the fades.
+      Stretch (25-400 %) keeps the pitch with our own WSOLA
+      (`vcc/audio/TimeStretch.h`: Hann frames of ~40 ms at a fixed output
+      hop, each taken where it best continues the waveform), scales the
+      fades and keeps the clip's start. No third-party licence.
+    - **Group / Ungroup Clips** (Cmd/Ctrl+G, Shift+Cmd/Ctrl+G): clips and
+      MIDI regions sharing a group move and nudge together across tracks
+      (regions by the ticks that time spans), saved with the project.
+    - **Transport > Capture MIDI** (Shift+Cmd/Ctrl+R): the engine keeps
+      the last ten minutes of MIDI input played while not recording, with
+      the transport position when it was playing; the last performance
+      (after the last pause of over 3 s) becomes a region on the selected
+      track, where it was played or from the playhead
+      (`vcc/session/Retrospective.h`).
+    - **Tools > MIDI Input Filter...**: channels, note range, minimum
+      velocity, and notes / controllers / pitch bend / aftertouch /
+      program changes, applied before anything plays or records.
+      Remembered.
+    - **Tests**: `test_time_stretch` (length, pitch within 3 Hz, level
+      without dips, stereo balance), `test_session` (capture, clip groups);
+      `edit_tools_checks` in the desktop check.

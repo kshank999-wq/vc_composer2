@@ -61,6 +61,7 @@
 
 #include "audio/SurfaceInput.h"
 #include <atomic>
+#include <deque>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -180,6 +181,52 @@ public:
     MidiOutRouter& midi_router() noexcept { return *midi_router_; }
     /// A control surface's MIDI: offered every incoming message first.
     SurfaceInput& surface_input() noexcept { return surface_input_; }
+
+    // --- MIDI input filter and retrospective record (Main Spec §9) --------------
+    /// What MIDI input is let through to play and record.
+    struct InputFilter {
+        std::uint16_t channels = 0xFFFF;  ///< Bit n: channel n+1.
+        std::uint8_t note_low = 0, note_high = 127, velocity_min = 1;
+        bool notes = true, controllers = true, pitch_bend = true, aftertouch = true, program = true;
+    };
+    void set_input_filter(const InputFilter& f) noexcept { input_filter_.store(pack(f)); }
+    InputFilter input_filter() const noexcept { return unpack(input_filter_.load()); }
+    static std::uint64_t pack(const InputFilter& f) noexcept
+    {
+        return std::uint64_t(f.channels) | (std::uint64_t(f.note_low & 127) << 16) | (std::uint64_t(f.note_high & 127) << 23) |
+               (std::uint64_t(f.velocity_min & 127) << 30) | (std::uint64_t(f.notes) << 37) |
+               (std::uint64_t(f.controllers) << 38) | (std::uint64_t(f.pitch_bend) << 39) |
+               (std::uint64_t(f.aftertouch) << 40) | (std::uint64_t(f.program) << 41);
+    }
+    static InputFilter unpack(std::uint64_t v) noexcept
+    {
+        InputFilter f;
+        f.channels = static_cast<std::uint16_t>(v & 0xFFFF);
+        f.note_low = static_cast<std::uint8_t>((v >> 16) & 127);
+        f.note_high = static_cast<std::uint8_t>((v >> 23) & 127);
+        f.velocity_min = static_cast<std::uint8_t>((v >> 30) & 127);
+        f.notes = (v >> 37) & 1;
+        f.controllers = (v >> 38) & 1;
+        f.pitch_bend = (v >> 39) & 1;
+        f.aftertouch = (v >> 40) & 1;
+        f.program = (v >> 41) & 1;
+        return f;
+    }
+    static bool passes(const InputFilter& f, const juce::MidiMessage& m) noexcept;
+    /// MIDI thread: false when the filter drops the message. Logs it for
+    /// the retrospective record.
+    bool accept_live(const juce::MidiMessage& m) noexcept;
+    /// What was played on MIDI inputs while not recording (the last ten
+    /// minutes): wall time, and the transport position when it was playing.
+    struct LiveEvent {
+        std::uint8_t bytes[3] = {0, 0, 0};
+        double wall_ms = 0.0;
+        std::int64_t position = -1;  ///< Samples, or -1 when stopped (or recording).
+    };
+    std::vector<LiveEvent> live_history();
+    /// The rate the engine runs at (live history positions are in its samples).
+    double sample_rate() const noexcept { return sample_rate_; }
+    void clear_live_history();
 
     // --- Monitor path (Main Spec §12) -------------------------------------------
     /// What the speakers hear, never what renders and exports write: dim,
@@ -624,6 +671,10 @@ private:
     std::atomic<int> live_track_index_{-1};
     SurfaceInput surface_input_;
     std::atomic<bool> learn_armed_{false};
+    std::atomic<std::uint64_t> input_filter_{pack(InputFilter{})};
+    audio::SpscQueue<LiveEvent> live_log_{4096};
+    std::deque<LiveEvent> live_history_;
+    void drain_live_log();
     std::atomic<bool> monitor_dim_{false}, monitor_mono_{false}, monitor_mute_{false};
     std::atomic<float> monitor_dim_gain_{0.1f};
     std::atomic<int> monitor_pair_{0};

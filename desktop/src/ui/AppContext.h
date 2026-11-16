@@ -128,6 +128,12 @@ enum : juce::CommandID {
     bounceInPlace,
     saveOnStop,
     monitorDim,
+    reverseClips,
+    timeStretchClips,
+    groupClips,
+    ungroupClips,
+    captureMidi,
+    midiInputFilter,
 };
 }  // namespace cmd
 

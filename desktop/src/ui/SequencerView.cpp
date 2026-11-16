@@ -5136,6 +5136,12 @@ int SequencerView::selected_clip_count() const
     return static_cast<int>(impl_->model.selected_clips().size());
 }
 
+std::vector<std::pair<std::string, std::string>> SequencerView::selected_clips() const
+{
+    impl_->deferred.flush();
+    return impl_->model.selected_clips();
+}
+
 std::pair<std::string, std::string> SequencerView::selected_clip() const
 {
     impl_->deferred.flush();

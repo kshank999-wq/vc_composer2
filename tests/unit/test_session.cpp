@@ -515,3 +515,102 @@ TEST_CASE("mix groups link faders, mutes, solos and arms; VCAs trim members and 
     CHECK(s.remove_mix_group(grp));
     CHECK(s.data().vcas.empty());
 }
+
+#include "vcc/session/Retrospective.h"
+
+TEST_CASE("retrospective MIDI: the last performance, where it was played or from the playhead")
+{
+    const TempoMap tempo(120.0);  // a quarter = 0.5 s
+    const Ticks Q = kTicksPerQuarter;
+    std::vector<session::LiveMidi> ev = {
+        // An earlier noodle, then a long pause...
+        {0x90, 60, 90, 0.0, -1}, {0x80, 60, 0, 0.4, -1},
+        // ...then the phrase worth keeping, played while stopped.
+        {0x90, 64, 100, 10.0, -1}, {0x80, 64, 0, 10.5, -1}, {0xB0, 64, 127, 10.5, -1},
+        {0x90, 67, 80, 11.0, -1}, {0x90, 71, 70, 11.0, -1},  // 71 is still held
+        {0x80, 67, 0, 12.0, -1}};
+    auto r = session::capture_performance(ev, tempo, 4 * Q);
+    REQUIRE(r.has_value());
+    REQUIRE(r->notes.size() == 3u);
+    CHECK_EQ(r->notes[0].pitch, 64);
+    CHECK_EQ(r->notes[0].start, 4 * Q);       // from the playhead
+    CHECK_EQ(r->notes[0].duration, Q);         // 0.5 s at 120 BPM
+    CHECK_EQ(r->notes[1].start, 6 * Q);
+    CHECK_EQ(r->notes[0].velocity, 100);
+    const auto held = std::find_if(r->notes.begin(), r->notes.end(), [](const NoteEvent& n) { return n.pitch == 71; });
+    REQUIRE(held != r->notes.end());
+    CHECK_EQ(held->end(), 8 * Q);              // closed at the last event
+    REQUIRE(r->controllers.size() == 1u);
+    CHECK_EQ(r->controllers[0].controller, 64);
+    CHECK_EQ(r->start, 4 * Q);
+    CHECK(r->end >= 8 * Q);
+
+    // Played along with the transport: the notes land where they were heard.
+    std::vector<session::LiveMidi> along = {{0x90, 60, 90, 0.0, 10 * Q}, {0x80, 60, 0, 0.25, 10 * Q + Q / 2}};
+    r = session::capture_performance(along, tempo, 0);
+    REQUIRE(r.has_value());
+    CHECK_EQ(r->notes[0].start, 10 * Q);
+    CHECK_EQ(r->notes[0].duration, Q / 2);
+    CHECK(!session::capture_performance({{0xB0, 1, 10, 0.0, -1}}, tempo, 0).has_value());
+
+    // Into a track as a region, one undo step.
+    Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Piano", "keys.piano");
+    const auto ids = s.add_recorded_regions({{t, *session::capture_performance(ev, tempo, 0)}}, "Capture MIDI", false);
+    CHECK_EQ(ids.size(), 1u);
+    CHECK_EQ(s.undo_label(), std::string("Capture MIDI"));
+}
+
+TEST_CASE("clip groups move together across tracks; regions follow by time")
+{
+    Session s(catalogs());
+    s.new_empty();
+    const auto a = s.add_audio_track("Dialogue", false);
+    const auto b = s.add_audio_track("FX", false);
+    const auto m = s.add_track("Piano", "keys.piano");
+    project::AudioClip c;
+    c.file = "Audio Files/x.wav";
+    c.length = 2.0;
+    c.start_seconds = 1.0;
+    const auto ca = s.add_audio_clips({{a, c}}, "Import", false).front();
+    c.start_seconds = 3.0;
+    const auto cb = s.add_audio_clips({{b, c}}, "Import", false).front();
+    project::MidiRegion r;
+    r.start = s.data().tempo.tick_at_seconds(1.0);
+    r.end = r.start + kTicksPerQuarter;
+    r.notes.push_back({r.start, kTicksPerQuarter, 60, 90, 0, {}});
+    const auto rm = s.add_recorded_regions({{m, r}}, "Record", false).front();
+    const auto g = s.group_items({{a, ca}, {b, cb}, {m, rm}});
+    REQUIRE(!g.empty());
+    CHECK_EQ(s.undo_label(), std::string("Group"));
+
+    s.update_audio_clip(a, ca, "Move clip", [](project::AudioClip& x) { x.start_seconds += 0.5; });
+    auto clip_at = [&](const std::string& t, const std::string& id) {
+        for (const auto& x : s.data().find_track(t)->active_version()->audio_clips)
+            if (x.id == id) return x.start_seconds;
+        return -1.0;
+    };
+    CHECK_NEAR(clip_at(a, ca), 1.5, 1e-9);
+    CHECK_NEAR(clip_at(b, cb), 3.5, 1e-9);
+    const auto& reg = s.data().find_track(m)->active_version()->regions.front();
+    CHECK_NEAR(s.data().tempo.seconds_at(reg.start), 1.5, 1e-6);
+    CHECK_EQ(reg.notes.front().start, reg.start);
+    s.undo();
+    CHECK_NEAR(clip_at(b, cb), 3.0, 1e-9);  // one undo step for the whole group
+
+    s.nudge_audio_clips(b, {cb}, -0.25);
+    CHECK_NEAR(clip_at(a, ca), 0.75, 1e-9);
+    CHECK(s.ungroup_items({{a, ca}}));
+    s.nudge_audio_clips(b, {cb}, 0.25);
+    CHECK_NEAR(clip_at(a, ca), 0.75, 1e-9);  // ungrouped: alone
+    CHECK(s.group_items({{a, ca}}).empty());  // a group needs two
+
+    // Saved and reopened, the group holds.
+    s.group_items({{a, ca}, {b, cb}});
+    const std::string path = std::string(VCC_TEST_TMP_DIR) + "/clipgroups.vcc2";
+    REQUIRE(s.save_as(path));
+    Session o(catalogs());
+    REQUIRE(o.open(path));
+    CHECK(!o.data().find_track(a)->active_version()->audio_clips.front().group_id.empty());
+}

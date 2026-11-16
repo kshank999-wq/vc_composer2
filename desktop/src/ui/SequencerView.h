@@ -55,6 +55,8 @@ public:
     std::pair<std::string, std::string> selected_clip() const;
     /// How many clips are selected (Shift-click and box selection add to it).
     int selected_clip_count() const;
+    /// Every selected clip, {track id, clip id}, the primary one first.
+    std::vector<std::pair<std::string, std::string>> selected_clips() const;
     /// Selects a clip (the Clips list): its track, the clip, scrolled into view.
     void select_clip(const std::string& track_id, const std::string& clip_id);
     /// The track whose piano roll is open inline (empty: none).

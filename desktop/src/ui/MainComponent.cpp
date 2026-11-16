@@ -4,6 +4,7 @@
 #include "ui/console/RoutingCanvas.h"
 #include "ui/review/Review.h"
 #include "ui/review/Relink.h"
+#include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
 #include "ui/console/MixTools.h"
 #include "ui/library/ArticulationMapWindow.h"
@@ -338,6 +339,7 @@ MainComponent::MainComponent(AppContext& context)
     };
     context_.show_plugin_window = [this](const std::string& id) { show_plugin_window(id); };
     restore_monitor(context_);
+    restore_midi_input_filter(context_);
     context_.show_insert_window = [this](const std::string& owner, int slot) { show_insert_window(owner, slot); };
     context_.capture_plugin_states = [this] { capture_plugin_states(); };
     context_.show_comment = [this](const std::string& id) { review::show_comments(context_, id); };
@@ -1589,7 +1591,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::showControlSurfaces, cmd::jogForward, cmd::jogBack, cmd::showReview,
                 cmd::collectPackage, cmd::openPackage, cmd::showComments, cmd::addComment, cmd::relinkMedia,
                 cmd::articulationMap, cmd::missingInstruments, cmd::mixTools, cmd::bounceInPlace, cmd::saveOnStop,
-                cmd::monitorDim});
+                cmd::monitorDim, cmd::reverseClips, cmd::timeStretchClips, cmd::groupClips, cmd::ungroupClips,
+                cmd::captureMidi, cmd::midiInputFilter});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1682,6 +1685,26 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.setInfo("Save on Transport Stop", "Saves the project whenever playback stops", "File",
                          hw::ui_settings().getBoolValue("save_on_stop", false) ? juce::ApplicationCommandInfo::isTicked : 0);
             break;
+        case cmd::reverseClips:
+            info.setInfo("Reverse Clips", "The selected clips play backwards (new files; originals kept)", "Edit", 0);
+            break;
+        case cmd::timeStretchClips:
+            info.setInfo("Time Stretch Clips...", "Longer or shorter, pitch kept (new files; originals kept)", "Edit", 0);
+            break;
+        case cmd::groupClips:
+            info.setInfo("Group Clips", "The selected clips move together", "Edit", 0);
+            info.addDefaultKeypress('g', cmdKey);
+            break;
+        case cmd::ungroupClips:
+            info.setInfo("Ungroup Clips", "", "Edit", 0);
+            info.addDefaultKeypress('g', cmdKey | shift);
+            break;
+        case cmd::captureMidi:
+            info.setInfo("Capture MIDI", "What you just played on a MIDI keyboard, as a region on the selected track",
+                         "Transport", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            info.addDefaultKeypress('r', cmdKey | shift);
+            break;
+        case cmd::midiInputFilter: info.setInfo("MIDI Input Filter...", "Channels, notes and messages let through", "Tools", 0); break;
         case cmd::monitorDim:
             info.setInfo("Dim Monitor", "Lowers what the speakers play (never an export)", "Transport",
                          context_.engine.monitor().dim ? juce::ApplicationCommandInfo::isTicked : 0);
@@ -1845,6 +1868,20 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::collectPackage: review::show_package(context_); break;
         case cmd::relinkMedia: review::show_relink(context_); break;
         case cmd::mixTools: show_mix_tools(context_); break;
+        case cmd::reverseClips: context_.status(reverse_clips(context_, sequencer_.selected_clips())); break;
+        case cmd::timeStretchClips: ask_time_stretch(context_, sequencer_.selected_clips()); break;
+        case cmd::groupClips: {
+            const auto clips = sequencer_.selected_clips();
+            context_.status(clips.size() < 2 ? juce::String("Select two or more clips to group")
+                            : !s.group_items(clips).empty() ? "Grouped " + juce::String(static_cast<int>(clips.size())) + " clips: they move together"
+                                                            : juce::String("Could not group them"));
+            break;
+        }
+        case cmd::ungroupClips:
+            context_.status(s.ungroup_items(sequencer_.selected_clips()) ? juce::String("Ungrouped") : juce::String("No group selected"));
+            break;
+        case cmd::captureMidi: context_.status(capture_midi(context_, s.selected_track())); break;
+        case cmd::midiInputFilter: show_midi_input_filter(context_); break;
         case cmd::bounceInPlace: context_.status(bounce_in_place(context_, s.selected_track())); break;
         case cmd::saveOnStop: {
             auto& ui = hw::ui_settings();
@@ -1984,6 +2021,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             for (auto id : {cmd::editShuffle, cmd::editSlip, cmd::editSpot, cmd::editGrid, cmd::toggleSmartTool})
                 m.addCommandItem(c, id);
             m.addSeparator();
+            for (auto id : {cmd::groupClips, cmd::ungroupClips, cmd::reverseClips, cmd::timeStretchClips}) m.addCommandItem(c, id);
+            m.addSeparator();
             m.addSubMenu("Keyboard Shortcuts", shortcuts_menu());
             break;
         case 2:
@@ -2011,7 +2050,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addSeparator();
             for (auto id : {cmd::toggleLoop, cmd::toggleRecord, cmd::togglePunch}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::toggleMetronome, cmd::addHit, cmd::monitorDim}) m.addCommandItem(c, id);
+            for (auto id : {cmd::toggleMetronome, cmd::addHit, cmd::monitorDim, cmd::captureMidi}) m.addCommandItem(c, id);
             break;
         case 4:
             for (auto id : {cmd::addTrack, cmd::addAudioTrack}) m.addCommandItem(c, id);
@@ -2042,7 +2081,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
         case 5:
             for (auto id : {cmd::chordExplorer, cmd::ostinatoCreator, cmd::addTemplate}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::audioSettings, cmd::showControlSurfaces, cmd::scanPlugins, cmd::reloadCrashedPlugins})
+            for (auto id : {cmd::audioSettings, cmd::midiInputFilter, cmd::showControlSurfaces, cmd::scanPlugins,
+                            cmd::reloadCrashedPlugins})
                 m.addCommandItem(c, id);
             break;
         case 6: m.addCommandItem(c, cmd::about); break;
