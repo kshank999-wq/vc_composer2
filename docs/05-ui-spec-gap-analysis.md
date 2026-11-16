@@ -1922,3 +1922,45 @@ macOS, Linux and Windows. What it took:
       reopened, then Apply to Score); `performance_checks` in the desktop
       check (the question, Keep, the Composer tag, Apply with *always*, the
       rule applying without asking).
+50. **iPad companion: first build. Running on the iPad simulator in CI**
+    (November 16, 2026; Add-On Features spec §6, Decision: SwiftUI + the
+    shared C++ core).
+    - **One core, two apps**: `mobile/` (`vcc::mobile::Document`) is the
+      iPad's window onto the desktop's own session, project, score editor
+      and engraving, behind a standard-library-only header. It is built
+      and unit-tested with everything else (`test_mobile`), and
+      cross-built for iPadOS by `ipad/build-core.sh` into an XCFramework.
+    - **The app** (`ipad/`, SwiftUI, XcodeGen): opens and saves the
+      desktop's `.vcc2` files through the Files app, nothing converted;
+      **Send** shares the file (AirDrop to the Mac, iCloud Drive). The score
+      is the desktop's engraving drawn with CoreGraphics and Bravura.
+      Fingers pan and pinch-zoom (re-engraved at the new size); the Pencil
+      (or a finger press-and-hold) shows a shadow note at the pitch under
+      it and enters on lift - the pattern reviewers liked in Sibelius for
+      iPad; a finger tap enters or selects. A floating keypad: note values,
+      rest, dot, accidentals, delete, undo/redo (the system undo manager,
+      so three-finger undo works). Part picker; play on Apple's sampler
+      (the spec's lightweight audition - sample libraries stay on the
+      desktop).
+    - **Handwriting** (spec §6.2): Write mode puts a PencilKit ink layer
+      over the score (Pencil only by default; *Finger draws* is the
+      spec's option). A pause reads the ink with the shared recognizer
+      (`mobile/Handwriting`): notes, rests, accidentals and rhythm, as
+      the spec's release scope recommends. The preview draws each symbol
+      in orange and rings doubts in red with the reason - a head between a
+      line and a space (tap it for the other reading), a stemless filled
+      head, an unclear accidental, a bar written too full, strokes not
+      read - and Accept writes the phrase as one undo step. Sibelius for
+      iPad has no handwriting recognition; StaffPad marks a whole bar
+      orange without saying which stroke failed.
+    - **Checks**: on every push, `.github/workflows/ipad.yml` builds the
+      core for device and simulator, generates the project and runs the
+      unit tests (bundled content, entry, save and reopen in the desktop
+      format, templates, Bravura drawing, handwriting through the bridge)
+      and a UI test (tap entry of three notes, undo, redo, select, delete)
+      on an iPad simulator, with screenshots saved as the run's artifact.
+    - **Not yet**: handwriting tried with a real Pencil (the recognizer is
+      tested on synthetic strokes and will need tuning on a device);
+      articulations, slurs and dynamics in handwriting; page view; the
+      full score of several parts at once; a kept sketch layer; signing
+      and TestFlight (needs App Store Connect API key secrets).

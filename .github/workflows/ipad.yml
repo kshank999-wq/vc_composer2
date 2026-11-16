@@ -70,18 +70,6 @@ jobs:
           grep -E "error:|Test Case .*(passed|failed)|XCTAssert|\*\* (BUILD|TEST)" "$RUNNER_TEMP/xcodebuild.log" | head -200
           if [ $status -ne 0 ]; then tail -80 "$RUNNER_TEMP/xcodebuild.log"; fi
           exit $status
-      - name: Screenshots (small, inline, for review from the log)
-        if: always()
-        run: |
-          for f in "$RUNNER_TEMP"/shots/*.png; do
-            [ -f "$f" ] || continue
-            sips -s format jpeg -s formatOptions 55 -Z 1100 "$f" --out "$f.jpg" >/dev/null
-            echo "::group::SHOT $(basename "$f") $(stat -f%z "$f.jpg") bytes"
-            echo "BEGIN-SHOT $(basename "$f")"
-            base64 -i "$f.jpg" | fold -w 120
-            echo "END-SHOT"
-            echo "::endgroup::"
-          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
