@@ -18,6 +18,8 @@
 #include <string>
 #include <vector>
 
+#include "vcc/mobile/Handwriting.h"
+
 namespace vcc::mobile {
 
 // --- Drawing: the engraving's display list, flattened -----------------------
@@ -120,6 +122,8 @@ public:
     std::string add_track(const std::string& name, const std::string& instrument_id);
     int bar_count() const;
     double tempo_bpm() const;
+    /// The project's time base (ticks per quarter note).
+    static std::int64_t ticks_per_quarter();
     std::string meter() const;  ///< "4/4" at the start.
     std::string key() const;    ///< "D major".
 
@@ -144,6 +148,13 @@ public:
     bool remove_note(const std::string& track_id, std::uint64_t note);
     /// -2..2: double flat .. double sharp, 0 natural.
     bool set_accidental(const std::string& track_id, std::uint64_t note, int alteration);
+    /// Handwriting: strokes written over the track's last layout, read into
+    /// a preview (nothing changes yet). The composer corrects it - choosing a
+    /// doubtful head's other reading, say - and commits it.
+    Recognition recognize(const std::string& track_id, const std::vector<Stroke>& strokes) const;
+    /// Writes a (corrected) recognition into the score as one undo step.
+    bool commit(const std::string& track_id, const Recognition& recognition);
+
     bool undo();
     bool redo();
     bool can_undo() const;

@@ -1,17 +1,28 @@
 import SwiftUI
 
+/// Picks the app: the document browser normally; a fresh score straight away
+/// for the UI tests.
 @main
-struct VCComposerPadApp: App {
-    /// UI tests open a fresh score straight away instead of the document browser.
-    private let testing = ProcessInfo.processInfo.arguments.contains("-UITestNewScore")
-
-    var body: some Scene {
-        if testing {
-            WindowGroup { ScoreScreen(document: ScoreDocument()) }
+enum Launcher {
+    static func main() {
+        if ProcessInfo.processInfo.arguments.contains("-UITestNewScore") {
+            TestingApp.main()
         } else {
-            DocumentGroup(newDocument: { ScoreDocument() }) { file in
-                ScoreScreen(document: file.document)
-            }
+            VCComposerPadApp.main()
         }
+    }
+}
+
+struct VCComposerPadApp: App {
+    var body: some Scene {
+        DocumentGroup(newDocument: { ScoreDocument() }) { file in
+            ScoreScreen(document: file.document)
+        }
+    }
+}
+
+struct TestingApp: App {
+    var body: some Scene {
+        WindowGroup { ScoreScreen(document: ScoreDocument()) }
     }
 }

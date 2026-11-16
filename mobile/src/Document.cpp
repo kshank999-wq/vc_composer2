@@ -12,6 +12,7 @@
 #include "vcc/engraving/TimelineMap.h"
 #include "vcc/project/Render.h"
 #include "vcc/session/Session.h"
+#include "HandwritingImpl.h"
 
 namespace vcc::mobile {
 
@@ -161,6 +162,8 @@ int Document::bar_count() const
     return std::max(4, d.meter.bar_at(std::max<Ticks>(0, impl_->session->content_end() - 1)) + 1);
 }
 
+std::int64_t Document::ticks_per_quarter() { return kTicksPerQuarter; }
+
 double Document::tempo_bpm() const { return impl_->session->data().tempo.bpm_at(0); }
 std::string Document::meter() const { return impl_->session->data().meter.at_bar(1).to_string(); }
 std::string Document::key() const { return impl_->session->data().key; }
@@ -303,6 +306,78 @@ bool Document::set_accidental(const std::string& track_id, std::uint64_t note, i
         if (!score.find_note(note)) return false;
         ed.set_selection({note});
         return ed.set_accidental(std::clamp(alteration, -2, 2)).succeeded();
+    });
+}
+
+Recognition Document::recognize(const std::string& track_id, const std::vector<Stroke>& strokes) const
+{
+    const auto it = impl_->laid.find(track_id);
+    detail::InkContext ctx;
+    if (it != impl_->laid.end()) {
+        ctx.staff_top = it->second.result.staff_top_y;
+        const auto timeline = it->second.timeline;
+        ctx.tick_for_x = [timeline](double x) {
+            const Ticks t = std::max<Ticks>(0, timeline.tick_for_x(x));
+            const Ticks grid = kTicksPerQuarter / 2;  // writing starts on an eighth
+            return static_cast<std::int64_t>((t + grid / 2) / grid * grid);
+        };
+    }
+    const auto& meter = impl_->session->data().meter;
+    ctx.bar_end_of = [&meter](std::int64_t tick) { return static_cast<std::int64_t>(meter.bar_start(meter.bar_at(tick) + 1)); };
+    ctx.duration_ticks = [](int value, int dots) {
+        nt::Duration d{static_cast<nt::NoteValue>(value)};
+        d.dots = static_cast<std::uint8_t>(std::clamp(dots, 0, 2));
+        return static_cast<std::int64_t>(d.ticks());
+    };
+    return detail::recognize(strokes, ctx);
+}
+
+bool Document::commit(const std::string& track_id, const Recognition& recognition)
+{
+    if (recognition.items.empty()) return false;
+    const auto it = impl_->laid.find(track_id);
+    if (it == impl_->laid.end()) return false;
+    const auto& laid = it->second;
+    int notes = 0;
+    for (const auto& r : recognition.items) notes += r.kind == Recognized::Kind::Note ? 1 : 0;
+    const std::string label = notes == static_cast<int>(recognition.items.size())
+                                  ? "Handwrite " + std::to_string(notes) + (notes == 1 ? " note" : " notes")
+                                  : "Handwrite " + std::to_string(recognition.items.size()) + " symbols";
+    return impl_->edit(track_id, label, [&](editing::ScoreEditor& ed, nt::Score& score) {
+        for (const auto& r : recognition.items) {
+            if (static_cast<std::size_t>(r.staff) >= score.staff_count()) return false;
+            // With a note selected, choosing a value would retime it (as on the
+            // desktop): the last note entered stays selected, so let it go.
+            ed.clear_selection();
+            ed.set_duration(static_cast<nt::NoteValue>(r.value));
+            ed.set_dots(r.dots);
+            if (r.kind == Recognized::Kind::Rest) {
+                editing::EditCursor c;
+                c.staff_index = static_cast<std::size_t>(r.staff);
+                c.tick = r.tick;
+                ed.set_cursor(c);
+                ed.set_duration(static_cast<nt::NoteValue>(r.value));
+                ed.set_dots(r.dots);
+                if (!ed.insert_rest().succeeded()) return false;
+                continue;
+            }
+            bool first = true;
+            for (const int pos : r.positions) {
+                // The pitch a staff position spells in the clef and key there.
+                const double x = laid.timeline.x_for_tick(r.tick) + 0.5;
+                const double y = laid.result.staff_top_y[static_cast<std::size_t>(r.staff)] + 4.0 - 0.5 * pos;
+                const auto at = en::insertion_point_at(laid.result, score, laid.timeline, en::Point{x, y}, 0);
+                if (!at.valid) return false;
+                nt::Pitch pitch = at.pitch;
+                if (first && r.alteration != Recognized::kNoAccidental)
+                    pitch.alteration = static_cast<std::int8_t>(std::clamp(r.alteration, -2, 2));
+                const bool ok = first ? ed.insert_at(static_cast<std::size_t>(r.staff), r.tick, pitch).succeeded()
+                                      : ed.add_to_chord(pitch).succeeded();
+                if (!ok) return false;
+                first = false;
+            }
+        }
+        return true;
     });
 }
 
