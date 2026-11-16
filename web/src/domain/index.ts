@@ -12,3 +12,4 @@ export * from './discounts';
 export * from './license-grants';
 export * from './account-password';
 export * from './releases';
+export * from './collaboration';
