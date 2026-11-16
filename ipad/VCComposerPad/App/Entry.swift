@@ -97,7 +97,8 @@ struct Keypad: View {
         .offset(x: offset.width + drag.width, y: offset.height + drag.height)
         .gesture(DragGesture().updating($drag) { v, s, _ in s = v.translation }
                     .onEnded { v in offset.width += v.translation.width; offset.height += v.translation.height })
-        .accessibilityIdentifier("keypad")
+        // No identifier here: on a container it would replace the keys' own.
+        .accessibilityElement(children: .contain)
     }
 
     /// An accidental: on the selection when there is one, else for the next note.
