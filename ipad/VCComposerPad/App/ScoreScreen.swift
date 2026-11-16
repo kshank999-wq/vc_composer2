@@ -6,6 +6,10 @@ struct ScoreScreen: View {
     @ObservedObject var document: ScoreDocument
     @StateObject private var entry = EntryState()
     @StateObject private var player = Player()
+    @StateObject private var ink = InkController()
+    @State private var writing = false
+    @AppStorage("fingerDraws") private var fingerDraws = false
+    @State private var sending: SendItem?
     @State private var trackId = ""
     @Environment(\.undoManager) private var undoManager
 
@@ -16,8 +20,10 @@ struct ScoreScreen: View {
         VStack(spacing: 0) {
             header
             ZStack(alignment: .bottomTrailing) {
-                ScoreCanvas(document: document, entry: entry, trackId: track?.identifier ?? "", playhead: player.position)
+                ScoreCanvas(document: document, entry: entry, trackId: track?.identifier ?? "", playhead: player.position,
+                            ink: ink, writing: writing, fingerDraws: fingerDraws)
                     .ignoresSafeArea(edges: .bottom)
+                if writing { inkBar.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading) }
                 Keypad(entry: entry,
                        onDelete: deleteSelection,
                        onAccidental: setAccidental,
@@ -27,6 +33,7 @@ struct ScoreScreen: View {
             }
         }
         .onAppear { if trackId.isEmpty { trackId = tracks.first?.identifier ?? "" } }
+        .sheet(item: $sending) { item in ShareSheet(items: [item.url]) }
         .onDisappear { player.stop() }
     }
 
@@ -47,6 +54,17 @@ struct ScoreScreen: View {
             .accessibilityIdentifier("play")
             .accessibilityLabel(player.playing ? "Stop" : "Play")
 
+            Button { writing.toggle() } label: {
+                Label("Write", systemImage: writing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
+                    .font(.headline)
+            }
+            .accessibilityIdentifier("write")
+            .accessibilityAddTraits(writing ? .isSelected : [])
+
+            Button { send() } label: { Label("Send", systemImage: "square.and.arrow.up").font(.headline) }
+                .accessibilityIdentifier("send")
+                .accessibilityHint("Share the score as a VC Composer project to open on the desktop")
+
             Text("\(Int(document.core.tempo)) bpm  ·  \(document.core.meter)  ·  \(document.core.key)")
                 .font(.subheadline).foregroundStyle(.secondary)
             Spacer()
@@ -58,6 +76,49 @@ struct ScoreScreen: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .background(.bar)
+    }
+
+    /// Handwriting: what was read, and Accept / Clear (spec §6.2: preview,
+    /// correct, then commit).
+    private var inkBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "pencil.and.scribble").foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ink.ready ? ink.summary : "Write with the Pencil on the staff")
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityIdentifier("ink-summary")
+                if ink.toCheck > 0 {
+                    Text("Tap a red note to take its other reading").font(.caption).foregroundStyle(.red)
+                }
+            }
+            Toggle("Finger draws", isOn: $fingerDraws).toggleStyle(.button).font(.caption)
+                .accessibilityIdentifier("finger-draws")
+            Button("Read") { ink.read() }.accessibilityIdentifier("ink-read")
+            Button("Clear", role: .destructive) { ink.clear() }.accessibilityIdentifier("ink-clear")
+            Button("Accept") { ink.accept() }
+                .buttonStyle(.borderedProminent)
+                .disabled(!ink.ready)
+                .accessibilityIdentifier("ink-accept")
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .shadow(radius: 6)
+        .frame(maxWidth: 640)
+    }
+
+    /// Send to Desktop (spec §6.3's first step): the project as the desktop's
+    /// own .vcc2 file, through the share sheet (AirDrop to the Mac, iCloud
+    /// Drive, Files). The desktop opens it as it is.
+    private func send() {
+        let name = document.core.title.isEmpty ? "Score" : document.core.title
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name + ".vcc2")
+        try? FileManager.default.removeItem(at: url)
+        do {
+            try document.core.save(toPath: url.path)
+            sending = SendItem(url: url)
+        } catch {
+            entry.status = "Could not prepare the file: \(error.localizedDescription)"
+        }
     }
 
     private func deleteSelection() {
@@ -78,4 +139,18 @@ struct ScoreScreen: View {
         }
         entry.status = a < 0 ? "Flat" : a > 0 ? "Sharp" : "Natural"
     }
+}
+
+struct SendItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// The system share sheet.
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

@@ -1,6 +1,7 @@
 #import "VCCDocument.h"
 
 #import <CoreText/CoreText.h>
+#import <UIKit/UIKit.h>
 
 #include <algorithm>
 #include <map>
@@ -58,6 +59,57 @@ NSError *fail(const std::string &message)
 - (double)duration { return _duration; }
 - (NSInteger)pitch { return _pitch; }
 - (NSInteger)velocity { return _velocity; }
+@end
+
+@implementation VCCRecognizedItem {
+@public
+    vcc::mobile::Recognized _r;
+}
+- (BOOL)isRest { return _r.kind == vcc::mobile::Recognized::Kind::Rest; }
+- (NSInteger)value { return _r.value; }
+- (NSInteger)dots { return _r.dots; }
+- (NSInteger)staff { return _r.staff; }
+- (NSArray<NSNumber *> *)positions
+{
+    NSMutableArray *out = [NSMutableArray array];
+    for (int p : _r.positions) [out addObject:@(p)];
+    return out;
+}
+- (int64_t)tick { return _r.tick; }
+- (BOOL)doubtful { return _r.doubtful; }
+- (NSString *)why { return ns(_r.why); }
+- (BOOL)hasAlternative { return _r.has_alternative; }
+@end
+
+@implementation VCCRecognition {
+@public
+    vcc::mobile::Recognition _rec;
+}
+- (NSArray<VCCRecognizedItem *> *)items
+{
+    NSMutableArray *out = [NSMutableArray array];
+    for (const auto &r : _rec.items) {
+        VCCRecognizedItem *i = [[VCCRecognizedItem alloc] init];
+        i->_r = r;
+        [out addObject:i];
+    }
+    return out;
+}
+- (NSString *)summary { return ns(_rec.summary); }
+- (NSInteger)doubtfulCount { return _rec.doubtful_count(); }
+- (NSInteger)unusedStrokeCount { return static_cast<NSInteger>(_rec.unused_strokes.size()); }
+- (void)useAlternativeAtIndex:(NSInteger)index
+{
+    if (index < 0 || static_cast<std::size_t>(index) >= _rec.items.size()) return;
+    auto &r = _rec.items[static_cast<std::size_t>(index)];
+    if (!r.has_alternative || r.positions.empty()) return;
+    std::swap(r.positions.front(), r.alternative_position);
+}
+- (void)removeItemAtIndex:(NSInteger)index
+{
+    if (index < 0 || static_cast<std::size_t>(index) >= _rec.items.size()) return;
+    _rec.items.erase(_rec.items.begin() + index);
+}
 @end
 
 @implementation VCCDocument {
@@ -297,6 +349,29 @@ static void draw_codepoint(CGContextRef ctx, CTFontRef font, uint32_t cp, CGFloa
 {
     return _doc->set_accidental(str(trackId), note, static_cast<int>(alteration));
 }
++ (int64_t)ticksPerQuarter { return vcc::mobile::Document::ticks_per_quarter(); }
+
+- (VCCRecognition *)recognizeInTrack:(NSString *)trackId strokes:(NSArray<NSArray<NSValue *> *> *)strokes
+{
+    std::vector<vcc::mobile::Stroke> ink;
+    for (NSArray<NSValue *> *stroke in strokes) {
+        vcc::mobile::Stroke s;
+        for (NSValue *v in stroke) {
+            const CGPoint p = v.CGPointValue;
+            s.push_back({p.x, p.y});
+        }
+        if (!s.empty()) ink.push_back(std::move(s));
+    }
+    VCCRecognition *r = [[VCCRecognition alloc] init];
+    r->_rec = _doc->recognize(str(trackId), ink);
+    return r;
+}
+
+- (BOOL)commitRecognition:(VCCRecognition *)recognition inTrack:(NSString *)trackId
+{
+    return _doc->commit(str(trackId), recognition->_rec);
+}
+
 - (BOOL)undo { return _doc->undo(); }
 - (BOOL)redo { return _doc->redo(); }
 

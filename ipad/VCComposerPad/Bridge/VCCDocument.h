@@ -40,7 +40,34 @@ typedef NS_ENUM(NSInteger, VCCValue) {
 @property(nonatomic, readonly) NSInteger velocity;
 @end
 
+/// One symbol read from handwriting, before it is written.
+@interface VCCRecognizedItem : NSObject
+@property(nonatomic, readonly) BOOL isRest;
+@property(nonatomic, readonly) NSInteger value;       ///< VCCValue.
+@property(nonatomic, readonly) NSInteger dots;
+@property(nonatomic, readonly) NSInteger staff;
+@property(nonatomic, readonly, copy) NSArray<NSNumber *> *positions;  ///< Staff positions (a chord: several).
+@property(nonatomic, readonly) int64_t tick;
+@property(nonatomic, readonly) BOOL doubtful;
+@property(nonatomic, readonly, copy) NSString *why;
+@property(nonatomic, readonly) BOOL hasAlternative;
+@end
+
+/// Handwriting read into a preview: correct it, then commit it.
+@interface VCCRecognition : NSObject
+@property(nonatomic, readonly, copy) NSArray<VCCRecognizedItem *> *items;
+@property(nonatomic, readonly, copy) NSString *summary;
+@property(nonatomic, readonly) NSInteger doubtfulCount;
+@property(nonatomic, readonly) NSInteger unusedStrokeCount;
+/// A doubtful head: take its other reading (line <-> space). Toggles.
+- (void)useAlternativeAtIndex:(NSInteger)index NS_SWIFT_NAME(useAlternative(at:));
+- (void)removeItemAtIndex:(NSInteger)index NS_SWIFT_NAME(removeItem(at:));
+@end
+
 @interface VCCDocument : NSObject
+
+/// The project's time base (ticks per quarter note).
++ (int64_t)ticksPerQuarter NS_SWIFT_NAME(ticksPerQuarter());
 
 /// The shipped content (instruments, templates) and Bravura's metadata, from
 /// the app bundle. Nil, with an error, when the content is missing.
@@ -98,6 +125,13 @@ typedef NS_ENUM(NSInteger, VCCValue) {
 - (BOOL)enterRestInTrack:(NSString *)trackId at:(VCCPlacement *)at value:(VCCValue)value dots:(NSInteger)dots NS_SWIFT_NAME(enterRest(inTrack:at:value:dots:));
 - (BOOL)removeNote:(uint64_t)note inTrack:(NSString *)trackId NS_SWIFT_NAME(removeNote(_:inTrack:));
 - (BOOL)setAccidental:(NSInteger)alteration forNote:(uint64_t)note inTrack:(NSString *)trackId NS_SWIFT_NAME(setAccidental(_:forNote:inTrack:));
+/// Handwriting: strokes (points in staff spaces, the track's last layout)
+/// read into a preview; nothing changes until it is committed.
+- (VCCRecognition *)recognizeInTrack:(NSString *)trackId
+                             strokes:(NSArray<NSArray<NSValue *> *> *)strokes NS_SWIFT_NAME(recognize(inTrack:strokes:));
+/// Writes a (corrected) recognition as one undo step.
+- (BOOL)commitRecognition:(VCCRecognition *)recognition inTrack:(NSString *)trackId NS_SWIFT_NAME(commit(_:inTrack:));
+
 - (BOOL)undo;
 - (BOOL)redo;
 

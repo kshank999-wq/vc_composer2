@@ -58,3 +58,38 @@ final class BridgeTests: XCTestCase {
         XCTAssertGreaterThan(dark, 200)
     }
 }
+
+/// Handwriting through the bridge: strokes in, a preview out, committed.
+final class HandwritingTests: XCTestCase {
+    private func line(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double) -> [NSValue] {
+        (0...12).map { i in
+            let t = Double(i) / 12
+            return NSValue(cgPoint: CGPoint(x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t))
+        }
+    }
+    private func scribble(_ cx: Double, _ cy: Double) -> [NSValue] {
+        (0...10).map { i in
+            let y = cy - 0.4 + 0.08 * Double(i)
+            let half = 0.6 * max(0.22, (1 - pow((y - cy) / 0.45, 2)).squareRoot())
+            return NSValue(cgPoint: CGPoint(x: i % 2 == 1 ? cx + half : cx - half, y: y))
+        }
+    }
+
+    func testAHandwrittenQuarterIsPreviewedThenWritten() throws {
+        let doc = try Core.make()
+        doc.newEmpty(withInstrument: "woodwinds.flute")
+        let track = try XCTUnwrap(doc.tracks.first)
+        _ = doc.layoutTrack(track.identifier, spacesPerQuarter: 6)
+        let middle = doc.y(forStaff: 0, position: 4, inTrack: track.identifier)
+        let r = doc.recognize(inTrack: track.identifier,
+                              strokes: [scribble(0.4, middle), line(1.0, middle, 1.0, middle - 3.4)])
+        XCTAssertEqual(r.items.count, 1)
+        XCTAssertEqual(r.items.first?.value, VCCValue.quarter.rawValue)
+        XCTAssertEqual(r.items.first?.positions.first?.intValue, 4)
+        XCTAssertEqual(r.doubtfulCount, 0)
+        XCTAssertEqual(doc.performance().count, 0, "a preview writes nothing")
+        XCTAssertTrue(doc.commit(r, inTrack: track.identifier))
+        XCTAssertEqual(doc.performance().first?.pitch, 71)
+        XCTAssertEqual(doc.undoLabel, "Handwrite 1 note")
+    }
+}
