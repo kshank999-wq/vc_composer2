@@ -1379,7 +1379,9 @@ void performance_checks(AppContext& ctx, MainComponent& main, const std::string&
     session.undo();
     check(session.performance_of(track)->empty(), "one undo returns the note to how it is written");
 
-    // A plain drag of a note up a tone: a new pitch, written into the score.
+    // A plain drag of a note up a tone changes the written music: Decision 1
+    // asks - Apply to Score or Keep Producer Override (Memory Management
+    // spec §2.3: never silently overwrite Composer content).
     const auto rows_per_tone = (notes[0].y - notes[1].y);  // C to D is a tone
     const auto& sc0 = session.data().find_track(track)->active_version()->score;
     std::vector<notation::ScoreNote> line;
@@ -1387,18 +1389,65 @@ void performance_checks(AppContext& ctx, MainComponent& main, const std::string&
         if (!n.is_rest) line.push_back(n);
     std::sort(line.begin(), line.end(), [](const auto& a, const auto& b) { return a.start_tick < b.start_tick; });
     const auto target = line.size() >= 4 ? line[3] : notation::ScoreNote{};
-    drag(*roll, {last.left + 4.0f, last.y}, {last.left + 4.0f, last.y - rows_per_tone});
-    if (auto* stray = find_dialog("Notate the edit"))
-        if (auto* cancel = find_button(*stray, "Cancel")) cancel->triggerClick(), pump(100);
-    const auto* rewritten = session.data().find_track(track)->active_version()->score.find_note(target.id);
     const int before_midi = notation::midi_note_number(target.pitch);
+    auto played_pitch = [&] {
+        const auto r = project::render_track(*session.data().find_track(track));
+        for (std::size_t i = 0; i < r.notes.size(); ++i)
+            if (r.note_ids[i] == target.id) return r.notes[i].pitch;
+        return -1;
+    };
+    const int played_before = played_pitch();
+    auto drag_up = [&] { drag(*roll, {last.left + 4.0f, last.y}, {last.left + 4.0f, last.y - rows_per_tone}); pump(150); };
+    drag_up();
+    auto* question = find_dialog("This changes the score");
+    check(question != nullptr && score_json() == score_before,
+          "dragging a score note up a tone asks before the score changes (Apply to Score / Keep Producer Override)");
+    if (question) {
+        shoot(*question, dir, "19-producer-edit-question");
+        if (auto* keep = find_button(*question, "Keep Producer Override")) keep->triggerClick();
+        pump(200);
+    }
+    const auto* ov = session.performance_of(track);
+    check(score_json() == score_before && played_pitch() == played_before + 2 && ov && ov->count(target.id) &&
+              ov->at(target.id).producer,
+          "Keep Producer Override: the score stays as written, playback is a tone higher, the note is marked");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(300);
+    shoot(main, dir, "19-producer-override-in-composer");
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(300);
+    // Apply to Score for the kept note writes it as it plays.
+    const int applied = session.apply_overrides_to_score(track, {target.id});
+    const auto* now = session.data().find_track(track)->active_version()->score.find_note(target.id);
+    check(applied == 1 && now && notation::midi_note_number(now->pitch) == before_midi + 2 && played_pitch() == played_before + 2 &&
+              session.performance_of(track)->count(target.id) == 0,
+          "Apply to Score later writes the kept note as it plays, and the override goes");
+    session.undo();
+    session.undo();
+    check(score_json() == score_before && session.performance_of(track)->empty(), "undo puts both back");
+
+    // Apply to Score, ticking "always": written, and the project's rule.
+    drag_up();
+    question = find_dialog("This changes the score");
+    if (question) {
+        if (auto* always = dynamic_cast<juce::ToggleButton*>(question->findChildWithID("always")))
+            always->setToggleState(true, juce::dontSendNotification);
+        if (auto* apply = find_button(*question, "Apply to Score")) apply->triggerClick();
+        pump(200);
+    }
+    const auto* rewritten = session.data().find_track(track)->active_version()->score.find_note(target.id);
     const int after_midi = rewritten ? notation::midi_note_number(rewritten->pitch) : -1;
     check(rewritten && after_midi == before_midi + 2 && rewritten->start_tick == target.start_tick &&
-              session.performance_of(track)->empty(),
-          "dragging a score note up a tone rewrites its pitch in the score (" + juce::String(before_midi) + " -> " +
-              juce::String(after_midi) + ")");
+              session.performance_of(track)->empty() && session.data().producer_edits == "apply",
+          "Apply to Score rewrites the pitch in the score (" + juce::String(before_midi) + " -> " + juce::String(after_midi) +
+              ") and, ticked, becomes this project's rule");
     session.undo();
     check(score_json() == score_before, "one undo puts the written note back");
+    drag_up();
+    check(find_dialog("This changes the score") == nullptr && score_json() != score_before,
+          "with the rule set, the next such edit applies without asking");
+    session.undo();
+    session.set_producer_edits("ask");
 
     // Stretching the first note into the second: the reconciliation prompt.
     drag(*roll, {first.right - 1.0f, first.y}, {first.right + 20.0f, first.y});

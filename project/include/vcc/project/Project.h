@@ -126,7 +126,14 @@ struct NoteOverride {
     /// when the expression map shapes dynamics with a controller, to that
     /// controller while the note sounds.
     int cc = 0;
-    bool empty() const noexcept { return onset == 0 && length == 0 && velocity == 0 && cc == 0; }
+    /// Semitones added to what sounds (Keep Producer Override of a pitch
+    /// edit, Memory Management spec §2.3): the written note is unchanged.
+    int pitch = 0;
+    /// Kept as a Producer override of an edit that would have changed the
+    /// written music: Composer marks the note, so the score reader knows
+    /// playback differs from the page.
+    bool producer = false;
+    bool empty() const noexcept { return onset == 0 && length == 0 && velocity == 0 && cc == 0 && pitch == 0; }
 };
 bool operator==(const NoteOverride& a, const NoteOverride& b) noexcept;
 bool operator!=(const NoteOverride& a, const NoteOverride& b) noexcept;
@@ -588,6 +595,11 @@ struct ProjectData {
     /// with the slowest path. Saved with the project, so a mix sounds the
     /// same when it is reopened. Older files, which did not say, have it on.
     bool delay_compensation = true;
+    /// A Producer edit that would change the written music (Memory
+    /// Management spec §2.3): "ask" (Apply to Score / Keep Producer
+    /// Override), or, once "always do this for this project" was ticked,
+    /// "apply" or "keep".
+    std::string producer_edits = "ask";
     /// The keyboard deck's key zoom (1-3), remembered with the project
     /// (docs/spec/ui, "Behavior rules" 3). A view setting: no undo step.
     double key_zoom = 1.0;

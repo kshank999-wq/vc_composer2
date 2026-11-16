@@ -36,6 +36,8 @@ NoteOverride clamp_override(const NoteOverride& o) noexcept
     c.length = std::clamp<Ticks>(o.length, -kMaxShift, 8 * kTicksPerQuarter);
     c.velocity = std::clamp(o.velocity, -127, 127);
     c.cc = std::clamp(o.cc, -127, 127);
+    c.pitch = std::clamp(o.pitch, -48, 48);
+    c.producer = o.producer;
     return c;
 }
 

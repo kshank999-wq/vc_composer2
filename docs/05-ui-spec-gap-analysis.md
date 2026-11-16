@@ -1891,3 +1891,34 @@ macOS, Linux and Windows. What it took:
       rows, sorting, Suspend, Reload, Purge, Locate, a cancelled batch and
       a family batch that closes its processes. `VCC_CHECK_ONLY=freeze_checks,usage_checks`
       (any of the four memory sections) runs just those, in about a minute.
+49. **Memory Management spec, Decision 1: Apply to Score / Keep Producer
+    Override. Done** (November 16, 2026; Memory Management spec §2.3).
+    - **The rule**: a Producer edit that would change the written music -
+      a score note dragged to another pitch, or moved or lengthened onto
+      a new rhythm in the piano roll - no longer writes the score
+      silently. It asks: **Apply to Score** (Composer shows it; parts and
+      exports print it) or **Keep Producer Override** (the score stays as
+      written; only playback changes). *Always do this for this project*
+      makes the answer the project's rule (saved with it); the piano
+      roll's score-note menu, *Edits that change the score*, sets it back
+      to *Ask each time* or to either rule. Edits that only shape the
+      performance (velocity, Alt-drag timing, humanize, an off-grid nudge
+      notation cannot write) never ask.
+    - **Overrides can now hold a pitch**: a performance override carries a
+      semitone offset as well as timing, length, velocity and controller,
+      so Keep never touches the score - before, keeping a pitch edit still
+      wrote the pitch.
+    - **Clearly identified**: in Composer a note kept as a Producer
+      override wears a dashed amber tag with a small `P`; in the piano
+      roll its written position and pitch show as a dashed outline joined
+      to where it plays. *Apply to Score (write them as they play)* in the
+      score-note menu turns kept overrides into notation later (velocity
+      and controller changes stay performance; a placement notation cannot
+      write stays an override and says so).
+    - **Articulation tracks**: an edit on an articulation track is its
+      part's edit (they share note ids), asked about and applied there, so
+      it follows into every view and is never overwritten.
+    - **Tests**: `test_notate` (keep a pitch and a timing edit, saved and
+      reopened, then Apply to Score); `performance_checks` in the desktop
+      check (the question, Keep, the Composer tag, Apply with *always*, the
+      rule applying without asking).

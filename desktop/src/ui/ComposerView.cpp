@@ -134,6 +134,25 @@ public:
             g.setColour(juce::Colour(strict ? 0xffe0553a : 0xffe0a040));
             g.drawEllipse(r.translated(vb.getX(), vb.getY()).expanded(3.5f), 1.6f);
         }
+        // Producer overrides (Memory Management spec §2.3): a note that plays
+        // differently from how it is written - kept in Producer instead of
+        // applied to the score - wears a small amber tag, so the page never
+        // silently disagrees with what is heard.
+        for (const auto& [id, ov] : t->active_version()->performance) {
+            if (!ov.producer) continue;
+            const auto r = view_.notehead_bounds(id);
+            if (r.isEmpty()) continue;
+            const auto at = r.translated(vb.getX(), vb.getY()).expanded(3.0f);
+            juce::Path ring, dashed;
+            ring.addRoundedRectangle(at, 3.0f);
+            const float dashes[] = {2.5f, 2.0f};
+            juce::PathStrokeType(1.3f).createDashedStroke(dashed, ring, dashes, 2);
+            g.setColour(juce::Colour(0xffe8a33d));
+            g.fillPath(dashed);
+            g.setFont(hw::fonts::silk(8.5f, 0.04f, true));
+            g.drawText("P", juce::Rectangle<float>(at.getRight() - 1.0f, at.getY() - 9.0f, 9.0f, 9.0f), juce::Justification::centred,
+                       false);
+        }
     }
 
     void resized() override

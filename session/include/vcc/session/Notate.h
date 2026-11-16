@@ -20,6 +20,8 @@
 // option is applied as one undo step.
 #pragma once
 
+#include <optional>
+
 #include <map>
 #include <string>
 #include <utility>
@@ -62,12 +64,24 @@ struct NotatePlan {
     /// The score revision the plan was made against; applying refuses a
     /// plan whose version has changed since.
     std::uint64_t base_revision = 0;
+    /// Keep Producer Override (a piano-roll edit of a score note): the
+    /// score untouched, the edit kept as how the note is played. Always
+    /// offered for a note edit, whether or not it is among `options`.
+    std::optional<NotateOption> keep;
     bool ok() const noexcept { return error.empty() && !options.empty(); }
+    /// Whether the recommended reading changes the written music.
+    bool alters_notation() const noexcept { return ok() && options.front().changes_notation; }
 };
 
 /// Plans a piano-roll edit of score note `note` (a tie chain's first note)
 /// on the track's active version.
 NotatePlan plan_note_edit(const project::Track& track, notation::EventId note, const NoteTarget& target);
+
+/// Apply to Score for a note kept as a Producer override: its written
+/// pitch and rhythm become what it plays (velocity and controller changes
+/// stay performance). Only readings that write notation are offered; an
+/// error when it cannot be written (off every grid notation has).
+NotatePlan plan_apply_override(const project::Track& track, notation::EventId note);
 
 struct RegionNotateSettings {
     notation::NoteValue grid = notation::NoteValue::Sixteenth;

@@ -220,6 +220,12 @@ public:
     /// Plug-in delay compensation on or off, saved with the project. One
     /// undo step; false when it is already so.
     bool set_delay_compensation(bool on);
+    /// Apply to Score: notes kept as Producer overrides are written as they
+    /// play (one undo step); how many were written, and in `left` how many
+    /// could not be.
+    int apply_overrides_to_score(const std::string& track_id, const std::vector<notation::EventId>& notes, int* left = nullptr);
+    /// "ask", "apply" or "keep": what a notation-changing Producer edit does.
+    bool set_producer_edits(const std::string& policy);
     /// The keyboard deck's key zoom, saved with the project without an undo step.
     void set_key_zoom(double zoom);
     /// The master's loudness target (LUFS, -36..-6). One undo step.

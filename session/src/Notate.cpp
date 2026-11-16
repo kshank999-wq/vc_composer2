@@ -321,13 +321,15 @@ NotatePlan plan_note_edit(const project::Track& track, nt::EventId note, const N
     override_option.id = "override";
     override_option.label = "Keep it as a performance";
     override_option.detail = "the score stays as written; only how the note is played changes";
-    override_option.score = pitch_changed ? with_pitch(score, spelled) : score;
+    override_option.score = score;
     override_option.performance = v->performance;
     {
         project::NoteOverride o;
         if (auto it = v->performance.find(note); it != v->performance.end()) o = it->second;
         o.onset += target.start - cur->start;
         o.length += std::max<Ticks>(1, target.duration) - cur->duration;
+        o.pitch += target.pitch - cur->pitch;
+        o.producer = true;
         const auto clamped = project::clamp_override(o);
         if (clamped != o) override_option.detail += " (as far as a performance can move a note)";
         if (clamped.empty())
@@ -335,7 +337,8 @@ NotatePlan plan_note_edit(const project::Track& track, nt::EventId note, const N
         else
             override_option.performance[note] = clamped;
     }
-    override_option.changes_notation = pitch_changed;
+    override_option.changes_notation = false;
+    plan.keep = override_option;
 
     if (!timing_changed) {
         // A pitch edit is always notation; a chromatic note can be spelled two ways.
@@ -429,6 +432,45 @@ NotatePlan plan_note_edit(const project::Track& track, nt::EventId note, const N
     if (plan.options.size() == 1) {
         plan.ambiguity.clear();
         plan.question.clear();
+    }
+    return plan;
+}
+
+NotatePlan plan_apply_override(const project::Track& track, notation::EventId note)
+{
+    NotatePlan plan;
+    const project::TrackVersion* v = track.active_version();
+    const auto it = v ? v->performance.find(note) : decltype(v->performance)::const_iterator{};
+    if (!v || it == v->performance.end()) {
+        plan.error = "That note plays as written";
+        return plan;
+    }
+    const auto played = project::render_track(track);
+    const NoteEvent* cur = rendered(played, note);
+    if (!cur) {
+        plan.error = "That note does not sound on its own";
+        return plan;
+    }
+    // The same track without the note's placement and pitch override: the
+    // edit is then "from the written note to what it plays".
+    project::Track bare = track;
+    auto& perf = bare.active_version()->performance;
+    project::NoteOverride o = it->second;
+    o.onset = o.length = o.pitch = 0;
+    o.producer = false;
+    if (o.empty())
+        perf.erase(note);
+    else
+        perf[note] = o;
+    plan = plan_note_edit(bare, note, NoteTarget{cur->start, cur->duration, cur->pitch});
+    plan.keep.reset();
+    plan.options.erase(std::remove_if(plan.options.begin(), plan.options.end(),
+                                      [](const NotateOption& x) { return !x.changes_notation; }),
+                       plan.options.end());
+    if (plan.error == "Nothing to change") plan.error.clear();
+    if (plan.options.empty() && plan.error.empty()) {
+        // Only a velocity or controller change, or timing too fine for notation.
+        plan.error = "It cannot be written in the score as it plays; it stays a performance";
     }
     return plan;
 }

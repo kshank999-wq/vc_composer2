@@ -21,7 +21,8 @@ namespace vcc::project {
 
 bool operator==(const NoteOverride& a, const NoteOverride& b) noexcept
 {
-    return a.onset == b.onset && a.length == b.length && a.velocity == b.velocity && a.cc == b.cc;
+    return a.onset == b.onset && a.length == b.length && a.velocity == b.velocity && a.cc == b.cc && a.pitch == b.pitch &&
+           a.producer == b.producer;
 }
 bool operator!=(const NoteOverride& a, const NoteOverride& b) noexcept { return !(a == b); }
 
@@ -288,7 +289,7 @@ void ProjectData::sync_scores()
         const notation::ExpressionMap map = expression_map_for(*parent);
         std::uint64_t perf = pv->performance.size();
         for (const auto& [id, ov] : pv->performance)
-            perf = perf * 1099511628211ull + id * 31u + static_cast<std::uint64_t>(ov.onset * 7 + ov.length * 13 + ov.velocity * 17 + ov.cc);
+            perf = perf * 1099511628211ull + id * 31u + static_cast<std::uint64_t>(ov.onset * 7 + ov.length * 13 + ov.velocity * 17 + ov.cc + ov.pitch * 19);
         const auto& groups = siblings[child.articulation_parent];
         std::string group_list;
         for (const auto& g : groups) group_list += g + ",";
@@ -1068,6 +1069,8 @@ static json::Value track_to_json(const Track& t)
                 if (ov.length != 0) po.set("length", ov.length);
                 if (ov.velocity != 0) po.set("velocity", ov.velocity);
                 if (ov.cc != 0) po.set("cc", ov.cc);
+                if (ov.pitch != 0) po.set("pitch", ov.pitch);
+                if (ov.producer) po.set("producer", true);
                 perf.emplace_back(std::move(po));
             }
             if (!perf.empty()) vo.set("performance", perf);
@@ -1126,6 +1129,7 @@ json::Value Project::to_json() const
     root.set("start_timecode", d.start_timecode);
     root.set("sample_rate", d.sample_rate);
     root.set("delay_compensation", d.delay_compensation);
+    if (d.producer_edits != "ask") root.set("producer_edits", d.producer_edits);
     root.set("key_zoom", d.key_zoom);
     root.set("loudness_target", d.loudness_target);
 
@@ -1284,6 +1288,8 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
     d.name = doc.get_string("name", "Untitled");
     d.key = doc.get_string("key", "C major");
     d.delay_compensation = doc.get_bool("delay_compensation", true);
+    d.producer_edits = doc.get_string("producer_edits", "ask");
+    if (d.producer_edits != "apply" && d.producer_edits != "keep") d.producer_edits = "ask";
     d.key_zoom = std::clamp(doc.get_double("key_zoom", 1.0), 1.0, 3.0);
     d.loudness_target = std::clamp(doc.get_double("loudness_target", -14.0), -36.0, -6.0);
     bool first = true;
@@ -1403,6 +1409,8 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
                 o.length = pj.get_int("length");
                 o.velocity = static_cast<int>(std::clamp<std::int64_t>(pj.get_int("velocity"), -127, 127));
                 o.cc = static_cast<int>(std::clamp<std::int64_t>(pj.get_int("cc"), -127, 127));
+                o.pitch = static_cast<int>(std::clamp<std::int64_t>(pj.get_int("pitch"), -127, 127));
+                o.producer = pj.get_bool("producer", false);
                 if (!o.empty() && v.score.find_note(id)) v.performance[id] = o;
             }
             for (const auto& rj : vj.get("regions") ? vj.get("regions")->as_array() : json::Array{}) {

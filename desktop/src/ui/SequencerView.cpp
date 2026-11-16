@@ -4288,11 +4288,11 @@ private:
             // written dynamic shape is kept.
             const int delta = vel_value_ - l->score_notes[static_cast<std::size_t>(i)].velocity;
             if (delta == 0) return;
-            ok = m_.ctx.session.edit_performance(l->id, ids, gesture_label("Performance velocity"),
+            ok = m_.ctx.session.edit_performance(part_of(l->id), ids, gesture_label("Performance velocity"),
                                                  [delta](notation::EventId, project::NoteOverride& o) { o.velocity += delta; });
         } else {
             const bool onset = kind == Drag::PerfMove;
-            ok = m_.ctx.session.edit_performance(l->id, ids, gesture_label(onset ? "Performance timing" : "Performance length"),
+            ok = m_.ctx.session.edit_performance(part_of(l->id), ids, gesture_label(onset ? "Performance timing" : "Performance length"),
                                                  [dt, onset](notation::EventId, project::NoteOverride& o) {
                                                      (onset ? o.onset : o.length) += dt;
                                                  });
@@ -4306,17 +4306,31 @@ private:
     /// (Main Spec §8, MIDI -> notation) and kept as a performance where it
     /// cannot. One undo step for the gesture. A single note whose edit can
     /// be read more than one way asks which reading was meant.
+    using ScoreEdits = std::vector<std::pair<notation::EventId, session::NoteTarget>>;
+
+    /// The track a score-note edit belongs to: an articulation track's part
+    /// (it shows the part's notes, with the same ids), else the lane's own.
+    std::string part_of(const std::string& lane) const
+    {
+        const auto* t = m_.ctx.session.data().find_track(lane);
+        return t && !t->articulation_parent.empty() ? t->articulation_parent : lane;
+    }
+
     void commit_score_edit(Drag kind)
     {
         const auto* l = m_.selected_lane();
         if (!l || perf_sel_.empty()) return;
-        const std::string track = l->id;
+        auto& session = m_.ctx.session;
+        // An articulation track shows its part's notes (the same ids): the
+        // edit is the part's.
+        std::string track = l->id;
+        if (const auto* t = session.data().find_track(track); t && !t->articulation_parent.empty()) track = t->articulation_parent;
         const bool move = kind == Drag::PerfMove;
         const Ticks dt = dt_;
         const int dp = dp_;
         const bool free = free_;
         // Targets from what the roll showed when the drag began.
-        std::vector<std::pair<notation::EventId, session::NoteTarget>> targets;
+        ScoreEdits targets;
         for (auto sid : perf_sel_) {
             const int i = score_index(*l, sid);
             if (i < 0) continue;
@@ -4334,31 +4348,102 @@ private:
             return (move && dt > 0) ? a.second.start > b.second.start : a.second.start < b.second.start;
         });
         const std::string label = gesture_label(move ? "Edit score note" : "Lengthen score note");
+        hint_.clear();
+        // Free (Alt): a performance, as before.
+        if (free) {
+            apply_score_edits(track, targets, label, false);
+            return;
+        }
+        // Would the edit change the written music? (Memory Management spec
+        // §2.3: never silently overwrite Composer content.)
+        std::optional<session::NotatePlan> first;
+        for (const auto& [sid, target] : targets) {
+            auto plan = session.plan_note_edit(track, sid, target);
+            if (plan.ok() && plan.alters_notation()) {
+                first = std::move(plan);
+                break;
+            }
+        }
+        if (!first) {
+            apply_score_edits(track, targets, label, true);
+            return;
+        }
+        const auto policy = session.data().producer_edits;
+        if (policy == "apply" || policy == "keep") {
+            apply_score_edits(track, targets, label, policy == "apply");
+            return;
+        }
+        ask_producer_edit(track, targets, label, *first);
+    }
+
+    /// Applies a gesture's note edits: written into the score (`to_score`:
+    /// the recommended reading, asking which when one note can be read
+    /// more than one way), or each kept as a Producer override.
+    void apply_score_edits(const std::string& track, const ScoreEdits& targets, const std::string& label, bool to_score)
+    {
         auto& session = m_.ctx.session;
         int written = 0, performed = 0;
         juce::String last;
         for (const auto& [sid, target] : targets) {
-            const auto plan = session.plan_note_edit(track, sid, target);
+            auto plan = session.plan_note_edit(track, sid, target);
             if (!plan.ok()) continue;
-            if (targets.size() == 1 && !free && !plan.ambiguity.empty()) {
+            if (!to_score) {
+                if (!plan.keep) continue;
+                plan.options = {*plan.keep};
+                plan.ambiguity.clear();
+            } else if (targets.size() == 1 && !plan.ambiguity.empty()) {
                 ask_reading(track, plan, label);
                 return;
             }
-            std::size_t choice = 0;
-            if (free)
-                for (std::size_t k = 0; k < plan.options.size(); ++k)
-                    if (plan.options[k].id == "override") choice = k;
-            if (session.apply_notate(track, plan, choice, label, true)) {
-                const auto& o = plan.options[choice];
-                (o.id == "override" ? performed : written)++;
+            if (session.apply_notate(track, plan, 0, label, true)) {
+                const auto& o = plan.options.front();
+                (o.changes_notation ? written : performed)++;
                 last = juce::String(session::describe(o));
             }
         }
-        hint_.clear();
         if (written + performed == 1)
             status(last);
         else if (written + performed > 1)
-            status(juce::String(written) + " written into the score, " + juce::String(performed) + " kept as a performance");
+            status(juce::String(written) + " written into the score, " + juce::String(performed) + " kept as Producer overrides");
+    }
+
+    /// Decision 1: an edit made here that changes the written music asks
+    /// whether the score takes it or Producer keeps it as an override; a
+    /// tick makes the answer this project's rule (Edit Performance menu
+    /// puts it back to asking).
+    void ask_producer_edit(const std::string& track, const ScoreEdits& targets, const std::string& label,
+                           const session::NotatePlan& plan)
+    {
+        const auto* t = m_.ctx.session.data().find_track(track);
+        const juce::String what = juce::String(session::describe(plan.options.front()));
+        auto* w = new juce::AlertWindow(
+            "This changes the score",
+            (targets.size() == 1 ? juce::String("The edit changes the written music") : juce::String(static_cast<int>(targets.size())) +
+                                                                                            " edited notes change the written music") +
+                (t ? " of " + juce::String(t->name) : juce::String()) + " (" + what +
+                ").\n\nApply to Score: Composer shows it, and parts and exports print it.\nKeep Producer Override: the score "
+                "stays as written; only playback changes, and Composer marks the note.",
+            juce::MessageBoxIconType::QuestionIcon);
+        w->setComponentID("producer_edit_question");
+        auto always = std::make_shared<juce::ToggleButton>("Always do this for this project");
+        always->setComponentID("always");
+        always->setSize(320, 26);
+        w->addCustomComponent(always.get());
+        w->addButton("Apply to Score", 1, juce::KeyPress(juce::KeyPress::returnKey));
+        w->addButton("Keep Producer Override", 2);
+        w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+        juce::Component::SafePointer<PianoRoll> self(this);
+        w->enterModalState(true, juce::ModalCallbackFunction::create([self, w, always, track, targets, label](int r) {
+                               w->removeCustomComponent(0);
+                               if (!self || r <= 0) {
+                                   if (self) self->status("Nothing changed");
+                                   return;
+                               }
+                               const bool to_score = r == 1;
+                               if (always->getToggleState()) self->m_.ctx.session.set_producer_edits(to_score ? "apply" : "keep");
+                               self->apply_score_edits(track, targets, label, to_score);
+                           }),
+                           true);
     }
 
     /// The reconciliation prompt: an edit that can be read more than one way
@@ -4432,10 +4517,20 @@ private:
         menu.addItem(1, "Performance...");
         menu.addSubMenu("Humanize", humanize);
         menu.addItem(2, n == 1 ? "Reset to as written" : "Reset these to as written", any);
+        menu.addItem(5, "Apply to Score (write them as they play)", any);
         menu.addSeparator();
         menu.addItem(3, "Select all score notes");
         menu.addItem(4, "Reset the whole track to as written", !l->performance.empty());
-        const std::string track = l->id;
+        // Decision 1: what an edit here that changes the written music does.
+        const auto policy = m_.ctx.session.data().producer_edits;
+        juce::PopupMenu rule;
+        rule.addItem(21, "Ask each time", true, policy == "ask");
+        rule.addItem(22, "Always apply to the score", true, policy == "apply");
+        rule.addItem(23, "Always keep as Producer overrides", true, policy == "keep");
+        menu.addSubMenu("Edits that change the score", rule);
+        std::string track = l->id;
+        if (const auto* t = m_.ctx.session.data().find_track(track); t && !t->articulation_parent.empty())
+            track = t->articulation_parent;
         const auto ids = perf_sel_;
         juce::Component::SafePointer<PianoRoll> self(this);
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition(),
@@ -4465,6 +4560,22 @@ private:
             case 4:
                 if (session.clear_performance(track)) status("The whole track plays as written");
                 break;
+            case 5: {
+                int left = 0;
+                const int n = session.apply_overrides_to_score(track, ids, &left);
+                status(n == 0 && left == 0 ? juce::String("Those notes play as written")
+                       : juce::String(n) + " written into the score as they play" +
+                             (left > 0 ? ", " + juce::String(left) + " cannot be written exactly and stay performances" : juce::String()));
+                break;
+            }
+            case 21:
+            case 22:
+            case 23:
+                session.set_producer_edits(r == 21 ? "ask" : r == 22 ? "apply" : "keep");
+                status(r == 21 ? "Edits here that change the score will ask first"
+                       : r == 22 ? "Edits here that change the score now apply to it (this project)"
+                                 : "Edits here that change the score now stay Producer overrides (this project)");
+                break;
             case 11:
             case 12:
             case 13: {
@@ -4489,7 +4600,7 @@ private:
                 area = area.isEmpty() ? r : area.getUnion(r);
             }
         if (area.isEmpty()) area = grid_area().withSizeKeepingCentre(10, 10);
-        juce::CallOutBox::launchAsynchronously(std::make_unique<PerformancePanel>(m_.ctx, l->id, perf_sel_, m_.bpm),
+        juce::CallOutBox::launchAsynchronously(std::make_unique<PerformancePanel>(m_.ctx, part_of(l->id), perf_sel_, m_.bpm),
                                                area.getIntersection(grid_area()), this);
     }
 
@@ -4624,7 +4735,8 @@ private:
             if (sel && drag_ == Drag::PerfLength) shown.duration = std::max<Ticks>(1, shown.duration + dt_);
             const auto r = note_rect(shown);
             const auto w = l.score_written.find(sid);
-            const bool moved = w != l.score_written.end() && (w->second.start != shown.start || w->second.duration != shown.duration);
+            const bool moved = w != l.score_written.end() &&
+                               (w->second.start != shown.start || w->second.duration != shown.duration || w->second.pitch != shown.pitch);
             if (moved) {
                 const auto wr = note_rect(w->second);
                 if (wr.intersects(gf) || r.intersects(gf)) {

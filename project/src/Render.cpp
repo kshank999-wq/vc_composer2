@@ -26,6 +26,7 @@ NoteEvent apply_override(NoteEvent note, const NoteOverride& o) noexcept
     note.start = std::max<Ticks>(0, note.start + o.onset);
     note.duration = std::max<Ticks>(1, note.duration + o.length);
     note.velocity = std::clamp(note.velocity + o.velocity, 1, 127);
+    note.pitch = std::clamp(note.pitch + o.pitch, 0, 127);
     return note;
 }
 

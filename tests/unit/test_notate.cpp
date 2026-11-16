@@ -3,6 +3,7 @@
 // cannot; MIDI regions are notated into the score. Ambiguous cases offer
 // their readings instead of guessing.
 #include <algorithm>
+#include <filesystem>
 
 #include "vcc/editing/ScoreEditor.h"
 #include "vcc/project/Render.h"
@@ -309,4 +310,61 @@ TEST_CASE("a region over written notes asks where it goes; triplets offer straig
     sc.remove_note(f.ids[3]);
     REQUIRE(f.s.commit_score(f.t, sc, "Delete"));
     CHECK(!f.s.apply_notate(f.t, stale, 0, "Notate"));
+}
+
+TEST_CASE("Decision 1: a Producer edit that changes notation can be kept as an override, then applied to the score")
+{
+    Fixture f;
+    REQUIRE(f.ids.size() == 4);
+    const auto written = score_of(f.s, f.t).find_note(f.ids[1])->pitch;  // D4
+    // A pitch edit (D4 -> E4 sounding): the recommended reading writes it.
+    auto target = target_of(played(f.s, f.t, f.ids[1]));
+    target.pitch += 2;
+    auto plan = f.s.plan_note_edit(f.t, f.ids[1], target);
+    REQUIRE(plan.ok());
+    CHECK(plan.alters_notation());
+    REQUIRE(plan.keep.has_value());
+    CHECK(!plan.keep->changes_notation);
+    // Keep Producer Override: the score is untouched; it plays the new pitch;
+    // the note is marked as a Producer override.
+    plan.options = {*plan.keep};
+    REQUIRE(f.s.apply_notate(f.t, plan, 0, "Edit score note"));
+    CHECK(score_of(f.s, f.t).find_note(f.ids[1])->pitch == written);
+    CHECK_EQ(played(f.s, f.t, f.ids[1]).pitch, target.pitch);
+    const auto& ov = track(f.s, f.t).active_version()->performance.at(f.ids[1]);
+    CHECK(ov.producer && ov.pitch == 2);
+
+    // A timing edit kept the same way: written rhythm unchanged, played later.
+    auto later = target_of(played(f.s, f.t, f.ids[3]));
+    const Ticks written_start = score_of(f.s, f.t).find_note(f.ids[3])->start_tick;
+    later.start += Q / 2;
+    auto timing = f.s.plan_note_edit(f.t, f.ids[3], later);
+    REQUIRE(timing.ok() && timing.keep);
+    timing.options = {*timing.keep};
+    REQUIRE(f.s.apply_notate(f.t, timing, 0, "Edit score note"));
+    CHECK_EQ(score_of(f.s, f.t).find_note(f.ids[3])->start_tick, written_start);
+    CHECK_EQ(played(f.s, f.t, f.ids[3]).start, later.start);
+
+    // Saved and reopened, the overrides (and the project's rule) stay.
+    REQUIRE(f.s.set_producer_edits("keep"));
+    const auto dir = std::filesystem::temp_directory_path() / "vcc_override_test";
+    std::filesystem::create_directories(dir);
+    std::string error;
+    REQUIRE(f.s.save_as((dir / "o.vcc2").string(), &error));
+    session::Session back(catalogs());
+    REQUIRE(back.open((dir / "o.vcc2").string(), &error));
+    CHECK_EQ(back.data().producer_edits, std::string("keep"));
+    CHECK(track(back, f.t).active_version()->performance.at(f.ids[1]).producer);
+    CHECK_EQ(played(back, f.t, f.ids[1]).pitch, target.pitch);
+    std::filesystem::remove_all(dir);
+
+    // Apply to Score: the written music becomes what plays; the override goes.
+    int left = -1;
+    CHECK_EQ(f.s.apply_overrides_to_score(f.t, {f.ids[1], f.ids[3]}, &left), 2);
+    CHECK_EQ(left, 0);
+    CHECK(score_of(f.s, f.t).find_note(f.ids[1])->pitch != written);
+    CHECK_EQ(played(f.s, f.t, f.ids[1]).pitch, target.pitch);
+    CHECK_EQ(played(f.s, f.t, f.ids[3]).start, later.start);
+    CHECK_EQ(score_of(f.s, f.t).find_note(f.ids[3])->start_tick, written_start + Q / 2);
+    CHECK(track(f.s, f.t).active_version()->performance.count(f.ids[1]) == 0);
 }

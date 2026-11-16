@@ -790,6 +790,35 @@ bool Session::set_meter(const TimeSignature& sig)
     });
 }
 
+int Session::apply_overrides_to_score(const std::string& track_id, const std::vector<notation::EventId>& notes, int* left)
+{
+    int written = 0, failed = 0;
+    for (const auto id : notes) {
+        const project::Track* t = project_.data().find_track(track_id);
+        if (!t) break;
+        const auto plan = session::plan_apply_override(*t, id);
+        if (plan.ok() && apply_notate(track_id, plan, 0, "Apply to Score", true))
+            ++written;
+        else if (const auto* v = t->active_version(); v && v->performance.count(id))
+            ++failed;
+    }
+    if (left) *left = failed;
+    return written;
+}
+
+bool Session::set_producer_edits(const std::string& policy)
+{
+    if (policy != "ask" && policy != "apply" && policy != "keep") return false;
+    return edit(policy == "ask" ? "Ask before Producer edits change the score"
+                : policy == "apply" ? "Producer edits always apply to the score"
+                                    : "Producer edits always stay overrides",
+                [&](project::ProjectData& d) {
+                    if (d.producer_edits == policy) return false;
+                    d.producer_edits = policy;
+                    return true;
+                });
+}
+
 bool Session::set_delay_compensation(bool on)
 {
     return edit(on ? "Delay compensation on" : "Delay compensation off", [&](project::ProjectData& d) {
