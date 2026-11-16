@@ -108,6 +108,12 @@ enum class Glyph : std::uint16_t {
     StringsUpBow,
     StringsDownBow,
     OrnamentTrill,
+
+    // --- Percussion noteheads (Main Spec §7 "percussion maps") --------------
+    NoteheadXBlack,
+    NoteheadCircleX,
+    NoteheadTriangleUpBlack,
+    NoteheadDiamondBlack,
 };
 
 /// Canonical SMuFL name, as the specification and every font's metadata use

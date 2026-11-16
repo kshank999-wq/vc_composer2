@@ -121,8 +121,9 @@ notation::ExpressionMap expression_map_for(const Track& track)
 
 std::string expression_map_key(const Track& track)
 {
-    if (!track.articulation_map) return track.expression_map;
-    return track.expression_map + "|" + expression_map_to_json(*track.articulation_map).to_text();
+    const std::string drums = track.percussion_map.empty() ? std::string() : "|drums:" + track.percussion_map;
+    if (!track.articulation_map) return track.expression_map + drums;
+    return track.expression_map + "|" + expression_map_to_json(*track.articulation_map).to_text() + drums;
 }
 
 std::string MapHealth::summary() const

@@ -6,6 +6,9 @@
 #include "ui/review/Relink.h"
 #include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
+#include "ui/PrintPreview.h"
+#include "ui/ScoreTools.h"
+#include "ui/ShortcutEditor.h"
 #include "ui/console/MixTools.h"
 #include "ui/library/ArticulationMapWindow.h"
 #include "ui/library/LibraryBrowser.h"
@@ -1020,6 +1023,7 @@ void export_parts_svg(AppContext& c, const juce::File& folder)
         engraving::PrintOptions po;
         po.title = c.session.data().name;
         po.subtitle = t->name;
+        po.multirests = true;  // a part: empty runs as multi-bar rests
         const auto laid = engraving::lay_out_pages(v->score, engine, po);
         const auto svgs = engraving::render_pages_svg(laid, {}, music_font().loaded ? &music_font().glyphs : nullptr);
         for (std::size_t i = 0; i < svgs.size(); ++i) {
@@ -1083,9 +1087,7 @@ juce::PopupMenu MainComponent::theme_menu()
 juce::PopupMenu MainComponent::shortcuts_menu()
 {
     juce::PopupMenu m;
-    std::vector<composer::ShortcutProfile> profiles{composer::make_composer2_profile()};
-    for (auto& p : composer::built_in_profiles()) profiles.push_back(std::move(p));
-    for (const auto& p : profiles) {
+    for (const auto& p : all_shortcut_profiles()) {
         const std::string name = p.name();
         juce::String label(name);
         if (name == "Composer 2") label << "  (5 quarter, 4 eighth, 6 half)";
@@ -1093,14 +1095,16 @@ juce::PopupMenu MainComponent::shortcuts_menu()
             if (use_shortcut_profile(name)) context_.status("Keyboard shortcuts: " + juce::String(name));
         });
     }
+    m.addSeparator();
+    m.addItem("Edit Shortcuts...", [this] {
+        show_shortcut_editor(context_, [this](const std::string& name) { use_shortcut_profile(name); });
+    });
     return m;
 }
 
 bool MainComponent::use_shortcut_profile(const std::string& name)
 {
-    std::vector<composer::ShortcutProfile> profiles{composer::make_composer2_profile()};
-    for (auto& p : composer::built_in_profiles()) profiles.push_back(std::move(p));
-    for (auto& p : profiles)
+    for (auto& p : all_shortcut_profiles())
         if (p.name() == name) {
             context_.shortcuts = std::move(p);
             toolbar_.refresh_legends();
@@ -1592,7 +1596,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::collectPackage, cmd::openPackage, cmd::showComments, cmd::addComment, cmd::relinkMedia,
                 cmd::articulationMap, cmd::missingInstruments, cmd::mixTools, cmd::bounceInPlace, cmd::saveOnStop,
                 cmd::monitorDim, cmd::reverseClips, cmd::timeStretchClips, cmd::groupClips, cmd::ungroupClips,
-                cmd::captureMidi, cmd::midiInputFilter});
+                cmd::captureMidi, cmd::midiInputFilter, cmd::lyrics, cmd::explodeTracks, cmd::implodeTracks, cmd::addRepeat,
+                cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1705,6 +1710,16 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.addDefaultKeypress('r', cmdKey | shift);
             break;
         case cmd::midiInputFilter: info.setInfo("MIDI Input Filter...", "Channels, notes and messages let through", "Tools", 0); break;
+        case cmd::lyrics: info.setInfo("Lyrics...", "Syllables on the selected notes", "Edit", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); info.addDefaultKeypress('l', cmdKey | shift); break;
+        case cmd::explodeTracks: info.setInfo("Explode...", "Chords split into new tracks", "Edit", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); break;
+        case cmd::implodeTracks: info.setInfo("Implode...", "Tracks combined as chords onto the selected one", "Edit", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); break;
+        case cmd::addRepeat: info.setInfo("Repeat and Endings...", "Repeat bars, with first and second endings", "Edit", 0); break;
+        case cmd::unrollRepeats: info.setInfo("Unroll Repeats", "Writes the repeats out into the bars", "Edit", 0); break;
+        case cmd::editShortcuts: info.setInfo("Edit Shortcuts...", "Keys for every command; your own profiles", "Edit", 0); break;
+        case cmd::printPreview:
+            info.setInfo("Print Preview...", "The full score or a part as it will print", "File", 0);
+            info.addDefaultKeypress('p', cmdKey | shift);
+            break;
         case cmd::monitorDim:
             info.setInfo("Dim Monitor", "Lowers what the speakers play (never an export)", "Transport",
                          context_.engine.monitor().dim ? juce::ApplicationCommandInfo::isTicked : 0);
@@ -1882,6 +1897,15 @@ bool MainComponent::perform(const InvocationInfo& info)
             break;
         case cmd::captureMidi: context_.status(capture_midi(context_, s.selected_track())); break;
         case cmd::midiInputFilter: show_midi_input_filter(context_); break;
+        case cmd::lyrics: ask_lyrics(context_); break;
+        case cmd::explodeTracks: ask_explode(context_); break;
+        case cmd::implodeTracks: ask_implode(context_); break;
+        case cmd::addRepeat: ask_repeat(context_); break;
+        case cmd::unrollRepeats: context_.status(unroll(context_)); break;
+        case cmd::printPreview: show_print_preview(context_); break;
+        case cmd::editShortcuts:
+            show_shortcut_editor(context_, [this](const std::string& name) { use_shortcut_profile(name); });
+            break;
         case cmd::bounceInPlace: context_.status(bounce_in_place(context_, s.selected_track())); break;
         case cmd::saveOnStop: {
             auto& ui = hw::ui_settings();
@@ -2007,7 +2031,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addCommandItem(c, cmd::importAudio);
             m.addCommandItem(c, cmd::importMusicXml);
             m.addSeparator();
-            for (auto id : {cmd::save, cmd::saveAs, cmd::saveOnStop, cmd::saveAsTemplate, cmd::collectPackage, cmd::relinkMedia})
+            for (auto id : {cmd::save, cmd::saveAs, cmd::saveOnStop, cmd::saveAsTemplate, cmd::printPreview, cmd::collectPackage,
+                            cmd::relinkMedia})
                 m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::exportStems, cmd::exportMidi, cmd::exportMusicXml, cmd::exportFullScorePdf, cmd::exportPartsPdf,
@@ -2022,6 +2047,9 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
                 m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::groupClips, cmd::ungroupClips, cmd::reverseClips, cmd::timeStretchClips}) m.addCommandItem(c, id);
+            m.addSeparator();
+            for (auto id : {cmd::lyrics, cmd::addRepeat, cmd::unrollRepeats, cmd::explodeTracks, cmd::implodeTracks})
+                m.addCommandItem(c, id);
             m.addSeparator();
             m.addSubMenu("Keyboard Shortcuts", shortcuts_menu());
             break;

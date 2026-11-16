@@ -898,9 +898,11 @@ TEST_CASE("import: Finale-style file with divisions of 1")
     CHECK(n[4].duration == nt::half());
     CHECK_EQ(n[4].start_tick, 4 * Q);
     CHECK(nt::has_articulation(n[4].articulations, nt::Articulation::Fermata));
-    bool lyrics = false;
-    for (const auto& w : r.warnings) lyrics = lyrics || w == "1 lyrics ignored";
-    CHECK(lyrics);
+    // The lyric is kept now (Main Spec §7), not reported as ignored.
+    int sung = 0;
+    for (const auto& note : n) sung += note.lyric.empty() ? 0 : 1;
+    CHECK_EQ(sung, 1);
+    for (const auto& w : r.warnings) CHECK(w.find("lyric") == std::string::npos);
 }
 
 TEST_CASE("import: Sibelius-style file with divisions of 480, a pickup and a B-flat clarinet")

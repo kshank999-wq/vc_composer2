@@ -43,6 +43,8 @@
 #include "ui/review/Relink.h"
 #include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
+#include "ui/PrintPreview.h"
+#include "ui/ShortcutEditor.h"
 #include "ui/console/MixTools.h"
 #include "ui/library/ArticulationMapWindow.h"
 #include "ui/library/LibraryBrowser.h"
@@ -5980,6 +5982,105 @@ void edit_tools_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// Notation tools (Main Spec §7): the shortcut editor (duplicate, set a key,
+/// conflicts, export and import), lyrics and repeats on the printed part,
+/// multi-bar rests, print preview, explode, the drum kit's map.
+void notation_tools_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+
+    // Shortcut editor.
+    show_shortcut_editor(ctx, [&main](const std::string& name) { main.use_shortcut_profile(name); });
+    ShortcutEditor* ed = nullptr;
+    wait_for([&] { return (ed = shortcut_editor()) != nullptr; });
+    if (!ed) {
+        check(false, "Edit Shortcuts opens the editor");
+        return;
+    }
+    ed->choose_profile("Composer 2");
+    check(ed->profile().is_built_in() && ed->rows() > 20, "the editor lists every command of a factory profile");
+    const auto mine = ed->duplicate();
+    check(!ed->profile().is_built_in() && ed->profile().name() == mine, "Duplicate makes an editable copy: " + juce::String(mine));
+    ed->start_capture(0);
+    composer::KeyStroke f9;
+    composer::KeyStroke::from_text("F9", f9);
+    const auto said = ed->take_stroke(f9, false);
+    check(ed->profile().stroke_for(composer::all_commands().front()) == f9 && ed->conflicts_text() == "No conflicts",
+          "Set key binds the pressed key: " + said);
+    // A key another command holds asks first, then moves.
+    const auto taken = ed->profile().stroke_for(composer::all_commands()[3]);
+    ed->start_capture(1);
+    const auto asked = ed->take_stroke(taken, false);
+    check(asked.contains("is used by") && ed->capturing(), "a key in use is not taken silently: " + asked);
+    ed->take_stroke(taken, true);
+    check(ed->profile().stroke_for(composer::all_commands()[1]) == taken && !ed->profile().is_bound(composer::all_commands()[3]),
+          "pressing it again moves it, and the old command loses it");
+    const auto text = shortcut_profile_to_text(ed->profile());
+    const auto back = shortcut_profile_from_text(text);
+    check(back && back->name() == mine && back->stroke_for(composer::all_commands().front()) == f9,
+          "a profile exports and imports as a .vccshortcuts file");
+    shoot(*ed->getTopLevelComponent(), dir, "64-shortcuts");
+    delete_user_shortcut_profile(mine);
+    ed->getTopLevelComponent()->setVisible(false);
+
+    // A part with lyrics, a repeat with endings and a long rest.
+    session.new_empty();
+    const auto voice = session.add_track("Soprano", "vocals.soprano");
+    notation::Score sc = session.data().find_track(voice)->active_version()->score;
+    const Ticks bar = session.data().meter.at_bar(1).ticks_per_bar();
+    for (int b : {0, 1, 2, 11}) {
+        notation::ScoreNote n;
+        n.start_tick = b * bar;
+        n.duration = notation::whole();
+        n.pitch = notation::spell_midi_note(67 + b % 3, {});
+        sc.insert_note(0, n);
+    }
+    session.commit_score(voice, sc, "Write");
+    std::vector<notation::EventId> ids;
+    for (const auto& n : session.data().find_track(voice)->active_version()->score.notes(0)) ids.push_back(n.id);
+    check(session.set_lyrics(voice, ids, "Al-le-lu-ia") == 4, "four syllables on four notes");
+    notation::RepeatSection rep;
+    rep.start_bar = 1;
+    rep.end_bar = 2;
+    rep.ending_bars = 1;
+    session.set_repeats({rep});
+    show_print_preview(ctx);
+    PrintPreview* preview = nullptr;
+    wait_for([&] { return (preview = print_preview()) != nullptr; });
+    if (preview) {
+        preview->show_source(1);
+        check(preview->source_count() == 2 && preview->page_count() >= 1 && preview->source_name(1) == "Part: Soprano",
+              "Print Preview shows the full score and each part (" + juce::String(preview->page_count()) + " page(s) for the part)");
+        shoot(*preview->getTopLevelComponent(), dir, "65-print-preview");
+        preview->getTopLevelComponent()->setVisible(false);
+    }
+    engraving::LayoutEngine engine;
+    if (music_font().loaded) engine.set_glyph_table(music_font().glyphs);
+    engraving::PrintOptions po;
+    po.multirests = true;
+    const auto laid = engraving::lay_out_pages(session.data().find_track(voice)->active_version()->score, engine, po);
+    std::set<std::string> texts;
+    for (const auto& p : laid.pages)
+        for (const auto& t : p.layout.display_list.texts) texts.insert(t.text);
+    check(texts.count("Al") && texts.count("ia") && texts.count("1.") && texts.count("2.") && texts.count("8"),
+          "the part prints the lyrics, the 1. and 2. endings and an 8-bar rest");
+
+    // Explode, and a drum kit.
+    session.new_empty();
+    const auto horns = session.add_track("Horns", "brass.horn_section");
+    notation::Score hs = session.data().find_track(horns)->active_version()->score;
+    hs.insert_chord(0, 0, notation::half(), {notation::spell_midi_note(60, {}), notation::spell_midi_note(64, {}), notation::spell_midi_note(67, {})});
+    session.commit_score(horns, hs, "Write");
+    const auto parts = session.explode(horns, 0, bar, 3);
+    check(parts.size() == 3u && session.undo_label() == "Explode", "Explode makes three horn parts in one undo step");
+    const auto kit = session.add_track("Drums", "rhythm.drum_kit");
+    check(session.data().find_track(kit)->percussion_map == "gm_kit", "a drum kit track gets the drum map");
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -6493,7 +6594,7 @@ void accessibility_checks(MainWindow& window, const juce::File& dir)
     pump(150);
     report("Producer view", main);
     for (auto id : {cmd::showCircleOfFifths, cmd::showRouting, cmd::showReview, cmd::showComments, cmd::collectPackage,
-                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap, cmd::mixTools, cmd::midiInputFilter}) {
+                    cmd::showControlSurfaces, cmd::relinkMedia, cmd::articulationMap, cmd::mixTools, cmd::midiInputFilter, cmd::editShortcuts, cmd::printPreview}) {
         ctx.commands.invokeDirectly(id, false);
         pump(200);
     }
@@ -7827,6 +7928,8 @@ int main(int argc, char** argv)
         mix_tools_checks(window, dir);
         section("edit_tools_checks");
         edit_tools_checks(window, dir);
+        section("notation_tools_checks");
+        notation_tools_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

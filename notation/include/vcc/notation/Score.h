@@ -87,6 +87,16 @@ struct ScoreNote {
     /// where it belongs.
     std::int8_t staff_shift = 0;
 
+    /// A lyric syllable sung on this note (Main Spec §7), printed under the
+    /// staff. A trailing "-" continues the word onto the next note; "_"
+    /// alone holds the syllable before (a melisma). Empty for none.
+    std::string lyric;
+
+    /// The notehead's shape, for percussion (Main Spec §7): 0 the usual,
+    /// 1 an x (cymbals, hi-hat), 2 a circled x (open hi-hat), 3 a
+    /// triangle, 4 a diamond. Set from the track's percussion map.
+    std::uint8_t notehead = 0;
+
     Ticks end_tick() const noexcept { return grace ? start_tick : start_tick + duration.ticks(); }
     bool is_valid() const noexcept;
 };
@@ -142,6 +152,22 @@ struct Measure {
     bool contains(Ticks tick) const noexcept
     {
         return tick >= start_tick && tick < end_tick();
+    }
+};
+
+/// A repeated passage (Main Spec §7 "repeats and endings"): bars
+/// `start_bar`..`end_bar` played `times` times. With `ending_bars`, the last
+/// that many bars of the passage are a first ending ("1."), and the same
+/// number of bars after it the second ending ("2."), played the last time
+/// instead.
+struct RepeatSection {
+    std::int32_t start_bar = 1;
+    std::int32_t end_bar = 1;
+    std::int32_t times = 2;
+    std::int32_t ending_bars = 0;
+    bool operator==(const RepeatSection& o) const noexcept
+    {
+        return start_bar == o.start_bar && end_bar == o.end_bar && times == o.times && ending_bars == o.ending_bars;
     }
 };
 
@@ -307,6 +333,10 @@ public:
     const std::vector<Slur>& slurs() const noexcept { return slurs_; }
     const std::vector<TempoMarking>& tempos() const noexcept { return tempos_; }
     const std::vector<TextMarking>& texts() const noexcept { return texts_; }
+    /// Repeats and endings, for engraving and exchange (the project's,
+    /// pushed into every score like the meter).
+    const std::vector<RepeatSection>& repeats() const noexcept { return repeats_; }
+    void set_repeats(std::vector<RepeatSection> repeats) { repeats_ = std::move(repeats); }
 
     /// The dynamic in force at `tick` for a note in `voice` on `staff`, or
     /// mezzo-forte when none has been written - a score with no dynamics
@@ -399,6 +429,7 @@ private:
     std::vector<Slur> slurs_;
     std::vector<TempoMarking> tempos_;
     std::vector<TextMarking> texts_;
+    std::vector<RepeatSection> repeats_;
 
     EventId last_event_id_ = kInvalidEventId;
     std::uint64_t revision_ = 0;

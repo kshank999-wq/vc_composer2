@@ -261,6 +261,7 @@ public:
     std::string run();
 
 private:
+    std::map<int, bool> lyric_open_;  ///< Per staff and voice: a word goes on onto the next note.
     struct PartCtx {
         const project::Track* track = nullptr;
         const nt::Score* score = nullptr;
@@ -1023,6 +1024,24 @@ void Exporter::write_event(xml::Writer& w, const PartCtx& part, const Lane& lane
             if (has(nt::Articulation::Fermata)) w.empty("fermata", {{"type", "upright"}});
             w.close();
         }
+        // The lyric, on the note's first written piece (Main Spec §7, §16).
+        if (first_note && p.first && p.src && !p.src->lyric.empty()) {
+            std::string text = p.src->lyric;
+            const bool goes_on = text.size() > 1 && text.back() == '-';
+            if (goes_on) text.pop_back();
+            bool& open_word = lyric_open_[lane.staff * 64 + std::max(0, lane.voice)];
+            if (text == "_") {
+                w.open("lyric", {{"number", "1"}});
+                w.empty("extend");
+                w.close();
+            } else {
+                w.open("lyric", {{"number", "1"}});
+                w.leaf("syllabic", goes_on ? (open_word ? "middle" : "begin") : (open_word ? "end" : "single"));
+                w.leaf("text", text);
+                w.close();
+                open_word = goes_on;
+            }
+        }
         w.close();
     }
 }
@@ -1177,6 +1196,19 @@ void Exporter::write_part(xml::Writer& w, const PartCtx& part, bool first_part)
             mattrs.emplace_back("number", std::to_string(m.bar));
         }
         w.open("measure", mattrs);
+        // Repeats and endings starting here (left barline).
+        for (const auto& r : data_.repeats) {
+            const bool forward = r.start_bar == m.bar;
+            const bool first_ending = r.ending_bars > 0 && m.bar == r.end_bar - r.ending_bars + 1;
+            const bool second_ending = r.ending_bars > 0 && m.bar == r.end_bar + 1;
+            if (!forward && !first_ending && !second_ending) continue;
+            w.open("barline", {{"location", "left"}});
+            if (forward) w.leaf("bar-style", "heavy-light");
+            if (first_ending) w.empty("ending", {{"number", r.times > 2 ? "1, 2" : "1"}, {"type", "start"}});
+            if (second_ending) w.empty("ending", {{"number", std::to_string(r.times)}, {"type", "start"}});
+            if (forward) w.empty("repeat", {{"direction", "forward"}});
+            w.close();
+        }
 
         // Attributes.
         const TimeSignature sig = (pickup_ && mi == 0) ? measures_[1].sig : m.sig;
@@ -1274,6 +1306,21 @@ void Exporter::write_part(xml::Writer& w, const PartCtx& part, bool first_part)
             }
             cursor = d.offset;
             write_direction(w, part, d);
+        }
+        // Repeats and endings ending here (right barline).
+        for (const auto& r : data_.repeats) {
+            const bool backward = r.end_bar == m.bar;
+            const bool second_end = r.ending_bars > 0 && m.bar == r.end_bar + r.ending_bars;
+            if (!backward && !second_end) continue;
+            w.open("barline", {{"location", "right"}});
+            if (backward) w.leaf("bar-style", "light-heavy");
+            if (backward && r.ending_bars > 0) w.empty("ending", {{"number", r.times > 2 ? "1, 2" : "1"}, {"type", "stop"}});
+            if (second_end) w.empty("ending", {{"number", std::to_string(r.times)}, {"type", "discontinue"}});
+            if (backward) {
+                if (r.times > 2) w.empty("repeat", {{"direction", "backward"}, {"times", std::to_string(r.times)}});
+                else w.empty("repeat", {{"direction", "backward"}});
+            }
+            w.close();
         }
         w.close();
     }

@@ -1,6 +1,7 @@
 #include "vcc/session/Session.h"
 #include "vcc/session/Package.h"
 #include "vcc/session/Relink.h"
+#include "vcc/project/Percussion.h"
 
 #include <algorithm>
 #include <cctype>
@@ -379,6 +380,7 @@ std::string Session::add_track(const std::string& name, const std::string& instr
             t->assignment.patch_display = "GM placeholder";
             t->assignment.message = "Built-in placeholder sound until a library patch or plug-in is assigned.";
             if (def->unpitched) t->midi_channel = 9;
+            t->percussion_map = project::default_percussion_map(instrument);
             // The staves the instrument reads (clef, transposition, grand
             // staff), as a template would give it.
             if (auto* v = t->active_version(); v && v->score.total_note_count() == 0)
@@ -662,6 +664,16 @@ bool Session::set_instrument_plugin(const std::string& id, const project::Plugin
             t.assignment.patch_display = "GM placeholder";
             t.assignment.message = "Built-in placeholder sound until a library patch or plug-in is assigned.";
         }
+        return true;
+    }));
+}
+
+bool Session::set_percussion_map(const std::string& id, const std::string& map)
+{
+    if (!map.empty() && !project::percussion_map_named(map)) return false;
+    return edit(map.empty() ? "No percussion map" : "Percussion map", on_track(id, [&](project::Track& t) {
+        if (t.percussion_map == map) return false;
+        t.percussion_map = map;
         return true;
     }));
 }

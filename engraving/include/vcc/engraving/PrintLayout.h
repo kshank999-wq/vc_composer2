@@ -54,6 +54,10 @@ struct PrintOptions {
 
     /// A number at the foot of every page, when there is more than one.
     bool number_pages = true;
+    /// Multi-bar rests (Main Spec §7), as a part has them: a run of two or
+    /// more empty bars in one meter prints as one bar with an H-bar and the
+    /// count over it. Off for a full score.
+    bool multirests = false;
 
     bool is_valid() const noexcept
     {

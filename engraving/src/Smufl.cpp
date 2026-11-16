@@ -98,6 +98,11 @@ const GlyphEntry kDefaults[] = {
     {Glyph::StringsUpBow,    "stringsUpBow",   0xE612, 1.0},
     {Glyph::StringsDownBow,  "stringsDownBow", 0xE610, 1.2},
     {Glyph::OrnamentTrill,   "ornamentTrill",  0xE566, 1.6},
+
+    {Glyph::NoteheadXBlack,          "noteheadXBlack",          0xE0A9, 1.18},
+    {Glyph::NoteheadCircleX,         "noteheadCircleX",         0xE0B3, 1.18},
+    {Glyph::NoteheadTriangleUpBlack, "noteheadTriangleUpBlack", 0xE0BE, 1.18},
+    {Glyph::NoteheadDiamondBlack,    "noteheadDiamondBlack",    0xE0DB, 1.18},
 };
 
 }  // namespace

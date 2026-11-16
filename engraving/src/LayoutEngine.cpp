@@ -595,6 +595,9 @@ double LayoutEngine::layout_header(const notation::Score& score, const StaffCont
     return x - left_x;
 }
 
+/// Room a start repeat (thick, thin, dots) takes at the head of a system.
+constexpr double kStartRepeatWidth = 2.2;
+
 void LayoutEngine::layout_barlines(const notation::Score& score, const TimelineMap& timeline,
                                    const std::vector<StaffContext>& staves,
                                    notation::Ticks from_tick, notation::Ticks to_tick,
@@ -630,6 +633,72 @@ void LayoutEngine::layout_barlines(const notation::Score& score, const TimelineM
         item.thickness = staff_prototype_.line_thickness * 1.6;
         item.role = ItemRole::Barline;
         result.display_list.add(item);
+    }
+
+    // Repeats and endings (Main Spec §7).
+    auto thick_thin = [&](double x, bool thick_first, bool dots_right) {
+        const double thin = staff_prototype_.line_thickness * 1.6, thick = 0.5;
+        const double a = thick_first ? x + thick * 0.5 : x - thick * 0.5;
+        const double b = thick_first ? x + thick + 0.4 : x - thick - 0.4;
+        for (const auto& [at, w] : {std::pair<double, double>{a, thick}, std::pair<double, double>{b, thin}}) {
+            LineItem line;
+            line.from = Point{at, top};
+            line.to = Point{at, bottom};
+            line.thickness = w;
+            line.role = ItemRole::Barline;
+            result.display_list.add(line);
+        }
+        const double dot_x = dots_right ? b + 0.45 : b - 0.85;
+        for (const StaffContext& staff : staves)
+            for (const double pos : {1.5, 2.5}) {
+                const double y = staff.metrics.top_y + pos;
+                emit_glyph(Glyph::AugmentationDot, Point{dot_x, y}, ItemRole::Barline, notation::kInvalidEventId, result);
+            }
+    };
+    for (const notation::RepeatSection& r : score.repeats()) {
+        const notation::Ticks start = score.measure_start_tick(r.start_bar);
+        const notation::Ticks end = score.measure(r.end_bar).end_tick();
+        if (start == from_tick) thick_thin(timeline.x_for_tick(start) - kStartRepeatWidth + 0.3, true, true);
+        else if (start > from_tick && start < to_tick) thick_thin(timeline.x_for_tick(start), true, true);
+        if (end > from_tick && end <= to_tick) thick_thin(timeline.x_for_tick(end), false, false);
+        // The endings: "1." over the last bars of the passage, "2." over as
+        // many after it.
+        if (r.ending_bars <= 0) continue;
+        const double bracket_y = top - 3.0;
+        auto ending = [&](std::int32_t first_bar, const std::string& label, bool closed) {
+            const notation::Ticks a = score.measure_start_tick(first_bar);
+            const notation::Ticks b = score.measure(first_bar + r.ending_bars - 1).end_tick();
+            if (b <= from_tick || a >= to_tick) return;
+            const double x0 = timeline.x_for_tick(std::max(a, from_tick)) + 0.3;
+            const double x1 = timeline.x_for_tick(std::min(b, to_tick)) - 0.3;
+            LineItem over;
+            over.from = Point{x0, bracket_y};
+            over.to = Point{x1, bracket_y};
+            over.thickness = staff_prototype_.line_thickness * 1.4;
+            over.role = ItemRole::Barline;
+            result.display_list.add(over);
+            if (a >= from_tick) {
+                LineItem hook = over;
+                hook.from = Point{x0, bracket_y};
+                hook.to = Point{x0, bracket_y + 1.8};
+                result.display_list.add(hook);
+                TextItem t;
+                t.text = label;
+                t.size = 1.4;
+                t.origin = Point{x0 + 0.4, bracket_y + 1.6};
+                t.role = ItemRole::Text;
+                result.display_list.add(t);
+            }
+            if (closed && b <= to_tick) {
+                LineItem hook = over;
+                hook.from = Point{x1, bracket_y};
+                hook.to = Point{x1, bracket_y + 1.8};
+                result.display_list.add(hook);
+            }
+        };
+        // Played `times` times: every pass but the last takes the first ending.
+        ending(r.end_bar - r.ending_bars + 1, r.times > 2 ? "1.-" + std::to_string(r.times - 1) + "." : std::string("1."), true);
+        ending(r.end_bar + 1, std::to_string(r.times) + ".", false);
     }
 }
 
@@ -1357,8 +1426,18 @@ void LayoutEngine::layout_chord(const StaffContext& staff, const TimelineMap& ti
         // contributes its stem to it, and its own place in the result.
         const bool shared = index < chord.shared_head.size() && chord.shared_head[index];
 
-        if (!shared)
-            emit_glyph(head, Point{x, y}, ItemRole::Notehead, note.id, result);
+        if (!shared) {
+            // A percussion map's shape (x for cymbals...), when it has one
+            // and the duration does not ask for an open head.
+            Glyph shaped = head;
+            if (note.notehead != 0 && head == Glyph::NoteheadBlack) {
+                const Glyph shapes[] = {Glyph::NoteheadBlack, Glyph::NoteheadXBlack, Glyph::NoteheadCircleX,
+                                        Glyph::NoteheadTriangleUpBlack, Glyph::NoteheadDiamondBlack};
+                shaped = shapes[std::min<int>(note.notehead, 4)];
+                if (glyphs_.metrics(shaped).codepoint == 0) shaped = head;  // a font without it
+            }
+            emit_glyph(shaped, Point{x, y}, ItemRole::Notehead, note.id, result);
+        }
 
         if (!shared && staff.metrics.needs_ledger_lines(position)) {
             int lines[16]{};
@@ -2651,6 +2730,13 @@ LayoutResult LayoutEngine::layout(const notation::Score& score, const TimelineMa
         header_width = std::max(options_.header_width,
                                 layout_header(score, nullptr, from_tick, 0.0, nullptr));
     }
+    // A repeat that opens the system goes at the end of the header, ahead
+    // of the first note, so the header makes room for it.
+    for (const notation::RepeatSection& r : score.repeats())
+        if (score.measure_start_tick(r.start_bar) == from_tick) {
+            header_width += kStartRepeatWidth;
+            break;
+        }
     const double music_x = timeline.x_for_tick(from_tick);
     const double left_x = music_x - header_width;
     const double right_x = timeline.x_for_tick(to_tick);
@@ -2761,6 +2847,47 @@ LayoutResult LayoutEngine::layout(const notation::Score& score, const TimelineMa
     }
     layout_dynamics(score, timeline, from_tick, to_tick, marking_staves, result);
     layout_hairpins(score, timeline, from_tick, to_tick, marking_staves, result);
+
+    // Lyrics (Main Spec §7): one line under each staff that has any, below
+    // its dynamics, each syllable centred on its note; a word's hyphen sits
+    // between its syllables.
+    for (const StaffContext& staff : staves) {
+        const auto notes = score.notes_in_range(staff.index, from_tick, to_tick);
+        if (std::none_of(notes.begin(), notes.end(), [](const notation::ScoreNote& n) { return !n.lyric.empty(); }))
+            continue;
+        constexpr double kLyricSize = 1.5;
+        double baseline = staff.metrics.bottom_y() + 4.0;
+        for (const GlyphItem& glyph : result.display_list.glyphs)
+            if (glyph.role == ItemRole::Dynamic && glyph.bounds.y > staff.metrics.bottom_y() &&
+                glyph.bounds.y < staff.metrics.bottom_y() + 6.0)
+                baseline = std::max(baseline, glyph.bounds.y + glyph.bounds.height + kLyricSize + 0.4);
+        double hyphen_from = -1.0;
+        for (const notation::ScoreNote& n : notes) {
+            if (n.is_rest || n.lyric.empty() || n.grace || n.in_chord) continue;
+            std::string syllable = n.lyric;
+            const bool continues = syllable.size() > 1 && syllable.back() == '-';
+            if (continues) syllable.pop_back();
+            const double x = timeline.x_for_tick(n.start_tick) + 0.6;
+            const double width = 0.55 * kLyricSize * static_cast<double>(syllable.size());
+            if (hyphen_from >= 0.0 && x - width * 0.5 - hyphen_from > 1.2) {
+                TextItem hyphen;
+                hyphen.text = "-";
+                hyphen.size = kLyricSize;
+                hyphen.origin = Point{(hyphen_from + x - width * 0.5) * 0.5 - 0.3, baseline};
+                hyphen.role = ItemRole::Text;
+                result.display_list.add(hyphen);
+            }
+            if (syllable != "_") {
+                TextItem item;
+                item.text = syllable;
+                item.size = kLyricSize;
+                item.origin = Point{x - width * 0.5, baseline};
+                item.role = ItemRole::Text;
+                result.display_list.add(item);
+            }
+            hyphen_from = continues ? x + width * 0.5 : -1.0;
+        }
+    }
 
     // After the markings, which a text clears when they share the space
     // above the top staff: a dynamic goes nearest the staff, and a

@@ -153,6 +153,7 @@ int export_parts_pdf(AppContext& context, const juce::File& target, juce::String
         engraving::PrintOptions po;
         po.title = d.production.title.empty() ? d.name : d.production.title;
         po.subtitle = t->name;
+        po.multirests = true;  // empty runs as multi-bar rests
         // A part reads at written pitch under its written key.
         const notation::Score written = interchange::display_score(v->score, false);
         parts.emplace_back(t->name, engraving::lay_out_pages(written, engine, po));

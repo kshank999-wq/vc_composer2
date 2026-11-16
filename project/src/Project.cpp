@@ -1,6 +1,7 @@
 #include "vcc/project/Project.h"
 
 #include "vcc/project/ArticulationMap.h"
+#include "vcc/project/Percussion.h"
 
 #include "vcc/project/Automation.h"
 
@@ -247,8 +248,29 @@ notation::Score score_for_track(const std::string& name)
 void ProjectData::sync_scores()
 {
     auto ks = key_signature_for(key);
-    for (auto& t : tracks)
-        for (auto& v : t.versions) sync_score(v.score, meter, ks);
+    for (auto& t : tracks) {
+        const PercussionMap* drums = t.percussion_map.empty() ? nullptr : percussion_map_named(t.percussion_map);
+        for (auto& v : t.versions) {
+            sync_score(v.score, meter, ks);
+            if (v.score.repeats() != repeats) v.score.set_repeats(repeats);
+            if (!drums) continue;
+            // Each note's head as its sound's (x for cymbals...).
+            std::vector<std::pair<notation::EventId, std::uint8_t>> heads;
+            for (std::size_t s = 0; s < v.score.staff_count(); ++s)
+                for (const auto& n : v.score.notes(s)) {
+                    if (n.is_rest) continue;
+                    const auto* sound = drums->by_written(notation::midi_note_number(n.pitch));
+                    const std::uint8_t want = sound ? sound->notehead : 0;
+                    if (n.notehead != want) heads.emplace_back(n.id, want);
+                }
+            for (const auto& [id, head] : heads)
+                if (const auto* n = v.score.find_note(id)) {
+                    auto changed = *n;
+                    changed.notehead = head;
+                    v.score.modify_note(id, changed);
+                }
+        }
+    }
 }
 
 // --- History --------------------------------------------------------------------
@@ -404,6 +426,17 @@ ProjectData Project::expand(const Kept& s)
         for (auto& v : t.versions)
             if (i < s.scores.size()) v.score = *s.scores[i++];
     return d;
+}
+
+bool Project::squash_undo(std::size_t steps, const std::string& label)
+{
+    if (steps < 1 || undo_.size() < steps) return false;
+    auto first = undo_.end() - static_cast<std::ptrdiff_t>(steps);
+    first->label = label;
+    first->after = undo_.back().after;
+    undo_.erase(first + 1, undo_.end());
+    redo_.clear();
+    return true;
 }
 
 std::string Project::undo_label() const { return undo_.empty() ? std::string{} : undo_.back().label; }
@@ -898,6 +931,7 @@ json::Value Project::to_json() const
                                          {"message", a.message}});
         o.set("expression_map", t.expression_map);
         if (t.articulation_map) o.set("articulation_map", expression_map_to_json(*t.articulation_map));
+        if (!t.percussion_map.empty()) o.set("percussion_map", t.percussion_map);
         if (!t.instrument_plugin.empty())
             o.set("instrument_plugin", json::Object{{"format", t.instrument_plugin.format},
                                                     {"identifier", t.instrument_plugin.identifier},
@@ -1061,6 +1095,13 @@ json::Value Project::to_json() const
     for (const auto& m : d.markers)
         markers.emplace_back(json::Object{{"id", m.id}, {"kind", m.kind}, {"seconds", m.seconds}, {"label", m.label},
                                           {"cue_id", m.cue_id}, {"streamer_seconds", m.streamer_seconds}});
+    if (!d.repeats.empty()) {
+        json::Array reps;
+        for (const auto& r : d.repeats)
+            reps.emplace_back(json::Object{{"start_bar", r.start_bar}, {"end_bar", r.end_bar}, {"times", r.times},
+                                           {"ending_bars", r.ending_bars}});
+        root.set("repeats", reps);
+    }
     if (!d.vcas.empty()) {
         json::Array vcas;
         for (const auto& v : d.vcas)
@@ -1200,6 +1241,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         }
         t.expression_map = j.get_string("expression_map", "default");
         if (const auto* am = j.get("articulation_map")) t.articulation_map = expression_map_from_json(*am);
+        t.percussion_map = j.get_string("percussion_map");
         if (const auto* pj = j.get("instrument_plugin")) t.instrument_plugin = plugin_from_json(*pj);
         t.output_bus_id = j.get_string("output_bus_id");
         t.sends = sends_from_json(j.get("sends"));
@@ -1417,6 +1459,14 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
     }
     d.active_picture_id = doc.get_string("active_picture_id");
     if (!d.active_picture_id.empty() && !d.active_picture()) return fail("active picture not found");
+    for (const auto& j : doc.get("repeats") ? doc.get("repeats")->as_array() : json::Array{}) {
+        notation::RepeatSection r;
+        r.start_bar = static_cast<std::int32_t>(std::max<std::int64_t>(1, j.get_int("start_bar", 1)));
+        r.end_bar = static_cast<std::int32_t>(std::max<std::int64_t>(r.start_bar, j.get_int("end_bar", r.start_bar)));
+        r.times = static_cast<std::int32_t>(std::clamp<std::int64_t>(j.get_int("times", 2), 2, 16));
+        r.ending_bars = static_cast<std::int32_t>(std::clamp<std::int64_t>(j.get_int("ending_bars", 0), 0, r.end_bar - r.start_bar));
+        d.repeats.push_back(r);
+    }
     for (const auto& j : doc.get("vcas") ? doc.get("vcas")->as_array() : json::Array{}) {
         Vca v;
         v.id = j.get_string("id");

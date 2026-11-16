@@ -1,5 +1,6 @@
 #include "vcc/notation/ScoreFile.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cmath>
 #include <limits>
@@ -79,6 +80,8 @@ json::Value note_to_json(const ScoreNote& note)
     if (note.grace_order != plain.grace_order) out.set("grace_order", integer(note.grace_order));
     if (note.grace_slashed != plain.grace_slashed) out.set("grace_slashed", json::Value::make_bool(note.grace_slashed));
     if (note.staff_shift != plain.staff_shift) out.set("staff_shift", integer(note.staff_shift));
+    if (!note.lyric.empty()) out.set("lyric", text(note.lyric));
+    if (note.notehead != 0) out.set("notehead", integer(note.notehead));
     if (note.articulations != plain.articulations) out.set("articulations", articulations_to_json(note.articulations));
     return out;
 }
@@ -301,6 +304,8 @@ bool note_from_json(const json::Value& value, ScoreNote& out, std::string& why,
         return false;
     }
     read_bool(value, "grace_slashed", out.grace_slashed);
+    if (const json::Value& lyric = value["lyric"]; lyric.is_string()) out.lyric = lyric.as_string();
+    out.notehead = static_cast<std::uint8_t>(std::clamp<std::int64_t>(value["notehead"].as_int(0), 0, 4));
     if (read_bounded(value, "staff_shift", out.staff_shift) == Field::Unusable) {
         why = "its staff shift is not one this build can hold";
         return false;

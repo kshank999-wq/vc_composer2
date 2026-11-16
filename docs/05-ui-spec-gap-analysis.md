@@ -1690,3 +1690,33 @@ macOS, Linux and Windows. What it took:
     - **Tests**: `test_time_stretch` (length, pitch within 3 Hz, level
       without dips, stereo balance), `test_session` (capture, clip groups);
       `edit_tools_checks` in the desktop check.
+43. **Notation: lyrics, repeats, multi-bar rests, percussion maps,
+    explode/implode, print preview, shortcut editor. Done** (November 16,
+    2026; Main Spec §7).
+    - **Lyrics** (Edit > Lyrics..., Shift+Cmd/Ctrl+L): one syllable per
+      selected note; hyphens split a word, `_` holds a syllable. Engraved
+      under the staff with hyphens between syllables; kept through
+      MusicXML import and export (`<lyric>` with `<syllabic>`).
+    - **Repeats** (Edit > Add Repeat..., Unroll Repeats): a section of bars
+      played *n* times with optional first/second endings, saved with the
+      project, drawn as repeat barlines with dots and "1." / "2." brackets
+      (a repeat opening a system sits in the header, ahead of the first
+      note), and exchanged as MusicXML `<repeat>` / `<ending>`. Unroll
+      writes the passage out (notes, dynamics, hairpins, slurs, texts,
+      tempos, chords) as one undo step.
+    - **Multi-bar rests** in parts (PDF, SVG and Print Preview): runs of
+      empty bars become an H-bar with the count, bar numbers as written.
+    - **Percussion maps**: drum kits get the General MIDI kit map: staff
+      positions as drum-set parts are written, x / circled-x / triangle
+      noteheads, and playback through the map's MIDI notes. Track menu >
+      Percussion map lists the sounds.
+    - **Explode / Implode** (Edit menu): chords split into new tracks, top
+      note first, or tracks combined as chords onto one, each one undo step.
+    - **File > Print Preview...** (Shift+Cmd/Ctrl+P): the full score or any
+      part as it prints, one or two pages, Export PDF from there.
+    - **Edit Shortcuts...** (from the Shortcuts menu): duplicate a factory
+      profile, set a key by pressing it (a key in use asks before it
+      moves), export and import `.vccshortcuts` files.
+    - **Tests**: `test_session` (lyrics, explode/implode, repeats through
+      MusicXML and unroll, percussion map), `test_musicxml`, the printed
+      part's multi-bar rests; `notation_tools_checks` in the desktop check.

@@ -1,6 +1,7 @@
 #include "ui/TrackPanel.h"
 
 #include "ui/library/ArticulationMapWindow.h"
+#include "vcc/project/Percussion.h"
 #include "ui/library/LibraryBrowser.h"
 
 #include "ui/Deferred.h"
@@ -458,6 +459,23 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
     m.addItem("Open instrument window", !t->instrument_plugin.empty(),
               false, [&c, id] { if (c.show_plugin_window) c.show_plugin_window(id); });
     m.addItem("Articulation map...", [&c, id] { show_articulation_map(c, id); });
+    {
+        juce::PopupMenu drums;
+        drums.addItem("None (pitched)", true, t->percussion_map.empty(), [&c, id] { c.session.set_percussion_map(id, ""); });
+        for (const auto& pm : project::builtin_percussion_maps()) {
+            const std::string map_id = pm.id;
+            drums.addItem(juce::String(pm.name), true, t->percussion_map == pm.id,
+                          [&c, id, map_id] { c.session.set_percussion_map(id, map_id); });
+        }
+        if (const auto* pm = project::percussion_map_named(t->percussion_map)) {
+            drums.addSeparator();
+            for (const auto& sound : pm->sounds)
+                drums.addItem(juce::String(sound.name) + "  -  " + juce::MidiMessage::getMidiNoteName(sound.written, true, true, 4) +
+                                  (sound.notehead == 1 ? " (x)" : sound.notehead == 2 ? " (circled x)" : sound.notehead == 3 ? " (triangle)" : ""),
+                              false, false, [] {});
+        }
+        m.addSubMenu("Percussion map", drums);
+    }
     // Trans (Add-On spec §10): the popover, at the pointer.
     {
         std::string why;

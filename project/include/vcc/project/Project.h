@@ -305,6 +305,9 @@ struct Track {
     /// project so it plays the same anywhere. When set, `expression_map`
     /// is its name and this is what plays.
     std::optional<notation::ExpressionMap> articulation_map;
+    /// A percussion map's id (vcc/project/Percussion.h), for a drum kit:
+    /// staff positions and noteheads to drum sounds. Empty for pitched parts.
+    std::string percussion_map;
     /// Instrument plug-in; empty means the built-in placeholder plays.
     PluginRef instrument_plugin;
     std::string output_bus_id;
@@ -582,6 +585,9 @@ struct ProjectData {
     std::vector<ChordMark> chords;
     std::vector<StemDef> stems;
     std::vector<Vca> vcas;
+    /// Repeats and endings (Main Spec §7): printed and exchanged; playback
+    /// follows the timeline as written (Edit > Unroll Repeats writes them out).
+    std::vector<notation::RepeatSection> repeats;
     std::vector<MixGroup> mix_groups;
     std::vector<Snapshot> snapshots;
     std::vector<std::string> applied_templates;
@@ -657,6 +663,10 @@ public:
     bool undo();
     bool redo();
     std::size_t history_size() const noexcept { return undo_.size(); }
+    /// Makes the last `steps` undo steps one, named `label` (an operation
+    /// built from several edits, such as Explode adding tracks then writing
+    /// them, undoes in one). False when there are fewer.
+    bool squash_undo(std::size_t steps, const std::string& label);
 
     // --- Common edits (each one undo step) -----------------------------------
 

@@ -8,7 +8,12 @@ GlyphSubstitute substitute_for(Glyph glyph) noexcept
         // Noteheads. Open for a half and longer, which is the one notehead
         // distinction a reader needs at a glance.
         case Glyph::NoteheadBlack:
+        case Glyph::NoteheadTriangleUpBlack:
+        case Glyph::NoteheadDiamondBlack:
             return GlyphSubstitute{SubstituteKind::FilledEllipse, "", 0.0};
+        case Glyph::NoteheadXBlack:
+        case Glyph::NoteheadCircleX:
+            return GlyphSubstitute{SubstituteKind::Letters, "x", 0.0};
         case Glyph::NoteheadHalf:
         case Glyph::NoteheadWhole:
         case Glyph::NoteheadDoubleWhole:

@@ -134,6 +134,13 @@ enum : juce::CommandID {
     ungroupClips,
     captureMidi,
     midiInputFilter,
+    lyrics,
+    explodeTracks,
+    implodeTracks,
+    addRepeat,
+    unrollRepeats,
+    editShortcuts,
+    printPreview,
 };
 }  // namespace cmd
 

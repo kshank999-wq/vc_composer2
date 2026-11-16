@@ -6,6 +6,7 @@
 
 #include "vcc/notation/MidiRenderer.h"
 #include "vcc/project/ArticulationMap.h"
+#include "vcc/project/Percussion.h"
 
 namespace vcc::project {
 
@@ -69,6 +70,12 @@ notation::RenderResult render_score_events(const Track& track, const notation::E
     options.to_tick = to;
     renderer.set_options(options);
     notation::RenderResult r = renderer.render(version->score);
+    // A drum kit's staff positions play their drums (Main Spec §7).
+    if (const PercussionMap* drums = track.percussion_map.empty() ? nullptr : percussion_map_named(track.percussion_map))
+        for (auto& e : r.events)
+            if (e.role == notation::EventRole::Note &&
+                (e.event.type == music::MidiEventType::NoteOn || e.event.type == music::MidiEventType::NoteOff))
+                if (const auto* sound = drums->by_written(e.event.data1)) e.event.data1 = static_cast<std::uint8_t>(sound->midi);
     canonical_order(r.events);
     std::sort(r.unmapped_articulations.begin(), r.unmapped_articulations.end());
     std::sort(r.out_of_range_notes.begin(), r.out_of_range_notes.end());

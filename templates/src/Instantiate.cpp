@@ -6,6 +6,8 @@
 
 #include "vcc/templates/Templates.h"
 
+#include "vcc/project/Percussion.h"
+
 namespace vcc::templates {
 
 using project::ResolutionStatus;
@@ -320,6 +322,7 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
                                   : map_bus(tt.output_bus_id);
             t.template_origin = tpl.template_id + "/" + tt.id;
 
+            t.percussion_map = project::default_percussion_map(tt.instrument_standard_id);
             if (tt.midi_channel_policy == "drum" || (def.unpitched && tt.midi_channel_policy == "auto")) {
                 t.midi_channel = 9;
             } else if (tt.midi_channel_policy.rfind("fixed:", 0) == 0) {

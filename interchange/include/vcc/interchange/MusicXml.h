@@ -133,6 +133,9 @@ struct ImportResult {
     /// The chord symbols (<harmony>) of the first part that has any.
     std::vector<ImportedChord> chords;
 
+    /// Repeats and endings (bars of the imported layout).
+    std::vector<notation::RepeatSection> repeats;
+
     int measure_count = 0;
     bool has_pickup = false;
     Ticks pickup_ticks = 0;  ///< Length of the pickup bar when `has_pickup`.

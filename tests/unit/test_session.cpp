@@ -614,3 +614,170 @@ TEST_CASE("clip groups move together across tracks; regions follow by time")
     REQUIRE(o.open(path));
     CHECK(!o.data().find_track(a)->active_version()->audio_clips.front().group_id.empty());
 }
+
+TEST_CASE("score tools: lyrics by syllable, explode chords to parts, implode parts to chords")
+{
+    CHECK(Session::lyric_syllables("Hal-le-lu-jah,  sing  -x") ==
+          (std::vector<std::string>{"Hal-", "le-", "lu-", "jah,", "sing", "-x"}));
+    Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Horns", "brass.horn_section");
+    auto chord = [&](Ticks at, std::vector<int> midi) {
+        notation::Score sc = s.data().find_track(t)->active_version()->score;
+        std::vector<notation::Pitch> pitches;
+        for (int m : midi) pitches.push_back(notation::spell_midi_note(m, {}));
+        sc.insert_chord(0, at, notation::quarter(), pitches);
+        s.commit_score(t, sc, "Write");
+    };
+    chord(0, {60, 64, 67});
+    chord(kTicksPerQuarter, {62, 65});
+    chord(2 * kTicksPerQuarter, {64});
+
+    std::vector<notation::EventId> all;
+    for (const auto& n : s.data().find_track(t)->active_version()->score.notes(0)) all.push_back(n.id);
+    CHECK_EQ(s.set_lyrics(t, all, "Ky-ri-e"), 3);
+    std::map<Ticks, std::string> sung;
+    for (const auto& n : s.data().find_track(t)->active_version()->score.notes(0))
+        if (!n.lyric.empty()) sung[n.start_tick] = n.lyric;
+    CHECK_EQ(sung.size(), 3u);  // one per chord
+    CHECK_EQ(sung[0], std::string("Ky-"));
+    CHECK_EQ(sung[2 * kTicksPerQuarter], std::string("e"));
+    CHECK_EQ(s.undo_label(), std::string("Lyrics"));
+
+    const auto before = s.data().tracks.size();
+    const auto parts = s.explode(t, 0, 4 * kTicksPerQuarter, 3);
+    REQUIRE(parts.size() == 3u);
+    CHECK_EQ(s.data().tracks.size(), before + 3);
+    CHECK_EQ(s.undo_label(), std::string("Explode"));
+    auto top_pitches = [&](const std::string& id) {
+        std::vector<int> out;
+        for (const auto& n : s.data().find_track(id)->active_version()->score.notes(0))
+            if (!n.is_rest) out.push_back(notation::midi_note_number(n.pitch));
+        return out;
+    };
+    CHECK(top_pitches(parts[0]) == (std::vector<int>{67, 65, 64}));
+    CHECK(top_pitches(parts[1]) == (std::vector<int>{64, 62, 64}));  // fewer notes: the lowest doubles
+    CHECK(top_pitches(parts[2]) == (std::vector<int>{60, 62, 64}));
+    s.undo();
+    CHECK_EQ(s.data().tracks.size(), before);  // one undo takes the whole explode back
+
+    const auto a = s.add_track("Flute", "woodwinds.flute");
+    const auto b = s.add_track("Oboe", "woodwinds.oboe");
+    auto line = [&](const std::string& id, int midi) {
+        notation::Score sc = s.data().find_track(id)->active_version()->score;
+        notation::ScoreNote n;
+        n.start_tick = 0;
+        n.duration = notation::half();
+        n.pitch = notation::spell_midi_note(midi, {});
+        sc.insert_note(0, n);
+        s.commit_score(id, sc, "Write");
+    };
+    line(a, 76);
+    line(b, 72);
+    const auto target = s.add_track("Reduction", "keys.piano");
+    REQUIRE(s.implode({a, b}, target, 0, 4 * kTicksPerQuarter));
+    std::vector<int> got;
+    for (const auto& n : s.data().find_track(target)->active_version()->score.notes(0)) got.push_back(notation::midi_note_number(n.pitch));
+    std::sort(got.begin(), got.end());
+    CHECK(got == (std::vector<int>{72, 76}));
+}
+
+TEST_CASE("repeats: play order with endings, unrolled into the bars, and through MusicXML with lyrics")
+{
+    notation::RepeatSection r;
+    r.start_bar = 2;
+    r.end_bar = 4;
+    r.ending_bars = 1;  // bar 4 is "1.", bar 5 is "2."
+    CHECK(Session::play_order({r}, 6) == (std::vector<std::int32_t>{1, 2, 3, 4, 2, 3, 5, 6}));
+    notation::RepeatSection plain;
+    plain.start_bar = 1;
+    plain.end_bar = 2;
+    plain.times = 3;
+    CHECK(Session::play_order({plain}, 3) == (std::vector<std::int32_t>{1, 2, 1, 2, 1, 2, 3}));
+
+    Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Voice", "vocals.soprano");
+    notation::Score sc = s.data().find_track(t)->active_version()->score;
+    const Ticks bar = s.data().meter.at_bar(1).ticks_per_bar();
+    for (int b = 0; b < 6; ++b) {
+        notation::ScoreNote n;
+        n.start_tick = b * bar;
+        n.duration = notation::whole();
+        n.pitch = notation::spell_midi_note(60 + b, {});
+        n.lyric = b == 1 ? "Glo-" : b == 2 ? "ri-" : b == 3 ? "a" : "";
+        sc.insert_note(0, n);
+    }
+    s.commit_score(t, sc, "Write");
+    REQUIRE(s.set_repeats({r}));
+    CHECK(s.data().find_track(t)->active_version()->score.repeats().size() == 1u);  // pushed into the score
+
+    // MusicXML out and back: the repeat and the lyrics survive.
+    const auto xml = s.export_musicxml();
+    CHECK(xml.find("<repeat direction=\"forward\"/>") != std::string::npos);
+    CHECK(xml.find("<repeat direction=\"backward\"/>") != std::string::npos);
+    CHECK(xml.find("<ending number=\"1\" type=\"start\"/>") != std::string::npos);
+    CHECK(xml.find("<syllabic>begin</syllabic>") != std::string::npos);
+    CHECK(xml.find("<text>Glo</text>") != std::string::npos);
+    const auto back = interchange::import_musicxml(xml);
+    REQUIRE(back.ok);
+    REQUIRE(back.repeats.size() == 1u);
+    CHECK(back.repeats[0] == r);
+    std::string sung;
+    for (const auto& n : back.parts.front().score.notes(0)) sung += n.lyric;
+    CHECK_EQ(sung, std::string("Glo-ri-a"));
+
+    // Unrolled: 8 bars, the repeat written out, the signs gone.
+    CHECK_EQ(s.unroll_repeats(), 2);
+    CHECK_EQ(s.undo_label(), std::string("Unroll repeats"));
+    CHECK(s.data().repeats.empty());
+    std::vector<int> pitches;
+    for (const auto& n : s.data().find_track(t)->active_version()->score.notes(0)) pitches.push_back(notation::midi_note_number(n.pitch));
+    CHECK(pitches == (std::vector<int>{60, 61, 62, 63, 61, 62, 64, 65}));
+    s.undo();
+    CHECK_EQ(s.data().repeats.size(), 1u);
+}
+
+#include "vcc/project/Percussion.h"
+#include "vcc/project/Render.h"
+
+TEST_CASE("percussion map: a drum kit's staff positions show their noteheads and play their drums")
+{
+    Session s(catalogs());
+    s.new_empty();
+    const auto kit = s.add_track("Drums", "rhythm.drum_kit");
+    CHECK_EQ(s.data().find_track(kit)->percussion_map, std::string("gm_kit"));
+    const auto* map = project::percussion_map_named("gm_kit");
+    REQUIRE(map != nullptr);
+    notation::Score sc = s.data().find_track(kit)->active_version()->score;
+    auto hit = [&](Ticks at, int written) {
+        notation::ScoreNote n;
+        n.start_tick = at;
+        n.duration = notation::quarter();
+        n.pitch = notation::spell_midi_note(written, {});
+        sc.insert_note(0, n);
+    };
+    hit(0, 65);                    // kick (F4)
+    hit(kTicksPerQuarter, 72);     // snare (C5)
+    hit(2 * kTicksPerQuarter, 79); // closed hi-hat (G5)
+    s.commit_score(kit, sc, "Groove");
+    std::map<int, int> heads;
+    for (const auto& n : s.data().find_track(kit)->active_version()->score.notes(0))
+        heads[notation::midi_note_number(n.pitch)] = n.notehead;
+    CHECK_EQ(heads[65], 0);
+    CHECK_EQ(heads[79], 1);  // an x
+    std::vector<int> played;
+    for (const auto& n : project::render_track(*s.data().find_track(kit)).notes) played.push_back(n.pitch);
+    CHECK(played == (std::vector<int>{36, 38, 42}));
+    CHECK(s.set_percussion_map(kit, ""));
+    played.clear();
+    for (const auto& n : project::render_track(*s.data().find_track(kit)).notes) played.push_back(n.pitch);
+    CHECK(played == (std::vector<int>{65, 72, 79}));  // without a map: as written
+    s.undo();
+    const std::string path = std::string(VCC_TEST_TMP_DIR) + "/drums.vcc2";
+    REQUIRE(s.save_as(path));
+    Session r(catalogs());
+    REQUIRE(r.open(path));
+    CHECK_EQ(r.data().find_track(kit)->percussion_map, std::string("gm_kit"));
+    CHECK(!s.set_percussion_map(kit, "no_such_map"));
+}

@@ -264,3 +264,43 @@ VCC_TEST(pages_render_to_svg_each_carrying_the_font_and_its_own_title)
 }
 
 VCC_TEST_MAIN("engraving/PrintLayout")
+
+VCC_TEST(a_part_prints_empty_bars_as_multi_bar_rests_numbered_as_written)
+{
+    // Bars 1 and 9 play; 2-8 are silent; a lyric and a repeat ending too.
+    notation::Score score;
+    auto first = note_at(0, notation::whole(), {notation::Step::G, 4, 0});
+    first.lyric = "Ah";
+    score.insert_note(0, first);
+    score.insert_note(0, note_at(8 * kBar, notation::whole(), {notation::Step::A, 4, 0}));
+    score.insert_note(0, note_at(9 * kBar, notation::whole(), {notation::Step::B, 4, 0}));
+    notation::RepeatSection r;
+    r.start_bar = 9;
+    r.end_bar = 9;
+    score.set_repeats({r});
+    const LayoutEngine engine;
+    PrintOptions options;
+    options.multirests = true;
+    options.bars_per_system = 4;
+    const auto printed = engraving::lay_out_pages(score, engine, options);
+    VCC_CHECK_EQ(printed.bar_count, 10);
+    VCC_CHECK(!printed.pages.empty());
+    if (printed.pages.empty()) return;
+    const auto& page = printed.pages.front().layout;
+    VCC_CHECK(has_text(page, "7"));   // bars 2-8 as one
+    VCC_CHECK(has_text(page, "Ah"));  // the lyric under its note
+    // Three bars laid out (1, the rest, 9) and 10: one system, numbered as written.
+    VCC_CHECK_EQ(printed.system_count, std::size_t{1});
+    VCC_CHECK_EQ(printed.pages.front().systems.front().last_bar, 10);
+    int hbars = 0;
+    for (const auto& line : page.display_list.lines)
+        if (line.role == ItemRole::Rest && line.thickness > 0.5) ++hbars;
+    VCC_CHECK_EQ(hbars, 1);
+
+    // Off (a full score): every bar printed.
+    PrintOptions full;
+    full.bars_per_system = 4;
+    const auto all = engraving::lay_out_pages(score, engine, full);
+    VCC_CHECK_EQ(all.system_count, std::size_t{3});
+    VCC_CHECK(!has_text(all.pages.front().layout, "7"));
+}

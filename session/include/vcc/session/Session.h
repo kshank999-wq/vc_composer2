@@ -110,6 +110,30 @@ public:
     /// document; the caller asks about unsaved changes first.
     templates::InstantiateResult new_from_template(const std::string& template_id,
                                                    const templates::InstantiateOptions& options = {});
+    // --- Score tools (Main Spec §7) ------------------------------------------------
+    /// "Hal-le-lu-jah, sing" -> "Hal-", "le-", "lu-", "jah,", "sing".
+    static std::vector<std::string> lyric_syllables(const std::string& text);
+    /// Sings `text` on these notes, a syllable per onset in time order (a
+    /// chord takes one); empty text clears their lyrics. One undo step.
+    /// Returns the syllables placed.
+    int set_lyrics(const std::string& track_id, const std::vector<notation::EventId>& notes, const std::string& text);
+    /// Explode: the chords of [from, to) on the track's first staff split
+    /// into `parts` new tracks of the same instrument, top note to the
+    /// first; a chord with fewer notes doubles its lowest. One undo step.
+    std::vector<std::string> explode(const std::string& track_id, Ticks from, Ticks to, int parts);
+    /// Implode: the notes of [from, to) on the sources' first staves become
+    /// chords on the target's (what the target had there gives way).
+    bool implode(const std::vector<std::string>& sources, const std::string& target, Ticks from, Ticks to);
+    /// Repeats and endings (printed and exchanged). One undo step "Repeats".
+    bool set_repeats(std::vector<notation::RepeatSection> repeats);
+    /// The bars in the order a player plays them.
+    static std::vector<std::int32_t> play_order(const std::vector<notation::RepeatSection>& repeats, std::int32_t last_bar);
+    /// Writes the repeats out (Edit > Unroll Repeats): every track's notes,
+    /// markings and the chord symbols copied into the bars they repeat,
+    /// the meter following; the repeat signs go. Audio clips, MIDI regions
+    /// and markers stay where they are. One undo step; returns bars added.
+    int unroll_repeats();
+
     /// File > New Project...: a new document from the setup, with no undo
     /// history, saved when a folder is given (the folder is created; an
     /// existing project file there is never overwritten).
@@ -176,6 +200,8 @@ public:
     /// Gives a track its own articulation map (Main Spec §11), or - with no
     /// map - plays it through a built-in one by name. One undo step,
     /// "Articulation map".
+    /// A drum kit's percussion map ("gm_kit"; empty for none). One undo step.
+    bool set_percussion_map(const std::string& track_id, const std::string& map);
     bool set_articulation_map(const std::string& track_id, const std::optional<notation::ExpressionMap>& map,
                               const std::string& builtin = "default");
     bool assign_sound(const std::string& track_id, const project::PluginRef& plugin,

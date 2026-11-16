@@ -193,6 +193,7 @@ ImportSummary Session::import_musicxml(const std::string& xml, bool replace_proj
         if (take_maps) {
             d.meter = meter;
             d.key = key;
+            d.repeats = r.repeats;
             if (!r.tempos.empty()) {
                 const double first = r.tempos.front().tick == 0 ? r.tempos.front().bpm : 120.0;
                 d.tempo = TempoMap(std::clamp(first, 20.0, 400.0));

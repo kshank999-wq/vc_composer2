@@ -101,6 +101,7 @@ struct RawNote {
     int dots = 0;
     int tm_actual = 1, tm_normal = 1;
     bool tie_start = false, tie_stop = false;
+    std::string lyric;  ///< The first verse's syllable; "-" appended when the word goes on.
     nt::ArticulationMask arts = 0;
     std::vector<std::pair<std::string, int>> slurs;  ///< (type, number)
     std::vector<RawTuplet> tuplets;
@@ -160,6 +161,10 @@ struct RawMeasure {
     std::vector<RawKey> keys;
     std::vector<RawClef> clefs;
     std::vector<RawTranspose> transposes;
+    // Repeats and endings (Main Spec §7, §16).
+    bool repeat_forward = false, repeat_backward = false;
+    int repeat_times = 2;
+    bool first_ending_starts = false;
 };
 
 struct PartInfo {
@@ -563,7 +568,15 @@ RawNote Importer::read_note(const xml::Element& n, long long divisions)
         } else if (name == "notations") {
             read_notations(c, note);
         } else if (name == "lyric") {
-            count("lyrics");
+            // The first verse; later verses are counted, not kept.
+            if (!note.lyric.empty() || (!c.attribute("number").empty() && c.attribute("number") != "1")) {
+                count("lyric verses after the first");
+            } else {
+                note.lyric = c.child_text("text");
+                const auto syllabic = c.child_text("syllabic");
+                if (!note.lyric.empty() && (syllabic == "begin" || syllabic == "middle")) note.lyric += "-";
+                if (note.lyric.empty() && c.child("extend")) note.lyric = "_";
+            }
         }
     }
     if (n.attribute("print-object") == "no" && note.rest) note.invisible = true;
@@ -700,8 +713,17 @@ void Importer::read_part(const xml::Element& part_el, RawPart& part)
                     m.directions.push_back(std::move(d));
                 }
             } else if (name == "barline") {
-                if (c.child("repeat")) count("repeat barlines (music not unfolded)");
-                if (c.child("ending")) count("volta endings");
+                if (const auto* rep = c.child("repeat")) {
+                    if (rep->attribute("direction") == "forward") m.repeat_forward = true;
+                    if (rep->attribute("direction") == "backward") {
+                        m.repeat_backward = true;
+                        if (const auto t = detail::parse_double(rep->attribute("times")); t && *t >= 2) m.repeat_times = static_cast<int>(*t);
+                    }
+                }
+                if (const auto* end = c.child("ending")) {
+                    const auto number = end->attribute("number");
+                    if (end->attribute("type") == "start" && !number.empty() && number.front() == '1') m.first_ending_starts = true;
+                }
             } else if (name == "harmony") {
                 RawHarmony h;
                 h.offset = pos;
@@ -825,6 +847,28 @@ void Importer::layout(const std::vector<RawPart>& parts)
         result_.time_signatures.push_back({0, 1, 4, 4});
     }
     result_.measure_count = static_cast<int>(count_measures);
+
+    // Repeats and endings, from the first part's barlines.
+    if (!parts.empty()) {
+        int section_start = 1, first_ending = 0;
+        for (std::size_t i = 0; i < parts.front().measures.size(); ++i) {
+            const RawMeasure& m = parts.front().measures[i];
+            const int bar = static_cast<int>(i) + 1;
+            if (m.repeat_forward) section_start = bar;
+            if (m.first_ending_starts) first_ending = bar;
+            if (m.repeat_backward) {
+                notation::RepeatSection r;
+                r.start_bar = section_start;
+                r.end_bar = bar;
+                r.times = std::clamp(m.repeat_times, 2, 16);
+                r.ending_bars = first_ending >= section_start && first_ending <= bar ? bar - first_ending + 1 : 0;
+                if (r.ending_bars >= r.end_bar - r.start_bar + 1) r.ending_bars = 0;
+                result_.repeats.push_back(r);
+                section_start = bar + 1;
+                first_ending = 0;
+            }
+        }
+    }
 }
 
 // --- Pass 3 -------------------------------------------------------------------------
@@ -1072,6 +1116,7 @@ ImportedPart Importer::build(const RawPart& part, bool first)
             note.start_tick = tick;
             note.voice = voice;
             note.articulations = rn.arts;
+            note.lyric = rn.lyric;
             note.grace = rn.grace;
             note.grace_slashed = rn.slash;
             note.is_rest = rn.rest;
