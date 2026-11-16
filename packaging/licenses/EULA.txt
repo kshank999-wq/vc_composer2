@@ -1,0 +1,21 @@
+VC COMPOSER 2 - PREVIEW LICENCE TERMS (DRAFT - REPLACE BEFORE RELEASE)
+
+VC Software ("we") lets you install and use this preview of VC Composer 2
+on your own computers to evaluate it, until the date the preview ends.
+
+- The preview is provided "as is", without warranty of any kind. It may
+  contain errors. Keep copies of your work.
+- Projects, scores, audio and other material you create are yours. The
+  preview does not claim any right in them.
+- After the preview ends the program still opens, plays, prints and
+  exports your projects, but no longer saves them.
+- You may not sell, rent or redistribute the preview, or remove its
+  notices. Third-party components are licensed under their own terms
+  (see THIRD-PARTY-NOTICES.txt); nothing here limits your rights under
+  those terms (for example, to replace the LGPL FFmpeg libraries).
+- Third-party plug-ins and sample libraries you load are governed by
+  their own licences; VC Composer 2 does not include or license them.
+- To the extent the law allows, we are not liable for any indirect or
+  consequential loss arising from the preview.
+
+Questions: https://vc-software.com/support

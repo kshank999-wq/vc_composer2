@@ -1,0 +1,197 @@
+# Downloadable builds: Windows installer and macOS disk image.
+#
+# Run it from Actions > Preview builds > Run workflow, or push a tag such as
+# preview-0.1.0 (which also creates a GitHub pre-release with the files).
+#
+# Signing is used when its secrets exist and skipped otherwise (the files
+# then work for testing: Windows SmartScreen asks once, macOS needs
+# right-click > Open). Secrets (Settings > Secrets and variables > Actions):
+#   Windows, Azure Trusted Signing:
+#     AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+#     AZURE_SIGNING_ENDPOINT (e.g. https://eus.codesigning.azure.net/),
+#     AZURE_SIGNING_ACCOUNT, AZURE_SIGNING_PROFILE
+#   macOS, Developer ID + notarization:
+#     MACOS_CERTIFICATE_P12 (base64 of the .p12), MACOS_CERTIFICATE_PASSWORD,
+#     MACOS_SIGNING_IDENTITY ("Developer ID Application: Name (TEAMID)"),
+#     APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD (an app-specific password)
+#
+# FFmpeg (picture import and review-movie export) is an LGPL shared build on
+# both platforms, never a GPL one (docs/01-decisions-and-license-gates.md).
+name: Preview builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      preview:
+        description: "Preview build (time-limited, says Preview)"
+        type: boolean
+        default: true
+  push:
+    tags: ["preview-*", "v*"]
+    # While the packaging is being worked on, a push that touches it builds
+    # (as a preview) so the files can be tried from the run's artifacts.
+    branches: ["claude/**"]
+    paths: ["packaging/**", ".github/workflows/preview.yml"]
+
+permissions:
+  contents: write
+
+env:
+  PREVIEW: ${{ (github.event_name == 'workflow_dispatch' && inputs.preview) || startsWith(github.ref_name, 'preview-') || startsWith(github.ref_name, 'claude/') }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      HAS_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: LGPL FFmpeg (BtbN shared build)
+        shell: pwsh
+        run: |
+          $name = "ffmpeg-n7.1-latest-win64-lgpl-shared-7.1"
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$name.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath C:\ffmpeg-dl
+          Move-Item "C:\ffmpeg-dl\$name" C:\ffmpeg
+          Get-ChildItem C:\ffmpeg\lib, C:\ffmpeg\bin | Select-Object Name
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          v=$(sed -n 's/^    VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "expires=$(date -u -d '+60 days' +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DVCC_BUILD_DESKTOP=ON -DVCC_BUILD_TESTS=OFF
+          -DVCC_FFMPEG_ROOT=C:/ffmpeg -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          -DVCC_PREVIEW_BUILD=${{ env.PREVIEW == 'true' && 'ON' || 'OFF' }}
+          -DVCC_PREVIEW_EXPIRES=${{ steps.version.outputs.expires }}
+      - name: Build
+        run: cmake --build build --config Release --target VCComposer2 --parallel 3
+      - name: Stage
+        shell: bash
+        run: |
+          app="build/desktop/VCComposer2_artefacts/Release"
+          mkdir -p stage
+          cp "$app/VC Composer 2.exe" "$app/vcc_plugin_scanner.exe" "$app/vcc_plugin_host.exe" stage/
+          cp /c/ffmpeg/bin/*.dll stage/
+          packaging/collect-notices.sh stage/licenses
+          cp /c/ffmpeg/LICENSE.txt stage/licenses/FFmpeg-LICENSE.txt 2>/dev/null || true
+          echo "FFmpeg LGPL shared build from https://github.com/BtbN/FFmpeg-Builds (ffmpeg-n7.1-latest-win64-lgpl-shared-7.1); source: https://github.com/FFmpeg/FFmpeg/tree/release/7.1" > stage/licenses/FFmpeg-SOURCE.txt
+          ls -la stage stage/licenses
+      - name: Sign the programs
+        if: env.HAS_SIGNING == 'true'
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\stage
+          files-folder-filter: exe,dll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Installer
+        shell: pwsh
+        run: |
+          $defs = @("/DAppVersion=${{ steps.version.outputs.version }}", "/DSourceDir=$PWD\stage", "/DOutputDir=$PWD\dist")
+          if ("${{ env.PREVIEW }}" -eq "true") { $defs += "/DPreview=1" }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" @defs packaging\windows\VCComposer2.iss
+          Compress-Archive -Path stage\* -DestinationPath "dist\VC-Composer-2-${{ steps.version.outputs.version }}-Windows-portable.zip"
+      - name: Sign the installer
+        if: env.HAS_SIGNING == 'true'
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  macos:
+    runs-on: macos-latest
+    env:
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cached LGPL FFmpeg
+        id: ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: ~/ffmpeg-lgpl
+          key: ffmpeg-lgpl-7.1.1-${{ runner.arch }}-${{ hashFiles('packaging/macos/build-ffmpeg-lgpl.sh') }}
+      - name: Build LGPL FFmpeg
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        run: packaging/macos/build-ffmpeg-lgpl.sh "$HOME/ffmpeg-lgpl"
+      - name: Version
+        id: version
+        run: |
+          v=$(sed -n 's/^    VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "expires=$(date -u -v+60d +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DVCC_BUILD_DESKTOP=ON -DVCC_BUILD_TESTS=OFF
+          -DVCC_FFMPEG_ROOT=$HOME/ffmpeg-lgpl -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          -DVCC_PREVIEW_BUILD=${{ env.PREVIEW == 'true' && 'ON' || 'OFF' }}
+          -DVCC_PREVIEW_EXPIRES=${{ steps.version.outputs.expires }}
+      - name: Build
+        run: cmake --build build --config Release --target VCComposer2 --parallel 3
+      - name: Signing keychain
+        if: env.MACOS_SIGNING_IDENTITY != ''
+        env:
+          P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$P12" | base64 --decode > cert.p12
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import cert.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          rm cert.p12
+      - name: Bundle, sign, notarize, disk image
+        run: |
+          app="build/desktop/VCComposer2_artefacts/Release/VC Composer 2.app"
+          packaging/collect-notices.sh "$app/Contents/Resources/licenses" "$HOME/ffmpeg-lgpl/share/licenses"
+          tag=""; [ "$PREVIEW" = "true" ] && tag="Preview-"
+          mkdir -p dist
+          packaging/macos/bundle.sh "$app" "$HOME/ffmpeg-lgpl" "dist/VC-Composer-2-${tag}${{ steps.version.outputs.version }}-macOS.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ startsWith(github.ref_name, 'preview-') }}
+          files: dist/*

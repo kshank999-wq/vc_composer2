@@ -44,6 +44,7 @@
 #include "ui/review/Relink.h"
 #include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
+#include "Preview.h"
 #include "ui/PictureTools.h"
 #include "ui/TemplateBrowser.h"
 #include "ui/PrintPreview.h"
@@ -6288,6 +6289,26 @@ void template_shelf_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// Preview builds: the days left, the ending, and what the title says.
+void preview_checks()
+{
+    if (!preview::is_preview()) {
+        check(preview::status().isEmpty() && !preview::ended(), "a release build is not a preview");
+        return;
+    }
+    if (preview::expires().isEmpty()) {
+        check(preview::status() == "Preview" && !preview::ended("2099-01-01"), "a preview without a date never ends");
+        return;
+    }
+    const auto end = preview::expires();
+    check(preview::days_left(end) == 0 && !preview::ended(end), "the preview still saves on its last day (" + end + ")");
+    const auto after = juce::Time::fromISO8601(end + "T12:00:00Z") + juce::RelativeTime::days(1);
+    const auto next = after.toISO8601(true).substring(0, 10);
+    check(preview::ended(next) && preview::status(next) == "Preview ended " + end, "and stops saving the day after: " + preview::status(next));
+    const auto before = (juce::Time::fromISO8601(end + "T12:00:00Z") - juce::RelativeTime::days(45)).toISO8601(true).substring(0, 10);
+    check(preview::status(before) == "Preview - 45 days left", "45 days before: " + preview::status(before));
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -8141,6 +8162,8 @@ int main(int argc, char** argv)
         picture_tools_checks(window, dir);
         section("template_shelf_checks");
         template_shelf_checks(window, dir);
+        section("preview_checks");
+        preview_checks();
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

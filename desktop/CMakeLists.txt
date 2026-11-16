@@ -87,6 +87,13 @@ target_link_libraries(vcc_ui_notation PUBLIC vcc_juce vcc_engraving vcc_editing 
 # --- Application ------------------------------------------------------------------
 file(GLOB_RECURSE vcc_desktop_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 add_library(vcc_desktop STATIC ${vcc_desktop_sources})
+# Preview builds (packaging/, .github/workflows/preview.yml): say so and run
+# until a date. Release builds leave both unset.
+option(VCC_PREVIEW_BUILD "A time-limited preview build" OFF)
+set(VCC_PREVIEW_EXPIRES "" CACHE STRING "Last day a preview build saves (YYYY-MM-DD)")
+if(VCC_PREVIEW_BUILD)
+    target_compile_definitions(vcc_desktop PRIVATE VCC_PREVIEW=1 VCC_PREVIEW_EXPIRES="${VCC_PREVIEW_EXPIRES}")
+endif()
 target_include_directories(vcc_desktop PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # JUCE's flag set includes -Wswitch-enum, which flags every switch over the
 # shortcut-command enum even with a default case. Per-source so it lands after
@@ -105,7 +112,7 @@ target_link_libraries(vcc_desktop
 
 juce_add_gui_app(VCComposer2
     PRODUCT_NAME "VC Composer 2"
-    COMPANY_NAME "VC Composer"
+    COMPANY_NAME "VC Software"
     BUNDLE_ID "com.vccomposer.vccomposer2"
     VERSION "${PROJECT_VERSION}"
     DOCUMENT_EXTENSIONS vcc2

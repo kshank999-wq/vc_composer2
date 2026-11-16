@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "Preview.h"
 
 #include "ui/Dialogs.h"
 
@@ -69,7 +70,11 @@ MainWindow::~MainWindow()
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
 }
 
-void MainWindow::update_title() { setName(juce::String(session_->title()) + " - VC Composer 2"); }
+void MainWindow::update_title()
+{
+    const auto p = preview::status();
+    setName(juce::String(session_->title()) + " - VC Composer 2" + (p.isEmpty() ? juce::String() : " (" + p + ")"));
+}
 
 bool MainWindow::ask_to_close()
 {

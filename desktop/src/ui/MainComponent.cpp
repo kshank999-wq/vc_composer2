@@ -6,6 +6,7 @@
 #include "ui/review/Relink.h"
 #include "ui/EditTools.h"
 #include "ui/NewProjectWizard.h"
+#include "Preview.h"
 #include "ui/PictureTools.h"
 #include "ui/PrintPreview.h"
 #include "ui/ScoreTools.h"
@@ -709,7 +710,7 @@ void MainComponent::timerCallback()
     // Save on transport stop (Main Spec §12): a saved project, changed, saves
     // when playback stops (never while recording or playing).
     if (was_playing_ && !playing && !context_.engine.recording() && hw::ui_settings().getBoolValue("save_on_stop", false) &&
-        !context_.session.path().empty() && context_.session.dirty()) {
+        !context_.session.path().empty() && context_.session.dirty() && !preview::ended()) {
         std::string error;
         if (context_.session.save(&error)) context_.status("Saved on stop");
         else context_.status("Could not save on stop: " + juce::String(error));
@@ -838,6 +839,13 @@ void MainComponent::capture_plugin_states()
 
 bool MainComponent::save(bool save_as)
 {
+    if (preview::ended()) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::InfoIcon, "This preview has ended",
+            "This preview of VC Composer 2 ended on " + preview::expires() +
+                ". Projects still open, play, print and export; to save, download the latest version from vc-composer.com.");
+        return false;
+    }
     capture_plugin_states();
     std::string path = context_.session.path();
     if (save_as || path.empty()) {
@@ -1574,7 +1582,8 @@ void MainComponent::show_about()
     juce::AlertWindow::showMessageBoxAsync(
         juce::MessageBoxIconType::InfoIcon, "VC Composer 2",
         juce::String("Version ") + JUCE_APPLICATION_VERSION_STRING +
-            "\n\nA notation-first scoring workstation.\n\n"
+            (preview::is_preview() ? " (" + preview::status() + ")" : juce::String()) +
+            "\n\nA notation-first scoring workstation by VC Software.\n\n"
             "Built with JUCE (commercial JUCE 8 licence).\n"
             "Music font: Bravura, SIL Open Font License 1.1.\n"
             "Sounds marked \"Placeholder\" are the built-in stand-in until a library is assigned.");
