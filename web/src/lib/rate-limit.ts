@@ -51,6 +51,13 @@ export const RULES = {
    * few times at most, so ten an hour is room for mistakes and nothing more.
    */
   emailLink: { name: 'email-link', limit: 10, windowSeconds: 3600 },
+  /**
+   * Collaboration calls (sync, locks, invitations), by caller. A busy session
+   * syncs every few minutes and locks a few parts; 600 an hour is ample.
+   */
+  collab: { name: 'collab', limit: 600, windowSeconds: 3600 },
+  /** Invitations sent, by owner: a team is invited once, not a mailing list. */
+  collabInvite: { name: 'collab-invite', limit: 40, windowSeconds: 3600 },
 } as const satisfies Record<string, RateLimitRule>;
 
 /** The first hop in X-Forwarded-For is the client; Vercel sets it. */

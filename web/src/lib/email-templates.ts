@@ -236,3 +236,40 @@ export const licenseGranted = (input: LicenseGrantedInput): RenderedEmail => {
     ].join('\n'),
   };
 };
+
+export interface CollabInviteInput {
+  /** As people typed them: escaped here. */
+  projectName: string;
+  inviterName: string;
+  /** "Editor / composer", "Reviewer / director"... */
+  roleLabel: string;
+  acceptUrl: string;
+}
+
+/** An invitation to a shared project. */
+export const collabInvite = (input: CollabInviteInput): RenderedEmail => {
+  const who = input.inviterName.trim() || 'A VC Composer user';
+  return {
+    template: 'collab_invite',
+    version: 1,
+    subject: `${who} invited you to "${input.projectName}" in VC Composer`,
+    html: shell(
+      'You are invited to a shared project',
+      `<p style="margin:0 0 16px">${escapeHtml(who)} invited you to <strong>${escapeHtml(input.projectName)}</strong> as
+       ${escapeHtml(input.roleLabel)}.</p>
+       ${primaryLink(input.acceptUrl, 'Accept the invitation')}
+       ${note('Sign in or create a free account to accept. Reviewers and viewers need no subscription; editors are covered by the project owner’s plan.')}`,
+    ),
+    text: [
+      'VC COMPOSER',
+      '',
+      `${who} invited you to "${input.projectName}" as ${input.roleLabel}.`,
+      '',
+      `Accept: ${input.acceptUrl}`,
+      '',
+      'Sign in or create a free account to accept. Reviewers and viewers need no subscription; editors are covered by the project owner’s plan.',
+      '',
+      siteHost(),
+    ].join('\n'),
+  };
+};

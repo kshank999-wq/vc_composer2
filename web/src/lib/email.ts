@@ -3,6 +3,8 @@ import type { Platform } from '@/domain';
 import { env } from './env';
 import { adminClient } from './supabase';
 import {
+  collabInvite,
+  type CollabInviteInput,
   licenseGranted,
   licenseReminder,
   purchaseConfirmation,
@@ -91,4 +93,12 @@ export const sendLicenseGranted = async (
     to: input.to,
     userId: input.userId,
     email: licenseGranted({ ...input, accountUrl: accountUrl() }),
+  });
+
+/** An invitation to a shared project (collaboration). */
+export const sendCollabInvite = async (input: { to: string } & Omit<CollabInviteInput, 'acceptUrl'> & { token: string }): Promise<SendResult> =>
+  deliver({
+    to: input.to,
+    userId: null,
+    email: collabInvite({ ...input, acceptUrl: `${env.siteUrl}/collaboration/invite/${input.token}` }),
   });
