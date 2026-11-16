@@ -364,7 +364,7 @@ bool Project::edit(const std::string& label, const std::function<bool(ProjectDat
     working.sync_scores();
     if (breaks_approval(working)) return false;
     undo_.push_back({label, compact(std::move(data_)), {}});
-    if (undo_.size() > kMaxUndo) undo_.erase(undo_.begin());
+    trim_undo();
     data_ = std::move(working);
     redo_.clear();
     return true;
@@ -394,6 +394,59 @@ void Project::modify_unrecorded(const std::function<void(ProjectData&)>& change)
     data_.sync_scores();
 }
 
+namespace {
+
+/// A generous estimate of what a document without its scores occupies:
+/// the variable parts (plug-in states, regions, clips, automation) and a
+/// fixed allowance per track for the rest (maps, names, settings).
+std::size_t approx_bytes(const ProjectData& d)
+{
+    std::size_t b = sizeof(ProjectData);
+    auto state = [&](const PluginRef& p) { b += p.state_base64.size() + p.identifier.size() + 64; };
+    auto automation = [&](const std::vector<AutomationLane>& lanes) {
+        for (const auto& l : lanes) b += sizeof(AutomationLane) + l.points.size() * sizeof(AutomationPoint);
+    };
+    for (const auto& t : d.tracks) {
+        b += sizeof(Track) + 2048;
+        state(t.instrument_plugin);
+        for (const auto& i : t.inserts) b += sizeof(InsertSlot) + i.params.size() * 64, state(i.plugin);
+        automation(t.automation);
+        for (const auto& v : t.versions) {
+            b += sizeof(TrackVersion) + v.performance.size() * 64 + v.audio_clips.size() * (sizeof(AudioClip) + 128);
+            for (const auto& r : v.regions)
+                b += sizeof(MidiRegion) + r.notes.size() * sizeof(NoteEvent) + r.controllers.size() * sizeof(ControllerEvent);
+        }
+    }
+    for (const auto& bus : d.buses) {
+        b += sizeof(Bus) + 1024;
+        for (const auto& i : bus.inserts) b += sizeof(InsertSlot), state(i.plugin);
+        automation(bus.automation);
+    }
+    b += (d.markers.size() + d.comments.size() + d.cues.size()) * 256;
+    return b;
+}
+
+}  // namespace
+
+std::size_t Project::undo_bytes() const noexcept
+{
+    std::size_t total = 0;
+    for (const auto& s : undo_) total += s.before.bytes + s.after.bytes;
+    return total;
+}
+
+void Project::trim_undo()
+{
+    if (undo_.size() > kMaxUndo) undo_.erase(undo_.begin(), undo_.begin() + static_cast<std::ptrdiff_t>(undo_.size() - kMaxUndo));
+    std::size_t total = undo_bytes();
+    std::size_t drop = 0;
+    while (undo_.size() - drop > kMinUndo && total > kUndoBudgetBytes) {
+        total -= undo_[drop].before.bytes + undo_[drop].after.bytes;
+        ++drop;
+    }
+    if (drop > 0) undo_.erase(undo_.begin(), undo_.begin() + static_cast<std::ptrdiff_t>(drop));
+}
+
 Project::Kept Project::compact(ProjectData&& d)
 {
     Kept snap;
@@ -410,6 +463,7 @@ Project::Kept Project::compact(ProjectData&& d)
             snap.scores.push_back(std::move(shared));
             v.score = notation::Score{};
         }
+    snap.bytes = approx_bytes(d);
     snap.data = std::move(d);
     // Sweep scores no step keeps any more.
     if (score_pool_.size() > 4096)
@@ -457,6 +511,7 @@ bool Project::redo()
     Step s = std::move(redo_.back());
     redo_.pop_back();
     undo_.push_back({s.label, compact(std::move(data_)), {}});
+    trim_undo();
     data_ = expand(s.after);
     return true;
 }

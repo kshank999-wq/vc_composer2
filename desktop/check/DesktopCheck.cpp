@@ -6598,6 +6598,60 @@ void resources_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+/// Memory Management spec §3/§10: far more tracks than common edition
+/// limits (1,024 instrument + 2,048 audio) open in both views, scroll and
+/// play without a cap; times are reported so a slow path shows.
+void stress_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const int instruments = juce::SystemStats::getEnvironmentVariable("VCC_STRESS_MIDI", "1024").getIntValue();
+    const int audio = juce::SystemStats::getEnvironmentVariable("VCC_STRESS_AUDIO", "2048").getIntValue();
+    const auto first = session.add_track("Template", "strings.violins_1");
+    const auto audio_first = session.add_audio_track("Audio template", true);
+    const auto model = *session.data().find_track(first);
+    const auto audio_model = *session.data().find_track(audio_first);
+    auto t0 = juce::Time::getMillisecondCounterHiRes();
+    const bool added = session.edit("Add tracks", [&](project::ProjectData& d) {
+        for (int i = 1; i < instruments + audio - 1; ++i) {
+            auto t = i < instruments ? model : audio_model;
+            t.id = "stress-trk-" + std::to_string(i);
+            t.name = (i < instruments ? "Strings " : "Audio ") + std::to_string(i);
+            for (auto& v : t.versions) v.id = "stress-ver-" + std::to_string(i);
+            t.active_version_id = t.versions.front().id;
+            d.tracks.push_back(std::move(t));
+        }
+        return true;
+    });
+    pump(50);
+    const double add_ms = juce::Time::getMillisecondCounterHiRes() - t0;
+    check(added && static_cast<int>(session.data().tracks.size()) == instruments + audio,
+          "no cap: " + juce::String(instruments) + " instrument and " + juce::String(audio) + " audio tracks in one project (" +
+              juce::String(juce::roundToInt(add_ms)) + " ms with every view updated)");
+    double worst = 0;
+    for (const auto view : {cmd::showSequencer, cmd::showComposer, cmd::showSequencer}) {
+        t0 = juce::Time::getMillisecondCounterHiRes();
+        ctx.commands.invokeDirectly(view, false);
+        auto image = main.createComponentSnapshot(main.getLocalBounds(), true, 1.0f);
+        const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+        worst = std::max(worst, ms);
+        std::printf("    %s: %.0f ms to show and paint\n", view == cmd::showComposer ? "Composer" : "Producer", ms);
+    }
+    check(worst < 5000.0, "both views show and paint " + juce::String(instruments + audio) + " tracks (slowest " +
+                              juce::String(juce::roundToInt(worst)) + " ms)");
+    t0 = juce::Time::getMillisecondCounterHiRes();
+    session.set_gain(session.data().tracks[3].id, -2.0);
+    pump(30);
+    const double edit_ms = juce::Time::getMillisecondCounterHiRes() - t0;
+    check(edit_ms < 2000.0, "an edit with them all open takes " + juce::String(juce::roundToInt(edit_ms)) + " ms");
+    shoot(main, dir, "72-stress-producer");
+    session.new_empty();
+    pump(100);
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -8457,6 +8511,8 @@ int main(int argc, char** argv)
         account_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
+        section("stress_checks");
+        stress_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

@@ -1765,3 +1765,33 @@ macOS, Linux and Windows. What it took:
     - **Tests**: `test_templates` (shelf), `test_library` (package round
       trip, copies of built-ins, replacing, broken templates);
       `template_shelf_checks` in the desktop check.
+46. **Memory Management spec, P0: resource readout, no track ceiling,
+    shared transport. Done** (November 16, 2026; Memory Management spec
+    §2.3, §3, §6, §10).
+    - **CPU and RAM, bottom right of both views** (the status strip):
+      `CPU 24%   APP 3.1 GB   RAM 12.8 / 32 GB` - the audio engine's load,
+      the memory VC Composer uses with its plug-in host processes, the
+      computer's memory in use - coloured and worded `HIGH` by level
+      (engine load 70/90 %, memory 80/92 %), `DROPOUT` for ten seconds after
+      the device reports one. Click it for the details: load, buffer,
+      dropouts, memory by process, the computer's.
+    - **How memory is measured** (design decision, spec §12): per process,
+      by the OS (Windows working set, macOS physical footprint, Linux
+      resident set); each plug-in host process measures itself and answers
+      a short `memory` control call. An instrument in its own host process
+      is therefore measured exactly; plug-ins sharing a process are reported
+      together; nothing is guessed from file sizes. Sampled on its own
+      thread once a second (`ResourceMonitor`), so the audio and message
+      threads never wait; the engine load and dropout counters are read on
+      the message thread.
+    - **No track ceiling**: nothing in the model, files or licence counts
+      tracks. Stress-tested at 1,024 instrument + 2,048 audio tracks: saves
+      in 0.2 s, opens in 0.3 s, both views show and paint in about 0.2 s, an
+      edit with everything open about 0.5 s. Undo now keeps a memory budget
+      (384 MB besides the shared scores, at least 20 steps): that session
+      had kept 500 copies of itself, 3.5 GB; now 0.5-0.7 GB.
+    - **Shared transport**: switching Composer / Producer while playing
+      keeps playing, from where it was, with the selection kept.
+    - **Tests**: `test_project` (3,072 tracks save/load/edit, undo budget);
+      `resources_checks` and `stress_checks` in the desktop check
+      (`VCC_STRESS_MIDI` / `VCC_STRESS_AUDIO` change the counts).

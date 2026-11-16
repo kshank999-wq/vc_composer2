@@ -238,3 +238,46 @@ TEST_CASE("reference tracks are excluded from deliverables unless opted in")
     p.edit("opt in", [&](ProjectData& d) { d.find_track(temp)->include_in_export = true; return true; });
     CHECK_EQ(p.export_tracks().size(), 2u);
 }
+
+TEST_CASE("no track-count ceiling: 1,024 instrument and 2,048 audio tracks save, load and edit, with undo memory bounded")
+{
+    // Memory Management spec §3/§10: no artificial cap; a data-structure stress test.
+    Project p;
+    const std::string first = p.add_track("Template", TrackKind::Instrument, "strings.violins_1");
+    const Track model = *p.data().find_track(first);
+    REQUIRE(p.edit("Add 3,071 tracks", [&](ProjectData& d) {
+        for (int i = 1; i < 3072; ++i) {
+            Track t = model;
+            t.id = p.ids().next("trk");
+            t.name = (i < 1024 ? "Strings " : "Audio ") + std::to_string(i);
+            t.kind = i < 1024 ? TrackKind::Instrument : TrackKind::Audio;
+            for (auto& v : t.versions) v.id = p.ids().next("ver");
+            t.active_version_id = t.versions.front().id;
+            d.tracks.push_back(std::move(t));
+        }
+        return true;
+    }));
+    CHECK_EQ(p.data().tracks.size(), 3072u);
+    const auto dir = std::filesystem::temp_directory_path() / "vcc_stress_project";
+    std::filesystem::create_directories(dir);
+    const auto file = (dir / "big.vcc2").string();
+    std::string error;
+    REQUIRE(p.save(file, &error));
+    auto back = Project::load(file, &error);
+    REQUIRE(back.has_value());
+    CHECK_EQ(back->data().tracks.size(), 3072u);
+    std::size_t audio = 0;
+    for (const auto& t : back->data().tracks) audio += t.kind == TrackKind::Audio;
+    CHECK_EQ(audio, 2048u);
+    // A long run of small edits: undo keeps its budget, and at least 20 steps.
+    for (int i = 0; i < 120; ++i)
+        p.edit("Gain", [&](ProjectData& d) {
+            d.tracks[static_cast<std::size_t>(i)].gain_db = -1.0;
+            return true;
+        });
+    CHECK(p.undo_depth() >= 20u);
+    CHECK(p.undo_bytes() <= 384u * 1024u * 1024u);
+    CHECK(p.undo());
+    CHECK(p.data().tracks[119].gain_db == 0.0);
+    std::filesystem::remove_all(dir);
+}

@@ -717,6 +717,7 @@ private:
     struct Kept {
         ProjectData data;  ///< With every version's score left empty.
         std::vector<std::shared_ptr<const notation::Score>> scores;  ///< Track by track, version by version.
+        std::size_t bytes = 0;  ///< Estimated memory, scores aside (they are shared).
     };
     struct Step {
         std::string label;
@@ -728,6 +729,20 @@ private:
     /// Scores by revision, for sharing (expired entries are swept).
     std::unordered_map<std::uint64_t, std::weak_ptr<const notation::Score>> score_pool_;
     static constexpr std::size_t kMaxUndo = 500;
+    /// Undo keeps at most this much (estimated) besides the shared scores,
+    /// and at least kMinUndo steps however large the project: a 3,000-track
+    /// session kept 500 copies of itself (3.5 GB) before this.
+    static constexpr std::size_t kUndoBudgetBytes = 384u * 1024u * 1024u;
+    static constexpr std::size_t kMinUndo = 20;
+    void trim_undo();
+
+public:
+    /// Undo steps kept now, and their estimated memory (checks, the
+    /// resource panel).
+    std::size_t undo_depth() const noexcept { return undo_.size(); }
+    std::size_t undo_bytes() const noexcept;
+
+private:
     std::vector<Step> undo_;
     std::vector<Step> redo_;
 };
