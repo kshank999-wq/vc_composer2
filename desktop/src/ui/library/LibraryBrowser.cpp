@@ -1,5 +1,7 @@
 #include "ui/library/LibraryBrowser.h"
 
+#include <algorithm>
+
 #include <set>
 
 #include "AppResources.h"

@@ -1,5 +1,8 @@
 #include "ui/library/ArticulationMapWindow.h"
 
+#include <algorithm>
+#include <map>
+
 #include "ui/Dialogs.h"
 #include "ui/Theme.h"
 #include "ui/library/LibraryBrowser.h"

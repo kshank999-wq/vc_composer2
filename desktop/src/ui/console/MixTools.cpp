@@ -1,5 +1,7 @@
 #include "ui/console/MixTools.h"
 
+#include <algorithm>
+
 #include "audio/PrintToAudio.h"
 #include "ui/Dialogs.h"
 #include "ui/Theme.h"

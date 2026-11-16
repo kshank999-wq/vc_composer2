@@ -1,4 +1,5 @@
 // Library browser and discovery (Main Spec §10, §11).
+#include <algorithm>
 #include <filesystem>
 
 #include "vcc/core/Files.h"
