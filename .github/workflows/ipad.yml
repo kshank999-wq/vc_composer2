@@ -1,0 +1,92 @@
+# The iPad companion (ipad/): the shared C++ core cross-built for iPadOS, the
+# SwiftUI app generated with XcodeGen, and its unit and UI tests on an iPad
+# simulator. Unsigned: signing and TestFlight come with the App Store
+# Connect secrets (ipad/README.md).
+name: iPad
+
+on:
+  push:
+    paths:
+      - 'ipad/**'
+      - 'mobile/**'
+      - 'core/**'
+      - 'music/**'
+      - 'notation/**'
+      - 'engraving/**'
+      - 'editing/**'
+      - 'composer/**'
+      - 'theory/**'
+      - 'ostinato/**'
+      - 'project/**'
+      - 'templates/**'
+      - 'picture/**'
+      - 'cues/**'
+      - 'interchange/**'
+      - 'session/**'
+      - 'content/**'
+      - '.github/workflows/ipad.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ipad-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipad:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          brew install xcodegen
+      - name: Shared core for iPadOS (device + simulator)
+        run: ipad/build-core.sh
+      - name: Generate the Xcode project
+        run: cd ipad && xcodegen generate
+      - name: Pick an iPad simulator
+        id: sim
+        run: |
+          id=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          ipads = [d for runtime, ds in devices.items() if "iOS" in runtime for d in ds if "iPad" in d["name"]]
+          pro = [d for d in ipads if "Pro" in d["name"]]
+          print((pro or ipads)[-1]["udid"])')
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          xcrun simctl list devices | grep "$id"
+      - name: Build and test on the simulator
+        run: |
+          mkdir -p "$RUNNER_TEMP/shots"
+          cd ipad
+          set +e
+          TEST_RUNNER_SCREENSHOT_DIR="$RUNNER_TEMP/shots" xcodebuild test \
+            -project VCComposerPad.xcodeproj -scheme VCComposerPad \
+            -destination "id=${{ steps.sim.outputs.id }}" \
+            -resultBundlePath "$RUNNER_TEMP/VCComposerPad.xcresult" \
+            CODE_SIGNING_ALLOWED=NO > "$RUNNER_TEMP/xcodebuild.log" 2>&1
+          status=$?
+          grep -E "error:|Test Case .*(passed|failed)|XCTAssert|\*\* (BUILD|TEST)" "$RUNNER_TEMP/xcodebuild.log" | head -200
+          if [ $status -ne 0 ]; then tail -80 "$RUNNER_TEMP/xcodebuild.log"; fi
+          exit $status
+      - name: Screenshots (small, inline, for review from the log)
+        if: always()
+        run: |
+          for f in "$RUNNER_TEMP"/shots/*.png; do
+            [ -f "$f" ] || continue
+            sips -s format jpeg -s formatOptions 55 -Z 1100 "$f" --out "$f.jpg" >/dev/null
+            echo "::group::SHOT $(basename "$f") $(stat -f%z "$f.jpg") bytes"
+            echo "BEGIN-SHOT $(basename "$f")"
+            base64 -i "$f.jpg" | fold -w 120
+            echo "END-SHOT"
+            echo "::endgroup::"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ipad-results
+          path: |
+            ${{ runner.temp }}/shots
+            ${{ runner.temp }}/xcodebuild.log
+          if-no-files-found: ignore

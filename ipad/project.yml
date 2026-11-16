@@ -1,0 +1,92 @@
+# The iPad companion (Add-On spec §6). Generate the Xcode project with
+# `xcodegen generate` after `./build-core.sh` (see README.md).
+name: VCComposerPad
+options:
+  bundleIdPrefix: com.vccomposer
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    CLANG_CXX_LIBRARY: libc++
+    TARGETED_DEVICE_FAMILY: "2"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  VCComposerPad:
+    type: application
+    platform: iOS
+    sources:
+      - path: VCComposerPad
+        excludes: ["Info.plist"]
+      # The desktop's shipped content (instruments, templates), as a folder.
+      - path: ../content
+        type: folder
+        buildPhase: resources
+      - path: ../resources/fonts/Bravura/Bravura.otf
+        buildPhase: resources
+      - path: ../resources/fonts/Bravura/bravura_metadata.json
+        buildPhase: resources
+    dependencies:
+      - framework: build/VCCCore.xcframework
+        embed: false
+      - sdk: libc++.tbd
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vccomposer.ipad
+        PRODUCT_NAME: VCComposerPad
+        SWIFT_OBJC_BRIDGING_HEADER: VCComposerPad/Bridge/VCComposerPad-Bridging-Header.h
+        HEADER_SEARCH_PATHS: $(SRCROOT)/build/headers
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+    info:
+      path: VCComposerPad/Info.plist
+      properties:
+        CFBundleDisplayName: VC Composer
+        UIAppFonts: [Bravura.otf]
+        UISupportsDocumentBrowser: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: VC Composer Project
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes: [com.vccomposer.project]
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.vccomposer.project
+            UTTypeDescription: VC Composer Project
+            UTTypeConformsTo: [public.data, public.content]
+            UTTypeTagSpecification:
+              public.filename-extension: [vcc2]
+  VCComposerPadTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [VCComposerPadTests]
+    dependencies:
+      - target: VCComposerPad
+  VCComposerPadUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [VCComposerPadUITests]
+    dependencies:
+      - target: VCComposerPad
+schemes:
+  VCComposerPad:
+    build:
+      targets:
+        VCComposerPad: all
+        VCComposerPadTests: [test]
+        VCComposerPadUITests: [test]
+    test:
+      gatherCoverageData: false
+      targets:
+        - VCComposerPadTests
+        - VCComposerPadUITests

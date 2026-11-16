@@ -73,6 +73,7 @@ add_subdirectory(cues)
 add_subdirectory(interchange)
 add_subdirectory(session)
 add_subdirectory(licensing)
+add_subdirectory(mobile)
 
 if(VCC_BUILD_TOOLS)
     add_subdirectory(tools/vcc-cli)
