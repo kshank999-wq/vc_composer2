@@ -58,8 +58,8 @@ InstrumentUsagePanel::InstrumentUsagePanel(AppContext& context) : context_(conte
     auto& h = table_.getHeader();
     const int sortable = juce::TableHeaderComponent::defaultFlags;
     h.addColumn("Track", colTrack, 170, 80, 400, sortable);
-    h.addColumn("Instrument", colInstrument, 190, 80, 400, sortable);
-    h.addColumn("State", colState, 130, 70, 220, sortable);
+    h.addColumn("Instrument", colInstrument, 170, 80, 400, sortable);
+    h.addColumn("State", colState, 160, 70, 240, sortable);
     h.addColumn("Memory", colMemory, 210, 80, 360, sortable);
     h.addColumn("Engine load", colLoad, 100, 70, 160, sortable);
     h.setSortColumnId(colMemory, false);
@@ -174,8 +174,9 @@ void InstrumentUsagePanel::refresh()
 
     const double cpu = context_.engine.devices().getCpuUsage();
     const auto dot = juce::String::fromUTF8("  \xc2\xb7  ");
-    summary_.setText(juce::String(static_cast<int>(rows_.size())) + " instruments" + dot + juce::String(plugins) + " plug-ins in " +
-                         juce::String(static_cast<int>(processes.size())) + " host processes" + dot + "engine load " +
+    auto count = [](int n, const char* one, const char* many) { return juce::String(n) + " " + (n == 1 ? one : many); };
+    summary_.setText(count(static_cast<int>(rows_.size()), "instrument", "instruments") + dot + count(plugins, "plug-in", "plug-ins") +
+                         " in " + count(static_cast<int>(processes.size()), "host process", "host processes") + dot + "engine load " +
                          juce::String(juce::roundToInt(cpu * 100.0)) + "%" + dot + "VC Composer and its plug-ins " +
                          format_bytes(snap.total_bytes()) +
                          (snap.system.total > 0 ? dot + "computer " + format_bytes(snap.system.used()) + " / " +
@@ -215,6 +216,7 @@ void InstrumentUsagePanel::refresh()
     } else {
         tip = "No suggestions: memory and engine load are comfortable.";
     }
+    suggestion_.setColour(juce::Label::textColourId, tip.startsWith("No suggestions") ? colours::text_dim : colours::accent_warm);
     suggestion_.setText(tip, juce::dontSendNotification);
     select_tracks(selected);
     table_.updateContent();
@@ -413,7 +415,7 @@ void InstrumentUsagePanel::cancel_batch()
 void InstrumentUsagePanel::show_batch_menu()
 {
     juce::PopupMenu m;
-    m.addSectionHeader("Freeze && Unload");
+    m.addSectionHeader("Freeze & Unload");
     for (const auto& [name, tracks] : batch_targets()) {
         const auto t = tracks;
         m.addItem(name, [this, t] { context_.status(freeze_batch(t)); });
@@ -479,7 +481,7 @@ void InstrumentUsagePanel::paintCell(juce::Graphics& g, int row, int column, int
             text = r.suspended ? juce::String("0% (suspended)")
                    : !r.loaded ? juce::String("-")
                    : r.load_measured ? juce::String(r.load, r.load < 10.0 ? 1 : 0) + "%"
-                                     : juce::String("Not playing yet");
+                                     : juce::String("Idle");
             c = r.load >= 25.0 ? colours::fallback : r.load_measured ? colours::text : colours::text_dim;
             break;
         default: break;

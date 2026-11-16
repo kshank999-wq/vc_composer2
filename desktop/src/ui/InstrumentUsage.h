@@ -80,8 +80,8 @@ private:
     int ticks_ = 0;
     juce::Label title_, summary_, suggestion_, progress_;
     juce::TableListBox table_{"instruments"};
-    juce::TextButton freeze_{"Freeze && Unload"}, suspend_{"Suspend"}, reload_{"Reload"}, purge_{"Purge"},
-        locate_{"Locate"}, batch_{"Batch Freeze && Unload..."}, cancel_{"Cancel"};
+    juce::TextButton freeze_{"Freeze & Unload"}, suspend_{"Suspend"}, reload_{"Reload"}, purge_{"Purge"},
+        locate_{"Locate"}, batch_{"Batch Freeze & Unload..."}, cancel_{"Cancel"};
 };
 
 /// Opens (or brings forward) the panel.

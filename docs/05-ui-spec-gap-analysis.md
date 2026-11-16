@@ -1889,4 +1889,5 @@ macOS, Linux and Windows. What it took:
       print stale); `usage_checks` in the desktop check: three test
       plug-ins each in its own process and a built-in synth, measured
       rows, sorting, Suspend, Reload, Purge, Locate, a cancelled batch and
-      a family batch that closes its processes.
+      a family batch that closes its processes. `VCC_CHECK_ONLY=freeze_checks,usage_checks`
+      (any of the four memory sections) runs just those, in about a minute.

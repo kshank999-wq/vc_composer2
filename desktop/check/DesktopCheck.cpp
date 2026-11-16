@@ -7049,26 +7049,27 @@ void usage_checks(MainWindow& window, const juce::File& dir)
     for (const auto& [label, tracks] : panel->batch_targets()) groups.add(label);
     check(groups.contains("Selected tracks  (2)") && groups.contains("Family: Strings  (1)") && groups.contains("Family: Brass  (1)"),
           "Batch Freeze & Unload offers the selection and each family: " + groups.joinIntoString("; "));
-    panel->freeze_batch(panel->selected_tracks());
-    pump(60);
+    const auto started = panel->freeze_batch(panel->selected_tracks());
+    wait_for([&] { return panel->progress().isNotEmpty(); }, 3000);
     const auto progress = panel->progress();
     panel->cancel_batch();
     wait_for([&] { return !ctx.freeze_progress || ctx.freeze_progress().isEmpty(); }, 10000);
     pump(300);
-    check(progress.startsWith("Freezing") && !session.data().find_track(ids["Violins"])->instrument_unloaded &&
+    check(started.startsWith("Freezing and unloading 2") && progress.startsWith("Freezing") && !session.data().find_track(ids["Violins"])->instrument_unloaded &&
               !session.data().find_track(ids["Flute"])->instrument_unloaded,
           "a batch shows its progress (" + progress + ") and Cancel stops it with nothing unloaded");
     std::vector<std::string> woodwinds_and_strings;
     for (const auto& [label, tracks] : panel->batch_targets())
         if (label.startsWith("Family: Strings") || label.startsWith("Family: Woodwinds"))
             woodwinds_and_strings.insert(woodwinds_and_strings.end(), tracks.begin(), tracks.end());
-    panel->freeze_batch(woodwinds_and_strings);
+    const auto second = panel->freeze_batch(woodwinds_and_strings);
     wait_for([&] {
         return session.data().find_track(ids["Violins"])->instrument_unloaded && session.data().find_track(ids["Flute"])->instrument_unloaded;
     }, 60000);
     pump(500);
     int own = 0;
     wait_for([&] {
+        engine.render_offline(out, 512);  // as a running device would: the old instruments retire
         own = 0;
         for (const auto& [label, n] : host.host_processes())
             if (label == "VCC Test Instrument" && n > 0) ++own;
@@ -7077,7 +7078,7 @@ void usage_checks(MainWindow& window, const juce::File& dir)
     ctx.resources->sample_now();
     panel->refresh();
     const auto* frozen = row("Violins");
-    check(own == 1 && frozen && !frozen->loaded && frozen->state.startsWith("FROZEN") && frozen->memory == "0 (unloaded)",
+    check(second.startsWith("Freezing and unloading 2") && own == 1 && frozen && !frozen->loaded && frozen->state.startsWith("FROZEN") && frozen->memory == "0 (unloaded)",
           "batch Freeze & Unload of Strings and Woodwinds: printed, unloaded, their processes closed (" + juce::String(own) +
               " plug-in process left)");
     shoot(*panel, dir, "76-after-batch");
@@ -8292,6 +8293,26 @@ int main(int argc, char** argv)
         check(ctx.catalogs.error_count() == 0, "embedded content loads without errors");
         check(ctx.catalogs.templates->all().size() >= 200, "all template packs are embedded");
         check(music_font().loaded, "Bravura is embedded and loads");
+
+        // VCC_CHECK_ONLY=usage_checks,freeze_checks: just those (the memory
+        // management sections, which stand on their own), for a quick rerun.
+        if (const auto only = juce::SystemStats::getEnvironmentVariable("VCC_CHECK_ONLY", {}); only.isNotEmpty()) {
+            const std::vector<std::pair<const char*, void (*)(MainWindow&, const juce::File&)>> sections = {
+                {"freeze_checks", freeze_checks},
+                {"articulation_checks", articulation_checks},
+                {"articulation_template_checks", articulation_template_checks},
+                {"usage_checks", usage_checks}};
+            juce::StringArray wanted;
+            wanted.addTokens(only, ",", "");
+            for (const auto& [name, fn] : sections)
+                if (wanted.contains(name)) {
+                    section(name);
+                    fn(window, dir);
+                }
+            std::printf("%s: %d failure(s)\n", failures == 0 ? "PASSED" : "FAILED", failures);
+            std::fflush(stdout);
+            return failures == 0 ? 0 : 1;
+        }
 
         auto r = session.new_from_template("cinematic.horror.psychological");
         check(r.ok, "Horror template creates a project");
