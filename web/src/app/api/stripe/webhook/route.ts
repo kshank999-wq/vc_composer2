@@ -92,6 +92,9 @@ export async function POST(request: Request): Promise<Response> {
     event = stripe().webhooks.constructEvent(payload, signature, env.stripeWebhookSecret);
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'Signature verification failed';
+    // Said in the logs: a wrong STRIPE_WEBHOOK_SECRET (e.g. another endpoint's,
+    // or live vs sandbox) otherwise fails silently and nothing is fulfilled.
+    console.warn(`stripe webhook refused: ${message}`);
     return NextResponse.json({ error: message }, { status: 400 });
   }
 

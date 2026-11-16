@@ -64,7 +64,7 @@ const shell = (title: string, body: string): string => `<!doctype html>
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560" style="max-width:560px;width:100%">
           <tr>
             <td style="padding:4px 0 18px;font-family:${FONT};font-size:15px;font-weight:700;letter-spacing:0.08em;color:${TEXT}">
-              VC COMPOSER <span style="color:${ACCENT}">2</span>
+              VC COMPOSER
             </td>
           </tr>
           <tr>
