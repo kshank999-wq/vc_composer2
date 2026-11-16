@@ -856,3 +856,33 @@ a:focus-visible {
     flex-direction: column;
   }
 }
+
+/* ---------------------------------------------------------------- collaboration */
+
+.member-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  display: grid;
+  gap: 6px;
+}
+
+.member-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
