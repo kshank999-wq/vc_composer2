@@ -17,6 +17,7 @@
 #include "ui/hw/HwGallery.h"
 #include "ui/hw/HwTheme.h"
 
+#include <algorithm>
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include "ui/CueManager.h"

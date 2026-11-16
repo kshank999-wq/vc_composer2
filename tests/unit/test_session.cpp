@@ -1,4 +1,5 @@
 // The desktop app's document controller, exercised without a window.
+#include <algorithm>
 #include <filesystem>
 
 #include "vcc/core/Files.h"

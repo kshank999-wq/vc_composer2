@@ -6,6 +6,7 @@
 // workspace and tool window, renders audio offline through the playback
 // engine and checks it is not silent, saves and reopens, and writes a
 // screenshot of each surface. Exit code 0 means every check passed.
+#include <algorithm>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 

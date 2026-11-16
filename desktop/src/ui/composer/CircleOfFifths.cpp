@@ -1,5 +1,6 @@
 #include "ui/composer/CircleOfFifths.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "AppResources.h"

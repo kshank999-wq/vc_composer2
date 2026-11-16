@@ -1,5 +1,7 @@
 #include "ui/review/Relink.h"
 
+#include <algorithm>
+
 #include "ui/Dialogs.h"
 #include "ui/hw/HwTheme.h"
 

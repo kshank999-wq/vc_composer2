@@ -1,5 +1,6 @@
 #include "ui/shell/TopDeck.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace vcc::desktop::shell {

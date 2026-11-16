@@ -1,5 +1,6 @@
 #include "ui/surface/ControlSurface.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "ui/Dialogs.h"
