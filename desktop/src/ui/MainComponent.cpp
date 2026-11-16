@@ -339,7 +339,7 @@ MainComponent::MainComponent(AppContext& context)
         if (tracks.empty() || print_.printing()) return;
         unload_after_print_ = unload ? std::set<std::string>(tracks.begin(), tracks.end()) : std::set<std::string>{};
         show_right_tab(1);
-        print_.print_tracks(tracks, true, true);
+        print_.print_tracks(tracks, true, true, true);
     };
     print_.on_printed = [this](const std::vector<PrintItem>& items) {
         // Freeze & Unload: the prints are placed; now close the instruments,

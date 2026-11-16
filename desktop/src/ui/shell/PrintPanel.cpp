@@ -94,7 +94,8 @@ void PrintPanel::start()
     print_tracks(tracks, fx_.getToggleState());
 }
 
-void PrintPanel::print_tracks(const std::vector<std::string>& tracks, bool include_fx, std::optional<bool> play_audio)
+void PrintPanel::print_tracks(const std::vector<std::string>& tracks, bool include_fx, std::optional<bool> play_audio,
+                              bool offline)
 {
     const bool play = play_audio.value_or(play_audio_.getToggleState());
     if (job_ || live_ || tracks.empty()) return;
@@ -103,7 +104,7 @@ void PrintPanel::print_tracks(const std::vector<std::string>& tracks, bool inclu
     // print's own engine loads them, and the print's signature includes them.
     if (context_.capture_plugin_states) context_.capture_plugin_states();
     context_.engine.stop();
-    if (realtime_.getToggleState()) {
+    if (realtime_.getToggleState() && !offline) {
         // Real time: every track at once, played live and recorded.
         std::vector<PlaybackEngine::LivePrintSource> sources;
         for (const auto& id : tracks) {

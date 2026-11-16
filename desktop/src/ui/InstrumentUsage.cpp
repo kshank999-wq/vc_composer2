@@ -224,7 +224,8 @@ void InstrumentUsagePanel::refresh()
 
 void InstrumentUsagePanel::sort_by(Sort column, bool forwards)
 {
-    table_.getHeader().setSortColumnId(static_cast<int>(column), forwards);  // calls sortOrderChanged
+    table_.getHeader().setSortColumnId(static_cast<int>(column), forwards);  // the header (it re-sorts later)
+    sortOrderChanged(static_cast<int>(column), forwards);                     // and now
 }
 
 void InstrumentUsagePanel::sortOrderChanged(int column, bool forwards)

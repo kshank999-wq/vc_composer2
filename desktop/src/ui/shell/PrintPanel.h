@@ -26,7 +26,10 @@ public:
     /// Starts printing these tracks (the header's Print and Freeze keys use
     /// this with one track; Freeze prints with effects).
     /// `play_audio` overrides the panel's Play printed audio switch (Freeze always plays the print).
-    void print_tracks(const std::vector<std::string>& tracks, bool include_fx, std::optional<bool> play_audio = std::nullopt);
+    /// `offline`: render-only whatever the Real-time key says (Freeze: a
+    /// render of the track, never a recording).
+    void print_tracks(const std::vector<std::string>& tracks, bool include_fx, std::optional<bool> play_audio = std::nullopt,
+                      bool offline = false);
     /// Starts printing the ticked tracks with the panel's settings (the red key).
     void start();
     void cancel();
