@@ -334,6 +334,44 @@ MainComponent::MainComponent(AppContext& context)
         show_right_tab(1);  // in a short window, the Print tab shows the print's progress
         print_.print_tracks({track}, freeze);
     };
+    context_.freeze_tracks = [this](const std::vector<std::string>& tracks, bool unload) {
+        if (tracks.empty() || print_.printing()) return;
+        unload_after_print_ = unload ? std::set<std::string>(tracks.begin(), tracks.end()) : std::set<std::string>{};
+        show_right_tab(1);
+        print_.print_tracks(tracks, true, true);
+    };
+    print_.on_printed = [this](const std::vector<PrintItem>& items) {
+        // Freeze & Unload: the prints are placed; now close the instruments,
+        // their settings captured first so Unfreeze brings them back as they were.
+        if (unload_after_print_.empty()) return;
+        capture_plugin_states();
+        int unloaded = 0;
+        for (const auto& i : items)
+            if (i.ok && unload_after_print_.count(i.track_id) && context_.session.set_instrument_unloaded(i.track_id, true)) ++unloaded;
+        unload_after_print_.clear();
+        if (unloaded > 0)
+            context_.status("Frozen and unloaded " + juce::String(unloaded) + (unloaded == 1 ? " instrument" : " instruments") +
+                            ": their memory is given back; Unfreeze reloads them");
+    };
+    context_.track_state = [this](const std::string& id) -> juce::String {
+        const auto* t = context_.session.data().find_track(id);
+        if (!t) return {};
+        if (print_.printing_track(id)) return "RENDERING";
+        // The signature hashes the track's music: worked out once per edit.
+        const auto gen = context_.session.change_count();
+        if (gen != freeze_cache_generation_) {
+            freeze_cache_.clear();
+            freeze_cache_generation_ = gen;
+        }
+        auto cached = freeze_cache_.find(id);
+        if (cached == freeze_cache_.end()) cached = freeze_cache_.emplace(id, context_.session.freeze_state(id)).first;
+        const auto state = cached->second;
+        const juce::String unloaded = t->instrument_unloaded ? juce::String::fromUTF8(" \xc2\xb7 UNLOADED") : juce::String();
+        if (state == project::FreezeState::Stale) return "STALE" + unloaded;
+        if (state == project::FreezeState::Frozen) return "FROZEN" + unloaded;
+        if (context_.engine.instrument_status(id).startsWith("Missing")) return "MISSING PLUG-IN";
+        return "LIVE";
+    };
 
     layout_.setItemLayout(0, 220, 520, 300);
     layout_.setItemLayout(1, 5, 5, 5);
@@ -474,6 +512,8 @@ MainComponent::~MainComponent()
     context_.capture_plugin_states = nullptr;
     context_.show_comment = nullptr;
     context_.show_library_for_track = nullptr;
+    context_.freeze_tracks = nullptr;
+    context_.track_state = nullptr;
 }
 
 void MainComponent::paint(juce::Graphics& g) { g.fillAll(hw::tok::chassis); }
@@ -1614,7 +1654,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::articulationMap, cmd::missingInstruments, cmd::mixTools, cmd::bounceInPlace, cmd::saveOnStop,
                 cmd::monitorDim, cmd::reverseClips, cmd::timeStretchClips, cmd::groupClips, cmd::ungroupClips,
                 cmd::captureMidi, cmd::midiInputFilter, cmd::lyrics, cmd::explodeTracks, cmd::implodeTracks, cmd::addRepeat,
-                cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account});
+                cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
+                cmd::unfreezeTrack, cmd::rerenderTrack});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -1837,6 +1878,26 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::reloadCrashedPlugins:
             info.setInfo("Reload Crashed Plug-ins", "Starts crashed plug-ins again from their last state", "Tools", 0);
             break;
+        case cmd::freezeTrack:
+            info.setInfo("Freeze", "Print the selected track through its inserts and play the print; the instrument stays loaded",
+                         "Track", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            break;
+        case cmd::freezeUnload:
+            info.setInfo("Freeze && Unload", "Print the selected track, play the print, and close its instrument to free memory",
+                         "Track", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            break;
+        case cmd::unfreezeTrack: {
+            const auto* t = context_.session.data().find_track(context_.session.selected_track());
+            info.setInfo("Unfreeze", "Back to the live instrument; the print stays on the audio lane", "Track",
+                         t && (t->playback == "audio" || t->instrument_unloaded) ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            break;
+        }
+        case cmd::rerenderTrack: {
+            const auto* t = context_.session.data().find_track(context_.session.selected_track());
+            info.setInfo("Re-render", "Print the selected track again (a stale print: the music or instrument changed)", "Track",
+                         t && !t->print_signature.empty() ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            break;
+        }
         case cmd::account: info.setInfo("Account and Licence...", "Sign in, activate this computer, see the licence", "Help", 0); break;
         case cmd::about: info.setInfo("About VC Composer", "", "Help", 0); break;
         default: break;
@@ -1931,6 +1992,17 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::exportPicture: show_picture_export(context_); break;
         case cmd::tempoFinder: show_tempo_finder(context_); break;
         case cmd::account: show_account_window(context_); break;
+        case cmd::freezeTrack:
+        case cmd::freezeUnload:
+            if (!s.selected_track().empty()) context_.freeze_tracks({s.selected_track()}, info.commandID == cmd::freezeUnload);
+            break;
+        case cmd::unfreezeTrack:
+            if (s.unfreeze(s.selected_track())) context_.status("Unfrozen: the live instrument plays again");
+            break;
+        case cmd::rerenderTrack:
+            if (const auto* t = s.data().find_track(s.selected_track()))
+                context_.freeze_tracks({t->id}, t->instrument_unloaded);
+            break;
         case cmd::editShortcuts:
             show_shortcut_editor(context_, [this](const std::string& name) { use_shortcut_profile(name); });
             break;
@@ -2113,7 +2185,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             for (auto id : {cmd::addAuxBus, cmd::addGroupBus}) m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::duplicateVersion, cmd::loadInstrument, cmd::openInstrumentWindow, cmd::articulationMap,
-                            cmd::missingInstruments, cmd::bounceInPlace, cmd::removeTrack})
+                            cmd::missingInstruments, cmd::bounceInPlace, cmd::freezeTrack, cmd::freezeUnload, cmd::unfreezeTrack,
+                            cmd::rerenderTrack, cmd::removeTrack})
                 m.addCommandItem(c, id);
             m.addCommandItem(c, cmd::mixTools);
             m.addSeparator();

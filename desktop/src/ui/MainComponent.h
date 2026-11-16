@@ -207,6 +207,9 @@ private:
     int ticks_ = 0;
     bool syncing_range_ = false;
     int status_age_ = 0;
+    std::set<std::string> unload_after_print_;
+    std::map<std::string, project::FreezeState> freeze_cache_;
+    std::uint64_t freeze_cache_generation_ = ~0ull;  ///< Freeze & Unload: close these once printed.
     bool punch_ = false;
 };
 

@@ -85,20 +85,21 @@ void PluginHost::set_host_tool(const juce::File& tool)
 juce::StringArray PluginHost::hosting_mode_names()
 {
     return {"Inside VC Composer", "Each instance in its own process (safest)", "One process per plug-in",
-            "One process per manufacturer", "All plug-ins in one process (lightest)"};
+            "One process per manufacturer", "All plug-ins in one process (lightest)",
+            "Each instrument in its own process, effects shared (recommended)"};
 }
 
 namespace {
-const char* const kModeKeys[] = {"in_app", "each_instance", "per_plugin", "per_manufacturer", "shared"};
+const char* const kModeKeys[] = {"in_app", "each_instance", "per_plugin", "per_manufacturer", "shared", "instruments_alone"};
 }  // namespace
 
 PluginHost::HostingMode PluginHost::hosting_mode() const
 {
     const auto key = properties_->getValue("hostingMode", {});
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 6; ++i)
         if (key == kModeKeys[i]) return static_cast<HostingMode>(i);
     // Older settings had an on/off switch.
-    return properties_->getBoolValue("outOfProcessHosting", true) ? HostingMode::each_instance : HostingMode::in_app;
+    return properties_->getBoolValue("outOfProcessHosting", true) ? HostingMode::instruments_alone : HostingMode::in_app;
 }
 
 void PluginHost::set_hosting_mode(HostingMode mode)
@@ -151,13 +152,15 @@ std::shared_ptr<HostProcess> PluginHost::process_for(const juce::PluginDescripti
 {
     const auto mode = hosting_mode();
     juce::String key, label;
-    const bool alone = mode == HostingMode::each_instance || isolated(d.createIdentifierString());
+    const bool alone = mode == HostingMode::each_instance || (mode == HostingMode::instruments_alone && d.isInstrument) ||
+                       isolated(d.createIdentifierString());
     if (!alone) {
         if (mode == HostingMode::per_plugin) {
             key = "plugin:" + d.createIdentifierString();
             label = d.name;
-        } else if (mode == HostingMode::per_manufacturer) {
-            key = "maker:" + (d.manufacturerName.isEmpty() ? juce::String("Unknown") : d.manufacturerName);
+        } else if (mode == HostingMode::per_manufacturer || mode == HostingMode::instruments_alone) {
+            key = (mode == HostingMode::instruments_alone ? "fx-maker:" : "maker:") +
+                  (d.manufacturerName.isEmpty() ? juce::String("Unknown") : d.manufacturerName);
             label = d.manufacturerName.isEmpty() ? juce::String("Unknown manufacturer") : d.manufacturerName;
         } else {
             key = "shared";

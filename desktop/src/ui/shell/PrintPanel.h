@@ -4,6 +4,10 @@
 // print, track by track. Each print lands on the track's own audio lane.
 #pragma once
 
+#include <algorithm>
+#include <functional>
+#include <optional>
+
 #include <memory>
 #include <set>
 #include <string>
@@ -21,11 +25,19 @@ public:
 
     /// Starts printing these tracks (the header's Print and Freeze keys use
     /// this with one track; Freeze prints with effects).
-    void print_tracks(const std::vector<std::string>& tracks, bool include_fx);
+    /// `play_audio` overrides the panel's Play printed audio switch (Freeze always plays the print).
+    void print_tracks(const std::vector<std::string>& tracks, bool include_fx, std::optional<bool> play_audio = std::nullopt);
     /// Starts printing the ticked tracks with the panel's settings (the red key).
     void start();
     void cancel();
     bool printing() const noexcept { return job_ != nullptr || live_; }
+    /// Whether this track is in the print running now (its state reads Rendering).
+    bool printing_track(const std::string& track_id) const
+    {
+        return printing() && std::find(active_.begin(), active_.end(), track_id) != active_.end();
+    }
+    /// After a print finishes (not cancelled), with what it placed.
+    std::function<void(const std::vector<PrintItem>&)> on_printed;
     /// Offline (rendered, faster than real time) or Real-time (played live
     /// and recorded: the way to print external MIDI hardware).
     hw::Keycap& offline_key() { return offline_; }
@@ -72,6 +84,7 @@ private:
     Ticks live_start_ = 0;
     hw::Lcd lcd_{"READY", 11.0f};
     std::unique_ptr<PrintJob> job_;
+    std::vector<std::string> active_;
     std::vector<PrintItem> last_;
 };
 

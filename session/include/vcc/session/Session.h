@@ -19,6 +19,7 @@
 #include "vcc/project/Performance.h"
 #include "vcc/session/Notate.h"
 #include "vcc/project/MidiTools.h"
+#include "vcc/project/Freeze.h"
 #include "vcc/project/Project.h"
 #include "vcc/project/Stems.h"
 #include "vcc/templates/Templates.h"
@@ -94,6 +95,8 @@ public:
     /// Counts documents: a new, opened or template-made project is a new one,
     /// even where its track and version ids repeat the last one's.
     std::uint64_t document_generation() const noexcept { return generation_; }
+    /// Counts every change told to listeners (caches of derived values key on it).
+    std::uint64_t change_count() const noexcept { return changes_; }
 
     // --- Listeners ------------------------------------------------------------
     using Listener = std::function<void(Change)>;
@@ -388,6 +391,15 @@ public:
     /// Ids are returned in order; empty when nothing could be placed.
     std::vector<std::string> place_prints(const std::vector<std::pair<std::string, project::AudioClip>>& prints,
                                           bool printed_fx, bool play_audio);
+    // --- Freeze (Memory Management spec §5) ---------------------------------------------
+    /// Live, Frozen (the print plays and matches its source) or Stale.
+    project::FreezeState freeze_state(const std::string& track_id) const;
+    /// Closes (true) or reopens (false) a frozen track's instrument plug-in;
+    /// its settings stay in the track. Unloading needs a print playing.
+    bool set_instrument_unloaded(const std::string& track_id, bool unloaded);
+    /// Back to the live instrument: the MIDI plays, the plug-in is loaded;
+    /// the printed audio stays on the track's audio lane.
+    bool unfreeze(const std::string& track_id);
     /// MIDI played in (a recording pass), as one undo step: each region on
     /// its track's main lane; with `as_takes` the main-lane regions it
     /// overlaps move to the next free take lane. Ids are returned in order.
@@ -776,6 +788,7 @@ private:
     void document_changed();
     void reset(project::Project project, const std::string& path);
     std::uint64_t generation_ = 0;
+    std::uint64_t changes_ = 0;
 
     const Catalogs& catalogs_;
     project::Project project_;

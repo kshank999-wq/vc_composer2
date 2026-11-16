@@ -74,7 +74,10 @@ public:
     ///   per_plugin       all instances of one plug-in share a process
     ///   per_manufacturer all of one manufacturer's plug-ins share a process
     ///   shared           every plug-in in one process (lightest out of the app)
-    enum class HostingMode { in_app, each_instance, per_plugin, per_manufacturer, shared };
+    /// instruments_alone (the default): each instrument in its own process,
+    /// so its memory is measured on its own and given back when it is
+    /// unloaded; effects share a process per manufacturer.
+    enum class HostingMode { in_app, each_instance, per_plugin, per_manufacturer, shared, instruments_alone };
     static juce::StringArray hosting_mode_names();
     HostingMode hosting_mode() const;
     void set_hosting_mode(HostingMode mode);

@@ -94,9 +94,14 @@ void PrintPanel::start()
     print_tracks(tracks, fx_.getToggleState());
 }
 
-void PrintPanel::print_tracks(const std::vector<std::string>& tracks, bool include_fx)
+void PrintPanel::print_tracks(const std::vector<std::string>& tracks, bool include_fx, std::optional<bool> play_audio)
 {
+    const bool play = play_audio.value_or(play_audio_.getToggleState());
     if (job_ || live_ || tracks.empty()) return;
+    active_ = tracks;
+    // The plug-ins' settings as they are now go into the project first: the
+    // print's own engine loads them, and the print's signature includes them.
+    if (context_.capture_plugin_states) context_.capture_plugin_states();
     context_.engine.stop();
     if (realtime_.getToggleState()) {
         // Real time: every track at once, played live and recorded.
@@ -116,7 +121,7 @@ void PrintPanel::print_tracks(const std::vector<std::string>& tracks, bool inclu
         live_start_ = range ? sel.from : 0;
         const Ticks end = range ? sel.to : std::max<Ticks>(context_.session.content_end(), kTicksPerWhole);
         live_fx_ = include_fx;
-        live_play_ = play_audio_.getToggleState();
+        live_play_ = play;
         const auto error = context_.engine.start_live_print(sources, live_start_, end, 2.0);
         if (!context_.engine.live_printing()) {
             if (context_.status) context_.status("Real-time print: " + error);
@@ -133,7 +138,7 @@ void PrintPanel::print_tracks(const std::vector<std::string>& tracks, bool inclu
     PrintRequest rq;
     rq.tracks = tracks;
     rq.include_fx = include_fx;
-    rq.play_audio = play_audio_.getToggleState();
+    rq.play_audio = play;
     const auto& sel = context_.session.selection();
     if (selection_.getToggleState() && sel.has_range()) {
         rq.start = sel.from;
@@ -182,6 +187,7 @@ void PrintPanel::live_finished(const std::vector<PlaybackEngine::LivePrintResult
         return;
     }
     last_ = place_live_prints(context_, results, live_start_, live_fx_, live_play_);
+    if (on_printed) on_printed(last_);
     int ok = 0;
     juce::StringArray problems;
     for (const auto& i : last_) {
@@ -227,7 +233,9 @@ void PrintPanel::finished()
     lcd_.set_text(job_->cancelled() ? juce::String("CANCELLED") : "DONE  " + juce::String(ok) + " / " + juce::String(last_.size()) +
                                                                     "\n48 kHz  24-BIT  WAV");
     if (context_.status) context_.status(job_->summary());
+    const bool cancelled = job_->cancelled();
     job_.reset();
+    if (on_printed && !cancelled) on_printed(last_);
     record_.setButtonText("Record score to audio");
     repaint();
 }

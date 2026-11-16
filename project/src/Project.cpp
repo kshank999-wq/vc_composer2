@@ -1,4 +1,5 @@
 #include "vcc/project/Project.h"
+#include "vcc/project/Freeze.h"
 
 #include "vcc/project/ArticulationMap.h"
 #include "vcc/project/Percussion.h"
@@ -6,6 +7,7 @@
 #include "vcc/project/Automation.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <set>
 
 #include "vcc/core/Files.h"
@@ -945,6 +947,128 @@ const std::map<int, Migration>& migrations()
 
 }  // namespace
 
+static json::Value track_to_json(const Track& t)
+{
+    json::Object o{{"id", t.id}, {"name", t.name}, {"kind", to_string(t.kind)}, {"folder_id", t.folder_id},
+                   {"family", t.family}, {"role", t.role}, {"color", t.color},
+                   {"instrument_standard_id", t.instrument_standard_id},
+                   {"articulation_intents", string_array(t.articulation_intents)},
+                   {"fallback_instruments", string_array(t.fallback_instruments)},
+                   {"plugin_requirements", string_array(t.plugin_requirements)}};
+    const auto& a = t.assignment;
+    o.set("assignment", json::Object{{"status", to_string(a.status)},
+                                     {"resolved_instrument_id", a.resolved_instrument_id},
+                                     {"patch_id", a.patch_id},
+                                     {"patch_display", a.patch_display},
+                                     {"placeholder_program", a.placeholder_program},
+                                     {"unsupported_articulations", string_array(a.unsupported_articulations)},
+                                     {"message", a.message}});
+    o.set("expression_map", t.expression_map);
+    if (t.articulation_map) o.set("articulation_map", expression_map_to_json(*t.articulation_map));
+    if (!t.percussion_map.empty()) o.set("percussion_map", t.percussion_map);
+    if (!t.instrument_plugin.empty())
+        o.set("instrument_plugin", json::Object{{"format", t.instrument_plugin.format},
+                                                {"identifier", t.instrument_plugin.identifier},
+                                                {"name", t.instrument_plugin.name},
+                                                {"vendor", t.instrument_plugin.vendor},
+                                                {"state", t.instrument_plugin.state_base64}});
+    o.set("output_bus_id", t.output_bus_id);
+    o.set("sends", sends_to_json(t.sends));
+    o.set("strip", strip_to_json(t.strip));
+    o.set("inserts", inserts_to_json(t.inserts));
+    o.set("gain_db", t.gain_db);
+    o.set("pan", t.pan);
+    o.set("mute", t.mute);
+    o.set("solo", t.solo);
+    o.set("input", t.input);
+    o.set("input_stereo", t.input_stereo);
+    o.set("monitor", t.monitor);
+    o.set("playback", t.playback);
+    if (t.printed_fx) o.set("printed_fx", true);
+    if (!t.print_signature.empty()) o.set("print_signature", t.print_signature);
+    if (t.instrument_unloaded) o.set("instrument_unloaded", true);
+    if (!t.midi_output.empty()) o.set("midi_output", t.midi_output);
+    if (t.record_source != "midi") o.set("record_source", t.record_source);
+    if (!t.sidechain.empty()) o.set("sidechain", t.sidechain);
+    if (t.input_quantize > 0) o.set("input_quantize", t.input_quantize);
+    if (!t.range_policy.empty()) o.set("range_policy", t.range_policy);
+    if (t.transpose != 0) o.set("transpose", t.transpose);
+    if (t.transpose_mode != "notation") o.set("transpose_mode", t.transpose_mode);
+    if (t.transpose_bypass) o.set("transpose_bypass", true);
+    if (!t.automation.empty()) o.set("automation", automation_to_json(t.automation));
+    o.set("automation_mode", t.automation_mode);
+    o.set("include_in_export", t.include_in_export);
+    o.set("midi_channel", t.midi_channel);
+    o.set("template_origin", t.template_origin);
+    json::Array versions;
+    for (const auto& v : t.versions) {
+        json::Array regions;
+        for (const auto& r : v.regions) {
+            json::Object ro{{"id", r.id}, {"start", r.start}, {"end", r.end},
+                            {"lane", r.lane}, {"source", r.source},
+                            {"notes", notes_to_json(r.notes)}};
+            if (!r.group_id.empty()) ro.set("group_id", r.group_id);
+            if (!r.controllers.empty()) {
+                json::Array cc;
+                for (const auto& e : r.controllers)
+                    cc.emplace_back(json::Array{json::Value(e.tick), json::Value(e.channel), json::Value(e.controller),
+                                                json::Value(e.value)});
+                ro.set("controllers", cc);
+            }
+            regions.emplace_back(std::move(ro));
+        }
+        json::Object vo{{"id", v.id}, {"name", v.name}, {"notes", v.notes},
+                        {"score", notation::score_to_json(v.score)}, {"regions", regions},
+                        {"articulation_overrides", string_array(v.articulation_overrides)}};
+        if (v.gain_db) vo.set("gain_db", *v.gain_db);
+        if (v.approved) vo.set("approved", true);
+        {
+            json::Array perf;
+            for (const auto& [id, ov] : v.performance) {
+                if (ov.empty() || !v.score.find_note(id)) continue;
+                json::Object po{{"note", static_cast<std::int64_t>(id)}};
+                if (ov.onset != 0) po.set("onset", ov.onset);
+                if (ov.length != 0) po.set("length", ov.length);
+                if (ov.velocity != 0) po.set("velocity", ov.velocity);
+                if (ov.cc != 0) po.set("cc", ov.cc);
+                perf.emplace_back(std::move(po));
+            }
+            if (!perf.empty()) vo.set("performance", perf);
+        }
+        if (!v.audio_clips.empty()) {
+            json::Array clips;
+            for (const auto& c : v.audio_clips)
+                clips.emplace_back(json::Object{{"id", c.id},
+                                                {"name", c.name},
+                                                {"file", c.file},
+                                                {"start_seconds", c.start_seconds},
+                                                {"source_offset", c.source_offset},
+                                                {"length", c.length},
+                                                {"gain_db", c.gain_db},
+                                                {"fade_in", c.fade_in},
+                                                {"fade_out", c.fade_out},
+                                                {"lane", c.lane},
+                                                {"muted", c.muted},
+                                                {"channels", c.channels},
+                                                {"file_sample_rate", c.file_sample_rate}});
+            for (std::size_t i = 0; i < v.audio_clips.size(); ++i)
+                if (!v.audio_clips[i].group_id.empty()) clips[i].set("group_id", v.audio_clips[i].group_id);
+            vo.set("audio_clips", clips);
+        }
+        if (!v.phrases.empty()) {
+            json::Array phrases;
+            for (const auto& ph : v.phrases)
+                phrases.emplace_back(
+                    json::Object{{"id", ph.id}, {"name", ph.name}, {"start", ph.start}, {"end", ph.end}});
+            vo.set("phrases", phrases);
+        }
+        versions.emplace_back(vo);
+    }
+    o.set("versions", versions);
+    o.set("active_version_id", t.active_version_id);
+    return o;
+}
+
 json::Value Project::to_json() const
 {
     const ProjectData& d = data_;
@@ -969,124 +1093,7 @@ json::Value Project::to_json() const
     root.set("loudness_target", d.loudness_target);
 
     json::Array tracks;
-    for (const auto& t : d.tracks) {
-        json::Object o{{"id", t.id}, {"name", t.name}, {"kind", to_string(t.kind)}, {"folder_id", t.folder_id},
-                       {"family", t.family}, {"role", t.role}, {"color", t.color},
-                       {"instrument_standard_id", t.instrument_standard_id},
-                       {"articulation_intents", string_array(t.articulation_intents)},
-                       {"fallback_instruments", string_array(t.fallback_instruments)},
-                       {"plugin_requirements", string_array(t.plugin_requirements)}};
-        const auto& a = t.assignment;
-        o.set("assignment", json::Object{{"status", to_string(a.status)},
-                                         {"resolved_instrument_id", a.resolved_instrument_id},
-                                         {"patch_id", a.patch_id},
-                                         {"patch_display", a.patch_display},
-                                         {"placeholder_program", a.placeholder_program},
-                                         {"unsupported_articulations", string_array(a.unsupported_articulations)},
-                                         {"message", a.message}});
-        o.set("expression_map", t.expression_map);
-        if (t.articulation_map) o.set("articulation_map", expression_map_to_json(*t.articulation_map));
-        if (!t.percussion_map.empty()) o.set("percussion_map", t.percussion_map);
-        if (!t.instrument_plugin.empty())
-            o.set("instrument_plugin", json::Object{{"format", t.instrument_plugin.format},
-                                                    {"identifier", t.instrument_plugin.identifier},
-                                                    {"name", t.instrument_plugin.name},
-                                                    {"vendor", t.instrument_plugin.vendor},
-                                                    {"state", t.instrument_plugin.state_base64}});
-        o.set("output_bus_id", t.output_bus_id);
-        o.set("sends", sends_to_json(t.sends));
-        o.set("strip", strip_to_json(t.strip));
-        o.set("inserts", inserts_to_json(t.inserts));
-        o.set("gain_db", t.gain_db);
-        o.set("pan", t.pan);
-        o.set("mute", t.mute);
-        o.set("solo", t.solo);
-        o.set("input", t.input);
-        o.set("input_stereo", t.input_stereo);
-        o.set("monitor", t.monitor);
-        o.set("playback", t.playback);
-        if (t.printed_fx) o.set("printed_fx", true);
-        if (!t.midi_output.empty()) o.set("midi_output", t.midi_output);
-        if (t.record_source != "midi") o.set("record_source", t.record_source);
-        if (!t.sidechain.empty()) o.set("sidechain", t.sidechain);
-        if (t.input_quantize > 0) o.set("input_quantize", t.input_quantize);
-        if (!t.range_policy.empty()) o.set("range_policy", t.range_policy);
-        if (t.transpose != 0) o.set("transpose", t.transpose);
-        if (t.transpose_mode != "notation") o.set("transpose_mode", t.transpose_mode);
-        if (t.transpose_bypass) o.set("transpose_bypass", true);
-        if (!t.automation.empty()) o.set("automation", automation_to_json(t.automation));
-        o.set("automation_mode", t.automation_mode);
-        o.set("include_in_export", t.include_in_export);
-        o.set("midi_channel", t.midi_channel);
-        o.set("template_origin", t.template_origin);
-        json::Array versions;
-        for (const auto& v : t.versions) {
-            json::Array regions;
-            for (const auto& r : v.regions) {
-                json::Object ro{{"id", r.id}, {"start", r.start}, {"end", r.end},
-                                {"lane", r.lane}, {"source", r.source},
-                                {"notes", notes_to_json(r.notes)}};
-                if (!r.group_id.empty()) ro.set("group_id", r.group_id);
-                if (!r.controllers.empty()) {
-                    json::Array cc;
-                    for (const auto& e : r.controllers)
-                        cc.emplace_back(json::Array{json::Value(e.tick), json::Value(e.channel), json::Value(e.controller),
-                                                    json::Value(e.value)});
-                    ro.set("controllers", cc);
-                }
-                regions.emplace_back(std::move(ro));
-            }
-            json::Object vo{{"id", v.id}, {"name", v.name}, {"notes", v.notes},
-                            {"score", notation::score_to_json(v.score)}, {"regions", regions},
-                            {"articulation_overrides", string_array(v.articulation_overrides)}};
-            if (v.gain_db) vo.set("gain_db", *v.gain_db);
-            if (v.approved) vo.set("approved", true);
-            {
-                json::Array perf;
-                for (const auto& [id, ov] : v.performance) {
-                    if (ov.empty() || !v.score.find_note(id)) continue;
-                    json::Object po{{"note", static_cast<std::int64_t>(id)}};
-                    if (ov.onset != 0) po.set("onset", ov.onset);
-                    if (ov.length != 0) po.set("length", ov.length);
-                    if (ov.velocity != 0) po.set("velocity", ov.velocity);
-                    if (ov.cc != 0) po.set("cc", ov.cc);
-                    perf.emplace_back(std::move(po));
-                }
-                if (!perf.empty()) vo.set("performance", perf);
-            }
-            if (!v.audio_clips.empty()) {
-                json::Array clips;
-                for (const auto& c : v.audio_clips)
-                    clips.emplace_back(json::Object{{"id", c.id},
-                                                    {"name", c.name},
-                                                    {"file", c.file},
-                                                    {"start_seconds", c.start_seconds},
-                                                    {"source_offset", c.source_offset},
-                                                    {"length", c.length},
-                                                    {"gain_db", c.gain_db},
-                                                    {"fade_in", c.fade_in},
-                                                    {"fade_out", c.fade_out},
-                                                    {"lane", c.lane},
-                                                    {"muted", c.muted},
-                                                    {"channels", c.channels},
-                                                    {"file_sample_rate", c.file_sample_rate}});
-                for (std::size_t i = 0; i < v.audio_clips.size(); ++i)
-                    if (!v.audio_clips[i].group_id.empty()) clips[i].set("group_id", v.audio_clips[i].group_id);
-                vo.set("audio_clips", clips);
-            }
-            if (!v.phrases.empty()) {
-                json::Array phrases;
-                for (const auto& ph : v.phrases)
-                    phrases.emplace_back(
-                        json::Object{{"id", ph.id}, {"name", ph.name}, {"start", ph.start}, {"end", ph.end}});
-                vo.set("phrases", phrases);
-            }
-            versions.emplace_back(vo);
-        }
-        o.set("versions", versions);
-        o.set("active_version_id", t.active_version_id);
-        tracks.emplace_back(o);
-    }
+    for (const auto& t : d.tracks) tracks.emplace_back(track_to_json(t));
     root.set("tracks", tracks);
 
     json::Array buses;
@@ -1311,6 +1318,8 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.monitor = j.get_string("monitor", "auto");
         t.playback = j.get_string("playback", "both");
         t.printed_fx = j.get_bool("printed_fx", false);
+        t.print_signature = j.get_string("print_signature");
+        t.instrument_unloaded = j.get_bool("instrument_unloaded", false);
         t.midi_output = j.get_string("midi_output", "");
         t.record_source = j.get_string("record_source", "midi") == "audio" ? "audio" : "midi";
         t.sidechain = j.get_string("sidechain", "");
@@ -1631,6 +1640,76 @@ std::optional<Project> Project::load(const std::string& path, std::string* error
         return std::nullopt;
     }
     return from_json(*doc, error);
+}
+
+// --- Freeze (Memory Management spec §5) -------------------------------------------------
+
+std::string render_signature(const ProjectData& d, const Track& t)
+{
+    json::Value j = track_to_json(t);
+    // What does not change the instrument's sound.
+    for (const char* k : {"id", "name", "color", "folder_id", "family", "role", "gain_db", "pan", "mute", "solo", "sends",
+                          "input", "input_stereo", "monitor", "playback", "print_signature", "instrument_unloaded",
+                          "include_in_export", "record_source", "output_bus_id", "template_origin", "automation_mode",
+                          "input_quantize", "range_policy", "assignment", "articulation_intents", "fallback_instruments",
+                          "plugin_requirements", "sidechain"})
+        j.remove(k);
+    // The strip and inserts count only when the print went through them.
+    if (!t.printed_fx) {
+        j.remove("strip");
+        j.remove("inserts");
+    }
+    // Automation that plays the instrument (its parameters; with a strip
+    // print, the strip's too) - never the fader, pan or sends.
+    json::Array lanes;
+    if (const auto* a = j.get("automation"); a && a->is_array())
+        for (const auto& l : a->as_array()) {
+            const std::string p = l.get_string("param");
+            const bool mix = p == "gain" || p == "gain_db" || p == "volume" || p == "pan" || p == "mute" ||
+                             p.rfind("send", 0) == 0 || (!t.printed_fx && p.rfind("strip.", 0) == 0);
+            if (!mix) lanes.push_back(l);
+        }
+    j.set("automation", lanes);
+    // Only the active version's music, and none of its audio.
+    json::Value active;
+    if (const auto* vs = j.get("versions"); vs && vs->is_array())
+        for (const auto& v : vs->as_array())
+            if (v.get_string("id") == t.active_version_id) active = v;
+    for (const char* k : {"id", "name", "notes", "approved", "gain_db", "audio_clips", "phrases"}) active.remove(k);
+    j.set("versions", json::Array{active});
+    j.remove("active_version_id");
+    // Timing: the tempo map and meter.
+    json::Array tempo, meter;
+    for (const auto& c : d.tempo.changes()) tempo.emplace_back(json::Array{json::Value(c.tick), json::Value(c.bpm)});
+    for (const auto& c : d.meter.changes()) meter.emplace_back(json::Array{json::Value(c.bar), json::Value(c.signature.to_string())});
+    j.set("tempo", tempo);
+    j.set("meter", meter);
+    // FNV-1a over the text.
+    const std::string text = json::write(j);
+    std::uint64_t h = 1469598103934665603ull;
+    for (const unsigned char c : text) {
+        h ^= c;
+        h *= 1099511628211ull;
+    }
+    char out[17];
+    std::snprintf(out, sizeof out, "%016llx", static_cast<unsigned long long>(h));
+    return out;
+}
+
+FreezeState freeze_state(const ProjectData& d, const Track& t)
+{
+    if (t.playback != "audio" || t.print_signature.empty()) return FreezeState::Live;
+    return render_signature(d, t) == t.print_signature ? FreezeState::Frozen : FreezeState::Stale;
+}
+
+const char* to_string(FreezeState s) noexcept
+{
+    switch (s) {
+        case FreezeState::Live: return "Live";
+        case FreezeState::Frozen: return "Frozen";
+        case FreezeState::Stale: return "Stale";
+    }
+    return "Live";
 }
 
 }  // namespace vcc::project

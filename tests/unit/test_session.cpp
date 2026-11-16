@@ -804,3 +804,61 @@ TEST_CASE("steady tempo from the tempo finder: one tempo between two points, the
     CHECK_NEAR(s.data().tempo.bpm_at(20 * kTicksPerWhole), 72.0, 1e-9);
     CHECK(!s.set_steady_tempo(0, 0, 900.0));
 }
+
+TEST_CASE("freeze: a print records what it was made from; mix moves leave it frozen, music edits make it stale")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Violins", "strings.violins_1");
+    notation::Score sc = s.data().find_track(t)->active_version()->score;
+    notation::ScoreNote n;
+    n.start_tick = 0;
+    n.duration = notation::whole();
+    n.pitch = notation::spell_midi_note(67, {});
+    sc.insert_note(0, n);
+    REQUIRE(s.commit_score(t, sc, "Write"));
+    CHECK(s.freeze_state(t) == project::FreezeState::Live);
+    CHECK(!s.set_instrument_unloaded(t, true));  // nothing printed: the instrument is all there is
+
+    project::AudioClip print;
+    print.file = "Audio Files/Violins print.wav";
+    print.length = 2.0;
+    REQUIRE(!s.place_prints({{t, print}}, true, true).empty());
+    CHECK(s.freeze_state(t) == project::FreezeState::Frozen);
+    CHECK(!s.data().find_track(t)->print_signature.empty());
+    // The fader, pan and mute are not in the print.
+    s.set_gain(t, -6.0);
+    s.set_mute(t, true);
+    CHECK(s.freeze_state(t) == project::FreezeState::Frozen);
+    // Unload, and it survives save and open.
+    REQUIRE(s.set_instrument_unloaded(t, true));
+    CHECK(s.data().find_track(t)->instrument_unloaded);
+    const auto dir = std::filesystem::temp_directory_path() / "vcc_freeze_test";
+    std::filesystem::create_directories(dir);
+    std::string error;
+    REQUIRE(s.save_as((dir / "f.vcc2").string(), &error));
+    session::Session back(catalogs());
+    REQUIRE(back.open((dir / "f.vcc2").string(), &error));
+    CHECK(back.data().find_track(t)->instrument_unloaded);
+    CHECK(back.freeze_state(t) == project::FreezeState::Frozen);
+    std::filesystem::remove_all(dir);
+
+    // A note changes: the print is stale.
+    notation::Score edited = s.data().find_track(t)->active_version()->score;
+    notation::ScoreNote m = n;
+    m.start_tick = 2 * kTicksPerQuarter;
+    m.duration = notation::half();
+    edited.insert_note(0, m);
+    REQUIRE(s.commit_score(t, edited, "Write"));
+    CHECK(s.freeze_state(t) == project::FreezeState::Stale);
+    CHECK(s.undo());
+    CHECK(s.freeze_state(t) == project::FreezeState::Frozen);
+    // The tempo changes: stale too.
+    REQUIRE(s.set_tempo(96.0));
+    CHECK(s.freeze_state(t) == project::FreezeState::Stale);
+    // Unfreeze: the live instrument again; the audio stays.
+    REQUIRE(s.unfreeze(t));
+    CHECK(s.freeze_state(t) == project::FreezeState::Live);
+    CHECK(!s.data().find_track(t)->instrument_unloaded);
+    CHECK(!s.data().find_track(t)->active_version()->audio_clips.empty());
+}

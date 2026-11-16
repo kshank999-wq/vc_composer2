@@ -120,6 +120,7 @@ void Session::remove_listener(int id) { listeners_.erase(id); }
 
 void Session::notify(Change change)
 {
+    ++changes_;
     // Copy first: a listener may add or remove listeners while being told.
     auto copy = listeners_;
     for (auto& [id, l] : copy)
@@ -1917,11 +1918,41 @@ std::vector<std::string> Session::place_prints(const std::vector<std::pair<std::
             place_clip(*v, std::move(c), true);
             t->printed_fx = printed_fx;
             if (play_audio && t->kind != project::TrackKind::Audio) t->playback = "audio";
+            if (t->kind != project::TrackKind::Audio) t->print_signature = project::render_signature(d, *t);
         }
         return true;
     });
     if (!ok) ids.clear();
     return ids;
+}
+
+project::FreezeState Session::freeze_state(const std::string& track_id) const
+{
+    const auto* t = data().find_track(track_id);
+    return t ? project::freeze_state(data(), *t) : project::FreezeState::Live;
+}
+
+bool Session::set_instrument_unloaded(const std::string& track_id, bool unloaded)
+{
+    const auto* t = data().find_track(track_id);
+    if (!t || t->instrument_unloaded == unloaded) return false;
+    if (unloaded && (t->playback != "audio" || t->print_signature.empty())) return false;
+    return edit(unloaded ? "Unload " + t->name : "Reload " + t->name, [&](project::ProjectData& d) {
+        d.find_track(track_id)->instrument_unloaded = unloaded;
+        return true;
+    });
+}
+
+bool Session::unfreeze(const std::string& track_id)
+{
+    const auto* t = data().find_track(track_id);
+    if (!t || (t->playback == "midi" && !t->instrument_unloaded)) return false;
+    return edit("Unfreeze " + t->name, [&](project::ProjectData& d) {
+        auto* tr = d.find_track(track_id);
+        tr->playback = "midi";
+        tr->instrument_unloaded = false;
+        return true;
+    });
 }
 
 std::vector<std::string> Session::add_audio_clips(

@@ -51,6 +51,12 @@ struct AppContext {
     /// Shows the library browser's candidates for the selected track (set
     /// by the main window).
     std::function<void()> show_library_for_track;
+    /// Freeze (Memory Management spec §5): prints the tracks through their
+    /// inserts and plays the prints; with `unload`, then closes their
+    /// instruments to give the memory back. Re-render is this again.
+    std::function<void(const std::vector<std::string>& tracks, bool unload)> freeze_tracks;
+    /// "LIVE", "RENDERING", "FROZEN", "FROZEN · UNLOADED", "STALE", "MISSING PLUG-IN".
+    std::function<juce::String(const std::string& track_id)> track_state;
 };
 
 /// Application commands (menus, toolbar buttons and key bindings).
@@ -147,6 +153,10 @@ enum : juce::CommandID {
     exportPicture,
     tempoFinder,
     account,
+    freezeTrack,
+    freezeUnload,
+    unfreezeTrack,
+    rerenderTrack,
 };
 }  // namespace cmd
 

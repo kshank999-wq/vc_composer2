@@ -6652,6 +6652,95 @@ void stress_checks(MainWindow& window, const juce::File& dir)
     pump(100);
 }
 
+/// Memory Management spec §5: Freeze & Unload with a real plug-in - the
+/// print plays, the instrument's process closes (its memory is given back),
+/// a music edit reads Stale, Re-render prints it again, Unfreeze reloads it.
+void freeze_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& host = ctx.plugins;
+    const auto instrument = scan(ctx, VCC_TEST_PLUGIN);
+    if (!instrument || !host.host_tool().existsAsFile() || !ctx.freeze_tracks || !ctx.track_state) {
+        std::printf("  skip  freeze (no test plug-in or host tool in this build)\n");
+        return;
+    }
+    ctx.engine.stop();
+    const auto original = host.hosting_mode();
+    host.set_hosting_mode(PluginHost::HostingMode::instruments_alone);
+    session.new_empty();
+    const auto folder = dir.getChildFile("freeze-check");
+    folder.deleteRecursively();
+    folder.createDirectory();
+    std::string error;
+    session.save_as(folder.getChildFile("Freeze.vcc2").getFullPathName().toStdString(), &error);
+    ctx.engine.prepare_offline(48000.0, 512);
+    const auto t = session.add_track("Violins", "strings.violins_1");
+    if (!session.set_instrument_plugin(t, *instrument)) {
+        check(false, "the test instrument loads on a track");
+        return;
+    }
+    notation::Score sc = session.data().find_track(t)->active_version()->score;
+    for (int b = 0; b < 2; ++b) {
+        notation::ScoreNote n;
+        n.start_tick = b * kTicksPerWhole;
+        n.duration = notation::whole();
+        n.pitch = notation::spell_midi_note(64 + b, {});
+        sc.insert_note(0, n);
+    }
+    session.commit_score(t, sc, "Write");
+    pump(300);
+    auto own_process = [&] {
+        for (const auto& [label, n] : host.host_processes())
+            if (label == "VCC Test Instrument") return n;
+        return 0;
+    };
+    check(own_process() == 1 && ctx.track_state(t) == "LIVE",
+          "a live instrument runs in a process of its own (instruments alone), and reads LIVE");
+
+    ctx.freeze_tracks({t}, true);
+    juce::String state;
+    wait_for([&] { return (state = ctx.track_state(t)).startsWith("FROZEN"); }, 60000);
+    pump(500);
+    const auto* tr = session.data().find_track(t);
+    const bool printed = tr && !tr->active_version()->audio_clips.empty() &&
+                         folder.getChildFile(juce::String(tr->active_version()->audio_clips.front().file)).getSize() > 1000;
+    check(state == juce::String::fromUTF8("FROZEN \xc2\xb7 UNLOADED") && printed && tr->playback == "audio",
+          "Freeze & Unload prints the track, plays the print and reads " + state);
+    wait_for([&] { return own_process() == 0; }, 5000);
+    check(own_process() == 0 && ctx.engine.instrument_status(t).startsWith("Unloaded"),
+          "the instrument's process has closed: its memory is given back (" + ctx.engine.instrument_status(t) + ")");
+    session.select_track(t);
+    main.show_workspace(MainComponent::Workspace::Sequencer);
+    pump(300);
+    shoot(main, dir, "73-frozen");
+
+    // The music changes: stale. Re-render prints it again (loading the
+    // instrument for the print only) and it is frozen and unloaded again.
+    notation::Score more = session.data().find_track(t)->active_version()->score;
+    notation::ScoreNote extra;
+    extra.start_tick = kTicksPerWhole / 2;
+    extra.duration = notation::half();
+    extra.pitch = notation::spell_midi_note(72, {});
+    more.insert_note(0, extra);
+    session.commit_score(t, more, "Write");
+    check(ctx.track_state(t).startsWith("STALE"), "editing the music marks the print STALE: " + ctx.track_state(t));
+    ctx.commands.invokeDirectly(cmd::rerenderTrack, false);
+    wait_for([&] { return (state = ctx.track_state(t)).startsWith("FROZEN"); }, 60000);
+    check(state == juce::String::fromUTF8("FROZEN \xc2\xb7 UNLOADED"), "Re-render prints it again: " + state);
+
+    // Unfreeze: the live instrument, in its own process again, with its settings.
+    ctx.commands.invokeDirectly(cmd::unfreezeTrack, false);
+    pump(500);
+    wait_for([&] { return own_process() == 1; }, 5000);
+    check(ctx.track_state(t) == "LIVE" && own_process() == 1 && ctx.engine.instrument_status(t) == "VCC Test Instrument" &&
+              !session.data().find_track(t)->active_version()->audio_clips.empty(),
+          "Unfreeze reloads the instrument; the print stays on the audio lane");
+    host.set_hosting_mode(original);
+    session.new_empty();
+}
+
 /// Relink missing media (Main Spec §16): a project whose audio moved opens
 /// saying what is missing; File > Relink Missing Media searches folders in the
 /// background, proposes the clear matches, leaves an ambiguous one to pick,
@@ -8513,6 +8602,8 @@ int main(int argc, char** argv)
         resources_checks(window, dir);
         section("stress_checks");
         stress_checks(window, dir);
+        section("freeze_checks");
+        freeze_checks(window, dir);
         section("relink_checks");
         relink_checks(window, dir);
         section("comments_checks");

@@ -331,6 +331,14 @@ struct Track {
     /// the track plays its audio lane they are bypassed, so they are not
     /// heard twice. Set by Print to audio with effects.
     bool printed_fx = false;
+    /// Freeze (Memory Management spec §5): what the track's print was made
+    /// from (render_signature at the time; empty: never printed). When the
+    /// music, instrument, articulation map or tempo change afterwards, the
+    /// print is stale.
+    std::string print_signature;
+    /// Freeze & Unload: the instrument plug-in is closed to give its memory
+    /// back; its state stays in instrument_plugin and comes back on Unfreeze.
+    bool instrument_unloaded = false;
     /// A MIDI track's external MIDI output device (its name), or empty: its
     /// notes then play the track's instrument. The hardware's sound comes
     /// back on the track's audio input (`input`), which a real-time print

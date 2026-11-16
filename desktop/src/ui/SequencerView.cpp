@@ -1962,9 +1962,16 @@ private:
             return true;
         }
         if (p.freeze.contains(pt)) {
-            // Frozen: printed with its effects and playing the print. Again: back to MIDI.
-            if (l.printed_fx && l.playback == "audio") session.set_playback(id, "both");
-            else if (m_.print_track) m_.print_track(id, true);
+            // The freeze choices (Memory Management spec §5).
+            session.select_track(id);
+            juce::PopupMenu m;
+            auto& cmds = m_.ctx.commands;
+            m.addCommandItem(&cmds, cmd::freezeTrack);
+            m.addCommandItem(&cmds, cmd::freezeUnload);
+            m.addSeparator();
+            m.addCommandItem(&cmds, cmd::unfreezeTrack);
+            m.addCommandItem(&cmds, cmd::rerenderTrack);
+            m.showMenuAsync(juce::PopupMenu::Options());
             return true;
         }
         return false;
@@ -2537,7 +2544,7 @@ private:
                                 cell.withTrimmedLeft(10).toFloat(), 8.5f);
             }
             key(g, p.print, "Print", false, hw::tok::rec);
-            key(g, p.freeze, "Freeze", l.printed_fx && l.playback == "audio", hw::tok::mute);
+            key(g, p.freeze, "Freeze", l.printed_fx && l.playback == "audio", hw::tok::mute);  // opens the freeze choices
             key(g, p.roll, "Piano roll", true);
             key(g, p.score, "Score", false);
         }
@@ -2725,6 +2732,22 @@ private:
                                                         : "Audio lane - print the score to audio, or record here",
                                 audio_lane.reduced(10, 0).toFloat(), 9.0f, juce::Justification::centredLeft,
                                 hw::tok::silk.withAlpha(0.6f));
+            }
+            // The track's freeze state, in words (spec: labels, not colour alone).
+            if (m_.ctx.track_state) {
+                const auto state = m_.ctx.track_state(l.id);
+                if (state.isNotEmpty() && state != "LIVE") {
+                    const auto tag = audio_lane.withWidth(state.length() * 7 + 18).withX(audio_lane.getRight() - (state.length() * 7 + 26))
+                                         .reduced(0, 3).toFloat();
+                    const auto c = state.startsWith("STALE") || state.startsWith("MISSING") ? hw::tok::meter_amber
+                                   : state == "RENDERING"                                    ? hw::tok::rec
+                                                                                             : hw::tok::type_audio;
+                    g.setColour(juce::Colours::black.withAlpha(0.55f));
+                    g.fillRoundedRectangle(tag, 3.0f);
+                    g.setColour(c);
+                    g.drawRoundedRectangle(tag, 3.0f, 1.0f);
+                    hw::paint::silk(g, state, tag, 8.5f, juce::Justification::centred, c);
+                }
             }
         }
 

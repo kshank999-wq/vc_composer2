@@ -1196,8 +1196,37 @@ void PlaybackEngine::retire_garbage()
     while (retired_previews_.pop(c)) delete c;
 }
 
+namespace {
+
+/// A frozen track whose instrument was unloaded: nothing to play, nothing
+/// held (Memory Management spec §5, "Freeze & Unload").
+class UnloadedInstrument final : public Instrument {
+public:
+    explicit UnloadedInstrument(juce::String name) : name_(std::move(name)) {}
+    void prepare(double, int) override {}
+    void process(juce::AudioBuffer<float>&, juce::MidiBuffer&, int) noexcept override {}
+    void all_notes_off() noexcept override {}
+    juce::String display_name() const override { return name_; }
+
+private:
+    juce::String name_;
+};
+
+}  // namespace
+
 std::shared_ptr<Instrument> PlaybackEngine::instrument_for(const project::Track& t, InstrumentSlot& slot)
 {
+    // A print of this very track (Re-render) loads it for the print's own engine.
+    if (t.instrument_unloaded && !(print_tap_ && print_tap_->track_id == t.id)) {
+        // The plug-in instance goes with the old slot: its process closes
+        // when nothing else uses it, giving its memory back.
+        if (slot.instrument && slot.key == "unloaded") return slot.instrument;
+        slot.key = "unloaded";
+        slot.instrument = std::make_shared<UnloadedInstrument>(
+            "Unloaded (frozen)" + (t.instrument_plugin.empty() ? juce::String() : ": " + juce::String(t.instrument_plugin.name)));
+        slot.status = slot.instrument->display_name();
+        return slot.instrument;
+    }
     const auto* def = session_.instrument_for(t);
     const PlaceholderVoice voice = placeholder_voice_for(def ? def->family : t.family,
                                                          def ? def->gm_program : t.assignment.placeholder_program,
