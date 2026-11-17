@@ -49,6 +49,8 @@
 #include "system/ResourceMonitor.h"
 #include "licensing/Account.h"
 #include "licensing/AccountWindow.h"
+#include "licensing/UpdateWindow.h"
+#include "licensing/Updater.h"
 #include "collab/Collaboration.h"
 #include "collab/SharedWindow.h"
 #include "vcc/session/Shared.h"
@@ -6404,6 +6406,10 @@ public:
     };
     std::map<juce::String, CollabProject> collab;
     std::map<juce::String, std::string> uploads;  ///< Storage: key -> bytes.
+    // Updates: what /api/releases offers and /api/downloads hands out.
+    std::string update_version = "0.2.0-preview.1";
+    std::string update_bytes;
+    std::string update_sha;  ///< What the catalogue records (empty: the bytes' own).
     int pushes_refused = 0;
     /// Another composer's push: the project and any media files (path -> bytes) it adds.
     juce::String push_as(const juce::String& id, const std::string& text, const std::map<std::string, std::string>& files = {})
@@ -6512,6 +6518,18 @@ private:
                 status = 200;
                 raw_reply = uploads[key];
             }
+        } else if (path.startsWith("/api/releases")) {
+            const auto sha = update_sha.empty() ? hash::sha256_hex(update_bytes) : update_sha;
+            status = 200;
+            reply = juce::String(json::write(json::Object{{"builds", json::Array{json::Object{
+                {"platform", Account::platform().toStdString()}, {"version", update_version}, {"releaseNotes", "Faster sync"},
+                {"sha256", sha}, {"minimumOsVersion", "11.0"}}}}}));
+        } else if (path.startsWith("/api/downloads/")) {
+            status = auth == "Bearer tok" ? 200 : 401;
+            uploads["update-file"] = update_bytes;
+            reply = status == 200 ? juce::String(json::write(json::Object{{"url", (url() + "/storage/update-file").toStdString()},
+                                                                           {"version", update_version}}))
+                                  : juce::String(R"({"error":"Sign in to download"})");
         } else if (path.startsWith("/api/collab/")) {
             collab_route(method, path, body, auth, status, reply);
         }
@@ -6654,6 +6672,107 @@ private:
     juce::StreamingSocket listener_;
     int port_ = 0;
 };
+
+/// The in-app updater against the fake site: an offer only when newer, the
+/// download through the account, the checksum, and the window.
+void updater_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    FakeStore store;
+    if (!store.ok()) {
+        check(false, "a local port for the fake site");
+        return;
+    }
+    auto& account = Account::get();
+    const auto saved_folder = account.folder();
+    const auto saved_config = account.config();
+    account.set_folder(dir.getChildFile("updater-account"));
+    account.sign_out();
+    account.set_config({store.url(), "anon-key", store.url()});
+    auto& updater = Updater::get();
+    const auto downloads = dir.getChildFile("updater-downloads");
+    downloads.deleteRecursively();
+    updater.set_folder(downloads);
+    updater.set_site(store.url());
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.update_bytes = std::string(300000, 'u') + "installer";
+    }
+
+    const auto current = Updater::current_version();
+    auto c = updater.check();
+    check(c.ok && c.offer && c.offer->version == "0.2.0-preview.1" && c.offer->notes == "Faster sync",
+          "a newer build is offered (this is " + current + "): " + c.message);
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.update_version = current.toStdString();
+    }
+    c = updater.check();
+    check(c.ok && !c.offer && c.message.contains("up to date"), "the same build is not offered: " + c.message);
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.update_version = "0.2.0-preview.1";
+    }
+    c = updater.check();
+    if (!c.offer) {
+        check(false, "the offer came back");
+        account.set_config(saved_config);
+        account.set_folder(saved_folder);
+        return;
+    }
+
+    auto d = updater.download(*c.offer);
+    check(!d.ok && d.message.contains("Sign in"), "downloading needs the account: " + d.message);
+    check(account.verify_code("ann@example.com", "123456").ok, "signed in");
+
+    double last = 0.0;
+    d = updater.download(*c.offer, [&](double p) { last = p; });
+    juce::MemoryBlock got;
+    d.file.loadFileAsData(got);
+    check(d.ok && std::string(static_cast<const char*>(got.getData()), got.getSize()) == std::string(300000, 'u') + "installer" &&
+              last > 0.99,
+          "the update downloads through the account, byte for byte: " + d.message);
+
+    // A file that does not match the catalogue's checksum never stays.
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.update_sha = std::string(64, 'f');
+    }
+    c = updater.check();
+    d.file.deleteFile();
+    const auto bad = updater.download(*c.offer);
+    check(!bad.ok && bad.message.contains("checksum") && downloads.findChildFiles(juce::File::findFiles, false).isEmpty(),
+          "a download that does not match its checksum is deleted: " + bad.message);
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.update_sha.clear();
+    }
+
+    const auto plan = updater.install_plan(downloads.getChildFile("VC-Composer-0.2.0-preview.1.dmg"));
+#if JUCE_WINDOWS
+    check(plan.contains("/SILENT") && plan.contains("/UPDATE"), "Windows runs the signed installer quietly, then the new version");
+#else
+    check(plan.joinIntoString("\n").contains("hdiutil attach") && plan.joinIntoString("\n").contains("ditto"),
+          "macOS swaps the app from the disk image once this copy has quit");
+#endif
+
+    show_update_window(ctx, [] { return true; });
+    UpdatePanel* panel = nullptr;
+    wait_for([&] { return (panel = update_panel()) != nullptr && panel->has_offer(); }, 15000);
+    check(panel && panel->has_offer() && panel->status_text().contains("0.2.0-preview.1"),
+          "Help > Check for Updates shows the offer: " + (panel ? panel->status_text() : juce::String()));
+    if (panel) {
+        panel->getTopLevelComponent()->setSize(760, 480);
+        shoot(*panel->getTopLevelComponent(), dir, "81-updates");
+        panel->getTopLevelComponent()->setVisible(false);
+    }
+
+    updater.set_site({});
+    updater.set_folder({});
+    account.sign_out();
+    account.set_config(saved_config);
+    account.set_folder(saved_folder);
+}
 
 /// The VC Composer logo: in the window's corner and in the about box.
 void brand_checks(MainWindow& window, const juce::File& dir)
@@ -8874,7 +8993,8 @@ int main(int argc, char** argv)
                 {"articulation_template_checks", articulation_template_checks},
                 {"usage_checks", usage_checks},
                 {"collab_checks", collab_checks},
-                {"brand_checks", brand_checks}};
+                {"brand_checks", brand_checks},
+                {"updater_checks", updater_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -9542,6 +9662,8 @@ int main(int argc, char** argv)
         collab_checks(window, dir);
         section("brand_checks");
         brand_checks(window, dir);
+        section("updater_checks");
+        updater_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

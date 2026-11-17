@@ -69,3 +69,12 @@ Root: HKA; Subkey: "Software\Classes\VCComposer2.Project\shell\open\command"; Va
 
 [Run]
 Filename: "{app}\VC Composer.exe"; Description: "{cm:LaunchProgram,{#AppTitle}}"; Flags: nowait postinstall skipifsilent
+; Run by the in-app updater (quietly, with /UPDATE): start the new version.
+Filename: "{app}\VC Composer.exe"; Flags: nowait; Check: IsUpdate
+
+[Code]
+// The in-app updater runs this installer with /UPDATE.
+function IsUpdate: Boolean;
+begin
+  Result := Pos('/UPDATE', UpperCase(GetCmdTail)) > 0;
+end;

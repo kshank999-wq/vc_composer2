@@ -85,6 +85,10 @@ jobs:
           -DVCC_FFMPEG_ROOT=C:/ffmpeg -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           -DVCC_PREVIEW_BUILD=${{ env.PREVIEW == 'true' && 'ON' || 'OFF' }}
           -DVCC_PREVIEW_EXPIRES=${{ steps.version.outputs.expires }}
+          "-DVCC_BUILD_LABEL=${{ steps.version.outputs.version }}${{ env.PREVIEW == 'true' && format('-preview.{0}', github.run_number) || '' }}"
+          "-DVCC_SITE_URL=${{ vars.VCC_SITE_URL || 'https://vc-composer.com' }}"
+          "-DVCC_SUPABASE_URL=${{ vars.VCC_SUPABASE_URL || 'https://nionythbfoeqpkrnqwuf.supabase.co' }}"
+          "-DVCC_SUPABASE_ANON_KEY=${{ vars.VCC_SUPABASE_ANON_KEY || 'sb_publishable_KEJ4yr-Ra1Z-KD1D2jBQow_PtCuCY1Y' }}"
       - name: Build
         run: cmake --build build --config Release --target VCComposer2 --parallel 3
       - name: Stage
@@ -197,6 +201,10 @@ jobs:
           -DVCC_FFMPEG_ROOT=$HOME/ffmpeg-lgpl -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           -DVCC_PREVIEW_BUILD=${{ env.PREVIEW == 'true' && 'ON' || 'OFF' }}
           -DVCC_PREVIEW_EXPIRES=${{ steps.version.outputs.expires }}
+          "-DVCC_BUILD_LABEL=${{ steps.version.outputs.version }}${{ env.PREVIEW == 'true' && format('-preview.{0}', github.run_number) || '' }}"
+          "-DVCC_SITE_URL=${{ vars.VCC_SITE_URL || 'https://vc-composer.com' }}"
+          "-DVCC_SUPABASE_URL=${{ vars.VCC_SUPABASE_URL || 'https://nionythbfoeqpkrnqwuf.supabase.co' }}"
+          "-DVCC_SUPABASE_ANON_KEY=${{ vars.VCC_SUPABASE_ANON_KEY || 'sb_publishable_KEJ4yr-Ra1Z-KD1D2jBQow_PtCuCY1Y' }}"
       - name: Build
         run: cmake --build build --config Release --target VCComposer2 --parallel 3
       - name: Signing keychain

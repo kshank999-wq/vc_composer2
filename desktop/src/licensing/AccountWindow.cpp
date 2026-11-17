@@ -78,7 +78,8 @@ void AccountPanel::refresh()
 {
     auto& a = Account::get();
     juce::String s;
-    if (preview::is_preview()) s = preview::status() + ". Previews do not need an account; buy at vc-composer.com to keep saving after.";
+    if (preview::is_preview())
+        s = preview::status() + (a.signed_in() ? ". Signed in as " + a.email() + "." : ". Sign in for updates and shared projects; previews need no licence.");
     else if (!a.configured()) s = "This build is not connected to vc-composer.com: saving is not licensed.";
     else if (!a.signed_in()) s = "Not signed in.";
     else s = "Signed in as " + a.email() + (a.activated().value_or(false) ? ". This computer is activated." : ". This computer is not activated yet.");
@@ -91,9 +92,13 @@ void AccountPanel::refresh()
              ". Last checked " + juce::String(standing->checked_at.substr(0, 10)) + ".";
     if (!saving.notice.empty()) st << (st.isEmpty() ? "" : "\n") << juce::String(saving.notice);
     standing_.setText(st, juce::dontSendNotification);
+    // Previews need no licence but do sign in: updates and shared projects
+    // go through the account.
     const bool on = a.configured();
-    for (auto* c : std::initializer_list<juce::Component*>{&email_, &code_, &send_, &sign_in_}) c->setEnabled(on && !a.signed_in());
-    for (auto* c : std::initializer_list<juce::Component*>{&serial_, &activate_, &check_, &sign_out_}) c->setEnabled(on && a.signed_in());
+    const bool can_sign_in = a.config().configured();
+    for (auto* c : std::initializer_list<juce::Component*>{&email_, &code_, &send_, &sign_in_}) c->setEnabled(can_sign_in && !a.signed_in());
+    sign_out_.setEnabled(can_sign_in && a.signed_in());
+    for (auto* c : std::initializer_list<juce::Component*>{&serial_, &activate_, &check_}) c->setEnabled(on && a.signed_in());
 }
 
 void AccountPanel::run(std::function<juce::String()> work, std::function<void()> done)

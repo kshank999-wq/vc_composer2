@@ -170,6 +170,7 @@ enum : juce::CommandID {
     syncShared,
     lockPart,
     unlockPart,
+    checkUpdates,
 };
 }  // namespace cmd
 

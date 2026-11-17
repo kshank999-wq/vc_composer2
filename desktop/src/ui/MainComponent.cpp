@@ -9,6 +9,8 @@
 #include "Preview.h"
 #include "licensing/Account.h"
 #include "licensing/AccountWindow.h"
+#include "licensing/UpdateWindow.h"
+#include "licensing/Updater.h"
 #include "collab/Collaboration.h"
 #include "collab/SharedWindow.h"
 #include "ui/PictureTools.h"
@@ -359,6 +361,19 @@ MainComponent::MainComponent(AppContext& context)
     context_.show_instrument_usage = [this] { show_instrument_usage(context_); };
     collab::Controller::get().ask_conflicts = ask_conflicts;
     collab::Controller::get().attach(context_);
+    // A little after start-up, quietly: is there a newer build on vc-composer.com?
+    {
+        juce::Component::SafePointer<MainComponent> self(this);
+        juce::Timer::callAfterDelay(20000, [self] {
+            if (self == nullptr) return;
+            check_for_updates_quietly([self](juce::String version) {
+                if (self == nullptr) return;
+                self->update_waiting_ = version;
+                self->context_.commands.commandStatusChanged();
+                self->context_.status("VC Composer " + version + " is available: Help > Install Update");
+            });
+        });
+    }
     context_.freeze_progress = [this]() -> juce::String {
         if (!print_.printing()) return {};
         return print_.progress_lcd().text().replace("\n", "  ");
@@ -1663,7 +1678,7 @@ public:
     {
         setComponentID("about_panel");
         setTitle("About VC Composer");
-        text_.setText(juce::String("Version ") + JUCE_APPLICATION_VERSION_STRING +
+        text_.setText(juce::String("Version ") + Updater::current_version() +
                           (preview::is_preview() ? " (" + preview::status() + ")" : juce::String()) +
                           "\n\nA notation-first scoring workstation by VC Software.\n\n"
                           "Built with JUCE (commercial JUCE 8 licence).\n"
@@ -1735,7 +1750,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::captureMidi, cmd::midiInputFilter, cmd::lyrics, cmd::explodeTracks, cmd::implodeTracks, cmd::addRepeat,
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
-                cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart});
+                cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
+                cmd::checkUpdates});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2026,6 +2042,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         }
         case cmd::account: info.setInfo("Account and Licence...", "Sign in, activate this computer, see the licence", "Help", 0); break;
         case cmd::about: info.setInfo("About VC Composer", "", "Help", 0); break;
+        case cmd::checkUpdates:
+            info.setInfo(update_waiting_.isNotEmpty() ? "Install Update " + update_waiting_ + "..." : juce::String("Check for Updates..."),
+                         "Whether vc-composer.com has a newer VC Composer, and install it", "Help",
+                         Updater::available() ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            break;
         default: break;
     }
 }
@@ -2252,6 +2273,7 @@ bool MainComponent::perform(const InvocationInfo& info)
             break;
         }
         case cmd::about: show_about(); break;
+        case cmd::checkUpdates: show_update_window(context_, [this] { return confirm_discard(); }); break;
         default: return false;
     }
     return true;
@@ -2362,6 +2384,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             break;
         case 6:
             m.addCommandItem(c, cmd::account);
+            m.addCommandItem(c, cmd::checkUpdates);
             m.addCommandItem(c, cmd::about);
             break;
         default: break;

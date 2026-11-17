@@ -95,13 +95,17 @@ add_library(vcc_desktop STATIC ${vcc_desktop_sources})
 # until a date. Release builds leave both unset.
 option(VCC_PREVIEW_BUILD "A time-limited preview build" OFF)
 set(VCC_PREVIEW_EXPIRES "" CACHE STRING "Last day a preview build saves (YYYY-MM-DD)")
+# The build's own label, which the updater compares with what the site offers:
+# "0.1.0-preview.17" for the 17th preview build; empty means the project version.
+set(VCC_BUILD_LABEL "" CACHE STRING "This build's version label, e.g. 0.1.0-preview.17")
 # Licensing (desktop/src/licensing/Account.h): a release build is pointed at
 # its Supabase project and site; left empty, saving is not licensed.
 set(VCC_SUPABASE_URL "" CACHE STRING "Supabase project URL for sign-in (release builds)")
 set(VCC_SUPABASE_ANON_KEY "" CACHE STRING "Supabase anon (publishable) key (release builds)")
 set(VCC_SITE_URL "" CACHE STRING "The storefront, e.g. https://vc-composer.com (release builds)")
 target_compile_definitions(vcc_desktop PRIVATE VCC_SUPABASE_URL="${VCC_SUPABASE_URL}"
-    VCC_SUPABASE_ANON_KEY="${VCC_SUPABASE_ANON_KEY}" VCC_SITE_URL="${VCC_SITE_URL}")
+    VCC_SUPABASE_ANON_KEY="${VCC_SUPABASE_ANON_KEY}" VCC_SITE_URL="${VCC_SITE_URL}"
+    VCC_BUILD_LABEL="${VCC_BUILD_LABEL}")
 if(VCC_PREVIEW_BUILD)
     target_compile_definitions(vcc_desktop PRIVATE VCC_PREVIEW=1 VCC_PREVIEW_EXPIRES="${VCC_PREVIEW_EXPIRES}")
 endif()

@@ -1,6 +1,7 @@
 // Licence standing on this computer: the same rules as the owner's other
 // desktops (see vcc/licensing/Standing.h).
 #include "vcc/licensing/Standing.h"
+#include "vcc/licensing/Update.h"
 #include "vcc_test.h"
 
 using namespace vcc;
@@ -90,4 +91,43 @@ TEST_CASE("an old answer is not a refusal, and the words fit how the licence cam
     CHECK_EQ(back->status, noted.status);
     CHECK_EQ(back->seen_lapsed_at, noted.seen_lapsed_at);
     CHECK(!DeskStanding::from_json(json::Value::make_object()));
+}
+
+TEST_CASE("updates: build labels read, and order releases above their previews")
+{
+    const auto p16 = parse_version("0.1.0-preview.16");
+    CHECK(p16.ok);
+    CHECK(p16.major == 0 && p16.minor == 1 && p16.patch == 0 && p16.preview == 16);
+    CHECK(parse_version("v1.2.3").ok);
+    CHECK(parse_version("1.2.3").preview == -1);
+    for (const char* bad : {"", "1.2", "1.2.x", "1.2.3-beta.1", "1.2.3-preview.", "1.2.3-preview.4x", "abc"})
+        CHECK(!parse_version(bad).ok);
+
+    CHECK(is_newer("0.1.0-preview.17", "0.1.0-preview.16"));
+    CHECK(!is_newer("0.1.0-preview.16", "0.1.0-preview.16"));
+    CHECK(!is_newer("0.1.0-preview.9", "0.1.0-preview.16"));  // numbers, not text
+    CHECK(is_newer("0.1.0", "0.1.0-preview.99"));             // the release beats its previews
+    CHECK(!is_newer("0.1.0-preview.99", "0.1.0"));
+    CHECK(is_newer("0.2.0-preview.1", "0.1.0"));
+    CHECK(is_newer("0.10.0", "0.9.9"));
+    CHECK(!is_newer("garbage", "0.1.0"));
+    CHECK(!is_newer("0.2.0", "garbage"));
+}
+
+TEST_CASE("updates: the site's catalogue offers this platform's newer build, or nothing")
+{
+    const auto catalogue = *json::parse(R"({"builds":[
+        {"platform":"windows","version":"0.1.0-preview.17","releaseNotes":"Fixes","sha256":"aa","minimumOsVersion":"10.0.17763"},
+        {"platform":"macos","version":"0.1.0-preview.15","releaseNotes":"Old","sha256":"bb","minimumOsVersion":"11.0"},
+        {"platform":"linux","version":"9.9.9"}]})");
+    const auto win = pick_update(catalogue, "windows", "0.1.0-preview.16");
+    REQUIRE(win.has_value());
+    CHECK(win->version == "0.1.0-preview.17");
+    CHECK(win->notes == "Fixes");
+    CHECK(win->sha256 == "aa");
+    CHECK(win->minimum_os == "10.0.17763");
+    CHECK(!pick_update(catalogue, "windows", "0.1.0-preview.17"));   // up to date
+    CHECK(!pick_update(catalogue, "macos", "0.1.0-preview.16"));     // the site's is older
+    CHECK(!pick_update(*json::parse("{}"), "windows", "0.1.0"));
+    CHECK(!pick_update(*json::parse(R"({"builds":"nope"})"), "windows", "0.1.0"));
 }

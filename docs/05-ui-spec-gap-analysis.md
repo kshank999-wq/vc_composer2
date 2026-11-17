@@ -2055,3 +2055,34 @@ macOS, Linux and Windows. What it took:
       and the desktop check's `collab_checks` with real WAV files and a
       picture: gathered on share, Ben's take downloaded byte for byte, both
       vocals kept, a damaged download refused and fetched by the next sync.
+
+53. **In-app updates** (November 17, 2026).
+    - **Builds know their number**: a preview build is labelled
+      `0.1.0-preview.<run>` (`VCC_BUILD_LABEL`), the same number the
+      publish step gives it on vc-composer.com; About shows it. A release
+      outranks every preview of its version (`vcc/licensing/Update.h`).
+    - **Check**: a little after start-up, and from Help > Check for
+      Updates..., the app asks `/api/releases` (preview builds follow the
+      preview channel). When a newer build is offered the status bar says
+      so and the Help item reads "Install Update <version>...".
+    - **Install and Restart**: the build downloads through the account
+      (`/api/downloads/<platform>`, a short-lived link) and must match the
+      SHA-256 the catalogue recorded, or it is deleted. Unsaved work is asked
+      about first. Windows runs the signed installer quietly
+      (`/SILENT /CLOSEAPPLICATIONS /UPDATE`), which installs over this copy
+      and starts the new one. macOS mounts the signed, notarized disk image;
+      a small script replaces the app once this copy has quit, then opens
+      it; where the app's folder cannot be written, the disk image opens for
+      a drag instead. Projects and settings live outside the app and stay.
+    - **The loop**: a fix is built, signed and published (Run workflow with
+      "Publish to the website"); the app on the composer's computer offers it.
+    - **Also**: preview builds now carry the site's and Supabase's addresses
+      (`VCC_SITE_URL`, `VCC_SUPABASE_URL`, `VCC_SUPABASE_ANON_KEY`), so
+      signing in, updates and shared projects work in them; previews sign in
+      without needing a licence.
+    - **Checks**: `test_licensing` (versions and the offer); the desktop
+      check's `updater_checks` against a fake site (offer only when newer,
+      sign-in required, byte-for-byte download, a wrong checksum deleted,
+      the install plan, the window). The install itself runs only on a real
+      Windows or Mac: the first real test is going from one published
+      preview to the next.
