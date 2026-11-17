@@ -33,6 +33,9 @@
  *   --channel stable|preview|beta|internal   default internal
  *   --min-os <version>            default ""
  *   --notes <text>                release notes, default ""
+ *   --make-live                   then make it the live build for its platform and
+ *                                 channel (what "Make live" in /admin/releases does:
+ *                                 the previous live build is retired, not deleted)
  *   --dry-run                     hash and print the plan; touch nothing
  *
  * Node 20 or later; no dependencies.
@@ -65,6 +68,7 @@ const { values, positionals } = (() => {
         'min-os': { type: 'string', default: '' },
         notes: { type: 'string', default: '' },
         'dry-run': { type: 'boolean', default: false },
+        'make-live': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
       },
     });
@@ -75,7 +79,7 @@ const { values, positionals } = (() => {
 
 if (values.help) {
   console.log(
-    'Usage: node scripts/publish-release.mjs --platform windows|macos --channel stable|preview|beta|internal --version X.Y.Z [--min-os V] [--notes TEXT] [--dry-run] <installer>',
+    'Usage: node scripts/publish-release.mjs --platform windows|macos --channel stable|preview|beta|internal --version X.Y.Z [--min-os V] [--notes TEXT] [--make-live] [--dry-run] <installer>',
   );
   process.exit(0);
 }
@@ -225,4 +229,28 @@ const recorded = await fetch(`${supabaseUrl}/rest/v1/release_builds?on_conflict=
 if (!recorded.ok) fail(`the build uploaded but could not be recorded (HTTP ${recorded.status}): ${await recorded.text()}`);
 
 console.log(`Recorded ${platform} ${version} on ${channel}, inactive, sha256 ${sha256}.`);
-console.log('Install it from /admin/releases, then press "Make live".');
+
+if (!values['make-live']) {
+  console.log('Install it from /admin/releases, then press "Make live".');
+  process.exit(0);
+}
+
+// 5. Make it live: retire the current live build of this platform and channel
+// (at most one may be live), then activate this one. The other platform is
+// never touched.
+const scope = new URLSearchParams({ platform: `eq.${platform}`, channel: `eq.${channel}`, active: 'eq.true' });
+const retired = await fetch(`${supabaseUrl}/rest/v1/release_builds?${scope}`, {
+  method: 'PATCH',
+  headers: { ...auth, 'content-type': 'application/json', prefer: 'return=minimal' },
+  body: JSON.stringify({ active: false, updated_at: new Date().toISOString() }),
+});
+if (!retired.ok) fail(`could not retire the current live build (HTTP ${retired.status}): ${await retired.text()}`);
+const mine = new URLSearchParams({ platform: `eq.${platform}`, channel: `eq.${channel}`, version: `eq.${version}` });
+const now = new Date().toISOString();
+const live = await fetch(`${supabaseUrl}/rest/v1/release_builds?${mine}`, {
+  method: 'PATCH',
+  headers: { ...auth, 'content-type': 'application/json', prefer: 'return=minimal' },
+  body: JSON.stringify({ active: true, published_at: now, updated_at: now }),
+});
+if (!live.ok) fail(`recorded, but could not be made live (HTTP ${live.status}): ${await live.text()}`);
+console.log(`${platform} ${version} is now the live ${channel} build.`);

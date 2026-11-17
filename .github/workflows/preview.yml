@@ -26,6 +26,10 @@ on:
         description: "Preview build (time-limited, says Preview)"
         type: boolean
         default: true
+      publish:
+        description: "Publish the signed builds to vc-composer.com (the free preview downloads)"
+        type: boolean
+        default: false
   push:
     tags: ["preview-*", "v*"]
     # While the packaging is being worked on, a push that touches it builds
@@ -241,3 +245,37 @@ jobs:
         with:
           prerelease: ${{ startsWith(github.ref_name, 'preview-') }}
           files: dist/*
+
+  # The signed builds, onto vc-composer.com's download page (the preview
+  # channel), when asked: Run workflow with "Publish" ticked. Each one gets
+  # its own version (0.1.0-preview.<run>) and replaces the live preview build
+  # of its platform; the previous one is retired, not deleted.
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && inputs.preview
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish to the website
+        run: |
+          ls -la dist
+          base=$(sed -n 's/^    VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)
+          version="${base}-preview.${{ github.run_number }}"
+          notes="Free preview ${version}: signed and notarized for macOS, signed for Windows. It saves for 60 days from its build date, then still opens, plays and exports."
+          setup=$(ls dist/*-Windows-Setup.exe | head -1)
+          dmg=$(ls dist/*-macOS.dmg | head -1)
+          [ -n "$setup" ] && [ -n "$dmg" ] || { echo "error: the signed installer or disk image is missing"; exit 1; }
+          node web/scripts/publish-release.mjs --platform windows --channel preview --version "$version" \
+            --min-os 10.0.17763 --notes "$notes" --make-live "$setup"
+          node web/scripts/publish-release.mjs --platform macos --channel preview --version "$version" \
+            --min-os 11.0 --notes "$notes" --make-live "$dmg"
