@@ -996,6 +996,8 @@ PlaybackEngine::~PlaybackEngine()
     session_.remove_listener(listener_);
     devices_.removeAudioCallback(this);
     devices_.removeMidiInputDeviceCallback({}, midi_callback_.get());
+    if (device_listener_) devices_.removeChangeListener(device_listener_.get());
+    midi_list_ = {};
     devices_.closeAudioDevice();
     // Unfinished recordings: close the files (they stay on disk), place nothing.
     delete pending_pass_.exchange(nullptr);
@@ -1014,16 +1016,50 @@ PlaybackEngine::~PlaybackEngine()
     retire_garbage();
 }
 
-juce::String PlaybackEngine::open_default_device()
+std::unique_ptr<juce::XmlElement> PlaybackEngine::device_state() const
 {
+    auto state = devices_.createStateXml();
+    if (!state) state = std::make_unique<juce::XmlElement>("DEVICESETUP");
+    auto* known = state->createNewChildElement("VCC_KNOWN_MIDI");
+    for (const auto& id : known_midi_) known->createNewChildElement("INPUT")->setAttribute("id", id);
+    state->setAttribute("vccAutoEnableMidi", auto_enable_midi_ ? 1 : 0);
+    return state;
+}
+
+void PlaybackEngine::refresh_midi_inputs()
+{
+    bool changed = false;
+    for (const auto& input : juce::MidiInput::getAvailableDevices()) {
+        if (known_midi_.contains(input.identifier)) continue;
+        known_midi_.add(input.identifier);
+        changed = true;
+        if (auto_enable_midi_) devices_.setMidiInputDeviceEnabled(input.identifier, true);
+    }
+    if (changed && on_devices_changed) on_devices_changed();
+}
+
+juce::String PlaybackEngine::open_default_device(const juce::XmlElement* saved)
+{
+    // What was chosen last time (the interface, rate, buffer, channels, MIDI
+    // inputs); the defaults when there is none or that interface is gone.
+    juce::String error;
+    bool restored = false;
+    if (saved != nullptr) {
+        auto_enable_midi_ = saved->getIntAttribute("vccAutoEnableMidi", 1) != 0;
+        if (const auto* known = saved->getChildByName("VCC_KNOWN_MIDI"))
+            for (const auto* e : known->getChildIterator()) known_midi_.addIfNotAlreadyThere(e->getStringAttribute("id"));
+        error = devices_.initialise(2, 2, saved, true);
+        restored = error.isEmpty() && devices_.getCurrentAudioDevice() != nullptr;
+    }
     // Inputs for recording and monitoring; without any, play only.
-    juce::String error = devices_.initialiseWithDefaultDevices(2, 2);
-    if (error.isNotEmpty() || devices_.getCurrentAudioDevice() == nullptr) error = devices_.initialiseWithDefaultDevices(0, 2);
+    if (!restored) error = devices_.initialiseWithDefaultDevices(2, 2);
+    if (!restored && (error.isNotEmpty() || devices_.getCurrentAudioDevice() == nullptr))
+        error = devices_.initialiseWithDefaultDevices(0, 2);
     if (error.isEmpty() && devices_.getCurrentAudioDevice() == nullptr) error = "no audio output device was found";
     if (error.isEmpty()) {
         auto* device = devices_.getCurrentAudioDevice();
         const int available = device->getInputChannelNames().size();
-        if (available > device->getActiveInputChannels().countNumberOfSetBits()) {
+        if (!restored && available > device->getActiveInputChannels().countNumberOfSetBits()) {
             auto setup = devices_.getAudioDeviceSetup();
             setup.useDefaultInputChannels = false;
             setup.inputChannels.clear();
@@ -1032,10 +1068,23 @@ juce::String PlaybackEngine::open_default_device()
         }
         devices_.addAudioCallback(this);
     }
-    for (const auto& input : juce::MidiInput::getAvailableDevices()) {
-        devices_.setMidiInputDeviceEnabled(input.identifier, true);
-    }
+    // MIDI inputs: the ones seen before keep their choice; new ones are turned on.
+    refresh_midi_inputs();
     devices_.addMidiInputDeviceCallback({}, midi_callback_.get());
+    // Plugging and unplugging (a USB-C keyboard, an interface's MIDI ports).
+    midi_list_ = juce::MidiDeviceListConnection::make([this] { refresh_midi_inputs(); });
+    struct Listener final : juce::ChangeListener {
+        PlaybackEngine& engine;
+        explicit Listener(PlaybackEngine& e) : engine(e) {}
+        void changeListenerCallback(juce::ChangeBroadcaster*) override
+        {
+            if (engine.on_devices_changed) engine.on_devices_changed();
+        }
+    };
+    if (!device_listener_) {
+        device_listener_ = std::make_unique<Listener>(*this);
+        devices_.addChangeListener(device_listener_.get());
+    }
     return error;
 }
 

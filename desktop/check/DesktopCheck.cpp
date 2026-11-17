@@ -33,6 +33,7 @@
 #include "vcc/project/Stems.h"
 #include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
+#include "ui/StudioSetup.h"
 #include "ui/hw/HwGallery.h"
 #include "ui/console/MixActions.h"
 #include "ui/console/ConsoleStrip.h"
@@ -6681,8 +6682,9 @@ void menu_checks(MainWindow& window, const juce::File& dir)
     auto& ctx = window.context();
     // The menu bar a desktop program is expected to have.
     const auto names = main.getMenuBarNames();
-    check(names.joinIntoString(",") == "File,Edit,View,Track,Templates,Transport,Tools,Window,Help",
-          "menu bar: File, Edit, View, Track, Templates, Transport, Tools, Window, Help (" + names.joinIntoString(",") + ")");
+    check(names.joinIntoString(",") == "File,Edit,View,Track,Templates,Transport,Tools,Studio,Window,Help",
+          "menu bar: File, Edit, View, Track, Templates, Transport, Tools, Studio, Window, Help (" +
+              names.joinIntoString(",") + ")");
     auto items = [&](const juce::String& menu) {
         juce::StringArray out;
         const auto popup = main.getMenuForIndex(names.indexOf(menu), menu);
@@ -6691,6 +6693,10 @@ void menu_checks(MainWindow& window, const juce::File& dir)
         return out;
     };
     const auto track = items("Track"), templates = items("Templates");
+    const auto studio = items("Studio");
+    check(studio.contains("Audio Setup...") && studio.contains("MIDI Setup...") && studio.contains("Plug-ins...") &&
+              studio.contains("Control Surfaces..."),
+          "Studio menu: audio, MIDI, plug-ins, surfaces (" + studio.joinIntoString("|") + ")");
     check(track.contains("New Track...") && track.contains("New Audio Track..."), "Track menu makes tracks (" + track.joinIntoString("|") + ")");
     check(templates.contains("Add Template to Project...") && templates.contains("New from Template...") &&
               templates.contains("Save as Template..."),
@@ -6846,6 +6852,55 @@ void layout_checks(MainWindow& window, const juce::File& dir)
     }
     main.apply_layout(*layouts::find("Compose"));
     pump(150);
+}
+
+void studio_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    ctx.commands.invokeDirectly(cmd::midiSetup, false);
+    StudioSetup* setup = nullptr;
+    wait_for([&] { return (setup = studio_setup()) != nullptr; });
+    if (setup == nullptr) {
+        check(false, "Studio > MIDI Setup opens the setup window");
+        return;
+    }
+    check(setup->page() == 1, "MIDI Setup opens on the MIDI page");
+    pump(200);
+    if (auto* w = find_dialog("Audio and MIDI Setup")) shoot(*w, dir, "86-midi-setup");
+    ctx.commands.invokeDirectly(cmd::audioSettings, false);
+    pump(300);
+    check(setup->page() == 0 && setup->summary().isNotEmpty(), "Audio Setup: the interface in one line (" + setup->summary() + ")");
+    if (auto* w = find_dialog("Audio and MIDI Setup")) shoot(*w, dir, "87-audio-setup");
+    check(rate_label(44100) == "44.1 kHz" && rate_label(48000) == "48 kHz" && rate_label(96000) == "96 kHz",
+          "rates read 44.1 / 48 / 96 kHz");
+    auto* device = ctx.engine.devices().getCurrentAudioDevice();
+    if (device != nullptr) {
+        // Every rate the interface offers has its key; choosing one runs the interface there.
+        const auto offered = setup->rate_keys();
+        check(!offered.isEmpty(), "the interface's rates have keys (" + offered.joinIntoString(", ") + ")");
+        const double was = device->getCurrentSampleRate();
+        for (const double hz : {44100.0, 48000.0, 96000.0})
+            if (offered.contains(rate_label(hz)) && std::abs(hz - was) > 1.0) {
+                check(setup->choose_rate(hz) && std::abs(ctx.engine.devices().getCurrentAudioDevice()->getCurrentSampleRate() - hz) < 1.0,
+                      "choosing " + rate_label(hz) + " runs the interface at it");
+                setup->choose_rate(was);
+                break;
+            }
+    } else {
+        check(setup->summary().startsWith("No audio interface"), "with no interface open, it says so");
+    }
+    // What is saved: the setup, the MIDI inputs seen, and the plug-in rule.
+    ctx.engine.set_auto_enable_midi(false);
+    auto state = ctx.engine.device_state();
+    check(state != nullptr && state->getChildByName("VCC_KNOWN_MIDI") != nullptr &&
+              state->getIntAttribute("vccAutoEnableMidi", 1) == 0,
+          "the saved setup carries the MIDI inputs seen and the turn-on rule");
+    ctx.engine.set_auto_enable_midi(true);
+    if (ctx.engine.on_devices_changed) ctx.engine.on_devices_changed();
+    check(hw::ui_settings().getValue("audio_device_state").contains("vccAutoEnableMidi"),
+          "the setup is saved for next time");
+    for (auto* w : dialogs::open_tool_windows()) w->closeButtonPressed();
+    pump(200);
 }
 
 void updater_checks(MainWindow& window, const juce::File& dir)
@@ -9169,7 +9224,8 @@ int main(int argc, char** argv)
                 {"brand_checks", brand_checks},
                 {"updater_checks", updater_checks},
                 {"menu_checks", menu_checks},
-                {"layout_checks", layout_checks}};
+                {"layout_checks", layout_checks},
+                {"studio_checks", studio_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -9843,6 +9899,8 @@ int main(int argc, char** argv)
         menu_checks(window, dir);
         section("layout_checks");
         layout_checks(window, dir);
+        section("studio_checks");
+        studio_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

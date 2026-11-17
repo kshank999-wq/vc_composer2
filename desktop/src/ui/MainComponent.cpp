@@ -31,6 +31,7 @@
 
 #include "ui/CueManager.h"
 #include "ui/Dialogs.h"
+#include "ui/StudioSetup.h"
 #include "ui/Import.h"
 #include "ui/console/ConsoleView.h"
 #include "ui/ScoreExchange.h"
@@ -1946,7 +1947,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
-                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout});
+                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2164,7 +2165,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::missingInstruments:
             info.setInfo("Missing Instruments...", "Plug-ins this project uses that are not installed here", "Track", 0);
             break;
-        case cmd::audioSettings: info.setInfo("Audio and MIDI Settings...", "", "Tools", 0); info.addDefaultKeypress(',', cmdKey); break;
+        case cmd::audioSettings:
+            info.setInfo("Audio Setup...", "The interface, sample rate, buffer size, inputs and outputs", "Studio", 0);
+            info.addDefaultKeypress(',', cmdKey);
+            break;
+        case cmd::midiSetup: info.setInfo("MIDI Setup...", "MIDI keyboards and controllers (USB, USB-C), on or off", "Studio", 0); break;
         case cmd::scanPlugins: info.setInfo("Plug-ins...", "", "Tools", 0); break;
         case cmd::reloadCrashedPlugins:
             info.setInfo("Reload Crashed Plug-ins", "Starts crashed plug-ins again from their last state", "Tools", 0);
@@ -2470,7 +2475,8 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::openInstrumentWindow:
             if (!s.selected_track().empty()) show_plugin_window(s.selected_track());
             break;
-        case cmd::audioSettings: show_audio_settings(); break;
+        case cmd::audioSettings: show_studio_setup(context_, 0); break;
+        case cmd::midiSetup: show_studio_setup(context_, 1); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;
         case cmd::reloadCrashedPlugins: {
             const int n = context_.engine.reload_crashed_plugins();
@@ -2492,14 +2498,14 @@ bool MainComponent::perform(const InvocationInfo& info)
 
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return {"File", "Edit", "View", "Track", "Templates", "Transport", "Tools", "Window", "Help"};
+    return {"File", "Edit", "View", "Track", "Templates", "Transport", "Tools", "Studio", "Window", "Help"};
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
 {
     juce::PopupMenu m;
     auto* c = &context_.commands;
-    const int index = juce::StringArray{"File", "Edit", "View", "Transport", "Track", "Tools", "Help", "Templates", "Window"}.indexOf(name);
+    const int index = juce::StringArray{"File", "Edit", "View", "Transport", "Track", "Tools", "Help", "Templates", "Window", "Studio"}.indexOf(name);
     switch (index) {
         case 0:
             for (auto id : {cmd::newProjectWizard, cmd::newFromTemplate, cmd::newProject, cmd::open, cmd::openPackage})
@@ -2595,9 +2601,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
         case 5:
             for (auto id : {cmd::chordExplorer, cmd::ostinatoCreator}) m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::audioSettings, cmd::midiInputFilter, cmd::showControlSurfaces, cmd::scanPlugins,
-                            cmd::reloadCrashedPlugins, cmd::instrumentUsage})
-                m.addCommandItem(c, id);
+            m.addCommandItem(c, cmd::instrumentUsage);
             break;
         case 6:
             m.addCommandItem(c, cmd::account);
@@ -2619,12 +2623,11 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
                             cmd::showComments, cmd::instrumentUsage})
                 m.addCommandItem(c, id);
             m.addItem("Mixer Window", [this] { show_console_window(); });
-            m.addSubMenu("Mixer Window on Display", mixer_display_menu());
             m.addSeparator();
             for (auto id : {cmd::addTemplate, cmd::chordExplorer, cmd::ostinatoCreator, cmd::showCircleOfFifths})
                 m.addCommandItem(c, id);
             m.addSeparator();
-            for (auto id : {cmd::showControlSurfaces, cmd::audioSettings, cmd::account}) m.addCommandItem(c, id);
+            m.addCommandItem(c, cmd::account);
             const auto open = dialogs::open_tool_windows();
             if (!open.empty()) {
                 m.addSeparator();
@@ -2640,6 +2643,18 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             }
             break;
         }
+        case 9:  // Studio: the hardware - interface, MIDI, plug-ins, surfaces, displays
+            m.addCommandItem(c, cmd::audioSettings);
+            m.addCommandItem(c, cmd::midiSetup);
+            m.addSeparator();
+            m.addCommandItem(c, cmd::scanPlugins);
+            m.addCommandItem(c, cmd::reloadCrashedPlugins);
+            m.addSeparator();
+            m.addCommandItem(c, cmd::showControlSurfaces);
+            m.addCommandItem(c, cmd::midiInputFilter);
+            m.addSeparator();
+            m.addSubMenu("Mixer Window on Display", mixer_display_menu());
+            break;
         default: break;
     }
     return m;

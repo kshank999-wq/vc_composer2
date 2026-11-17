@@ -174,6 +174,7 @@ enum : juce::CommandID {
     toggleDock,
     toggleWorkView,
     saveLayout,
+    midiSetup,
 };
 }  // namespace cmd
 

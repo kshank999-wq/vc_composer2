@@ -50,7 +50,17 @@ MainWindow::MainWindow(const juce::String& file, bool show_welcome)
     if (catalogs_->error_count() > 0)
         context_->status(juce::String(catalogs_->error_count()) + " content problem(s): some templates are unavailable");
 
-    const juce::String audio_error = engine_->open_default_device();
+    // The interface, rate, buffer and MIDI inputs chosen last time (Studio >
+    // Audio Setup / MIDI Setup), saved again whenever they change.
+    const auto saved_devices = juce::parseXML(hw::ui_settings().getValue("audio_device_state", ""));
+    const juce::String audio_error = engine_->open_default_device(saved_devices.get());
+    engine_->on_devices_changed = [this] {
+        if (auto state = engine_->device_state()) {
+            hw::ui_settings().setValue("audio_device_state", state->toString());
+            hw::ui_settings().saveIfNeeded();
+        }
+    };
+    engine_->on_devices_changed();
     if (audio_error.isNotEmpty()) context_->status("No audio output (" + audio_error + ") - choose a device in Tools > Audio");
 
     setVisible(true);

@@ -103,8 +103,24 @@ public:
 
     /// Opens the default output device. Returns an empty string, or why there
     /// is no audio (the app keeps working silently).
-    juce::String open_default_device();
+    /// With `saved` (a state from device_state()), the interface, sample
+    /// rate, buffer, channels and MIDI inputs chosen last time, falling back
+    /// to the defaults when that interface is not connected.
+    juce::String open_default_device(const juce::XmlElement* saved = nullptr);
     juce::AudioDeviceManager& devices() noexcept { return devices_; }
+    /// What open_default_device takes back: the device setup and MIDI inputs.
+    std::unique_ptr<juce::XmlElement> device_state() const;
+    /// Called (message thread) whenever the device setup or the MIDI inputs change.
+    std::function<void()> on_devices_changed;
+    /// MIDI inputs plugged in while the app runs (USB, USB-C, Bluetooth, a
+    /// network session) are turned on as they arrive; off: they wait to be
+    /// turned on in MIDI Setup. The ones seen before keep their choice.
+    void set_auto_enable_midi(bool on) noexcept { auto_enable_midi_ = on; }
+    bool auto_enable_midi() const noexcept { return auto_enable_midi_; }
+    /// The MIDI inputs seen so far (identifiers), saved with the setup.
+    const juce::StringArray& known_midi_inputs() const noexcept { return known_midi_; }
+    /// Looks at the connected MIDI inputs now (also done on every plug and unplug).
+    void refresh_midi_inputs();
 
     /// Prepares for offline rendering without a device: an open device stops
     /// driving this engine (the caller renders every block).
@@ -708,6 +724,10 @@ private:
     Ticks grain_return_ = 0;
     double grain_until_ms_ = 0.0;
     std::unique_ptr<juce::MidiInputCallback> midi_callback_;
+    bool auto_enable_midi_ = true;
+    juce::StringArray known_midi_;
+    std::unique_ptr<juce::ChangeListener> device_listener_;
+    juce::MidiDeviceListConnection midi_list_;
 };
 
 }  // namespace vcc::desktop
