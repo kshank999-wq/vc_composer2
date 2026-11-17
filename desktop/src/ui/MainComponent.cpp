@@ -31,6 +31,7 @@
 
 #include "ui/CueManager.h"
 #include "ui/Dialogs.h"
+#include "system/PluginWatch.h"
 #include "ui/StudioSetup.h"
 #include "ui/Import.h"
 #include "ui/console/ConsoleView.h"
@@ -1590,10 +1591,43 @@ void MainComponent::show_plugin_scanner()
                 refresh();
             };
             addAndMakeVisible(retry_);
+            // The look through the plug-in folders: at start-up, or now.
+            at_startup_.setButtonText("Check plug-in folders at start-up");
+            at_startup_.setToggleState(PluginWatch::at_startup(), juce::dontSendNotification);
+            at_startup_.onClick = [this] { PluginWatch::set_at_startup(at_startup_.getToggleState()); };
+            addAndMakeVisible(at_startup_);
+            check_now_.setButtonText("Check Folders Now");
+            check_now_.setComponentID("plugin_check_now");
+            check_now_.setTooltip("New, updated and removed plug-ins, and any that will not load (crashed, hung, or "
+                                  "waiting for a licence or authorisation)");
+            check_now_.onClick = [this] {
+                auto* watch = plugin_watch();
+                if (watch == nullptr || watch->running()) return;
+                juce::Component::SafePointer<Scanner> self(this);
+                watch->start(
+                    [self](const juce::String& p) {
+                        if (self) self->report_.setText(p, juce::dontSendNotification);
+                    },
+                    [self](const PluginReport& r) {
+                        if (self) self->show_report(r);
+                    });
+                report_.setText("Checking plug-ins...", juce::dontSendNotification);
+            };
+            addAndMakeVisible(check_now_);
+            details_.setButtonText("Report...");
+            details_.onClick = [this] {
+                if (auto* watch = plugin_watch())
+                    juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon, "Plug-in check",
+                                                           watch->last().details());
+            };
+            addAndMakeVisible(details_);
+            report_.setColour(juce::Label::textColourId, colours::accent);
+            addAndMakeVisible(report_);
+            if (auto* watch = plugin_watch()) show_report(watch->last());
             c.plugins.known().addChangeListener(this);
             refresh();
             startTimer(1000);  // failures arrive from scanning threads
-            setSize(720, 560);
+            setSize(760, 600);
         }
         ~Scanner() override
         {
@@ -1605,6 +1639,12 @@ void MainComponent::show_plugin_scanner()
         void resized() override
         {
             auto r = getLocalBounds();
+            auto watch_row = r.removeFromTop(32).reduced(8, 4);
+            at_startup_.setBounds(watch_row.removeFromLeft(250));
+            check_now_.setBounds(watch_row.removeFromLeft(150));
+            watch_row.removeFromLeft(6);
+            details_.setBounds(watch_row.removeFromRight(80));
+            report_.setBounds(watch_row.withTrimmedLeft(4));
             auto foot = r.removeFromBottom(failures_.isVisible() ? 180 : 64).reduced(8, 4);
             auto mode_row = foot.removeFromTop(26);
             hosting_label_.setBounds(mode_row.removeFromLeft(90));
@@ -1650,7 +1690,17 @@ void MainComponent::show_plugin_scanner()
             }
         }
 
+        void show_report(const PluginReport& r)
+        {
+            report_.setText(r.when == juce::Time() ? juce::String("Not checked yet this session") : r.summary(),
+                            juce::dontSendNotification);
+            details_.setEnabled(r.when != juce::Time());
+        }
+
         AppContext& context_;
+        juce::ToggleButton at_startup_;
+        juce::TextButton check_now_, details_;
+        juce::Label report_;
         juce::PluginListComponent list_;
         juce::Label mode_;
         juce::TextEditor failures_;

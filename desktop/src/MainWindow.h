@@ -2,6 +2,8 @@
 // plug-in hosting, the audio engine and the main component.
 #pragma once
 
+#include "system/PluginWatch.h"
+
 #include <memory>
 
 #include "ui/AppContext.h"
@@ -39,6 +41,7 @@ private:
     std::unique_ptr<LibraryService> library_;  // outlives the views that list it
     std::unique_ptr<ResourceMonitor> resources_;
     std::unique_ptr<MainComponent> main_;
+    std::unique_ptr<PluginWatch> plugin_watch_;  // the start-up look through the plug-in folders
     int listener_ = 0;
 };
 

@@ -34,6 +34,7 @@
 #include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
 #include "ui/StudioSetup.h"
+#include "system/PluginWatch.h"
 #include "ui/hw/HwGallery.h"
 #include "ui/console/MixActions.h"
 #include "ui/console/ConsoleStrip.h"
@@ -6903,6 +6904,70 @@ void studio_checks(MainWindow& window, const juce::File& dir)
     pump(200);
 }
 
+void plugin_watch_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& host = window.context().plugins;
+    host.set_scanner_tool(juce::File(VCC_PLUGIN_SCANNER_TOOL));
+    host.set_scan_timeout_ms(4000);
+    auto* watch = plugin_watch();
+    if (watch == nullptr || host.properties() == nullptr) {
+        check(false, "the plug-in check exists");
+        return;
+    }
+    juce::VST3PluginFormat* vst3 = nullptr;
+    for (auto* f : host.formats().getFormats())
+        if (f->getName() == "VST3") vst3 = dynamic_cast<juce::VST3PluginFormat*>(f);
+    if (vst3 == nullptr) {
+        check(false, "VST3 is a plug-in format here");
+        return;
+    }
+    // A plug-in folder of our own: the test instrument installed into it.
+    const auto folder = dir.getChildFile("plugin-folder");
+    folder.deleteRecursively();
+    folder.createDirectory();
+    const auto installed = folder.getChildFile(juce::File(VCC_TEST_PLUGIN).getFileName());
+    juce::File(VCC_TEST_PLUGIN).copyDirectoryTo(installed);
+    juce::PluginListComponent::setLastSearchPath(*host.properties(), *vst3, juce::FileSearchPath(folder.getFullPathName()));
+    check(watch->folders(*vst3).getNumPaths() == 1, "the plug-in folders can be set");
+
+    auto r = watch->run_now();
+    check(r.finished && r.added.size() >= 1 && r.looked_at == 1,
+          "a plug-in installed since the last look is found and added (" + r.summary() + ": " + r.added.joinIntoString(", ") + ")");
+    bool listed = false;
+    for (const auto& t : host.known().getTypes()) listed = listed || t.fileOrIdentifier == installed.getFullPathName();
+    check(listed, "it is in the plug-in list");
+    r = watch->run_now();
+    check(!r.any_change() && r.attention.isEmpty() && r.summary().startsWith("Plug-ins up to date"),
+          "looking again changes nothing (" + r.summary() + ")");
+
+    // An update installed over it: newer on disk, scanned again.
+    installed.setLastModificationTime(juce::Time::getCurrentTime() + juce::RelativeTime::hours(1));
+    r = watch->run_now();
+    check(r.updated.size() >= 1 && r.added.isEmpty(), "a newer install is scanned again as an update (" + r.updated.joinIntoString(", ") + ")");
+
+    // A plug-in that will not load: needs attention, the app carries on.
+    const auto crasher = folder.getChildFile(juce::File(VCC_TEST_CRASH_PLUGIN).getFileName());
+    juce::File(VCC_TEST_CRASH_PLUGIN).copyDirectoryTo(crasher);
+    r = watch->run_now();
+    check(r.attention.size() == 1 && r.attention[0].contains("crash"),
+          "one that crashes while it loads needs attention (" + r.attention.joinIntoString("; ") + ")");
+    check(r.details().contains("Needs attention"), "the report lists it");
+
+    // Uninstalled: off the list.
+    installed.deleteRecursively();
+    r = watch->run_now();
+    listed = false;
+    for (const auto& t : host.known().getTypes()) listed = listed || t.fileOrIdentifier == installed.getFullPathName();
+    check(r.removed.size() >= 1 && !listed, "an uninstalled plug-in is taken off the list (" + r.removed.joinIntoString(", ") + ")");
+    check(PluginWatch::at_startup(), "the check runs at start-up by default");
+
+    // Back as it was.
+    host.clear_scan_failure(crasher.getFullPathName());
+    host.known().removeFromBlacklist(crasher.getFullPathName());
+    host.properties()->removeValue("lastPluginScanPath_VST3");
+    folder.deleteRecursively();
+}
+
 void updater_checks(MainWindow& window, const juce::File& dir)
 {
     auto& ctx = window.context();
@@ -9195,9 +9260,11 @@ int main(int argc, char** argv)
     host_log.deleteFile();
 #if JUCE_WINDOWS
     _putenv_s("VCC_SETTINGS_DIR", settings.getFullPathName().toRawUTF8());
+    _putenv_s("VCC_NO_PLUGIN_CHECK", "1");
     _putenv_s("VCC_PLUGIN_HOST_LOG", host_log.getFullPathName().toRawUTF8());
 #else
     setenv("VCC_SETTINGS_DIR", settings.getFullPathName().toRawUTF8(), 1);
+    setenv("VCC_NO_PLUGIN_CHECK", "1", 1);  // plugin_watch_checks drives it
     setenv("VCC_PLUGIN_HOST_LOG", host_log.getFullPathName().toRawUTF8(), 1);
 #endif
 
@@ -9225,7 +9292,8 @@ int main(int argc, char** argv)
                 {"updater_checks", updater_checks},
                 {"menu_checks", menu_checks},
                 {"layout_checks", layout_checks},
-                {"studio_checks", studio_checks}};
+                {"studio_checks", studio_checks},
+                {"plugin_watch_checks", plugin_watch_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -9901,6 +9969,8 @@ int main(int argc, char** argv)
         layout_checks(window, dir);
         section("studio_checks");
         studio_checks(window, dir);
+        section("plugin_watch_checks");
+        plugin_watch_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

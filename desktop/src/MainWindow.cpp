@@ -76,10 +76,29 @@ MainWindow::MainWindow(const juce::String& file, bool show_welcome)
     if (hw::ui_settings().getBoolValue("console_at_startup", false))
         main_->show_console_window(hw::ui_settings().getValue("console_display", ""));
     if (main_->workspace() == MainComponent::Workspace::Composer) main_->composer().grabKeyboardFocus();
+
+    // A little after start-up, the plug-in folders are looked through in the
+    // background: new, updated, removed, and any that will not load.
+    plugin_watch_ = std::make_unique<PluginWatch>(*plugins_);
+    set_plugin_watch(plugin_watch_.get());
+    if (PluginWatch::at_startup() && juce::SystemStats::getEnvironmentVariable("VCC_NO_PLUGIN_CHECK", {}).isEmpty()) {
+        juce::Component::SafePointer<MainWindow> self(this);
+        juce::Timer::callAfterDelay(5000, [self] {
+            if (self == nullptr || !self->plugin_watch_) return;
+            auto* ctx = self->context_.get();
+            self->plugin_watch_->start([ctx](const juce::String& p) { ctx->status(p); },
+                                       [ctx](const PluginReport& r) {
+                                           if (r.any_change() || !r.attention.isEmpty())
+                                               ctx->status(r.summary() + " - Studio > Plug-ins... for the list");
+                                       });
+        });
+    }
 }
 
 MainWindow::~MainWindow()
 {
+    set_plugin_watch(nullptr);
+    plugin_watch_.reset();  // stops a look in progress before the host goes
 #if JUCE_MAC
     juce::MenuBarModel::setMacMainMenu(nullptr);
 #else
