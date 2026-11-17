@@ -94,6 +94,33 @@ jobs:
           cp /c/ffmpeg/LICENSE.txt stage/licenses/FFmpeg-LICENSE.txt 2>/dev/null || true
           echo "FFmpeg LGPL shared build $(cat /c/ffmpeg/BUILD-NAME.txt | tr -d '\r\n') from https://github.com/BtbN/FFmpeg-Builds (release 'latest'); source: https://github.com/FFmpeg/FFmpeg" > stage/licenses/FFmpeg-SOURCE.txt
           ls -la stage stage/licenses
+      - name: Signing setup check (which app, which account; no secrets printed)
+        if: env.HAS_SIGNING == 'true'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+        run: |
+          # Compare these with the signing account's Access control (IAM) page.
+          $body = @{ grant_type = 'client_credentials'; client_id = $env:AZURE_CLIENT_ID;
+                     client_secret = $env:AZURE_CLIENT_SECRET; scope = 'https://codesigning.azure.net/.default' }
+          try {
+            $t = Invoke-RestMethod -Method Post -Body $body `
+                 -Uri "https://login.microsoftonline.com/$($env:AZURE_TENANT_ID)/oauth2/v2.0/token"
+            $p = $t.access_token.Split('.')[1].Replace('-', '+').Replace('_', '/')
+            while ($p.Length % 4) { $p += '=' }
+            $c = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p)) | ConvertFrom-Json
+            Write-Host "Logged in as app (client) ID starting: $($c.appid.Substring(0,8))..."
+            Write-Host "                object ID starting:   $($c.oid.Substring(0,8))..."
+          } catch { Write-Host "Could not log in with AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID: $($_.Exception.Message)" }
+          $u = [Uri]$env:ENDPOINT.Trim()
+          Write-Host "Endpoint region: $($u.Host.Split('.')[0])  (the account's Overview > Account URI must match exactly)"
+          Write-Host "Endpoint has a trailing slash: $($env:ENDPOINT.Trim().EndsWith('/'))"
+          Write-Host "Account name is 'vcwriter': $($env:ACCOUNT.Trim() -eq 'vcwriter')"
+          Write-Host "Profile name starts: $($env:PROFILE.Trim().Substring(0, [Math]::Min(4, $env:PROFILE.Trim().Length)))...  (length $($env:PROFILE.Trim().Length))"
+          Write-Host "Any value with spaces around it: $(($env:ENDPOINT -ne $env:ENDPOINT.Trim()) -or ($env:ACCOUNT -ne $env:ACCOUNT.Trim()) -or ($env:PROFILE -ne $env:PROFILE.Trim()))"
       - name: Sign the programs
         if: env.HAS_SIGNING == 'true'
         uses: azure/trusted-signing-action@v0.5.1
