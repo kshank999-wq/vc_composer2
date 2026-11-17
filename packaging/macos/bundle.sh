@@ -77,7 +77,15 @@ hdiutil create -volname "VC Composer" -srcfolder "$STAGE" -ov -format UDZO "$DMG
 if [ -n "${MACOS_SIGNING_IDENTITY:-}" ] && [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ]; then
     codesign --force --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$DMG"
     auth=(--apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD")
-    result="$(xcrun notarytool submit "$DMG" "${auth[@]}" --wait --output-format json)"
+    # Apple's notary service is sometimes briefly unavailable (503): try a few times.
+    result=""
+    for attempt in 1 2 3; do
+        if result="$(xcrun notarytool submit "$DMG" "${auth[@]}" --wait --output-format json)"; then break; fi
+        echo "notarytool failed (attempt $attempt of 3)${result:+: $result}"
+        result=""
+        [ "$attempt" -lt 3 ] && sleep 60
+    done
+    [ -n "$result" ] || { echo "error: Apple's notary service could not be reached after 3 attempts"; exit 1; }
     echo "$result"
     id="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
     status="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')"
