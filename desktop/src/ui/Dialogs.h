@@ -30,13 +30,27 @@ namespace dialogs {
 /// A non-modal, resizable tool window with a native title bar. It deletes
 /// itself when closed; its content must not touch the AppContext in its
 /// destructor (the window may outlive the main window at shutdown).
-class ToolWindow final : public juce::DocumentWindow, private juce::DeletedAtShutdown {
+/// A floating tool window (Templates, Chord Explorer, ...). It stays above
+/// the main window while VC Composer is the active app, so it never gets lost
+/// behind it, and steps back when another app comes forward.
+class ToolWindow final : public juce::DocumentWindow, private juce::DeletedAtShutdown, private juce::Timer {
 public:
     ToolWindow(const juce::String& title, juce::Component* content, int width, int height);
+    ~ToolWindow() override;
     void closeButtonPressed() override;
     /// Called when the close button is pressed, before the window goes.
     std::function<void()> on_close;
+
+private:
+    void timerCallback() override;
 };
+
+/// The tool windows open now, oldest first (the Window menu lists them).
+std::vector<ToolWindow*> open_tool_windows();
+
+/// Sizes `window` to `width` x `height`, or to the screen when that is
+/// smaller, and centres it there so its title bar is always reachable.
+void fit_to_screen(juce::Component& window, int width, int height);
 
 /// Brings an open tool window to the front, or creates one with `make`.
 void show_tool(juce::Component::SafePointer<ToolWindow>& slot, const juce::String& title, int width, int height,

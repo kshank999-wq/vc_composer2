@@ -44,14 +44,60 @@ namespace dialogs {
 
 // --- Windows ------------------------------------------------------------------------------
 
+namespace {
+std::vector<ToolWindow*>& tool_windows()
+{
+    static std::vector<ToolWindow*> list;
+    return list;
+}
+}  // namespace
+
+std::vector<ToolWindow*> open_tool_windows()
+{
+    std::vector<ToolWindow*> out;
+    for (auto* w : tool_windows())
+        if (w->isVisible()) out.push_back(w);
+    return out;
+}
+
+void fit_to_screen(juce::Component& window, int width, int height)
+{
+    const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+    if (display == nullptr) {
+        window.centreWithSize(width, height);
+        return;
+    }
+    const auto area = display->userArea.reduced(8);
+    const int w = std::min(width, area.getWidth()), h = std::min(height, area.getHeight());
+    window.setBounds(area.getCentreX() - w / 2, area.getCentreY() - h / 2, w, h);
+    // Keep the top (the title bar) on screen whatever the size came to.
+    if (window.getY() < area.getY()) window.setTopLeftPosition(window.getX(), area.getY());
+}
+
 ToolWindow::ToolWindow(const juce::String& title, juce::Component* content, int width, int height)
     : juce::DocumentWindow(title, colours::background, juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
 {
     setUsingNativeTitleBar(true);
     setContentOwned(content, false);
     setResizable(true, false);
-    setResizeLimits(760, 480, 4000, 3000);
-    centreWithSize(width, height);
+    setResizeLimits(std::min(760, width), std::min(480, height), 4000, 3000);
+    fit_to_screen(*this, width, height);
+    tool_windows().push_back(this);
+    setAlwaysOnTop(juce::Process::isForegroundProcess());
+    startTimer(400);
+}
+
+ToolWindow::~ToolWindow()
+{
+    auto& list = tool_windows();
+    list.erase(std::remove(list.begin(), list.end(), this), list.end());
+}
+
+void ToolWindow::timerCallback()
+{
+    // Floating above our own windows only: off while another app is in front.
+    const bool front = juce::Process::isForegroundProcess();
+    if (isAlwaysOnTop() != front) setAlwaysOnTop(front);
 }
 
 void ToolWindow::closeButtonPressed()

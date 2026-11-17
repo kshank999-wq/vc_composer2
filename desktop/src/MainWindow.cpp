@@ -35,7 +35,9 @@ MainWindow::MainWindow(const juce::String& file, bool show_welcome)
 #else
     setMenuBar(main_.get());
 #endif
-    centreWithSize(1440, 900);
+    // Never larger than the screen: a window taller than a laptop display
+    // would open with its title bar and menus above the top edge.
+    dialogs::fit_to_screen(*this, 1440, 900);
 
     listener_ = session_->add_listener([this](session::Change c) {
         if (c == session::Change::File || c == session::Change::Document) update_title();

@@ -1956,8 +1956,8 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::addHit: info.setInfo("Mark Hit at Playhead", "", "Transport", 0); info.addDefaultKeypress('h', cmdKey | shift); break;
         case cmd::chordExplorer: info.setInfo("Chord Explorer...", "", "Tools", 0); info.addDefaultKeypress('h', cmdKey | shift); break;
         case cmd::ostinatoCreator: info.setInfo("Ostinato Creator...", "", "Tools", 0); info.addDefaultKeypress('o', cmdKey | shift); break;
-        case cmd::addTemplate: info.setInfo("Add Template to Project...", "", "Tools", 0); break;
-        case cmd::addTrack: info.setInfo("Add Track...", "", "Track", 0); info.addDefaultKeypress('t', cmdKey); break;
+        case cmd::addTemplate: info.setInfo("Add Template to Project...", "", "Templates", 0); break;
+        case cmd::addTrack: info.setInfo("New Track...", "", "Track", 0); info.addDefaultKeypress('t', cmdKey); break;
         case cmd::duplicateVersion: info.setInfo("Duplicate as New Version", "", "Track", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); info.addDefaultKeypress('d', cmdKey | shift); break;
         case cmd::removeTrack: info.setInfo("Remove Track", "", "Track", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); break;
         case cmd::loadInstrument: info.setInfo("Instrument...", "", "Track", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); break;
@@ -2281,12 +2281,16 @@ bool MainComponent::perform(const InvocationInfo& info)
 
 // --- Menus -------------------------------------------------------------------------------------
 
-juce::StringArray MainComponent::getMenuBarNames() { return {"File", "Edit", "View", "Transport", "Track", "Tools", "Help"}; }
+juce::StringArray MainComponent::getMenuBarNames()
+{
+    return {"File", "Edit", "View", "Track", "Templates", "Transport", "Tools", "Window", "Help"};
+}
 
-juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
+juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
 {
     juce::PopupMenu m;
     auto* c = &context_.commands;
+    const int index = juce::StringArray{"File", "Edit", "View", "Transport", "Track", "Tools", "Help", "Templates", "Window"}.indexOf(name);
     switch (index) {
         case 0:
             for (auto id : {cmd::newProjectWizard, cmd::newFromTemplate, cmd::newProject, cmd::open, cmd::openPackage})
@@ -2376,7 +2380,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             }
             break;
         case 5:
-            for (auto id : {cmd::chordExplorer, cmd::ostinatoCreator, cmd::addTemplate}) m.addCommandItem(c, id);
+            for (auto id : {cmd::chordExplorer, cmd::ostinatoCreator}) m.addCommandItem(c, id);
             m.addSeparator();
             for (auto id : {cmd::audioSettings, cmd::midiInputFilter, cmd::showControlSurfaces, cmd::scanPlugins,
                             cmd::reloadCrashedPlugins, cmd::instrumentUsage})
@@ -2387,6 +2391,40 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&)
             m.addCommandItem(c, cmd::checkUpdates);
             m.addCommandItem(c, cmd::about);
             break;
+        case 7:  // Templates: whole scoring palettes (horror, comedy, action...) as ready-made tracks
+            m.addCommandItem(c, cmd::addTemplate);
+            m.addCommandItem(c, cmd::newFromTemplate);
+            m.addCommandItem(c, cmd::newProjectWizard);
+            m.addSeparator();
+            m.addCommandItem(c, cmd::saveAsTemplate);
+            m.addItem("Import or Export Templates...", [this] { show_template_browser(context_, false); });
+            break;
+        case 8: {  // Window: every window, and the ones open now
+            for (auto id : {cmd::showComposer, cmd::showSequencer}) m.addCommandItem(c, id);
+            m.addSeparator();
+            for (auto id : {cmd::showMixer, cmd::showVideo, cmd::showCueManager, cmd::showRouting, cmd::showReview,
+                            cmd::showComments, cmd::instrumentUsage})
+                m.addCommandItem(c, id);
+            m.addSeparator();
+            for (auto id : {cmd::addTemplate, cmd::chordExplorer, cmd::ostinatoCreator, cmd::showCircleOfFifths})
+                m.addCommandItem(c, id);
+            m.addSeparator();
+            for (auto id : {cmd::showControlSurfaces, cmd::audioSettings, cmd::account}) m.addCommandItem(c, id);
+            const auto open = dialogs::open_tool_windows();
+            if (!open.empty()) {
+                m.addSeparator();
+                m.addSectionHeader("Open windows");
+                for (auto* w : open) {
+                    juce::Component::SafePointer<dialogs::ToolWindow> safe(w);
+                    m.addItem(w->getName(), [safe] {
+                        if (safe == nullptr) return;
+                        safe->setMinimised(false);
+                        safe->toFront(true);
+                    });
+                }
+            }
+            break;
+        }
         default: break;
     }
     return m;

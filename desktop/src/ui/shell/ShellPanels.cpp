@@ -45,6 +45,18 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
 
     // Composer view.
     {
+        // Making tracks comes first in both views: one instrument, or a whole
+        // scoring template (Horror, Comedy, Action...) laid out at once.
+        Group tracks{"Tracks"};
+        auto& track_key = add(tracks, "+ Track", 74);
+        track_key.setComponentID("composer_add_track");
+        track_key.setTooltip("New track: an instrument, audio or temp track (Ctrl/Cmd+T)");
+        track_key.onClick = [this, &track_key] { TrackPanel::show_add_track_menu(context_, &track_key); };
+        auto& template_key = add(tracks, "Template", 80);
+        template_key.setComponentID("composer_add_template");
+        template_key.setTooltip("Add a scoring template's tracks (horror, comedy, action...) to this project");
+        template_key.onClick = invoke(cmd::addTemplate);
+        groups_.push_back(tracks);
         Group entry{"Entry"};
         auto& note = add(entry, "Note entry", 100, false);
         note.set_led_dot(true);
@@ -140,6 +152,10 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
         inst.onClick = [this, &inst] { TrackPanel::show_add_track_menu(context_, &inst); };
         add(tracks, "+ Audio", 74).onClick = invoke(cmd::addAudioTrack);
         add(tracks, "+ Aux", 62).onClick = invoke(cmd::addAuxBus);
+        auto& tmpl = add(tracks, "Template", 80);
+        tmpl.setComponentID("producer_add_template");
+        tmpl.setTooltip("Add a scoring template's tracks (horror, comedy, action...) to this project");
+        tmpl.onClick = invoke(cmd::addTemplate);
         groups_.push_back(tracks);
         Group record{"Record"};
         record.producer = true;

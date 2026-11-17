@@ -6675,6 +6675,56 @@ private:
 
 /// The in-app updater against the fake site: an offer only when newer, the
 /// download through the account, the checksum, and the window.
+void menu_checks(MainWindow& window, const juce::File&)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    // The menu bar a desktop program is expected to have.
+    const auto names = main.getMenuBarNames();
+    check(names.joinIntoString(",") == "File,Edit,View,Track,Templates,Transport,Tools,Window,Help",
+          "menu bar: File, Edit, View, Track, Templates, Transport, Tools, Window, Help (" + names.joinIntoString(",") + ")");
+    auto items = [&](const juce::String& menu) {
+        juce::StringArray out;
+        const auto popup = main.getMenuForIndex(names.indexOf(menu), menu);
+        for (juce::PopupMenu::MenuItemIterator it(popup, true); it.next();)
+            out.add(it.getItem().text);
+        return out;
+    };
+    const auto track = items("Track"), templates = items("Templates");
+    check(track.contains("New Track...") && track.contains("New Audio Track..."), "Track menu makes tracks (" + track.joinIntoString("|") + ")");
+    check(templates.contains("Add Template to Project...") && templates.contains("New from Template...") &&
+              templates.contains("Save as Template..."),
+          "Templates menu: add, new project from one, save as one (" + templates.joinIntoString("|") + ")");
+    check(items("Window").contains("Mixer") && items("Window").contains("Chord Explorer..."),
+          "Window menu opens the windows (" + items("Window").joinIntoString("|") + ")");
+
+    // Both toolbars offer + Track and Template.
+    check(main.toolbar().key("+ Track") != nullptr && main.toolbar().key("Template") != nullptr,
+          "the toolbar has + Track and Template");
+
+    // A tool window floats over the app and is listed under Window.
+    show_template_browser(ctx, false);
+    pump(300);
+    const auto open = dialogs::open_tool_windows();
+    bool listed = false;
+    for (auto* w : open) listed = listed || w->getName() == "Templates";
+    check(listed, "the open Templates window is listed");
+    check(items("Window").contains("Templates"), "Window > Open windows names Templates");
+    bool floating = false;
+    for (auto* w : open)
+        if (w->getName() == "Templates") floating = w->isAlwaysOnTop() == juce::Process::isForegroundProcess();
+    check(floating, "Templates floats above the app while it is in front");
+
+    // Windows never open taller or wider than the screen.
+    if (const auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) {
+        juce::DocumentWindow probe("probe", juce::Colours::black, 0);
+        dialogs::fit_to_screen(probe, 5000, 5000);
+        check(d->userArea.contains(probe.getBounds()), "an oversized window is fitted inside the screen");
+    }
+    for (auto* w : dialogs::open_tool_windows()) w->closeButtonPressed();
+    pump(200);
+}
+
 void updater_checks(MainWindow& window, const juce::File& dir)
 {
     auto& ctx = window.context();
@@ -8994,7 +9044,8 @@ int main(int argc, char** argv)
                 {"usage_checks", usage_checks},
                 {"collab_checks", collab_checks},
                 {"brand_checks", brand_checks},
-                {"updater_checks", updater_checks}};
+                {"updater_checks", updater_checks},
+                {"menu_checks", menu_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -9664,6 +9715,8 @@ int main(int argc, char** argv)
         brand_checks(window, dir);
         section("updater_checks");
         updater_checks(window, dir);
+        section("menu_checks");
+        menu_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");
