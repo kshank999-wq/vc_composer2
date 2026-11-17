@@ -3,6 +3,8 @@
 #include "system/ResourceMonitor.h"
 
 #include "ui/Dialogs.h"
+#include "ui/hw/HwTheme.h"
+#include "ui/shell/Layouts.h"
 
 namespace vcc::desktop {
 
@@ -58,7 +60,12 @@ MainWindow::MainWindow(const juce::String& file, bool show_welcome)
         session_->new_empty();
         if (show_welcome) juce::MessageManager::callAsync([this] { show_template_browser(*context_, true); });
     }
-    main_->composer().grabKeyboardFocus();
+    // The layout it opens with (View > Layouts > Open VC Composer With), or
+    // the one it was left in; then the mixer on its display, if asked.
+    if (const auto layout = layouts::to_open_with()) main_->apply_layout(*layout);
+    if (hw::ui_settings().getBoolValue("console_at_startup", false))
+        main_->show_console_window(hw::ui_settings().getValue("console_display", ""));
+    if (main_->workspace() == MainComponent::Workspace::Composer) main_->composer().grabKeyboardFocus();
 }
 
 MainWindow::~MainWindow()
@@ -84,6 +91,7 @@ void MainWindow::update_title()
 bool MainWindow::ask_to_close()
 {
     if (!main_->confirm_discard()) return false;
+    layouts::set_last(main_->capture_layout());
     // A clean exit leaves no autosave behind for this document.
     if (!session_->path().empty()) juce::File(session_->path() + ".autosave").deleteFile();
     return true;

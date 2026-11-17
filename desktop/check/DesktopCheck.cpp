@@ -6769,6 +6769,85 @@ void menu_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+void layout_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    main.apply_layout(*layouts::find("Compose"));
+    pump(200);
+    const int edit_h = main.edit_frame().getHeight(), edit_w = main.edit_frame().getWidth();
+
+    // The bottom deck hides to a thin bar and comes back.
+    main.set_dock_hidden(true);
+    pump(150);
+    auto* key = dynamic_cast<juce::Button*>(main.findChildWithID("dock_toggle"));
+    check(!main.keyboard().isVisible() && key != nullptr && key->isVisible() && key->getButtonText() == "Show Keyboard",
+          "Hide Keyboard / Mixer Deck: the keyboard goes, Show Keyboard stays");
+    check(main.edit_frame().getHeight() > edit_h + 100,
+          "the edit window takes the deck's height (" + juce::String(edit_h) + " -> " +
+              juce::String(main.edit_frame().getHeight()) + ")");
+    shoot(window, dir, "84-deck-hidden");
+    if (key) key->triggerClick();
+    pump(150);
+    check(main.keyboard().isVisible() && !main.dock_hidden(), "Show Keyboard brings it back");
+
+    // Work view: no side panels.
+    main.set_work_view(true);
+    pump(150);
+    check(!main.track_panel().isVisible() && !main.inspector().isVisible() && main.edit_frame().getWidth() > edit_w + 300,
+          "Work View hides the side panels; the edit window widens (" + juce::String(edit_w) + " -> " +
+              juce::String(main.edit_frame().getWidth()) + ")");
+    shoot(window, dir, "85-work-view");
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(150);
+    check(!main.new_track_panel().isVisible() && !main.track_panel().isVisible(), "Work View holds in Producer");
+    main.set_work_view(false);
+    pump(150);
+    check(main.new_track_panel().isVisible() && main.track_panel().isVisible(), "leaving Work View brings the panels back");
+
+    // Layouts: saved by name, recalled, and the one the app opens with.
+    main.set_dock_hidden(true);
+    main.set_work_view(true);
+    auto mine = main.capture_layout();
+    mine.name = "Check Focus";
+    layouts::save(mine);
+    main.apply_layout(*layouts::find("Compose"));
+    pump(150);
+    check(!main.work_view() && !main.dock_hidden() && main.workspace() == MainComponent::Workspace::Composer,
+          "the Compose layout");
+    main.apply_layout(*layouts::find("Check Focus"));
+    pump(150);
+    auto now = main.capture_layout();
+    now.name = "Check Focus";
+    check(now == mine, "a saved layout comes back exactly");
+    layouts::set_startup("Check Focus");
+    check(layouts::to_open_with() && layouts::to_open_with()->name == "Check Focus", "it can be the layout the app opens with");
+    check(layouts::remove("Check Focus") && !layouts::find("Check Focus") && layouts::startup().isEmpty(),
+          "deleting it forgets it, as the start-up layout too");
+    main.apply_layout(*layouts::find("Mix"));
+    pump(150);
+    check(main.mixer_full(), "the Mix layout: the mixer full screen");
+
+    // The mixer window on a chosen display, filling it.
+    const auto displays = MainComponent::display_keys();
+    check(!displays.empty(), "the connected displays are listed (" + juce::String(static_cast<int>(displays.size())) + ")");
+    if (!displays.empty()) {
+        main.show_console_window(displays.front().first);
+        pump(200);
+        const auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+        check(main.mixer_window() != nullptr && main.mixer_window()->isVisible() && d != nullptr &&
+                  main.mixer_window()->getBounds() == d->userArea && main.console_display() == displays.front().first,
+              "Mixer Window on Display fills the chosen display, remembered (" +
+                  (main.mixer_window() ? main.mixer_window()->getBounds().toString() : juce::String("none")) + " on " +
+                  (d ? d->userArea.toString() : juce::String()) + ")");
+        auto with_console = main.capture_layout();
+        check(with_console.console_window && with_console.console_display == displays.front().first,
+              "a layout records the mixer window and its display");
+        main.mixer_window()->setVisible(false);
+    }
+    main.apply_layout(*layouts::find("Compose"));
+    pump(150);
+}
+
 void updater_checks(MainWindow& window, const juce::File& dir)
 {
     auto& ctx = window.context();
@@ -9089,7 +9168,8 @@ int main(int argc, char** argv)
                 {"collab_checks", collab_checks},
                 {"brand_checks", brand_checks},
                 {"updater_checks", updater_checks},
-                {"menu_checks", menu_checks}};
+                {"menu_checks", menu_checks},
+                {"layout_checks", layout_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -9761,6 +9841,8 @@ int main(int argc, char** argv)
         updater_checks(window, dir);
         section("menu_checks");
         menu_checks(window, dir);
+        section("layout_checks");
+        layout_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

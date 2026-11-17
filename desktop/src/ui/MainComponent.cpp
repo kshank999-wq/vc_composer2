@@ -267,6 +267,10 @@ MainComponent::MainComponent(AppContext& context)
     channel_tab_.onClick = [this] { show_right_tab(0); };
     print_tab_.onClick = [this] { show_right_tab(1); };
     addChildComponent(mixer_deck_);
+    dock_key_.setComponentID("dock_toggle");
+    dock_key_.setTooltip("Hide or show the bottom deck - the keyboard, or the mixer in Producer (Cmd/Ctrl+Alt+B)");
+    dock_key_.onClick = [this] { set_dock_hidden(!dock_hidden_); };
+    addAndMakeVisible(dock_key_);
     keyboard_.on_mixer = [this] { show_bottom_mixer(true); };
     mixer_deck_.on_keyboard = [this] { show_bottom_mixer(false); };
     mixer_deck_.on_full = [this](bool) { set_mixer_full(true); };
@@ -564,12 +568,22 @@ void MainComponent::resized()
     // The bottom deck: the keyboard (as tall as its key zoom needs), or in
     // the Producer view the mixer.
     const bool mixer_deck = workspace_ == Workspace::Producer && bottom_mixer_;
-    keyboard_.setVisible(!mixer_deck);
-    mixer_deck_.setVisible(mixer_deck);
+    keyboard_.setVisible(!mixer_deck && !dock_hidden_);
+    mixer_deck_.setVisible(mixer_deck && !dock_hidden_);
     keyboard_.show_mixer_key(workspace_ == Workspace::Producer);
     auto& deck = mixer_deck ? static_cast<juce::Component&>(mixer_deck_) : keyboard_;
     const auto below_top = r;  // for the full-screen mixer
-    deck.setBounds(r.removeFromBottom(mixer_deck ? shell::MixerDeck::kHeight : keyboard_.preferred_height()));
+    if (dock_hidden_) {
+        // Hidden: a thin bar with the key that brings it back.
+        auto bar = r.removeFromBottom(24);
+        dock_key_.setButtonText(mixer_deck ? "Show Mixer" : "Show Keyboard");
+        dock_key_.setBounds(bar.withSizeKeepingCentre(130, 22));
+    } else {
+        deck.setBounds(r.removeFromBottom(mixer_deck ? shell::MixerDeck::kHeight : keyboard_.preferred_height()));
+        dock_key_.setButtonText("Hide");
+        dock_key_.setBounds(deck.getX() + deck.getWidth() / 2 - 32, deck.getY() + 3, 64, 18);
+    }
+    dock_key_.toFront(false);
     r.removeFromBottom(kGap);
     r.removeFromTop(kGap);
     toolbar_.setBounds(r.removeFromTop(60));
@@ -583,6 +597,21 @@ void MainComponent::resized()
             full_console_->setBounds(below_top.withTrimmedTop(kGap));
             full_console_->toFront(false);
         }
+    }
+
+    if (work_view_) {
+        // Work view: no side panels; the edit window takes the width.
+        for (juce::Component* c : {static_cast<juce::Component*>(&master_), static_cast<juce::Component*>(&channel_),
+                                   static_cast<juce::Component*>(&print_), static_cast<juce::Component*>(&channel_tab_),
+                                   static_cast<juce::Component*>(&print_tab_)})
+            c->setVisible(false);
+        right_tabs_ = false;
+        edit_.setBounds(r);
+        const auto content = edit_.getBounds().getIntersection(edit_.content_area() + edit_.getPosition());
+        composer_.setBounds(content);
+        page_view_.setBounds(content);
+        sequencer_.setBounds(content);
+        return;
     }
 
     const bool producer = workspace_ == Workspace::Producer;
@@ -695,6 +724,130 @@ void MainComponent::show_right_tab(int tab)
     resized();
 }
 
+void MainComponent::apply_side_visibility()
+{
+    const bool producer = workspace_ == Workspace::Producer, side = !work_view_;
+    markers_.setVisible(side && !producer);
+    selection_.setVisible(side && !producer);
+    inspector_.setVisible(side && !producer);
+    new_track_.setVisible(side && producer);
+    clips_.setVisible(side && producer);
+    tracks_.setVisible(side);
+    if (divider_) divider_->setVisible(side);
+}
+
+void MainComponent::set_dock_hidden(bool hidden)
+{
+    dock_hidden_ = hidden;
+    resized();
+    context_.commands.commandStatusChanged();
+}
+
+void MainComponent::set_work_view(bool on)
+{
+    work_view_ = on;
+    apply_side_visibility();
+    resized();
+    context_.commands.commandStatusChanged();
+    context_.status(on ? "Work view: side panels hidden (View > Work View or Cmd/Ctrl+Alt+W brings them back)"
+                       : "Side panels shown");
+}
+
+layouts::ViewLayout MainComponent::capture_layout() const
+{
+    layouts::ViewLayout l;
+    l.producer = workspace_ == Workspace::Producer;
+    l.page_view = page_mode_;
+    l.bottom_mixer = bottom_mixer_;
+    l.dock_hidden = dock_hidden_;
+    l.work_view = work_view_;
+    l.mixer_full = mixer_full_;
+    l.console_window = mixer_ != nullptr && mixer_->isVisible();
+    l.console_display = console_display_;
+    return l;
+}
+
+void MainComponent::apply_layout(const layouts::ViewLayout& l)
+{
+    page_mode_ = l.page_view;
+    toolbar_.set_page_view(l.page_view);
+    work_view_ = l.work_view;
+    dock_hidden_ = l.dock_hidden;
+    bottom_mixer_ = l.bottom_mixer;
+    show_workspace(l.producer ? Workspace::Producer : Workspace::Composer);
+    if (l.mixer_full) set_mixer_full(true);
+    if (l.console_window) show_console_window(l.console_display);
+    else if (mixer_ != nullptr) mixer_->setVisible(false);
+    resized();
+    context_.commands.commandStatusChanged();
+    if (l.name.isNotEmpty()) context_.status("Layout: " + l.name);
+}
+
+juce::PopupMenu MainComponent::layouts_menu()
+{
+    juce::PopupMenu m;
+    const auto now = capture_layout();
+    auto add = [&](const layouts::ViewLayout& l) {
+        auto bare = l;
+        bare.name = {};
+        m.addItem(l.name, true, bare == now, [this, l] { apply_layout(l); });
+    };
+    for (const auto& l : layouts::built_in()) add(l);
+    const auto own = layouts::saved();
+    if (!own.empty()) {
+        m.addSeparator();
+        for (const auto& l : own) add(l);
+    }
+    m.addSeparator();
+    m.addCommandItem(&context_.commands, cmd::saveLayout);
+    if (!own.empty()) {
+        juce::PopupMenu del;
+        for (const auto& l : own) {
+            const auto name = l.name;
+            del.addItem(name, [this, name] {
+                layouts::remove(name);
+                context_.status("Deleted the layout " + name);
+            });
+        }
+        m.addSubMenu("Delete Layout", del);
+    }
+    juce::PopupMenu open_with;
+    const auto chosen = layouts::startup();
+    open_with.addItem("The layout it was left in", true, chosen.isEmpty(), [] { layouts::set_startup({}); });
+    open_with.addSeparator();
+    for (const auto& l : layouts::built_in()) {
+        const auto name = l.name;
+        open_with.addItem(name, true, chosen == name, [name] { layouts::set_startup(name); });
+    }
+    for (const auto& l : own) {
+        const auto name = l.name;
+        open_with.addItem(name, true, chosen == name, [name] { layouts::set_startup(name); });
+    }
+    m.addSubMenu("Open VC Composer With", open_with);
+    return m;
+}
+
+void MainComponent::save_layout_as()
+{
+    auto* w = new juce::AlertWindow("Save Layout",
+                                    "Saves how the window is arranged now: the view, the bottom deck, the side panels "
+                                    "and the mixer (and the display it is on).",
+                                    juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor("name", "My Layout", "Name");
+    w->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int result) {
+                           const auto name = w->getTextEditorContents("name").trim();
+                           if (result == 1 && name.isNotEmpty()) {
+                               auto l = capture_layout();
+                               l.name = name;
+                               layouts::save(l);
+                               context_.status("Saved the layout " + name + " (View > Layouts)");
+                           }
+                       }),
+                       true);
+}
+
 void MainComponent::show_bottom_mixer(bool mixer)
 {
     bottom_mixer_ = mixer;
@@ -746,11 +899,7 @@ void MainComponent::show_workspace(Workspace w)
     composer_.setVisible(!producer && !page_mode_);
     page_view_.setVisible(!producer && page_mode_);
     sequencer_.setVisible(producer);
-    markers_.setVisible(!producer);
-    selection_.setVisible(!producer);
-    inspector_.setVisible(!producer);
-    new_track_.setVisible(producer);
-    clips_.setVisible(producer);
+    apply_side_visibility();
     master_stage_ = false;  // a view switch leaves the Master stage
     deck_.set_producer(producer);
     toolbar_.set_producer(producer);
@@ -1264,14 +1413,60 @@ void MainComponent::set_mixer_full(bool full, bool compact_after)
                          : "Mixer in the bottom deck");
 }
 
-void MainComponent::show_console_window()
+std::vector<std::pair<juce::String, juce::String>> MainComponent::display_keys()
+{
+    std::vector<std::pair<juce::String, juce::String>> out;
+    const auto& displays = juce::Desktop::getInstance().getDisplays().displays;
+    for (int i = 0; i < displays.size(); ++i) {
+        const auto& d = displays.getReference(i);
+        out.emplace_back(d.totalArea.toString(), "Display " + juce::String(i + 1) + " - " +
+                                                     juce::String(d.totalArea.getWidth()) + " x " +
+                                                     juce::String(d.totalArea.getHeight()) +
+                                                     (d.isMain ? " (main)" : juce::String()));
+    }
+    return out;
+}
+
+void MainComponent::show_console_window(const juce::String& display)
 {
     if (!mixer_) {
         mixer_ = std::make_unique<MixerWindow>(context_);
-        mixer_->centreWithSize(1000, 460);
+        dialogs::fit_to_screen(*mixer_, 1000, 460);
+    }
+    // Shown first: a first showing restores where it was left, and the chosen display then wins.
+    mixer_->setVisible(true);
+    if (display.isNotEmpty()) {
+        const juce::Displays::Display* target = nullptr;
+        for (const auto& d : juce::Desktop::getInstance().getDisplays().displays)
+            if (d.totalArea.toString() == display) target = &d;
+        if (target != nullptr) {
+            // The whole display: a touch screen given over to the mixer.
+            mixer_->setBounds(target->userArea);
+            console_display_ = display;
+            hw::ui_settings().setValue("console_display", display);
+            hw::ui_settings().saveIfNeeded();
+        } else {
+            context_.status("That display is not connected now: the mixer opens on the main one");
+        }
     }
     mixer_->setVisible(true);
     mixer_->toFront(true);
+}
+
+juce::PopupMenu MainComponent::mixer_display_menu()
+{
+    juce::PopupMenu m;
+    for (const auto& [key, label] : display_keys())
+        m.addItem(label, true, key == console_display_, [this, key = key] { show_console_window(key); });
+    m.addSeparator();
+    const bool at_start = hw::ui_settings().getBoolValue("console_at_startup", false);
+    m.addItem("Open Mixer at Start-up", true, at_start, [this, at_start] {
+        hw::ui_settings().setValue("console_at_startup", !at_start);
+        hw::ui_settings().saveIfNeeded();
+        context_.status(!at_start ? "The mixer window will open at start-up, on the display chosen here"
+                                  : "The mixer window no longer opens at start-up");
+    });
+    return m;
 }
 
 void MainComponent::show_plugin_window(const std::string& id)
@@ -1751,7 +1946,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
-                cmd::checkUpdates});
+                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2047,6 +2242,17 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
                          "Whether vc-composer.com has a newer VC Composer, and install it", "Help",
                          Updater::available() ? 0 : juce::ApplicationCommandInfo::isDisabled);
             break;
+        case cmd::toggleDock:
+            info.setInfo(dock_hidden_ ? "Show Keyboard / Mixer Deck" : "Hide Keyboard / Mixer Deck",
+                         "The bottom deck: the keyboard, or the mixer in Producer", "View", 0);
+            info.addDefaultKeypress('b', cmdKey | juce::ModifierKeys::altModifier);
+            break;
+        case cmd::toggleWorkView:
+            info.setInfo("Work View", "Hides the side panels: the edit window as large as it gets", "View",
+                         work_view_ ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.addDefaultKeypress('w', cmdKey | juce::ModifierKeys::altModifier);
+            break;
+        case cmd::saveLayout: info.setInfo("Save Layout...", "Saves how the window is arranged now, by name", "View", 0); break;
         default: break;
     }
 }
@@ -2274,6 +2480,9 @@ bool MainComponent::perform(const InvocationInfo& info)
         }
         case cmd::about: show_about(); break;
         case cmd::checkUpdates: show_update_window(context_, [this] { return confirm_discard(); }); break;
+        case cmd::toggleDock: set_dock_hidden(!dock_hidden_); break;
+        case cmd::toggleWorkView: set_work_view(!work_view_); break;
+        case cmd::saveLayout: save_layout_as(); break;
         default: return false;
     }
     return true;
@@ -2329,6 +2538,10 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             for (auto id : {cmd::showComposer, cmd::showSequencer, cmd::toggleView, cmd::showMixer, cmd::showVideo,
                             cmd::showCueManager})
                 m.addCommandItem(c, id);
+            m.addSeparator();
+            m.addCommandItem(c, cmd::toggleWorkView);
+            m.addCommandItem(c, cmd::toggleDock);
+            m.addSubMenu("Layouts", layouts_menu());
             m.addSeparator();
             m.addCommandItem(c, cmd::toggleFollow);
             m.addCommandItem(c, cmd::showRouting);
@@ -2405,6 +2618,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             for (auto id : {cmd::showMixer, cmd::showVideo, cmd::showCueManager, cmd::showRouting, cmd::showReview,
                             cmd::showComments, cmd::instrumentUsage})
                 m.addCommandItem(c, id);
+            m.addItem("Mixer Window", [this] { show_console_window(); });
+            m.addSubMenu("Mixer Window on Display", mixer_display_menu());
             m.addSeparator();
             for (auto id : {cmd::addTemplate, cmd::chordExplorer, cmd::ostinatoCreator, cmd::showCircleOfFifths})
                 m.addCommandItem(c, id);

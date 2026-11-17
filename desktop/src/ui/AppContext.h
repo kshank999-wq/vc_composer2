@@ -171,6 +171,9 @@ enum : juce::CommandID {
     lockPart,
     unlockPart,
     checkUpdates,
+    toggleDock,
+    toggleWorkView,
+    saveLayout,
 };
 }  // namespace cmd
 

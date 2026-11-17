@@ -3,6 +3,8 @@
 // and every application command.
 #pragma once
 
+#include "ui/shell/Layouts.h"
+
 #include <map>
 #include <thread>
 #include <atomic>
@@ -102,7 +104,14 @@ public:
     void set_mixer_full(bool full, bool compact_after = true);
     bool mixer_full() const noexcept { return mixer_full_; }
     /// The console window: every strip's EQ, dynamics, sends and inserts.
-    void show_console_window();
+    /// On `display` (a key from display_keys(), e.g. a touch screen), filling
+    /// it; empty: where it was. Remembered, and with "Open Mixer at Start-up"
+    /// it opens there each time.
+    void show_console_window(const juce::String& display = {});
+    /// The displays now connected: (key, "Display 2 - 1920 x 1080").
+    static std::vector<std::pair<juce::String, juce::String>> display_keys();
+    juce::PopupMenu mixer_display_menu();
+    const juce::String& console_display() const noexcept { return console_display_; }
     /// The full-screen mixer (the console, laid out like hardware), or null before it is first shown.
     MixerComponent* full_console() noexcept { return full_console_.get(); }
     /// The jog/shuttle and transport controller (Tools > Control Surfaces).
@@ -113,6 +122,15 @@ public:
     /// Follow on or off (the title bar's key, View > Follow Playhead, Cmd/Ctrl+Shift+F); remembered.
     void set_follow(bool on);
     bool bottom_mixer() const noexcept { return bottom_mixer_; }
+    /// The bottom deck (keyboard or mixer) hidden, leaving a thin bar to bring it back.
+    void set_dock_hidden(bool hidden);
+    bool dock_hidden() const noexcept { return dock_hidden_; }
+    /// Work view: the side panels hidden, the edit window as large as it gets.
+    void set_work_view(bool on);
+    bool work_view() const noexcept { return work_view_; }
+    /// View > Layouts: the arrangement now, and one applied in a step.
+    layouts::ViewLayout capture_layout() const;
+    void apply_layout(const layouts::ViewLayout& layout);
     shell::ClipsPanel& clips_panel() noexcept { return clips_; }
     shell::PrintPanel& print_panel() noexcept { return print_; }
     shell::MasterPanel& master_panel() noexcept { return master_; }
@@ -189,6 +207,14 @@ private:
     bool page_mode_ = false;
     bool bottom_mixer_ = true;
     bool mixer_full_ = false;
+    bool dock_hidden_ = false;
+    bool work_view_ = false;
+    juce::String console_display_;
+    hw::Keycap dock_key_{"Hide"};
+    /// Which side panels show for the view (none in the Work view).
+    void apply_side_visibility();
+    juce::PopupMenu layouts_menu();
+    void save_layout_as();
     std::unique_ptr<MixerComponent> full_console_;
     Workspace before_mixer_ = Workspace::Producer;  ///< Where Cmd/Ctrl+M returns to.
     TrackPanel tracks_;
