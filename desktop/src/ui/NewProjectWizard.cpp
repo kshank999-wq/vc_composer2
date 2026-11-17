@@ -83,6 +83,13 @@ NewProjectWizard::NewProjectWizard(AppContext& context) : context_(context)
     mood_.onChange = [this] { fill_templates(); };
     template_box_.setTitle("Template");
     template_box_.onChange = [this] { template_changed(); };
+    layout_.setTitle("Track layout");
+    layout_.setComponentID("wizard_layout");
+    layout_.addItem("Tracks as the template lays them out", 1);
+    layout_.addItem("One track per instrument (articulations inside it)", 2);
+    layout_.addItem("A track per articulation (Violins - Pizzicato, - Tremolo...)", 3);
+    layout_.setSelectedId(1, juce::dontSendNotification);
+    addAndMakeVisible(layout_);
     about_.setFont(juce::FontOptions(12.0f));
     about_.setColour(juce::Label::textColourId, colours::text_dim);
     about_.setJustificationType(juce::Justification::topLeft);
@@ -280,6 +287,7 @@ session::ProjectSetup NewProjectWizard::setup() const
     if (s.name.empty()) s.name = "Untitled";
     s.folder = folder_ == juce::File() ? std::string() : folder_.getFullPathName().toStdString();
     s.template_id = template_;
+    s.track_layout = static_cast<templates::TrackLayout>(std::max(0, layout_.getSelectedId() - 1));
     if (const auto k = dialogs::key_from_combos(tonic_, mode_)) s.key = k->name();
     s.meter = TimeSignature::parse(meter_.getText().trim().toStdString());
     s.tempo = tempo_.getValue();
@@ -345,7 +353,8 @@ void NewProjectWizard::resized()
     mood_.setBounds(r.removeFromLeft(third));
     r.removeFromLeft(8);
     template_box_.setBounds(r);
-    about_.setBounds(line(48));
+    layout_.setBounds(line(26).removeFromLeft(440));
+    about_.setBounds(line(44));
     music_label_.setBounds(line(16));
     r = line(26);
     tonic_.setBounds(r.removeFromLeft(90));
@@ -378,7 +387,7 @@ void NewProjectWizard::resized()
 
 void show_new_project_wizard(AppContext& context)
 {
-    dialogs::show_tool(wizard_window(), "New Project", 720, 560, [&context] { return new NewProjectWizard(context); });
+    dialogs::show_tool(wizard_window(), "New Project", 720, 600, [&context] { return new NewProjectWizard(context); });
 }
 
 NewProjectWizard* new_project_wizard() { return wizard_slot(); }

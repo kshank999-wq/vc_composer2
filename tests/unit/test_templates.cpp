@@ -493,3 +493,49 @@ TEST_CASE("orchestral templates: consolidated and expanded open with the same pa
     for (const auto& t : saved.tracks)
         if (t.name == "Violins I") CHECK(t.articulation_tracks == strings_sounds);
 }
+
+TEST_CASE("track layout: any template opens with a track per articulation, or one per instrument")
+{
+    const templates::Template comedy = tpl("cinematic.comedy.light_quirky");
+    project::Project as_template, per_artic, per_instrument;
+    REQUIRE(instantiate(as_template, comedy, content().instruments, {}).ok);
+    templates::InstantiateOptions o;
+    o.layout = templates::TrackLayout::PerArticulation;
+    REQUIRE(instantiate(per_artic, comedy, content().instruments, o).ok);
+    auto parts = [](const project::Project& p) {
+        std::vector<std::string> names;
+        for (const auto& t : p.data().tracks)
+            if (t.kind == project::TrackKind::Instrument && t.articulation_parent.empty()) names.push_back(t.name);
+        return names;
+    };
+    // The same parts; each with sounds of its own is followed by them.
+    CHECK(parts(as_template) == parts(per_artic));
+    int children = 0;
+    for (const auto& tt : comedy.tracks) {
+        const auto groups = templates::articulation_tracks_for(tt);
+        if (!groups.empty()) CHECK_EQ(groups.front(), std::string("natural"));
+        children += static_cast<int>(groups.size());
+    }
+    REQUIRE(children > 0);
+    int made = 0;
+    for (const auto& t : per_artic.data().tracks)
+        if (!t.articulation_parent.empty()) ++made;
+    CHECK_EQ(made, children);
+    bool pizz = false;
+    for (const auto& t : per_artic.data().tracks) pizz = pizz || t.articulation_group == "pizzicato";
+    CHECK(pizz);
+
+    // Legato and sustain are not sounds of their own; one sound is no split.
+    templates::TemplateTrack only_legato;
+    only_legato.articulation_map = {"legato", "sustain"};
+    CHECK(templates::articulation_tracks_for(only_legato).empty());
+    templates::TemplateTrack strings;
+    strings.articulation_map = {"legato", "pizzicato", "tremolo", "pizzicato", "accent"};
+    const std::vector<std::string> want{"natural", "pizzicato", "tremolo"};
+    CHECK(templates::articulation_tracks_for(strings) == want);
+
+    // One per instrument folds even a template that is expanded by design.
+    o.layout = templates::TrackLayout::PerInstrument;
+    REQUIRE(instantiate(per_instrument, tpl("cinematic.orchestra.expanded"), content().instruments, o).ok);
+    for (const auto& t : per_instrument.data().tracks) CHECK(t.articulation_parent.empty());
+}

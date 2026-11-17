@@ -44,6 +44,10 @@ public:
     void toggle_favorite();
     void create();
     void add();
+    /// One track per instrument, or a track per articulation as well
+    /// (Violins I, then Violins I - Pizzicato, - Tremolo...).
+    void set_layout(templates::TrackLayout layout);
+    templates::TrackLayout layout() const;
 
     void paint(juce::Graphics&) override;
     void resized() override;
@@ -67,7 +71,8 @@ private:
     AppContext& context_;
     bool for_new_project_;
     juce::TextEditor search_;
-    juce::ComboBox category_, variant_, size_;
+    juce::ComboBox category_, variant_, size_, layout_;
+    juce::Label layout_label_;
     juce::Label count_;
     juce::ListBox list_;
     std::unique_ptr<Preview> preview_;

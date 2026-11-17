@@ -2086,3 +2086,38 @@ macOS, Linux and Windows. What it took:
       the install plan, the window). The install itself runs only on a real
       Windows or Mac: the first real test is going from one published
       preview to the next.
+54. **Menus, findable windows, and a track per articulation from any
+    template** (November 17, 2026).
+    - **Menu bar**: File, Edit, View, Track, Templates, Transport, Tools,
+      Window, Help (on macOS, in the screen's menu bar). *Templates*: Add
+      Template to Project, New from Template, New Project (the wizard),
+      Save as Template, Import or Export. *Window*: every window, and the
+      ones open now, to bring forward. *Track > New Track...* (Ctrl/Cmd+T).
+      Both toolbars start with *+ Track* (*+ Instrument* in Producer) and
+      *Template*.
+    - **Windows stay reachable**: the main window is never larger than the
+      screen (at 1440x900 on a laptop display its title bar and menus opened
+      above the top edge). Tool windows (Templates, Chord Explorer...) float
+      above VC Composer while it is the active app and step back when another
+      app is in front, so they never hide behind it.
+    - **Track layout** (Templates Supplement §8 "optional expression/keyswitch
+      lanes", Memory Management spec §4.3): the template window and the New
+      Project wizard ask *Tracks*: as the template lays them out; one track
+      per instrument (articulations inside it); or a track per articulation.
+      Per articulation, any of the templates opens each instrument followed
+      by a track per sound it uses - Natural plus each articulation in its
+      map that changes the sound (staccato, spiccato, pizzicato, tremolo,
+      marcato, harmonics, mute, trills...; legato, sustain, accents and
+      bowings play on Natural). The instrument's staff stays the one score;
+      each sound track plays its notes (as *Expand Articulations to Tracks*
+      makes them), and *Consolidate to One Track* folds them back. The
+      preview lists the tracks each instrument will get.
+      `templates::TrackLayout`, `articulation_tracks_for`
+      (`vcc/templates/Templates.h`), `ProjectSetup::track_layout`.
+    - **Checks**: `test_templates` (Comedy per articulation: the same parts
+      plus their sounds, Pizzicato among them; legato-only parts stay one
+      track; one per instrument folds even the Expanded orchestra); the
+      desktop check's `menu_checks` (the menus, the toolbar keys, the floating
+      Templates window listed under Window, an oversized window fitted to the
+      screen, Comedy added per articulation and per instrument; screenshots
+      `82-template-per-articulation`, `83-tracks-per-articulation`).

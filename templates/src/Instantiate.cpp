@@ -8,6 +8,7 @@
 
 #include "vcc/project/ArticulationMap.h"
 #include "vcc/project/Percussion.h"
+#include "vcc/notation/Markings.h"
 
 namespace vcc::templates {
 
@@ -152,6 +153,26 @@ int family_rank(const std::string& f)
 notation::Score instrument_score(const InstrumentDef& def, const std::string& track_name)
 {
     return score_for_instrument(def, track_name);
+}
+
+std::vector<std::string> articulation_tracks_for(const TemplateTrack& track)
+{
+    if (!track.articulation_tracks.empty()) return track.articulation_tracks;
+    // Sounds of their own; the rest (legato, sustain, accents, bowings,
+    // ornaments) are played by the natural track.
+    using A = notation::Articulation;
+    static const A sound_changing[] = {A::Staccato, A::Staccatissimo, A::Spiccato, A::Portato, A::Marcato, A::Pizzicato,
+                                       A::Tremolo, A::Trill,         A::Harmonic, A::Mute,    A::Falloff, A::Doit,
+                                       A::Plop,     A::Scoop};
+    std::vector<std::string> out{"natural"};
+    for (const auto& name : track.articulation_map) {
+        notation::Articulation a;
+        if (!notation::articulation_from_string(name, a)) continue;
+        if (std::find(std::begin(sound_changing), std::end(sound_changing), a) == std::end(sound_changing)) continue;
+        if (std::find(out.begin(), out.end(), name) == out.end()) out.push_back(name);
+    }
+    if (out.size() < 2) return {};
+    return out;
 }
 
 InstantiateResult instantiate(project::Project& proj, const Template& tpl, const InstrumentRegistry& instruments,
@@ -359,9 +380,12 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
             t.active_version_id = track_ids[i].second;
             // Expanded mode: the part, then a track per sound, as Expand makes them.
             std::vector<project::Track> sounds;
-            if (!tt.articulation_tracks.empty()) {
+            const auto groups = opt.layout == TrackLayout::PerInstrument     ? std::vector<std::string>{}
+                                : opt.layout == TrackLayout::PerArticulation ? articulation_tracks_for(tt)
+                                                                             : tt.articulation_tracks;
+            if (!groups.empty()) {
                 t.articulations_expanded = true;
-                sounds = project::make_articulation_tracks(t, tt.articulation_tracks, ids);
+                sounds = project::make_articulation_tracks(t, groups, ids);
             }
             d.tracks.push_back(std::move(t));
             for (auto& c : sounds) d.tracks.push_back(std::move(c));

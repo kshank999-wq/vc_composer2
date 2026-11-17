@@ -26,6 +26,8 @@ public:
     /// template's recommendations.
     void choose(const std::string& category, const std::string& mood, const std::string& template_id);
     const std::string& template_id() const noexcept { return template_; }
+    /// One track per instrument, or a track per articulation as well.
+    juce::ComboBox& layout_box() noexcept { return layout_; }
     void set_key(const std::string& key);
     void set_meter(const juce::String& meter);
     void set_tempo(double bpm);
@@ -57,7 +59,7 @@ private:
     juce::TextEditor name_, start_tc_;
     juce::TextButton choose_folder_{"Choose..."}, choose_picture_{"Choose picture..."}, clear_picture_{"None"},
         create_{"Create"}, cancel_{"Cancel"};
-    juce::ComboBox category_, mood_, template_box_, tonic_, mode_, meter_, frame_rate_, sample_rate_;
+    juce::ComboBox category_, mood_, template_box_, layout_, tonic_, mode_, meter_, frame_rate_, sample_rate_;
     juce::Slider tempo_{juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft};
     std::unique_ptr<juce::FileChooser> chooser_;
     juce::String message_;

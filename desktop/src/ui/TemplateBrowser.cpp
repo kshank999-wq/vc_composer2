@@ -9,6 +9,7 @@
 #include "ui/library/LibraryBrowser.h"
 #include "vcc/core/Files.h"
 #include "vcc/library/TemplatePackage.h"
+#include "vcc/project/ArticulationMap.h"
 #include "ui/Theme.h"
 
 namespace vcc::desktop {
@@ -182,9 +183,27 @@ bool delete_custom_template(AppContext& c, const std::string& id)
 
 // --- Preview pane ---------------------------------------------------------------------------
 
+namespace {
+/// The layout last chosen, kept while the app runs.
+templates::TrackLayout& last_layout()
+{
+    static templates::TrackLayout l = templates::TrackLayout::AsTemplate;
+    return l;
+}
+}  // namespace
+
 class TemplateBrowser::Preview final : public juce::Component {
 public:
     explicit Preview(AppContext& c) : context_(c) {}
+    templates::TrackLayout layout = templates::TrackLayout::AsTemplate;
+
+    /// The sound tracks a part opens with in the chosen layout.
+    std::vector<std::string> sounds_of(const templates::TemplateTrack& tr) const
+    {
+        if (layout == templates::TrackLayout::PerInstrument) return {};
+        if (layout == templates::TrackLayout::PerArticulation) return templates::articulation_tracks_for(tr);
+        return tr.articulation_tracks;
+    }
 
     void set(const templates::Template* t)
     {
@@ -307,10 +326,14 @@ private:
             fact(p, "Keys", join(k, ", "));
         }
         fact(p, "Length", juce::String(t->default_length_bars) + " bars");
-        int optional = 0;
-        for (const auto& tr : t->tracks) optional += tr.optional ? 1 : 0;
+        int optional = 0, sound_tracks = 0;
+        for (const auto& tr : t->tracks) {
+            optional += tr.optional ? 1 : 0;
+            sound_tracks += static_cast<int>(sounds_of(tr).size());
+        }
         fact(p, "Tracks", juce::String(static_cast<int>(t->tracks.size())) +
                               (optional ? " (" + juce::String(optional) + " optional)" : juce::String()) +
+                              (sound_tracks ? " + " + juce::String(sound_tracks) + " articulation tracks" : juce::String()) +
                               (t->buses.empty() ? juce::String() : ", " + juce::String(static_cast<int>(t->buses.size())) + " buses"));
 
         // Composer, period and culture.
@@ -407,6 +430,12 @@ private:
                     as.append("   [" + join(arts, ", ") + "]", juce::FontOptions(12.0f), fam_colour.withAlpha(0.85f));
                 }
                 if (tr->optional) as.append("   optional", juce::FontOptions(12.0f, juce::Font::italic), colours::accent_warm);
+                if (const auto sounds = sounds_of(*tr); !sounds.empty()) {
+                    std::vector<juce::String> names;
+                    for (const auto& g2 : sounds) names.push_back(utf8(project::articulation_group_name(g2)));
+                    as.append(juce::String::fromUTF8("\n      → tracks: ") + join(names, ", "), juce::FontOptions(12.0f),
+                              colours::text_dim);
+                }
                 p.y += text(p, as, 18) + 3;
             }
             p.y += 6;
@@ -479,6 +508,23 @@ TemplateBrowser::TemplateBrowser(AppContext& c, bool for_new_project) : context_
     list_.setOutlineThickness(1);
 
     preview_ = std::make_unique<Preview>(c);
+    layout_label_.setText("Tracks:", juce::dontSendNotification);
+    layout_label_.setColour(juce::Label::textColourId, colours::text_dim);
+    addAndMakeVisible(layout_label_);
+    layout_.setTitle("Track layout");
+    layout_.setComponentID("template_layout");
+    layout_.addItem("As the template lays them out", 1);
+    layout_.addItem("One track per instrument (articulations inside it)", 2);
+    layout_.addItem("A track per articulation (Violins - Pizzicato, - Tremolo...)", 3);
+    layout_.setTooltip("Per articulation: each instrument's sounds get tracks of their own, played from the "
+                       "instrument's staff; Track > Consolidate folds them back later");
+    layout_.onChange = [this] {
+        last_layout() = layout();
+        show_selected();
+    };
+    addAndMakeVisible(layout_);
+    layout_.setSelectedId(static_cast<int>(last_layout()) + 1, juce::dontSendNotification);
+    preview_->layout = last_layout();
     preview_view_.setViewedComponent(preview_.get(), false);
     preview_view_.setScrollBarsShown(true, false);
     addAndMakeVisible(preview_view_);
@@ -629,6 +675,11 @@ void TemplateBrowser::resized()
 
     r.removeFromLeft(1);
     auto bar = r.removeFromBottom(52).reduced(14, 11);
+    {
+        auto row2 = r.removeFromBottom(36).reduced(14, 4);
+        layout_label_.setBounds(row2.removeFromLeft(56));
+        layout_.setBounds(row2.removeFromLeft(std::min(440, row2.getWidth())));
+    }
     audition_.setBounds(bar.removeFromLeft(88));
     bar.removeFromLeft(6);
     stop_.setBounds(bar.removeFromLeft(58));
@@ -734,7 +785,9 @@ const templates::Template* TemplateBrowser::chosen() const
 void TemplateBrowser::show_selected()
 {
     const auto* t = chosen();
+    preview_->layout = layout();
     preview_->set(t);
+    preview_->repaint();
     const int w = std::max(200, preview_view_.getWidth() - preview_view_.getScrollBarThickness());
     preview_->setSize(w, std::max(preview_->measure(w), preview_view_.getHeight()));
     preview_view_.setViewPosition(0, 0);
@@ -841,6 +894,16 @@ void TemplateBrowser::audition()
                     " (a MIDI sketch on the placeholder voice)");
 }
 
+void TemplateBrowser::set_layout(templates::TrackLayout l)
+{
+    layout_.setSelectedId(static_cast<int>(l) + 1, juce::sendNotificationSync);
+}
+
+templates::TrackLayout TemplateBrowser::layout() const
+{
+    return static_cast<templates::TrackLayout>(std::max(0, layout_.getSelectedId() - 1));
+}
+
 void TemplateBrowser::create()
 {
     const auto* t = chosen();
@@ -848,7 +911,9 @@ void TemplateBrowser::create()
     context_.engine.stop_preview();
     const std::string id = t->template_id;
     const juce::String name = utf8(t->display_name);
-    auto r = context_.session.new_from_template(id);
+    templates::InstantiateOptions opt;
+    opt.layout = layout();
+    auto r = context_.session.new_from_template(id, opt);
     if (r.ok) {
         template_shelf().used(id);
         save_template_shelf();
@@ -871,7 +936,9 @@ void TemplateBrowser::add()
     if (!t || !t->instantiable()) return;
     const juce::String name = utf8(t->display_name);
     const std::string id = t->template_id;
-    auto r = context_.session.add_template(id);
+    templates::InstantiateOptions opt;
+    opt.layout = layout();
+    auto r = context_.session.add_template(id, opt);
     if (r.ok) {
         template_shelf().used(id);
         save_template_shelf();

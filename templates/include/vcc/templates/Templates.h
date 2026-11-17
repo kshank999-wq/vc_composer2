@@ -258,8 +258,23 @@ enum class InstantiateMode {
     Replace, ///< Clears instrument tracks first; needs replace_confirmed.
 };
 
+/// How a template's parts become tracks.
+enum class TrackLayout {
+    AsTemplate,       ///< As the template says (most: one track per instrument).
+    PerInstrument,    ///< One track per instrument, its articulations inside it.
+    PerArticulation,  ///< Each instrument, then a track per sound: "Violins I - Pizzicato".
+};
+
+/// The sounds a template track opens with a track each in
+/// TrackLayout::PerArticulation: the ones the template lists, else "natural"
+/// plus each articulation in its map that changes the sound (staccato,
+/// pizzicato, tremolo, marcato...; legato and sustain play as natural).
+/// Empty when the part has no second sound to split off.
+std::vector<std::string> articulation_tracks_for(const TemplateTrack& track);
+
 struct InstantiateOptions {
     InstantiateMode mode = InstantiateMode::Create;
+    TrackLayout layout = TrackLayout::AsTemplate;
     bool replace_confirmed = false;
     bool include_optional = true;
     bool apply_project_defaults = true;  ///< Create only: tempo, meter, key from the template.

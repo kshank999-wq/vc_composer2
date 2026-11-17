@@ -63,6 +63,8 @@ struct ProjectSetup {
     /// for its audio). Empty: not saved yet.
     std::string folder;
     std::string template_id;  ///< Empty: an empty project.
+    /// One track per instrument, or a track per articulation as well.
+    templates::TrackLayout track_layout = templates::TrackLayout::AsTemplate;
     /// Nullopt keeps the template's recommendation (or the default).
     std::optional<std::string> key;      ///< "D minor".
     std::optional<TimeSignature> meter;

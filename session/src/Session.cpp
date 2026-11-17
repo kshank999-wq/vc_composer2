@@ -242,6 +242,7 @@ SetupResult Session::create_project(const ProjectSetup& setup)
         }
         templates::InstantiateOptions opt;
         opt.mode = templates::InstantiateMode::Create;
+        opt.layout = setup.track_layout;
         opt.installed = installed_patches_;
         const auto r = templates::instantiate(fresh, *t, catalogs_.instruments, opt);
         if (!r.ok) {

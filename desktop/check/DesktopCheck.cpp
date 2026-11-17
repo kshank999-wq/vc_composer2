@@ -6675,7 +6675,7 @@ private:
 
 /// The in-app updater against the fake site: an offer only when newer, the
 /// download through the account, the checksum, and the window.
-void menu_checks(MainWindow& window, const juce::File&)
+void menu_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
     auto& ctx = window.context();
@@ -6699,8 +6699,9 @@ void menu_checks(MainWindow& window, const juce::File&)
           "Window menu opens the windows (" + items("Window").joinIntoString("|") + ")");
 
     // Both toolbars offer + Track and Template.
-    check(main.toolbar().key("+ Track") != nullptr && main.toolbar().key("Template") != nullptr,
-          "the toolbar has + Track and Template");
+    check((main.toolbar().key("+ Track") != nullptr || main.toolbar().key("+ Instrument") != nullptr) &&
+              main.toolbar().key("Template") != nullptr,
+          "the toolbar has + Track (+ Instrument in Producer) and Template");
 
     // A tool window floats over the app and is listed under Window.
     show_template_browser(ctx, false);
@@ -6723,6 +6724,49 @@ void menu_checks(MainWindow& window, const juce::File&)
     }
     for (auto* w : dialogs::open_tool_windows()) w->closeButtonPressed();
     pump(200);
+
+    // Any template, a track per articulation: Comedy - Light / Quirky opens
+    // each instrument followed by its sounds (Pizzicato, Staccato...).
+    auto& session = ctx.session;
+    session.new_empty();
+    show_template_browser(ctx, false);
+    TemplateBrowser* browser = nullptr;
+    wait_for([&] { return (browser = template_browser()) != nullptr; });
+    if (browser == nullptr) {
+        check(false, "the template window opens");
+        return;
+    }
+    browser->show_category("All categories");
+    check(browser->select("cinematic.comedy.light_quirky"), "the template window lists Comedy - Light / Quirky");
+    browser->set_layout(templates::TrackLayout::PerArticulation);
+    pump(100);
+    if (auto* w = find_dialog("Templates")) shoot(*w, dir, "82-template-per-articulation");
+    browser->add();
+    int parts = 0, sounds = 0;
+    bool pizz = false;
+    for (const auto& t : session.data().tracks) {
+        if (t.kind != project::TrackKind::Instrument) continue;
+        if (t.articulation_parent.empty()) ++parts;
+        else ++sounds;
+        pizz = pizz || t.name.find("Pizzicato") != std::string::npos;
+    }
+    check(parts > 0 && sounds > 0 && pizz,
+          "A track per articulation: " + juce::String(parts) + " instruments and " + juce::String(sounds) +
+              " articulation tracks, Pizzicato among them");
+    window.main().show_workspace(MainComponent::Workspace::Sequencer);
+    pump(300);
+    shoot(window, dir, "83-tracks-per-articulation");
+    // And folded: one track per instrument.
+    session.new_empty();
+    browser->set_layout(templates::TrackLayout::PerInstrument);
+    browser->add();
+    int folded = 0;
+    for (const auto& t : session.data().tracks) folded += t.articulation_parent.empty() ? 0 : 1;
+    check(folded == 0, "One track per instrument: no articulation tracks");
+    browser->set_layout(templates::TrackLayout::AsTemplate);
+    for (auto* w : dialogs::open_tool_windows()) w->closeButtonPressed();
+    pump(200);
+    session.new_empty();
 }
 
 void updater_checks(MainWindow& window, const juce::File& dir)
