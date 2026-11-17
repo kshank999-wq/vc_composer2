@@ -186,7 +186,7 @@ jobs:
           rm -f devid-g2.cer
           security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
           # codesign searches the keychain list, not just the default keychain.
-          security list-keychains -d user -s build.keychain $(security list-keychains -d user | tr -d '"')
+          security list-keychains -d user -s build.keychain login.keychain
           # What can sign here. A name equal to MACOS_SIGNING_IDENTITY prints as ***.
           security find-identity -v -p codesigning build.keychain
       - name: Bundle, sign, notarize, disk image

@@ -45,11 +45,12 @@ if [ -n "${MACOS_SIGNING_IDENTITY:-}" ]; then
     identities="$(security find-identity -v -p codesigning)"
     if ! printf '%s' "$identities" | grep -qF "\"$MACOS_SIGNING_IDENTITY\""; then
         # Not that exact name. With exactly one Developer ID identity here, sign with it.
-        devid="$(printf '%s\n' "$identities" | grep '"Developer ID Application:' || true)"
+        # (A keychain listed twice shows the same identity twice: count fingerprints.)
+        devid="$(printf '%s\n' "$identities" | grep '"Developer ID Application:' | awk '{print $2}' | sort -u || true)"
         if [ "$(printf '%s' "$devid" | grep -c . || true)" = 1 ]; then
             echo "warning: MACOS_SIGNING_IDENTITY does not match the certificate's name exactly;"
             echo "         signing with the one Developer ID Application identity in the keychain."
-            MACOS_SIGNING_IDENTITY="$(printf '%s' "$devid" | awk '{print $2}')"
+            MACOS_SIGNING_IDENTITY="$devid"
         else
             echo "error: no signing identity named as MACOS_SIGNING_IDENTITY. Identities here:"
             printf '%s\n' "$identities"
