@@ -179,8 +179,16 @@ jobs:
           security default-keychain -s build.keychain
           security unlock-keychain -p ci build.keychain
           security import cert.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
           rm cert.p12
+          # Apple's Developer ID intermediate (G2), so the certificate is trusted here.
+          curl -fsSL -o devid-g2.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import devid-g2.cer -k build.keychain || true
+          rm -f devid-g2.cer
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          # codesign searches the keychain list, not just the default keychain.
+          security list-keychains -d user -s build.keychain $(security list-keychains -d user | tr -d '"')
+          # What can sign here. A name equal to MACOS_SIGNING_IDENTITY prints as ***.
+          security find-identity -v -p codesigning build.keychain
       - name: Bundle, sign, notarize, disk image
         run: |
           app="build/desktop/VCComposer2_artefacts/Release/VC Composer.app"

@@ -40,6 +40,22 @@ done
 [ "$bad" = 0 ]
 
 if [ -n "${MACOS_SIGNING_IDENTITY:-}" ]; then
+    # Forgive how the name was pasted: stray spaces or line ends, a leading "CN=".
+    MACOS_SIGNING_IDENTITY="$(printf '%s' "$MACOS_SIGNING_IDENTITY" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^CN=//')"
+    identities="$(security find-identity -v -p codesigning)"
+    if ! printf '%s' "$identities" | grep -qF "\"$MACOS_SIGNING_IDENTITY\""; then
+        # Not that exact name. With exactly one Developer ID identity here, sign with it.
+        devid="$(printf '%s\n' "$identities" | grep '"Developer ID Application:' || true)"
+        if [ "$(printf '%s' "$devid" | grep -c . || true)" = 1 ]; then
+            echo "warning: MACOS_SIGNING_IDENTITY does not match the certificate's name exactly;"
+            echo "         signing with the one Developer ID Application identity in the keychain."
+            MACOS_SIGNING_IDENTITY="$(printf '%s' "$devid" | awk '{print $2}')"
+        else
+            echo "error: no signing identity named as MACOS_SIGNING_IDENTITY. Identities here:"
+            printf '%s\n' "$identities"
+            exit 1
+        fi
+    fi
     sign() { codesign --force --timestamp --options runtime --entitlements "$HERE/entitlements.plist" \
                       --sign "$MACOS_SIGNING_IDENTITY" "$@"; }
     for f in "$FRAMEWORKS"/*.dylib; do sign "$f"; done
@@ -59,7 +75,15 @@ hdiutil create -volname "VC Composer" -srcfolder "$STAGE" -ov -format UDZO "$DMG
 
 if [ -n "${MACOS_SIGNING_IDENTITY:-}" ] && [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ]; then
     codesign --force --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$DMG"
-    xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
-        --password "$APPLE_APP_PASSWORD" --wait
+    auth=(--apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD")
+    result="$(xcrun notarytool submit "$DMG" "${auth[@]}" --wait --output-format json)"
+    echo "$result"
+    id="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
+    status="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')"
+    if [ "$status" != "Accepted" ]; then
+        echo "error: Apple's notarization says: $status. Its log:"
+        [ -n "$id" ] && xcrun notarytool log "$id" "${auth[@]}" || true
+        exit 1
+    fi
     xcrun stapler staple "$DMG"
 fi
