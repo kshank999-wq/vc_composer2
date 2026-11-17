@@ -1,5 +1,7 @@
 #include "system/ProcessStats.h"
 
+#include <cstddef>
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
