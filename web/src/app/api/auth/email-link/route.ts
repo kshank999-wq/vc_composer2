@@ -38,14 +38,19 @@ export async function POST(request: Request) {
 
   const verdict = await verifyTurnstile(token, clientAddress(request));
   if (!verdict.ok) {
+    // Cloudflare's reason, in the server log: a secret that does not belong
+    // with the page's site key otherwise looks exactly like an unticked box.
+    console.warn(`email-link: person check refused (${verdict.reason})`);
+    const misconfigured = /invalid-input-secret|missing-input-secret/.test(verdict.reason);
     return NextResponse.json(
       {
-        error:
-          verdict.reason === 'unreachable'
+        error: misconfigured
+          ? 'Sign-in by email is not working on our side right now. Please use your password, or try again later.'
+          : verdict.reason === 'unreachable'
             ? 'The check that you are a person could not be reached. Try again in a moment.'
             : 'Please tick the box to show you are a person, then try again.',
       },
-      { status: 400 },
+      { status: misconfigured ? 503 : 400 },
     );
   }
 
@@ -57,7 +62,10 @@ export async function POST(request: Request) {
       redirectTo: `${origin}/auth/callback?next=${encodeURIComponent('/reset')}`,
     });
     // Said the same whether or not the address has an account.
-    if (error && !/not found/i.test(error.message)) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (error && !/not found/i.test(error.message)) {
+      console.warn(`email-link: Supabase refused the reset link (${error.message})`);
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     return NextResponse.json({ ok: true });
   }
 
@@ -68,6 +76,9 @@ export async function POST(request: Request) {
     if (made.error && !/already/i.test(made.error.message)) return NextResponse.json({ error: made.error.message }, { status: 400 });
     ({ error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo, shouldCreateUser: false } }));
   }
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) {
+    console.warn(`email-link: Supabase refused the sign-in link (${error.message})`);
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
   return NextResponse.json({ ok: true });
 }
