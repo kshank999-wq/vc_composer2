@@ -7296,6 +7296,81 @@ void hardware_insert_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+void ostinato_audition_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    ctx.session.new_empty();
+    ctx.session.select_track(ctx.session.add_track("Celli", "celli"));
+    show_ostinato_creator(ctx);
+    pump(400);
+    auto* win = find_dialog("Ostinato Creator");
+    std::function<juce::Component*(juce::Component&, const juce::String&)> find_id = [&](juce::Component& c, const juce::String& id) -> juce::Component* {
+        if (c.getComponentID() == id) return &c;
+        for (auto* k : c.getChildren())
+            if (auto* f = find_id(*k, id)) return f;
+        return nullptr;
+    };
+    auto* a = win ? dynamic_cast<juce::TextButton*>(find_id(*win, "ostinato_audition_0")) : nullptr;
+    auto* b = win ? dynamic_cast<juce::TextButton*>(find_id(*win, "ostinato_audition_1")) : nullptr;
+    if (a == nullptr || b == nullptr) {
+        check(false, "the Ostinato Creator's variants have Audition buttons");
+        return;
+    }
+    a->triggerClick();
+    pump(200);
+    check(a->getToggleState() && a->getButtonText() == "Stop" && ctx.engine.previewing(),
+          "Audition lights up, reads Stop, and loops the variant");
+    shoot(*win, dir, "91-ostinato-auditioning");
+    b->triggerClick();
+    pump(200);
+    check(b->getToggleState() && !a->getToggleState() && a->getButtonText() == "Audition",
+          "auditioning another variant moves the light to it");
+    b->triggerClick();
+    pump(200);
+    {
+        // No audio device here: process a block, as the device would, to let the stop land.
+        juce::AudioBuffer<float> block(2, 512);
+        ctx.engine.prepare_offline(48000.0, 512);
+        ctx.engine.render_offline(block, 512);
+    }
+    check(!b->getToggleState() && b->getButtonText() == "Audition" && !ctx.engine.previewing(),
+          "pressing it again stops the audition (lit " + juce::String(b->getToggleState() ? 1 : 0) + ", text " + b->getButtonText() + ", playing " + juce::String(ctx.engine.previewing() ? 1 : 0) + ")");
+    // Notation first: the cards show each figure as notation (as it goes on
+    // the staff), MIDI on request; Send to Track writes it on the staff.
+    auto* staff_view = dynamic_cast<vcc::ui::NotationView*>(find_id(*win, "ostinato_notation_0"));
+    check(staff_view != nullptr && staff_view->isVisible() && !staff_view->layout().notes.empty(),
+          "each variant is shown as notation");
+    shoot(*win, dir, "92-ostinato-notation");
+    if (auto* midi = dynamic_cast<juce::Button*>(find_id(*win, "ostinato_show_midi"))) midi->triggerClick();
+    pump(100);
+    check(staff_view != nullptr && !staff_view->isVisible(), "MIDI shows the piano-roll picture instead");
+    if (auto* notation = dynamic_cast<juce::Button*>(find_id(*win, "ostinato_show_notation"))) notation->triggerClick();
+    pump(100);
+    const auto celli = ctx.session.selected_track();
+    juce::TextButton* send = nullptr;
+    std::function<void(juce::Component&)> find_send = [&](juce::Component& c) {
+        if (auto* b = dynamic_cast<juce::TextButton*>(&c); b && b->getButtonText() == "Send to Track" && send == nullptr) send = b;
+        for (auto* k : c.getChildren()) find_send(*k);
+    };
+    find_send(*win);
+    if (send) send->triggerClick();
+    pump(300);
+    std::size_t on_staff = 0, regions = 0;
+    if (const auto* t = ctx.session.data().find_track(celli); t && t->active_version()) {
+        for (const auto& n : t->active_version()->score.notes(0)) on_staff += n.is_rest ? 0 : 1;
+        regions = t->active_version()->regions.size();
+    }
+    check(send != nullptr && on_staff > 0 && regions == 0,
+          "Send to Track writes the figure on the staff (" + juce::String(static_cast<int>(on_staff)) + " notes, " +
+              juce::String(static_cast<int>(regions)) + " MIDI regions)");
+    for (auto* w : dialogs::open_tool_windows()) w->closeButtonPressed();
+    pump(200);
+    window.main().show_workspace(MainComponent::Workspace::Composer);
+    pump(300);
+    shoot(window, dir, "93-ostinato-on-staff");
+    ctx.session.new_empty();
+}
+
 void updater_checks(MainWindow& window, const juce::File& dir)
 {
     auto& ctx = window.context();
@@ -9625,7 +9700,8 @@ int main(int argc, char** argv)
                 {"mixer_controller_checks", mixer_controller_checks},
                 {"note_mouse_checks", note_mouse_checks},
                 {"project_file_checks", project_file_checks},
-                {"hardware_insert_checks", hardware_insert_checks}};
+                {"hardware_insert_checks", hardware_insert_checks},
+                {"ostinato_audition_checks", ostinato_audition_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -10311,6 +10387,8 @@ int main(int argc, char** argv)
         project_file_checks(window, dir);
         section("hardware_insert_checks");
         hardware_insert_checks(window, dir);
+        section("ostinato_audition_checks");
+        ostinato_audition_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

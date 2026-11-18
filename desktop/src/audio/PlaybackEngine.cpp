@@ -2711,9 +2711,13 @@ void PlaybackEngine::process(const float* const* inputs, int num_inputs, float* 
         if (preview_) retired_previews_.push(preview_);
         preview_ = clip;
     }
-    if (stop_preview_request_.exchange(false) && preview_) {
-        preview_->synth->all_notes_off();
-        if (retired_previews_.push(preview_)) preview_ = nullptr;
+    if (stop_preview_request_.exchange(false)) {
+        // Stopped, even when the stop came before the audition ever started
+        // here (the flag would otherwise stay set).
+        if (preview_) {
+            preview_->synth->all_notes_off();
+            if (retired_previews_.push(preview_)) preview_ = nullptr;
+        }
         previewing_ = false;
     }
     service_passes();

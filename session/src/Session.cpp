@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <map>
 #include <set>
 
 #include "vcc/core/Files.h"
@@ -990,7 +991,65 @@ const project::ChordMark* Session::chord_symbol_at(Ticks tick) const
 project::InsertResult Session::send_ostinato(const std::string& id, const ostinato::Variant& v,
                                              const std::string& preset_id, project::CollisionPolicy policy)
 {
-    return insert_notes(id, v.start, v.end, v.notes, policy, "ostinato:" + preset_id + "/" + v.id);
+    // Notation first: the figure is written on the track's staff (it plays
+    // from there, as everything written does). Only a track with no staff -
+    // MIDI-only - gets it as a MIDI region.
+    const project::Track* t = data().find_track(id);
+    const project::TrackVersion* ver = t ? t->active_version() : nullptr;
+    if (!t || !ver || ver->score.staff_count() == 0 || t->kind == project::TrackKind::MidiOnly)
+        return insert_notes(id, v.start, v.end, v.notes, policy, "ostinato:" + preset_id + "/" + v.id);
+
+    const auto& score = ver->score;
+    const auto& staff = score.staff(0);
+    const project::PercussionMap* drums = t->percussion_map.empty() ? nullptr : project::percussion_map_named(t->percussion_map);
+    const bool percussion = drums != nullptr || staff.clef == notation::Clef::Percussion;
+    // Written as the pattern reads, not as briefly as it sounds: each note
+    // takes its grid step (the smallest distance between onsets), or up to
+    // the next note when that comes sooner - sixteenths, not 32nds and rests.
+    std::vector<Ticks> onsets;
+    for (const auto& n : v.notes) onsets.push_back(n.start);
+    std::sort(onsets.begin(), onsets.end());
+    onsets.erase(std::unique(onsets.begin(), onsets.end()), onsets.end());
+    Ticks step = 0;
+    for (std::size_t i = 1; i < onsets.size(); ++i) {
+        const Ticks gap = onsets[i] - onsets[i - 1];
+        if (gap > 0 && (step == 0 || gap < step)) step = gap;
+    }
+    auto written_length = [&](const NoteEvent& n) {
+        const auto next = std::upper_bound(onsets.begin(), onsets.end(), n.start);
+        Ticks len = std::max(n.duration, step);
+        if (next != onsets.end()) len = std::min(len, *next - n.start);
+        len = std::min(len, v.end - n.start);
+        return std::max<Ticks>(len, n.duration > 0 ? std::min(n.duration, v.end - n.start) : 0);
+    };
+    // Notes sounding together for the same time are one chord on the page.
+    std::map<std::pair<Ticks, Ticks>, std::vector<int>> groups;
+    for (const auto& n : v.notes) {
+        int written = n.pitch;
+        if (percussion) {
+            // On a drum staff each sound has its line (and head) in the kit's map.
+            if (drums)
+                if (const auto* sound = drums->by_midi(n.pitch)) written = sound->written;
+        } else {
+            written = n.pitch - staff.total_transposition();
+        }
+        if (written < 0 || written > 127 || n.duration <= 0) continue;
+        groups[{n.start, written_length(n)}].push_back(written);
+    }
+    std::vector<WrittenEvent> events;
+    for (auto& [span, pitches] : groups) {
+        std::sort(pitches.begin(), pitches.end());
+        pitches.erase(std::unique(pitches.begin(), pitches.end()), pitches.end());
+        WrittenEvent e;
+        e.start = span.first;
+        e.duration = span.second;
+        const auto key = percussion ? notation::KeySignature{}
+                                    : interchange::written_key(score.key_signature_at(span.first), staff.transposition_semitones);
+        for (const int midi : pitches) e.pitches.push_back(notation::spell_midi_note(midi, key));
+        events.push_back(std::move(e));
+    }
+    if (events.empty()) return insert_notes(id, v.start, v.end, v.notes, policy, "ostinato:" + preset_id + "/" + v.id);
+    return write_events(id, events, {}, policy, "Ostinato " + v.id + " on " + t->name);
 }
 
 // --- Picture, markers and cues ---------------------------------------------------------

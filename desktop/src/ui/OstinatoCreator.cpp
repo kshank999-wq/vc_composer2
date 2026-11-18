@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <string>
 
+#include "AppResources.h"
 #include "ui/Theme.h"
+#include "vcc/ui/NotationView.h"
 
 namespace vcc::desktop {
 
@@ -32,12 +34,29 @@ public:
     {
         for (auto* b : {&audition_, &vary_, &send_}) addAndMakeVisible(*b);
         addAndMakeVisible(lock_);
+        auto& font = music_font();
+        if (font.loaded) {
+            view_.set_glyph_table(font.glyphs);
+            view_.set_music_font(&font.font);
+        }
+        view_.set_follow_playhead(false);
+        view_.setWantsKeyboardFocus(false);
+        view_.setInterceptsMouseClicks(false, false);
+        view_.setComponentID("ostinato_notation_" + juce::String(index_));
+        addChildComponent(view_);
         audition_.setTooltip("Loop this variant (nothing is written)");
         vary_.setTooltip("Re-roll one aspect of this variant");
         lock_.setTooltip("Keep this variant's rhythm when varying it");
         send_.setTooltip("Write this variant to the target track (one undo step)");
         send_.setColour(juce::TextButton::buttonColourId, colours::accent);
-        audition_.onClick = [this] { owner_.audition(index_); };
+        // A toggle: lit and reading "Stop" while it loops; press again to stop.
+        audition_.setComponentID("ostinato_audition_" + juce::String(index_));
+        audition_.setColour(juce::TextButton::buttonOnColourId, kCardColours[index_]);
+        audition_.setColour(juce::TextButton::textColourOnId, juce::Colours::black);
+        audition_.onClick = [this] {
+            if (owner_.auditioning_ == index_) owner_.stop();
+            else owner_.audition(index_);
+        };
         send_.onClick = [this] { owner_.send(index_); };
         vary_.onClick = [this] {
             juce::PopupMenu m;
@@ -57,6 +76,31 @@ public:
     }
 
     bool lock_rhythm() const { return lock_.getToggleState(); }
+    /// Lit with "Stop" while this variant loops.
+    void show_playing(bool playing)
+    {
+        audition_.setToggleState(playing, juce::dontSendNotification);
+        audition_.setButtonText(playing ? "Stop" : "Audition");
+        audition_.setTooltip(playing ? "Stop the audition" : "Loop this variant (nothing is written)");
+        repaint();
+    }
+    juce::TextButton& audition_button() noexcept { return audition_; }
+    /// The variant as notation: its own written score (as it would go on the staff).
+    void set_notation(std::unique_ptr<notation::Score> score, Ticks from, Ticks to)
+    {
+        score_ = std::move(score);
+        from_ = from;
+        to_ = to;
+        view_.set_score(score_.get());
+        fit_view();
+        show_mode();
+    }
+    void show_mode()
+    {
+        view_.setVisible(owner_.notation_ && score_ != nullptr);
+        repaint();
+    }
+    vcc::ui::NotationView& notation_view() noexcept { return view_; }
     juce::String note;  ///< "varied pitch" etc.
 
     void paint(juce::Graphics& g) override
@@ -100,7 +144,7 @@ public:
         }
         g.drawText(sub, 58, 30, getWidth() - 70, 18, juce::Justification::centredLeft, true);
 
-        if (v)
+        if (v && !view_.isVisible())
             dialogs::draw_mini_roll(g, roll_.toFloat(), v->notes, v->start, v->end, owner_.options_.meter, colour);
         g.setColour(colours::text_dim.withAlpha(0.7f));
         g.setFont(juce::FontOptions(11.0f));
@@ -117,6 +161,8 @@ public:
         auto buttons = r.removeFromBottom(28);
         r.removeFromBottom(26);
         roll_ = r;
+        view_.setBounds(roll_);
+        fit_view();
         auto lock_row = getLocalBounds().reduced(14, 12).removeFromBottom(28 + 26).removeFromTop(24);
         lock_.setBounds(lock_row.removeFromLeft(120));
         const int w = (buttons.getWidth() - 12) / 3;
@@ -131,6 +177,20 @@ private:
     OstinatoCreator& owner_;
     int index_;
     juce::Rectangle<int> roll_;
+    void fit_view()
+    {
+        if (!score_ || roll_.isEmpty() || to_ <= from_) return;
+        // The whole figure across the card; a staff tall enough to read.
+        const double space = std::clamp(roll_.getHeight() / 14.0, 4.0, 9.0);
+        view_.set_vertical_zoom(space);
+        const double quarters = static_cast<double>(to_ - from_) / kTicksPerQuarter;
+        view_.set_horizontal_zoom(std::max(1.0, (roll_.getWidth() - 8 * space) / (space * quarters)));
+        view_.set_origin_tick(from_);
+    }
+
+    std::unique_ptr<notation::Score> score_;
+    Ticks from_ = 0, to_ = 0;
+    vcc::ui::NotationView view_;
     juce::TextButton audition_{"Audition"}, vary_{"Vary..."}, send_{"Send to Track"};
     juce::ToggleButton lock_{"Lock rhythm"};
 };
@@ -259,6 +319,24 @@ OstinatoCreator::OstinatoCreator(AppContext& c) : context_(c), target_(c, "New O
     generate_.onClick = [this] { generate(); };
     addAndMakeVisible(stop_);
     stop_.onClick = [this] { stop(); };
+    // The cards show the figure as notation (as it goes on the staff) or as MIDI.
+    for (auto* b : {&show_notation_, &show_midi_}) {
+        b->setClickingTogglesState(false);
+        b->setRadioGroupId(4711);
+        b->setColour(juce::TextButton::buttonOnColourId, colours::accent);
+        addAndMakeVisible(*b);
+    }
+    show_notation_.setComponentID("ostinato_show_notation");
+    show_midi_.setComponentID("ostinato_show_midi");
+    show_notation_.setToggleState(true, juce::dontSendNotification);
+    auto set_mode = [this](bool notation) {
+        notation_ = notation;
+        show_notation_.setToggleState(notation, juce::dontSendNotification);
+        show_midi_.setToggleState(!notation, juce::dontSendNotification);
+        for (auto& c : cards_) c->show_mode();
+    };
+    show_notation_.onClick = [set_mode] { set_mode(true); };
+    show_midi_.onClick = [set_mode] { set_mode(false); };
 
     addAndMakeVisible(hint_);
     hint_.setFont(juce::FontOptions(12.0f));
@@ -340,6 +418,9 @@ void OstinatoCreator::resized()
     auto bottom = r.removeFromBottom(kBottomBar).reduced(12, 12);
     stop_.setBounds(bottom.removeFromLeft(80));
     bottom.removeFromLeft(14);
+    show_midi_.setBounds(bottom.removeFromRight(70));
+    show_notation_.setBounds(bottom.removeFromRight(90));
+    bottom.removeFromRight(14);
     hint_.setBounds(bottom);
     r = r.reduced(12, 8);
     info_.setBounds(r.removeFromTop(24));
@@ -425,6 +506,7 @@ void OstinatoCreator::generate()
     }
     vary_count_ = {};
     update_info();
+    refresh_notation();
     for (auto& c : cards_) c->repaint();
     if (auditioning_ >= 0) audition(auditioning_);  // keep the loop going with the new notes
 }
@@ -446,6 +528,7 @@ void OstinatoCreator::vary(int index, ostinato::Aspect aspect)
     variants_[static_cast<std::size_t>(index)] = generator.vary(base, aspect, id);
     static const char* names[] = {"rhythm", "pitch", "accents", "register"};
     cards_[static_cast<std::size_t>(index)]->note = juce::String("varied ") + names[static_cast<int>(aspect)];
+    refresh_notation();
     cards_[static_cast<std::size_t>(index)]->repaint();
     if (auditioning_ == index) audition(index);
 }
@@ -463,15 +546,15 @@ void OstinatoCreator::audition(int index)
     }
     context_.engine.preview(notes, family, program, dialogs::project_bpm(context_), true, v.end - v.start);
     auditioning_ = index;
-    for (auto& c : cards_) c->repaint();
-    context_.status("Looping variant " + utf8(v.id) + " - press Stop to end the audition");
+    for (std::size_t i = 0; i < cards_.size(); ++i) cards_[i]->show_playing(static_cast<int>(i) == index);
+    context_.status("Looping variant " + utf8(v.id) + " - press its Stop (or Stop below) to end the audition");
 }
 
 void OstinatoCreator::stop()
 {
     context_.engine.stop_preview();
     auditioning_ = -1;
-    for (auto& c : cards_) c->repaint();
+    for (auto& c : cards_) c->show_playing(false);
 }
 
 void OstinatoCreator::send(int index)
@@ -512,6 +595,41 @@ void OstinatoCreator::send_with(const std::string& track_id, const ostinato::Var
         return;
     }
     dialogs::report_send(context_, result, what);
+}
+
+void OstinatoCreator::refresh_notation()
+{
+    // Written exactly as Send to Track would write it: a scratch project with
+    // this project's key, meter and tempo and the target's instrument.
+    const auto& project = context_.session.data();
+    std::string instrument = options_.percussion ? std::string() : std::string("keys.piano");
+    if (const auto* t = project.find_track(target_.track_id())) instrument = t->instrument_standard_id;
+    if (instrument.empty())
+        for (const auto& i : context_.session.catalogs().instruments.all())
+            if (i.family == "percussion" && i.unpitched) {
+                instrument = i.id;
+                break;
+            }
+    for (std::size_t i = 0; i < cards_.size(); ++i) {
+        if (i >= variants_.size()) {
+            cards_[i]->set_notation(nullptr, 0, 0);
+            continue;
+        }
+        session::Session scratch(context_.session.catalogs());
+        scratch.new_empty();
+        scratch.edit("Context", [&](project::ProjectData& d) {
+            d.key = project.key;
+            d.meter = project.meter;
+            d.tempo = project.tempo;
+            return true;
+        });
+        const auto track = scratch.add_track("Preview", instrument);
+        std::unique_ptr<notation::Score> score;
+        if (!track.empty() && scratch.send_ostinato(track, variants_[i], "preview", project::CollisionPolicy::Replace).ok)
+            if (const auto* t = scratch.data().find_track(track); t && t->active_version())
+                score = std::make_unique<notation::Score>(t->active_version()->score);
+        cards_[i]->set_notation(std::move(score), variants_[i].start, variants_[i].end);
+    }
 }
 
 void OstinatoCreator::update_info()

@@ -36,6 +36,8 @@ private:
     void send_with(const std::string& track_id, const ostinato::Variant& variant, const std::string& preset,
                    const juce::String& what, project::CollisionPolicy policy);
     void update_info();
+    /// Each variant written as Send to Track would write it, for the cards' notation.
+    void refresh_notation();
 
     AppContext& context_;
     juce::Label track_caption_, preset_caption_, key_caption_, follow_caption_, length_caption_, start_caption_,
@@ -46,6 +48,9 @@ private:
     juce::Label meter_;
     juce::TextEditor seed_;
     juce::TextButton new_seed_{"New seed"}, generate_{"Generate"}, stop_{"Stop"};
+    /// The cards show the figure as notation (default) or as MIDI.
+    juce::TextButton show_notation_{"Notation"}, show_midi_{"MIDI"};
+    bool notation_ = true;
     juce::ToggleButton evolve_{"Evolve every 4 bars"}, call_response_{"Call and response"};
     juce::Label info_, hint_;
     std::array<std::unique_ptr<Card>, 3> cards_;
