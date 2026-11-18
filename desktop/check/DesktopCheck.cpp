@@ -48,6 +48,7 @@
 #include "audio/ChannelDsp.h"
 #include "ui/console/ConsoleStrip.h"
 #include "ui/console/ConsoleView.h"
+#include "ui/ScoreTools.h"
 #include "ui/TrackPanel.h"
 #include "ui/composer/CircleOfFifths.h"
 #include "ui/console/RoutingCanvas.h"
@@ -4721,6 +4722,96 @@ void track_header_checks(MainWindow& window, const juce::File& dir)
     main.set_library_shown(false);
     pump(80);
     check(!main.library_shown(), "and it closes");
+}
+
+/// The piano sketch: every template opens with a Piano on top; its lines go
+/// to any track, its chords spread over a section; one line never gets a chord.
+void piano_sketch_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& session = window.context().session;
+    session.new_from_template("cinematic.orchestra.consolidated");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(300);
+    auto& composer = main.composer();
+    const auto tracks = session.composer_tracks();
+    check(!tracks.empty() && tracks.front()->name == "Piano" && composer.header(0).scribble().text().startsWith("PIANO"),
+          "the template opens with the Piano on top, the sketch track");
+    const std::string piano = tracks.front()->id;
+    notation::Score sc = session.data().find_track(piano)->active_version()->score;
+    sc.insert_chord(0, 0, notation::whole(), {notation::spell_midi_note(64, {}), notation::spell_midi_note(67, {}), notation::spell_midi_note(72, {})});
+    sc.insert_chord(1, 0, notation::whole(), {notation::spell_midi_note(48, {})});
+    session.commit_score(piano, sc, "Sketch");
+    session.select_track(piano);
+    pump(100);
+    // The header's menu carries the sketch tools.
+    auto menu = sketch_menu(window.context(), piano);
+    juce::StringArray labels;
+    for (juce::PopupMenu::MenuItemIterator it(menu); it.next();) labels.add(it.getItem().text);
+    check(labels.contains("Send Top Line to") && labels.contains("Send Bass Line to") && labels.contains("Send All Notes (chords) to") &&
+              labels.contains("Spread Chords to Strings (open, 5 parts)") && labels.contains("Spread Chords to Woodwinds (4 parts)"),
+          "the Piano's menu: send a line to any track, spread chords to a section (" + labels.joinIntoString(", ") + ")");
+    // All Notes lists only instruments that play chords.
+    bool violins_offered = false;
+    for (juce::PopupMenu::MenuItemIterator it(menu); it.next();)
+        if (it.getItem().text == "Send All Notes (chords) to" && it.getItem().subMenu)
+            for (juce::PopupMenu::MenuItemIterator sub(*it.getItem().subMenu); sub.next();)
+                violins_offered = violins_offered || sub.getItem().text.startsWith("Violins");
+    check(!violins_offered, "chords are never offered to a single-line instrument (violins)");
+    session.set_selection_range(0, 4 * kTicksPerQuarter);
+    const auto status = spread_to_strings(window.context(), piano);
+    const auto strings = session.string_section();
+    auto sounding = [&](const std::string& id) {
+        int p = -1;
+        if (const auto* t = session.data().find_track(id))
+            for (const auto& n : t->active_version()->score.notes(0))
+                if (!n.is_rest && n.start_tick == 0) p = notation::midi_note_number(n.pitch) + t->active_version()->score.staff(0).total_transposition();
+        return p;
+    };
+    check(!strings[0].empty() && sounding(strings[0]) == 72 && sounding(strings[1]) == 64 && sounding(strings[2]) == 55 &&
+              sounding(strings[3]) == 48 && sounding(strings[4]) == 36,
+          "Spread Chords to Strings: C5 violins I, E4 violins II, G3 violas, C3 celli, C2 basses (" + status + ")");
+    pump(120);
+    shoot(composer, dir, "piano-sketch-spread");
+
+    // The chord box: Send to Strings spreads the chord at the cursor; on a violin track alone, no chord.
+    composer.set_chord_mode(true);
+    pump(100);
+    auto& palette = composer.chord_palette();
+    check(palette.send_box().isShowing() && palette.send_box().getNumItems() == 4, "the chord box has Send to: this track / Strings / Woodwinds / Brass");
+    session.select_track(strings[0]);
+    pump(80);
+    palette.send_box().setSelectedItemIndex(0, juce::sendNotificationSync);
+    const auto before = session.data().find_track(strings[0])->active_version()->score.total_note_count();
+    palette.insert_key().triggerClick();
+    pump(80);
+    check(session.data().find_track(strings[0])->active_version()->score.total_note_count() == before,
+          "on the violins alone, Insert writes no chord (one line)");
+    palette.send_box().setSelectedItemIndex(1, juce::sendNotificationSync);
+    const Ticks at = composer.cursor() ? composer.cursor()->tick : 0;
+    const auto revisions = [&] {
+        std::vector<std::uint64_t> r;
+        for (const auto& id : strings)
+            if (const auto* t = session.data().find_track(id)) r.push_back(t->active_version()->score.revision());
+        return r;
+    };
+    const auto rev_before = revisions();
+    palette.insert_key().triggerClick();
+    pump(80);
+    const auto rev_after = revisions();
+    int filled = 0;
+    for (std::size_t k = 0; k < strings.size(); ++k) {
+        const auto* t = session.data().find_track(strings[k]);
+        if (!t) continue;
+        int here = 0;
+        for (const auto& n : t->active_version()->score.notes(0)) here += !n.is_rest && n.start_tick == at ? 1 : 0;
+        filled += here == 1 && rev_after[k] != rev_before[k] ? 1 : 0;
+    }
+    check(filled == 5, "Send to: Strings - the chord spread over all five string parts, one note each (" + juce::String(filled) + ")");
+    if (auto* w = find_dialog("Chord Mode")) shoot(*w, dir, "chord-box-send-to");
+    palette.send_box().setSelectedItemIndex(0, juce::sendNotificationSync);
+    composer.set_chord_mode(false);
+    session.new_empty();
 }
 
 void chord_palette_checks(MainWindow& window, const juce::File& dir)
@@ -9439,8 +9530,9 @@ void articulation_template_checks(MainWindow& window, const juce::File& dir)
     pump(300);
     const auto staves = session.staff_tracks().size();
     const auto tracks = session.music_tracks().size();
-    check(consolidated_staves == 15 && consolidated_tracks == 15 && staves == 15 && tracks == 15 + 39,
-          "the orchestra opens with 15 staves either way: " + juce::String(static_cast<int>(consolidated_tracks)) +
+    // The Piano sketch and the 15 parts, either way.
+    check(consolidated_staves == 16 && consolidated_tracks == 16 && staves == 16 && tracks == 16 + 39,
+          "the orchestra opens with 16 staves either way (the Piano and 15 parts): " + juce::String(static_cast<int>(consolidated_tracks)) +
               " tracks consolidated, " + juce::String(static_cast<int>(tracks)) + " expanded");
 
     std::string violins;
@@ -9467,7 +9559,7 @@ void articulation_template_checks(MainWindow& window, const juce::File& dir)
     shoot(main, dir, "75-folded-part");
     seq.set_part_folded(violins, false);
     pump(100);
-    check(shown == 54 && folded == 50 && seq.shown_track_rows() == 54 && !seq.part_folded(violins),
+    check(shown == 55 && folded == 51 && seq.shown_track_rows() == 55 && !seq.part_folded(violins),
           "Producer shows each part with its sound tracks (" + juce::String(shown) +
               " rows); folding Violins I hides its four, and they come back (" + juce::String(folded) + " folded)");
 
@@ -9475,7 +9567,7 @@ void articulation_template_checks(MainWindow& window, const juce::File& dir)
     session.select_track(violins);
     ctx.commands.invokeDirectly(cmd::consolidateArticulations, false);
     pump(100);
-    check(session.music_tracks().size() == 50 && rows_in_composer("Violins I").isNotEmpty() &&
+    check(session.music_tracks().size() == 51 && rows_in_composer("Violins I").isNotEmpty() &&
               !session.data().find_track(violins)->articulations_expanded,
           "consolidating one part of the expanded template leaves the rest expanded");
     session.new_empty();
@@ -10915,6 +11007,7 @@ int main(int argc, char** argv)
             const std::vector<std::pair<const char*, void (*)(MainWindow&, const juce::File&)>> sections = {
                 {"freeze_checks", freeze_checks},
                 {"track_header_checks", track_header_checks},
+                {"piano_sketch_checks", piano_sketch_checks},
                 {"articulation_checks", articulation_checks},
                 {"articulation_template_checks", articulation_template_checks},
                 {"usage_checks", usage_checks},
@@ -11571,6 +11664,8 @@ int main(int argc, char** argv)
         chord_palette_checks(window, dir);
         section("track_header_checks");
         track_header_checks(window, dir);
+        section("piano_sketch_checks");
+        piano_sketch_checks(window, dir);
         section("sound_pack_checks");
         sound_pack_checks(window, dir);
         section("swell_checks");

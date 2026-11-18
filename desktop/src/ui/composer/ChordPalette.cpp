@@ -261,6 +261,20 @@ ChordPalette::ChordPalette(ChordModeState& state) : hw::Panel("Chord mode", fals
         state_.then = std::max(0, then_.getSelectedItemIndex());
         changed();
     };
+    // Send to: this track, or the chord spread over a section, a note per player.
+    style_combo(send_, "chord_send_to");
+    send_.addItem("Send to: this track", 1);
+    send_.addItem("Send to: Strings (open, 5 parts)", 2);
+    send_.addItem("Send to: Woodwinds (4 parts)", 3);
+    send_.addItem("Send to: Brass (4 parts)", 4);
+    send_.setTooltip("Where Insert writes the chord: on this track, or spread over a section - a note each, top down "
+                     "(single-line instruments never get chords)");
+    send_.onChange = [this] {
+        if (refreshing_) return;
+        state_.send_to = std::max(0, send_.getSelectedItemIndex());
+        changed();
+    };
+    addAndMakeVisible(send_);
     // The quality, bass and voicing lists stay behind the keys (scripts and
     // the checks still set them); Then stays a list.
     for (auto* c : {&quality_, &bass_, &voicing_}) addChildComponent(*c);
@@ -428,6 +442,7 @@ void ChordPalette::refresh()
     for (int i = 0; i < 4; ++i)
         if (styles[i] == state_.style) voicing_.setSelectedItemIndex(i, juce::dontSendNotification);
     then_.setSelectedItemIndex(std::clamp(state_.then, 0, 2), juce::dontSendNotification);
+    send_.setSelectedItemIndex(std::clamp(state_.send_to, 0, 3), juce::dontSendNotification);
     for (std::size_t i = 0; i < types_.size(); ++i)
         types_[i]->setToggleState(chord_types()[i].first == state_.type, juce::dontSendNotification);
     {
@@ -536,6 +551,7 @@ void ChordPalette::resized()
     symbol_.setBounds(row.removeFromLeft(76));
     row.removeFromLeft(6);
     then_.setBounds(row);
+    send_.setBounds(line(266, 24));
     row = juce::Rectangle<int>(r.getX(), getHeight() - 42, r.getWidth(), 30);
     insert_.setBounds(row.removeFromLeft(110));
     row.removeFromLeft(6);

@@ -94,7 +94,7 @@ TEST_CASE("mobile: a desktop template opens with its staves, one per part")
     std::string error;
     REQUIRE(doc->new_from_template("cinematic.orchestra.expanded", &error));
     const auto tracks = doc->tracks();
-    CHECK_EQ(tracks.size(), 15u);  // the articulation tracks are the desktop's, not staves
+    CHECK_EQ(tracks.size(), 16u);  // the Piano sketch and 15 parts; the articulation tracks are the desktop's, not staves
     int expanded = 0;
     for (const auto& t : tracks) expanded += t.expanded ? 1 : 0;
     CHECK_EQ(expanded, 13);

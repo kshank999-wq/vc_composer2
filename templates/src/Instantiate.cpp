@@ -206,6 +206,23 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
         std::string folder_key;
     };
     std::vector<Planned> planned;
+    // The piano sketch track, first.
+    static const TemplateTrack sketch = [] {
+        TemplateTrack t;
+        t.id = "sketch_piano";
+        t.name = "Piano";
+        t.instrument_standard_id = "keys.piano";
+        t.role = "sketch";
+        t.group_id = "sketch";
+        return t;
+    }();
+    auto is_piano = [](const std::string& instrument) { return instrument == "keys.piano"; };
+    const bool has_piano =
+        std::any_of(tpl.tracks.begin(), tpl.tracks.end(), [&](const TemplateTrack& t) { return is_piano(t.instrument_standard_id); }) ||
+        (opt.mode == InstantiateMode::Merge &&
+         std::any_of(data.tracks.begin(), data.tracks.end(), [&](const project::Track& t) { return is_piano(t.instrument_standard_id); }));
+    if (opt.sketch_piano && !has_piano)
+        if (const InstrumentDef* def = instruments.find(sketch.instrument_standard_id)) planned.push_back({&sketch, def, "sketch"});
     for (const auto& tt : tpl.tracks) {
         if (tt.optional && !opt.include_optional) continue;
         const InstrumentDef* def = instruments.find(tt.instrument_standard_id);
@@ -216,7 +233,8 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
         planned.push_back({&tt, def, tt.group_id.empty() ? def->family : tt.group_id});
     }
     std::stable_sort(planned.begin(), planned.end(), [](const Planned& a, const Planned& b) {
-        return family_rank(a.folder_key) < family_rank(b.folder_key);
+        auto rank = [](const Planned& p) { return p.folder_key == "sketch" ? -1 : family_rank(p.folder_key); };
+        return rank(a) < rank(b);
     });
     std::vector<std::string> folder_keys;
     for (const auto& p : planned)

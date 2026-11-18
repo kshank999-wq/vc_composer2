@@ -126,6 +126,38 @@ public:
     /// into `parts` new tracks of the same instrument, top note to the
     /// first; a chord with fewer notes doubles its lowest. One undo step.
     std::vector<std::string> explode(const std::string& track_id, Ticks from, Ticks to, int parts);
+    /// Which line of a sketch's chords Send Notes to Track takes: the top
+    /// note, the 2nd or 3rd from the top, the middle note (a chord-playing
+    /// instrument takes every inner note), the bass note, or - only for an
+    /// instrument that plays chords - every note.
+    enum class VoicePart { Top, Middle, Bass, All, Second, Third };
+    /// Whether an instrument plays chords (keyboards, harp, guitars and other
+    /// plucked strings, tuned mallets, pads, ensembles) or one line at a time
+    /// (strings, woodwinds, brass, voices...): one line never gets a chord.
+    static bool plays_chords(const std::string& instrument_standard_id);
+    /// Send Notes to Track: from `source`'s notes in [from, to) - every staff,
+    /// so a piano's two hands are one keyboard - at each onset the chosen
+    /// line, written at the same pitch (as heard) on `target`'s first staff,
+    /// where what it had in the range gives way. A single-line instrument
+    /// never gets a chord (All is refused: -1). One undo step; the onsets written.
+    int send_notes(const std::string& source, Ticks from, Ticks to, VoicePart part, const std::string& target);
+    /// A section's tracks, top voice first (an empty id where the project has
+    /// none): Strings - violins I, violins II, violas, celli, basses;
+    /// Woodwinds - flute, oboe, clarinet, bassoon; Brass - trumpet, horn,
+    /// trombone, tuba.
+    enum class Section { Strings, Woodwinds, Brass };
+    std::vector<std::string> section_tracks(Section section) const;
+    std::vector<std::string> string_section() const { return section_tracks(Section::Strings); }
+    /// One chord (as heard) spread over a section's tracks at `tick`, a note
+    /// each: the top note to the first, each next voice the chord tone below -
+    /// two below with `open` spacing - and the bass note to the last, under
+    /// them; each kept inside its instrument's range. One undo step.
+    bool spread_chord_at(Ticks tick, const notation::Duration& duration, const std::vector<int>& sounding,
+                         const std::vector<std::string>& targets, bool open);
+    /// Spread Chords to Strings (or another section): each chord of [from, to)
+    /// on `source` (two or more notes at an onset, both hands) spread as
+    /// spread_chord_at does (strings open). One undo step; the chords spread.
+    int spread_chords(const std::string& source, Ticks from, Ticks to, const std::vector<std::string>& targets, bool open = true);
     /// Implode: the notes of [from, to) on the sources' first staves become
     /// chords on the target's (what the target had there gives way).
     bool implode(const std::vector<std::string>& sources, const std::string& target, Ticks from, Ticks to);

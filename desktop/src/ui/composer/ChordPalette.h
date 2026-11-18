@@ -30,6 +30,7 @@ struct ChordModeState {
     theory::VoicingStyle style = theory::VoicingStyle::Closed;
     int octave = 4;                      ///< The bass note's octave (C4 is middle C).
     int then = 0;                        ///< 0 after the chord, 1 next beat, 2 next bar
+    int send_to = 0;                     ///< 0 this track, 1 strings (open, 5 parts), 2 woodwinds, 3 brass
     bool write_symbol = true;            ///< Also set the chord symbol (the ruler's Chords row).
     /// What kind of chord, built in the key on the chosen (or clicked) root:
     /// "triad" and "seventh" are the key's own chords on that degree; "maj7",
@@ -60,7 +61,7 @@ std::optional<theory::Chord> chord_for(const ChordModeState& state, std::string*
 class ChordPalette final : public hw::Panel {
 public:
     static constexpr int kWidth = 420;
-    static constexpr int kHeight = 404;
+    static constexpr int kHeight = 436;
 
     explicit ChordPalette(ChordModeState& state);
 
@@ -83,6 +84,7 @@ public:
     juce::ComboBox& bass_box() { return bass_; }
     juce::ComboBox& voicing_box() { return voicing_; }
     juce::ComboBox& then_box() { return then_; }
+    juce::ComboBox& send_box() { return send_; }
     hw::Keycap& insert_key() { return insert_; }
     hw::Keycap& replace_key() { return replace_; }
     hw::Keycap& audition_key() { return audition_; }
@@ -108,7 +110,7 @@ private:
     ChordModeState& state_;
     std::vector<std::unique_ptr<hw::Keycap>> roots_, accidentals_, alterations_, types_, inversions_;
     hw::Keycap close_voicing_{"Close", true}, open_{"Open", true}, span1_{"1 Oct", true}, span2_{"2 Oct", true};
-    juce::ComboBox quality_, bass_, voicing_, then_;
+    juce::ComboBox quality_, bass_, voicing_, then_, send_;
     hw::Keycap octave_down_{"-"}, octave_up_{"+"}, symbol_{"Symbol", true}, close_{"x"};
     hw::Keycap insert_{"Insert"}, replace_{"Replace sel."}, audition_{"Audition"};
     hw::Lcd octave_lcd_{"", 12.0f}, name_lcd_{"", 15.0f};

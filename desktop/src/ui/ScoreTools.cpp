@@ -71,6 +71,79 @@ void ask_explode(AppContext& c)
                        true);
 }
 
+juce::String spread_to_section(AppContext& c, const std::string& source, session::Session::Section section)
+{
+    using S = session::Session::Section;
+    const auto targets = c.session.section_tracks(section);
+    const char* const strings[] = {"violins I", "violins II", "violas", "celli", "basses"};
+    const char* const winds[] = {"flute", "oboe", "clarinet", "bassoon"};
+    const char* const brass[] = {"trumpet", "horn", "trombone", "tuba"};
+    const char* const* names = section == S::Strings ? strings : section == S::Woodwinds ? winds : brass;
+    const juce::String what = section == S::Strings ? "strings" : section == S::Woodwinds ? "woodwinds" : "brass";
+    if (std::all_of(targets.begin(), targets.end(), [](const std::string& t) { return t.empty(); }))
+        return "No " + what + " in this project to spread to";
+    const auto [from, to] = range_or_song(c);
+    const int n = c.session.spread_chords(source, from, to, targets, section == S::Strings);
+    if (n == 0) return "No chords there to spread (two or more notes at once)";
+    juce::StringArray missing, order;
+    for (std::size_t k = 0; k < targets.size(); ++k) {
+        (targets[k].empty() ? missing : order).add(names[k]);
+    }
+    return "Spread " + juce::String(n) + (n == 1 ? " chord" : " chords") + " over the " + what +
+           (section == S::Strings ? ", open: " : ": ") + "a note each, top down (" + order.joinIntoString(", ") + ")" +
+           (missing.isEmpty() ? juce::String() : "; no " + missing.joinIntoString(", ") + " here");
+}
+
+juce::String spread_to_strings(AppContext& c, const std::string& source)
+{
+    return spread_to_section(c, source, session::Session::Section::Strings);
+}
+
+juce::PopupMenu sketch_menu(AppContext& c, const std::string& source)
+{
+    juce::PopupMenu m;
+    const auto* src = c.session.data().find_track(source);
+    if (!src) return m;
+    using VP = session::Session::VoicePart;
+    // A line of the chord to any instrument; every note (a chord) only to one that plays chords.
+    const std::pair<VP, const char*> parts[] = {{VP::Top, "Send Top Line to"},       {VP::Second, "Send 2nd Line to"},
+                                                {VP::Third, "Send 3rd Line to"},     {VP::Middle, "Send Middle to"},
+                                                {VP::Bass, "Send Bass Line to"},     {VP::All, "Send All Notes (chords) to"}};
+    for (const auto& [part, label] : parts) {
+        juce::PopupMenu targets;
+        for (const auto* t : c.session.music_tracks()) {
+            if (t->id == source || t->articulations_expanded) continue;
+            const bool chords = session::Session::plays_chords(t->instrument_standard_id);
+            if (part == VP::All && !chords) continue;  // a single-line instrument never gets a chord
+            const std::string id = t->id;
+            const VP which = part;
+            targets.addItem(juce::String(t->name), [&c, source, id, which] {
+                const auto [from, to] = range_or_song(c);
+                const int n = c.session.send_notes(source, from, to, which, id);
+                const auto* target = c.session.data().find_track(id);
+                const juce::String name(target ? target->name : std::string());
+                c.status(n < 0    ? name + " plays one line: send it the top, 2nd, 3rd, middle or bass line"
+                         : n == 0 ? juce::String("No notes of that kind there")
+                                  : "Sent " + juce::String(n) + (n == 1 ? " note" : " notes") + " to " + name);
+            });
+        }
+        if (targets.getNumItems() == 0) targets.addItem(part == VP::All ? "No chord instruments (piano, harp, guitar...)" : "No other tracks", false, false, [] {});
+        m.addSubMenu(label, targets);
+    }
+    m.addSeparator();
+    using S = session::Session::Section;
+    const std::pair<S, const char*> sections[] = {{S::Strings, "Spread Chords to Strings (open, 5 parts)"},
+                                                  {S::Woodwinds, "Spread Chords to Woodwinds (4 parts)"},
+                                                  {S::Brass, "Spread Chords to Brass (4 parts)"}};
+    for (const auto& [section, label] : sections) {
+        const auto ids = c.session.section_tracks(section);
+        const bool any = std::any_of(ids.begin(), ids.end(), [](const std::string& t) { return !t.empty(); });
+        const S which = section;
+        m.addItem(label, any, false, [&c, source, which] { c.status(spread_to_section(c, source, which)); });
+    }
+    return m;
+}
+
 void ask_implode(AppContext& c)
 {
     const auto target = c.session.selected_track();

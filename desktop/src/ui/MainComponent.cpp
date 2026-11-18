@@ -2318,7 +2318,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::collectPackage, cmd::openPackage, cmd::showComments, cmd::addComment, cmd::relinkMedia,
                 cmd::articulationMap, cmd::missingInstruments, cmd::mixTools, cmd::bounceInPlace, cmd::saveOnStop,
                 cmd::monitorDim, cmd::reverseClips, cmd::timeStretchClips, cmd::groupClips, cmd::ungroupClips,
-                cmd::captureMidi, cmd::midiInputFilter, cmd::lyrics, cmd::explodeTracks, cmd::implodeTracks, cmd::addRepeat,
+                cmd::captureMidi, cmd::midiInputFilter, cmd::lyrics, cmd::explodeTracks, cmd::implodeTracks, cmd::spreadChords, cmd::addRepeat,
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
@@ -2437,6 +2437,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             break;
         case cmd::midiInputFilter: info.setInfo("MIDI Input Filter...", "Channels, notes and messages let through", "Tools", 0); break;
         case cmd::lyrics: info.setInfo("Lyrics...", "Syllables on the selected notes", "Edit", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); info.addDefaultKeypress('l', cmdKey | shift); break;
+        case cmd::spreadChords:
+            info.setInfo("Spread Chords to Strings", "The selected track's chords (the piano) as open five-part chords: violins I and II, violas, celli, basses",
+                         "Edit", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled);
+            info.addDefaultKeypress('k', juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier);
+            break;
         case cmd::explodeTracks: info.setInfo("Explode...", "Chords split into new tracks", "Edit", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); break;
         case cmd::implodeTracks: info.setInfo("Implode...", "Tracks combined as chords onto the selected one", "Edit", has_track ? 0 : juce::ApplicationCommandInfo::isDisabled); break;
         case cmd::addRepeat: info.setInfo("Repeat and Endings...", "Repeat bars, with first and second endings", "Edit", 0); break;
@@ -2753,6 +2758,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::midiInputFilter: show_midi_input_filter(context_); break;
         case cmd::lyrics: ask_lyrics(context_); break;
         case cmd::explodeTracks: ask_explode(context_); break;
+        case cmd::spreadChords: context_.status(spread_to_strings(context_, s.selected_track())); break;
         case cmd::implodeTracks: ask_implode(context_); break;
         case cmd::addRepeat: ask_repeat(context_); break;
         case cmd::unrollRepeats: context_.status(unroll(context_)); break;
@@ -2964,6 +2970,9 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             m.addSeparator();
             for (auto id : {cmd::lyrics, cmd::addRepeat, cmd::unrollRepeats, cmd::explodeTracks, cmd::implodeTracks})
                 m.addCommandItem(c, id);
+            m.addCommandItem(c, cmd::spreadChords);
+            m.addSubMenu("Send Notes from the Selected Track", sketch_menu(context_, context_.session.selected_track()),
+                         context_.session.data().find_track(context_.session.selected_track()) != nullptr);
             m.addSeparator();
             m.addCommandItem(c, cmd::hearEntry);
             m.addSubMenu("Keyboard Shortcuts", shortcuts_menu());

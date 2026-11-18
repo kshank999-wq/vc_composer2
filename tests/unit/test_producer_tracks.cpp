@@ -122,9 +122,11 @@ TEST_CASE("a MIDI track sends to an external device, saved and undoable")
     CHECK(r.data().find_track(m)->midi_output == "Hardware Synth Port 1");
     s.undo();
     CHECK(s.data().find_track(m)->midi_output.empty());
-    // Only MIDI tracks send to hardware.
+    // Instrument tracks can send to hardware too (the track header's MIDI Out); audio tracks cannot.
     const auto f = s.add_track("Flute", "woodwinds.flute");
-    CHECK(!s.set_midi_output(f, "Hardware Synth Port 1"));
+    CHECK(s.set_midi_output(f, "Hardware Synth Port 1"));
+    const auto a = s.add_audio_track("Vox", false);
+    CHECK(!s.set_midi_output(a, "Hardware Synth Port 1"));
 }
 
 TEST_CASE("comping: part of a take replaces the main lane there, splitting what it covers")

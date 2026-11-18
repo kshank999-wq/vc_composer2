@@ -976,3 +976,99 @@ TEST_CASE("articulation tracks: expand a part, play the same notes once, follow 
     REQUIRE(s.remove_track(part));
     CHECK(s.music_tracks().empty());
 }
+
+TEST_CASE("the piano sketch: send its top, middle or bass notes to a track; spread its chords over the strings, open")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto piano = s.add_track("Piano", "keys.piano");
+    const auto v1 = s.add_track("Violins I", "strings.violins_1");
+    const auto v2 = s.add_track("Violins II", "strings.violins_2");
+    const auto vla = s.add_track("Violas", "strings.violas");
+    const auto vc = s.add_track("Celli", "strings.celli");
+    const auto cb = s.add_track("Basses", "strings.basses");
+    // C major across both hands: C3 in the left, E4 G4 C5 in the right; then a single melody note.
+    notation::Score sc = s.data().find_track(piano)->active_version()->score;
+    REQUIRE(sc.staff_count() == 2u);
+    sc.insert_chord(0, 0, notation::half(), {notation::spell_midi_note(64, {}), notation::spell_midi_note(67, {}), notation::spell_midi_note(72, {})});
+    sc.insert_chord(1, 0, notation::half(), {notation::spell_midi_note(48, {})});
+    notation::ScoreNote melody;
+    melody.start_tick = 2 * kTicksPerQuarter;
+    melody.duration = notation::quarter();
+    melody.pitch = notation::spell_midi_note(74, {});
+    sc.insert_note(0, melody);
+    REQUIRE(s.commit_score(piano, sc, "Sketch"));
+
+    auto sounding = [&](const std::string& id, Ticks at) {
+        std::vector<int> out;
+        const auto& score = s.data().find_track(id)->active_version()->score;
+        const int shift = score.staff(0).total_transposition();
+        for (const auto& n : score.notes(0))
+            if (!n.is_rest && n.start_tick == at) out.push_back(notation::midi_note_number(n.pitch) + shift);
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    const Ticks bar = 4 * kTicksPerQuarter;
+    CHECK_EQ(s.send_notes(piano, 0, bar, session::Session::VoicePart::Top, v1), 2);
+    CHECK(sounding(v1, 0) == std::vector<int>{72});
+    CHECK(sounding(v1, 2 * kTicksPerQuarter) == std::vector<int>{74});
+    CHECK_EQ(s.send_notes(piano, 0, bar, session::Session::VoicePart::Bass, cb), 2);
+    CHECK(sounding(cb, 0) == std::vector<int>{48});
+    // Violas play one line: the middle note, never a chord; every note (a chord) is refused.
+    CHECK_EQ(s.send_notes(piano, 0, bar, session::Session::VoicePart::Middle, vla), 1);  // the melody note has no middle
+    CHECK(sounding(vla, 0) == std::vector<int>{67});
+    CHECK_EQ(s.send_notes(piano, 0, bar, session::Session::VoicePart::All, vla), -1);
+    CHECK(sounding(vla, 0) == std::vector<int>{67});
+    CHECK_EQ(s.send_notes(piano, 0, bar, session::Session::VoicePart::Second, v2), 1);
+    CHECK(sounding(v2, 0) == std::vector<int>{67});
+    // A harp plays chords: it may take them all.
+    const auto harp = s.add_track("Harp", "keys.harp");
+    CHECK(session::Session::plays_chords("keys.harp") && !session::Session::plays_chords("strings.violas") &&
+          !session::Session::plays_chords("woodwinds.flute"));
+    CHECK_EQ(s.send_notes(piano, 0, bar, session::Session::VoicePart::All, harp), 2);
+    CHECK(sounding(harp, 0) == (std::vector<int>{48, 64, 67, 72}));
+
+    const auto strings = s.string_section();
+    CHECK(strings == (std::vector<std::string>{v1, v2, vla, vc, cb}));
+    CHECK_EQ(s.spread_chords(piano, 0, bar, strings), 1);  // the chord, not the melody note
+    CHECK_EQ(s.undo_label(), std::string("Spread Chords to Strings"));
+    // Open: C5 to violins I, E4 to violins II, G3 to violas, C3 to celli, C2 to the basses.
+    CHECK(sounding(v1, 0) == std::vector<int>{72});
+    CHECK(sounding(v2, 0) == std::vector<int>{64});
+    CHECK(sounding(vla, 0) == std::vector<int>{55});
+    CHECK(sounding(vc, 0) == std::vector<int>{48});
+    CHECK(sounding(cb, 0) == std::vector<int>{36});
+    // Written at the right pitch for the basses' octave transposition.
+    const auto& basses = s.data().find_track(cb)->active_version()->score;
+    CHECK_EQ(basses.staff(0).total_transposition(), -12);
+    s.undo();
+    CHECK(sounding(v2, 0) == std::vector<int>{67});  // back to what Send 2nd Line wrote
+
+    // Woodwinds: flute, oboe, clarinet, bassoon - close.
+    const auto fl = s.add_track("Flute", "woodwinds.flute");
+    const auto ob = s.add_track("Oboe", "woodwinds.oboe");
+    const auto cl = s.add_track("Clarinet", "woodwinds.clarinet_bb");
+    const auto bn = s.add_track("Bassoon", "woodwinds.bassoon");
+    const auto winds = s.section_tracks(session::Session::Section::Woodwinds);
+    CHECK(winds == (std::vector<std::string>{fl, ob, cl, bn}));
+    REQUIRE(s.spread_chord_at(bar, notation::half(), {48, 64, 67, 72}, winds, false));
+    CHECK(sounding(fl, bar) == std::vector<int>{72});
+    CHECK(sounding(ob, bar) == std::vector<int>{67});
+    CHECK(sounding(cl, bar) == std::vector<int>{64});
+    CHECK(sounding(bn, bar) == std::vector<int>{48});
+}
+
+TEST_CASE("every template opens with a Piano track at the top")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto r = s.new_from_template("cinematic.orchestra.consolidated");
+    REQUIRE(r.ok);
+    const auto tracks = s.music_tracks();
+    REQUIRE(!tracks.empty());
+    CHECK_EQ(tracks.front()->name, std::string("Piano"));
+    CHECK_EQ(tracks.front()->instrument_standard_id, std::string("keys.piano"));
+    int pianos = 0;
+    for (const auto* t : tracks) pianos += t->instrument_standard_id == "keys.piano";
+    CHECK_EQ(pianos, 1);
+}

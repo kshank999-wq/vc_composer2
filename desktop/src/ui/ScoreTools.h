@@ -12,6 +12,14 @@ namespace vcc::desktop {
 void ask_lyrics(AppContext& context);
 /// The selected range of the selected track into N new tracks.
 void ask_explode(AppContext& context);
+/// The sketch tools for a track (the Piano, normally): Send Top / Middle /
+/// Bass / All Notes to a track, and Spread Chords to Strings - over the
+/// selected range, or the whole track.
+juce::PopupMenu sketch_menu(AppContext& context, const std::string& source);
+/// Spread Chords to Strings from `source`; the status line says what happened.
+juce::String spread_to_strings(AppContext& context, const std::string& source);
+/// The same to the strings (open), woodwinds or brass.
+juce::String spread_to_section(AppContext& context, const std::string& source, session::Session::Section section);
 /// The selected range of chosen tracks onto the selected track as chords.
 void ask_implode(AppContext& context);
 /// A repeat over bars, with optional first/second endings.

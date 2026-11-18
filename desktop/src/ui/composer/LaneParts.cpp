@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "ui/Theme.h"
+#include "ui/ScoreTools.h"
 #include "ui/TrackPanel.h"
 #include "ui/console/ConsoleStyle.h"
 #include "vcc/ui/NotationView.h"
@@ -277,6 +278,9 @@ void TrackHeader::show_menu()
         context_.session.select_track(track_);
         context_.commands.invokeDirectly(expanded ? cmd::consolidateArticulations : cmd::expandArticulations, true);
     });
+    m.addSeparator();
+    // The sketch (the Piano, normally): its notes to other tracks, its chords over the strings.
+    m.addSubMenu("Send / Spread (selected range, or all)", sketch_menu(context_, track_));
     m.addSeparator();
     m.addItem("Track...", [this] { TrackPanel::show_track_menu(context_, track_); });
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition());

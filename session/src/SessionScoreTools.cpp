@@ -1,6 +1,8 @@
 // Score tools (Main Spec §7): lyrics, explode and implode.
 #include <algorithm>
+#include <array>
 #include <map>
+#include <set>
 
 #include "vcc/session/Session.h"
 
@@ -118,6 +120,255 @@ std::vector<std::string> Session::explode(const std::string& track_id, Ticks fro
     project_.squash_undo(project_.history_size() - before, "Explode");
     document_changed();
     return ids;
+}
+
+namespace {
+
+/// A sketch's notes by onset, as heard (both hands), lowest first.
+struct Onset {
+    nt::Duration duration;
+    std::vector<int> sounding;
+};
+
+std::map<Ticks, Onset> onsets_of(const project::TrackVersion& v, Ticks from, Ticks to)
+{
+    std::map<Ticks, Onset> out;
+    for (std::size_t st = 0; st < v.score.staff_count(); ++st) {
+        const int shift = v.score.staff(st).total_transposition();
+        for (const auto& n : v.score.notes(st)) {
+            if (n.is_rest || n.grace || n.start_tick < from || n.start_tick >= to) continue;
+            auto& o = out[n.start_tick];
+            const int p = nt::midi_note_number(n.pitch) + shift;
+            if (o.sounding.empty() || n.duration.ticks() > o.duration.ticks()) o.duration = n.duration;
+            if (std::find(o.sounding.begin(), o.sounding.end(), p) == o.sounding.end()) o.sounding.push_back(p);
+        }
+    }
+    for (auto& [t, o] : out) std::sort(o.sounding.begin(), o.sounding.end());
+    return out;
+}
+
+/// Writes chords (as heard) onto a track's first staff, replacing [from, to).
+bool write_sounding(project::Track& t, Ticks from, Ticks to, const std::map<Ticks, std::pair<nt::Duration, std::vector<int>>>& chords)
+{
+    project::TrackVersion* v = t.active_version();
+    if (!v || v->score.staff_count() == 0) return false;
+    std::vector<nt::EventId> old;
+    for (const auto& n : v->score.notes(0))
+        if (n.start_tick >= from && n.start_tick < to) old.push_back(n.id);
+    for (const auto id : old) v->score.remove_note(id);
+    const int shift = v->score.staff(0).total_transposition();
+    for (const auto& [tick, chord] : chords) {
+        std::vector<nt::Pitch> pitches;
+        for (const int p : chord.second)
+            pitches.push_back(nt::spell_midi_note(std::clamp(p - shift, 0, 127), v->score.key_signature_at(tick)));
+        if (!pitches.empty()) v->score.insert_chord(0, tick, chord.first, pitches, 0);
+    }
+    return true;
+}
+
+}  // namespace
+
+bool Session::plays_chords(const std::string& id)
+{
+    // Whole words of the id ("woodwinds.flute" is no lute).
+    const auto dot = id.find('.');
+    const std::string family = id.substr(0, dot);
+    std::set<std::string> words;
+    std::string name = dot == std::string::npos ? id : id.substr(dot + 1), word;
+    for (const char ch : name + "_") {
+        if (ch == '_') {
+            if (!word.empty()) words.insert(word);
+            word.clear();
+        } else {
+            word += ch;
+        }
+    }
+    auto any = [&](std::initializer_list<const char*> list) {
+        for (const char* w : list)
+            if (words.count(w)) return true;
+        return false;
+    };
+    if (family == "keys") return true;
+    if (any({"guitar", "banjo", "mandolin", "lute", "theorbo", "ukulele", "harp", "zither", "koto", "dulcimer", "accordion",
+             "harmonica", "vibraphone", "marimba", "xylophone", "glockenspiel", "crotales", "tubular", "celesta", "ensemble",
+             "hybrid", "choir", "kantele", "guzheng", "kalimba", "santoor", "qanun", "oud", "sitar", "balalaika", "bouzouki"}))
+        return true;
+    if (id == "strings.low_strings") return true;
+    if (family == "synth" && any({"pad", "poly", "stab", "arpeggiator", "texture", "drone"})) return true;
+    return false;
+}
+
+int Session::send_notes(const std::string& source, Ticks from, Ticks to, VoicePart part, const std::string& target)
+{
+    const project::Track* src = data().find_track(source);
+    const project::TrackVersion* sv = src ? src->active_version() : nullptr;
+    const project::Track* dst = data().find_track(target);
+    if (!sv || !dst || to <= from || source == target) return 0;
+    const bool chords_ok = plays_chords(dst->instrument_standard_id);
+    if (part == VoicePart::All && !chords_ok) return -1;  // a single line never gets a chord
+    std::map<Ticks, std::pair<nt::Duration, std::vector<int>>> chords;
+    for (const auto& [tick, o] : onsets_of(*sv, from, to)) {
+        std::vector<int> take;
+        const auto& s = o.sounding;  // lowest first
+        const std::size_t n = s.size();
+        auto from_top = [&](std::size_t k) {
+            if (k < n) take = {s[n - 1 - k]};
+        };
+        switch (part) {
+            case VoicePart::Top: from_top(0); break;
+            case VoicePart::Second: if (n >= 2) from_top(1); break;
+            case VoicePart::Third: if (n >= 3) from_top(2); break;
+            case VoicePart::Bass: take = {s.front()}; break;
+            case VoicePart::Middle:
+                if (n > 2) {
+                    if (chords_ok) take.assign(s.begin() + 1, s.end() - 1);
+                    else take = {s[n / 2]};
+                }
+                break;
+            case VoicePart::All: take = s; break;
+        }
+        if (!take.empty()) chords[tick] = {o.duration, take};
+    }
+    if (chords.empty()) return 0;
+    static const char* names[] = {"Top Line", "Middle", "Bass Line", "All Notes", "2nd Line", "3rd Line"};
+    const bool ok = edit(std::string("Send ") + names[static_cast<int>(part)] + " to " + dst->name,
+                         on_track(target, [&](project::Track& t) { return write_sounding(t, from, to, chords); }));
+    return ok ? static_cast<int>(chords.size()) : 0;
+}
+
+std::vector<std::string> Session::section_tracks(Section section) const
+{
+    // Each voice: the instruments that can take it, best first.
+    std::vector<std::vector<std::string>> voices;
+    switch (section) {
+        case Section::Strings:
+            voices = {{"strings.violins_1", "strings.violin"},
+                      {"strings.violins_2", "strings.violin"},
+                      {"strings.violas", "strings.viola"},
+                      {"strings.celli", "strings.cello"},
+                      {"strings.basses", "strings.double_bass"}};
+            break;
+        case Section::Woodwinds:
+            voices = {{"woodwinds.flute", "woodwinds.piccolo", "woodwinds.alto_flute"},
+                      {"woodwinds.oboe", "woodwinds.english_horn", "woodwinds.oboe_damore"},
+                      {"woodwinds.clarinet_bb", "woodwinds.clarinet_a", "woodwinds.clarinet_eb", "woodwinds.bass_clarinet"},
+                      {"woodwinds.bassoon", "woodwinds.contrabassoon"}};
+            break;
+        case Section::Brass:
+            voices = {{"brass.trumpet_bb", "brass.trumpet_c", "brass.trumpet_section", "brass.flugelhorn", "brass.cornet"},
+                      {"brass.horn_f", "brass.horn_section"},
+                      {"brass.trombone", "brass.trombone_section"},
+                      {"brass.tuba", "brass.bass_trombone", "brass.cimbasso"}};
+            break;
+    }
+    std::vector<std::string> out(voices.size());
+    std::set<std::string> used;
+    for (std::size_t k = 0; k < voices.size(); ++k)
+        for (const auto& want : voices[k]) {
+            for (const auto& t : data().tracks)
+                if (t.articulation_parent.empty() && t.kind == project::TrackKind::Instrument && t.instrument_standard_id == want &&
+                    !used.count(t.id)) {
+                    out[k] = t.id;
+                    break;
+                }
+            if (!out[k].empty()) {
+                used.insert(out[k]);
+                break;
+            }
+        }
+    return out;
+}
+
+namespace {
+
+/// One chord (as heard) spread a note per voice, top down; the last voice
+/// takes the bass. Each voice kept inside [low, high].
+std::vector<int> spread_voices(const std::vector<int>& sounding, const std::vector<std::pair<int, int>>& ranges, bool open)
+{
+    const std::size_t voices = ranges.size();
+    std::vector<int> v(voices, 0);
+    if (sounding.empty() || voices == 0) return v;
+    std::vector<int> pcs;
+    for (const int p : sounding)
+        if (std::find(pcs.begin(), pcs.end(), p % 12) == pcs.end()) pcs.push_back(p % 12);
+    const int skip = open && pcs.size() >= 3 ? 2 : 1;
+    auto below = [&](int p) {
+        int found = 0;
+        for (int q = p - 1; q > 0; --q)
+            if (std::find(pcs.begin(), pcs.end(), q % 12) != pcs.end() && ++found == skip) return q;
+        return p - 12;
+    };
+    v[0] = sounding.back();
+    for (std::size_t k = 1; k + 1 < voices; ++k) v[k] = below(v[k - 1]);
+    if (voices > 1) {
+        int bass = sounding.front();
+        while (bass >= v[voices - 2]) bass -= 12;
+        v[voices - 1] = bass;
+    }
+    for (std::size_t k = 0; k < voices; ++k) {
+        const auto [low, high] = ranges[k];
+        while (v[k] < low && v[k] + 12 <= 127) v[k] += 12;
+        while (v[k] > high && v[k] - 12 >= low) v[k] -= 12;
+    }
+    return v;
+}
+
+}  // namespace
+
+bool Session::spread_chord_at(Ticks tick, const nt::Duration& duration, const std::vector<int>& sounding,
+                              const std::vector<std::string>& targets, bool open)
+{
+    if (sounding.empty() || targets.empty()) return false;
+    std::vector<int> sorted = sounding;
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<std::pair<int, int>> ranges;
+    for (const auto& id : targets) {
+        const auto* t = data().find_track(id);
+        ranges.push_back(t ? range_for(*t) : std::pair<int, int>{0, 127});
+    }
+    const auto v = spread_voices(sorted, ranges, open);
+    const Ticks end = tick + std::max<Ticks>(1, duration.ticks());
+    return edit("Spread Chord", [&](project::ProjectData& d) {
+        bool any = false;
+        for (std::size_t k = 0; k < targets.size(); ++k) {
+            if (targets[k].empty()) continue;
+            std::map<Ticks, std::pair<nt::Duration, std::vector<int>>> one;
+            one[tick] = {duration, {v[k]}};
+            if (auto* t = d.find_track(targets[k])) any = write_sounding(*t, tick, end, one) || any;
+        }
+        return any;
+    });
+}
+
+int Session::spread_chords(const std::string& source, Ticks from, Ticks to, const std::vector<std::string>& targets, bool open)
+{
+    const project::Track* src = data().find_track(source);
+    const project::TrackVersion* sv = src ? src->active_version() : nullptr;
+    if (!sv || to <= from || targets.empty()) return 0;
+    std::vector<std::pair<int, int>> ranges;
+    for (const auto& id : targets) {
+        const auto* t = data().find_track(id);
+        ranges.push_back(t ? range_for(*t) : std::pair<int, int>{0, 127});
+    }
+    std::vector<std::map<Ticks, std::pair<nt::Duration, std::vector<int>>>> parts(targets.size());
+    int spread = 0;
+    for (const auto& [tick, o] : onsets_of(*sv, from, to)) {
+        if (o.sounding.size() < 2) continue;  // a melody note, not a chord
+        const auto v = spread_voices(o.sounding, ranges, open);
+        for (std::size_t k = 0; k < targets.size(); ++k)
+            if (!targets[k].empty()) parts[k][tick] = {o.duration, {v[k]}};
+        ++spread;
+    }
+    if (spread == 0) return 0;
+    const bool ok = edit("Spread Chords to Strings", [&](project::ProjectData& d) {
+        bool any = false;
+        for (std::size_t k = 0; k < targets.size(); ++k) {
+            if (targets[k].empty() || targets[k] == source) continue;
+            if (auto* t = d.find_track(targets[k])) any = write_sounding(*t, from, to, parts[k]) || any;
+        }
+        return any;
+    });
+    return ok ? spread : 0;
 }
 
 bool Session::implode(const std::vector<std::string>& sources, const std::string& target, Ticks from, Ticks to)

@@ -1357,6 +1357,38 @@ bool ComposerView::enter_chord(bool replace_selection)
         context_.status(juce::String(problem));
         return false;
     }
+    // Send to a section: the chord spread over its players, a note each, at the cursor.
+    if (chord_state_.send_to > 0) {
+        using S = session::Session::Section;
+        const S section = chord_state_.send_to == 1 ? S::Strings : chord_state_.send_to == 2 ? S::Woodwinds : S::Brass;
+        const auto targets = context_.session.section_tracks(section);
+        const juce::String what = section == S::Strings ? "strings" : section == S::Woodwinds ? "woodwinds" : "brass";
+        if (std::all_of(targets.begin(), targets.end(), [](const std::string& t) { return t.empty(); })) {
+            context_.status("No " + what + " in this project to send the chord to");
+            return false;
+        }
+        const auto hands = composer_ui::voice_chord_for_staves(*chord, chord_state_, true);
+        std::vector<int> sounding;
+        for (const auto* part : {&hands.lower, &hands.upper})
+            for (const auto& v : *part) sounding.push_back(v.midi);
+        const auto cur = editor_->cursor();
+        const auto duration = cur.duration;
+        if (!context_.session.spread_chord_at(cur.tick, duration, sounding, targets, section == S::Strings)) return false;
+        auto c = editor_->cursor();
+        c.tick = cur.tick + duration.ticks();
+        editor_->set_cursor(c);
+        apply_view_settings();
+        context_.status(juce::String::fromUTF8(chord->display_name().c_str()) + " spread over the " + what + ", a note each" +
+                        (section == S::Strings ? " (open)" : ""));
+        return true;
+    }
+    // A single-line instrument (violins, flute...) never gets a chord.
+    if (const auto* t = context_.session.data().find_track(editing_track_);
+        t && !session::Session::plays_chords(t->instrument_standard_id)) {
+        context_.status(juce::String(t->name) + " plays one line: write the chord on the piano, or choose Send to: Strings, "
+                                                "Woodwinds or Brass in the chord box");
+        return false;
+    }
     if (replace_selection) {
         const auto sel = editor_->selection();
         const notation::ScoreNote* first = nullptr;
