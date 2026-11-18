@@ -181,6 +181,7 @@ enum : juce::CommandID {
     hearEntry,
     builtinSounds,
     credits,
+    toggleInspector,
 };
 }  // namespace cmd
 

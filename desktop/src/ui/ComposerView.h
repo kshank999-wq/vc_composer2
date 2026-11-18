@@ -41,6 +41,9 @@ public:
 
     void set_playhead(Ticks tick, bool playing);
     bool note_entry() const noexcept { return note_entry_; }
+    /// Write (the quill: clicks write notes) or Select (the arrow: clicks
+    /// select and drag, never write). The staff tools' mode keys.
+    void set_note_entry(bool write);
     /// Scrolls the lanes so a track's staff is in view (the Track List).
     void reveal_track(const std::string& track_id);
     /// Zoom: staff size (pixels per staff space) and width (staff spaces per

@@ -924,12 +924,7 @@ void ComposerView::perform(Command command)
             if (editor_) context_.engine.locate(editor_->cursor().tick);
             context_.engine.play();
             return;
-        case Command::ToggleKeyboardEntryMode:
-            note_entry_ = !note_entry_;
-            reload_working_copy(false);
-            apply_view_settings();
-            context_.status(note_entry_ ? "Note entry on" : "Note entry off");
-            return;
+        case Command::ToggleKeyboardEntryMode: set_note_entry(!note_entry_); return;
         case Command::ExportMidiFile: context_.commands.invokeDirectly(cmd::exportMidi, true); return;
         case Command::EditKeySignature:
         case Command::EditTimeSignature:
@@ -993,8 +988,30 @@ juce::Rectangle<int> on_a_display(juce::Rectangle<int> r)
 }
 }  // namespace
 
+void ComposerView::set_note_entry(bool write)
+{
+    if (note_entry_ != write) {
+        note_entry_ = write;
+        just_entered_ = false;
+        reload_working_copy(false);
+        apply_view_settings();
+    }
+    context_.status(note_entry_ ? "Write: click the staff to write notes" : "Select: click notes to select them, drag to move them");
+    update_staff_tools();
+}
+
 void ComposerView::wire_tools(composer_ui::StaffTools& t)
 {
+    t.on_mode = [this](bool write) {
+        note_activity();
+        set_note_entry(write);
+        grabKeyboardFocus();
+    };
+    t.on_accent = [this](int strength) {
+        note_activity();
+        const auto track = context_.session.selected_track();
+        if (!track.empty()) context_.session.set_accent_strength(track, strength);
+    };
     t.on_command = [this](Command c) {
         note_activity();
         perform(c);
@@ -1092,7 +1109,11 @@ composer_ui::StaffToolsState ComposerView::tools_state() const
     composer_ui::StaffToolsState s;
     s.editable = editor_ != nullptr;
     s.chord_mode = chord_mode_;
-    if (const auto* t = context_.session.data().find_track(context_.session.selected_track())) s.track = t->name;
+    s.writing = note_entry_;
+    if (const auto* t = context_.session.data().find_track(context_.session.selected_track())) {
+        s.track = t->name;
+        s.accent = t->accent_strength;
+    }
     if (editor_) {
         const auto& cur = editor_->cursor();
         s.has_selection = !editor_->selection().empty();
@@ -1119,7 +1140,7 @@ void ComposerView::update_staff_tools()
     auto same = [](const composer_ui::StaffToolsState& a, const composer_ui::StaffToolsState& b) {
         return a.editable == b.editable && a.has_selection == b.has_selection && a.pitched == b.pitched && a.value == b.value &&
                a.dot == b.dot && a.triplet == b.triplet && a.rest == b.rest && a.voice == b.voice &&
-               a.chord_mode == b.chord_mode && a.track == b.track;
+               a.chord_mode == b.chord_mode && a.track == b.track && a.writing == b.writing && a.accent == b.accent;
     };
     if (!same(s, tools.state())) tools.set_state(s);
     if (tools_floating_ && !same(s, tools_floating_->state())) tools_floating_->set_state(s);

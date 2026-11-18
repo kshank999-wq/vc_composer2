@@ -217,6 +217,9 @@ public:
     /// "Articulation map".
     /// A drum kit's percussion map ("gm_kit"; empty for none). One undo step.
     bool set_percussion_map(const std::string& track_id, const std::string& map);
+    /// How strongly the track's accents play, 1-100 (50: the map's own).
+    /// Same-track calls coalesce, so a turn of the dial is one undo step.
+    bool set_accent_strength(const std::string& track_id, int strength);
     bool set_articulation_map(const std::string& track_id, const std::optional<notation::ExpressionMap>& map,
                               const std::string& builtin = "default");
     bool assign_sound(const std::string& track_id, const project::PluginRef& plugin,

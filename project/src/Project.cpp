@@ -1042,6 +1042,7 @@ static json::Value track_to_json(const Track& t)
                                      {"message", a.message}});
     o.set("expression_map", t.expression_map);
     if (t.articulation_map) o.set("articulation_map", expression_map_to_json(*t.articulation_map));
+    if (t.accent_strength != 50) o.set("accent_strength", t.accent_strength);
     if (!t.percussion_map.empty()) o.set("percussion_map", t.percussion_map);
     if (!t.instrument_plugin.empty())
         o.set("instrument_plugin", json::Object{{"format", t.instrument_plugin.format},
@@ -1389,6 +1390,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         }
         t.expression_map = j.get_string("expression_map", "default");
         if (const auto* am = j.get("articulation_map")) t.articulation_map = expression_map_from_json(*am);
+        t.accent_strength = static_cast<int>(std::clamp<std::int64_t>(j.get_int("accent_strength", 50), 1, 100));
         t.percussion_map = j.get_string("percussion_map");
         if (const auto* pj = j.get("instrument_plugin")) t.instrument_plugin = plugin_from_json(*pj);
         t.output_bus_id = j.get_string("output_bus_id");

@@ -327,6 +327,57 @@ private:
 
 // --- Main component -----------------------------------------------------------------------------
 
+/// Window > Inspector's content: what is selected over the inspector. Its
+/// place is remembered when it moves (to another screen, too).
+class InspectorBox final : public juce::Component, private juce::ComponentListener {
+public:
+    static constexpr int kWidth = 268, kSelection = 190, kGap = 6;
+    static int height() { return kSelection + kGap + composer_ui::Inspector::preferred_height(false) + 12; }
+    InspectorBox(shell::SelectionPanel& selection, composer_ui::Inspector& inspector)
+        : selection_(selection), inspector_(inspector)
+    {
+        setComponentID("inspector_box");
+        addAndMakeVisible(selection_);
+        addAndMakeVisible(inspector_);
+        inspector_.set_horizontal(false);
+        inspector_.set_compact(false);
+        setSize(kWidth, height());
+    }
+    void paint(juce::Graphics& g) override { g.fillAll(hw::tok::chassis); }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(6);
+        selection_.setBounds(r.removeFromTop(kSelection));
+        r.removeFromTop(kGap);
+        inspector_.setBounds(r.withHeight(std::min(r.getHeight(), composer_ui::Inspector::preferred_height(false))));
+    }
+    void parentHierarchyChanged() override
+    {
+        if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) {
+            if (watched_ != w) {
+                if (watched_ != nullptr) watched_->removeComponentListener(this);
+                watched_ = w;
+                w->addComponentListener(this);
+            }
+        }
+    }
+    ~InspectorBox() override
+    {
+        if (watched_ != nullptr) watched_->removeComponentListener(this);
+    }
+
+private:
+    void componentMovedOrResized(juce::Component& c, bool, bool) override
+    {
+        const auto b = c.getBounds();
+        hw::ui_settings().setValue("inspector_bounds", juce::String(b.getX()) + " " + juce::String(b.getY()) + " " +
+                                                           juce::String(b.getWidth()) + " " + juce::String(b.getHeight()));
+    }
+    shell::SelectionPanel& selection_;
+    composer_ui::Inspector& inspector_;
+    juce::Component::SafePointer<juce::Component> watched_;
+};
+
 MainComponent::MainComponent(AppContext& context)
     : context_(context),
       deck_(context),
@@ -352,9 +403,11 @@ MainComponent::MainComponent(AppContext& context)
     hw::Theme::get().attach(&hw::ui_settings());
     // The Edit window (docs/spec/ui): top deck, toolbar, left rack, the
     // edit window around the current view, right panel, status strip.
-    for (auto* c : std::initializer_list<juce::Component*>{&deck_, &toolbar_, &edit_, &markers_, &selection_,
-                                                           &inspector_, &status_strip_, &keyboard_})
+    for (auto* c : std::initializer_list<juce::Component*>{&deck_, &toolbar_, &edit_, &markers_, &status_strip_, &keyboard_})
         addAndMakeVisible(c);
+    // The selection readout and the inspector live in their own floating
+    // window (Window > Inspector), not in a column beside the edit window.
+    inspector_box_ = std::make_unique<InspectorBox>(selection_, inspector_);
     addChildComponent(new_track_);
     addChildComponent(clips_);
     addChildComponent(channel_);
@@ -637,6 +690,8 @@ MainComponent::MainComponent(AppContext& context)
 
 MainComponent::~MainComponent()
 {
+    // The Inspector window shows components this owns: it goes first.
+    delete inspector_window_.getComponent();
     stopTimer();
     if (autosave_thread_.joinable()) autosave_thread_.join();
     surface_.reset();
@@ -719,10 +774,11 @@ void MainComponent::resized()
     }
 
     const bool producer = workspace_ == Workspace::Producer;
-    // Under ~1280 px the right panel drops below the edit window.
+    // Under ~1280 px the right panel drops below the edit window. The
+    // Composer has none: its inspector floats (Window > Inspector).
     const bool narrow = getWidth() < 1280;
     juce::Rectangle<int> right_area;
-    if (!narrow) {
+    if (!narrow && producer) {
         right_area = r.removeFromRight(kRight);
         r.removeFromRight(kGap);
     }
@@ -746,8 +802,8 @@ void MainComponent::resized()
         tracks_.setBounds(rack);
     }
     auto edit = edit_.getBounds();
-    if (narrow) {
-        right_area = edit.removeFromBottom(producer ? 330 : 190);
+    if (narrow && producer) {
+        right_area = edit.removeFromBottom(330);
         edit.removeFromBottom(kGap);
         edit_.setBounds(edit);
     }
@@ -783,24 +839,6 @@ void MainComponent::resized()
             right_area.removeFromBottom(kGap);
             channel_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), 420)));
         }
-    } else if (narrow) {
-        // Selection, then the inspector in columns beside it.
-        selection_.setBounds(right_area.removeFromLeft(kRight));
-        right_area.removeFromLeft(kGap);
-        inspector_.set_horizontal(true);
-        inspector_.setBounds(right_area);
-    } else {
-        // The Composer column: what is selected, then the inspector. A tall
-        // keyboard deck makes it short: the inspector goes compact, then the
-        // selection readout gives up height (down to 110 px).
-        const bool compact = right_area.getHeight() < 190 + kGap + composer_ui::Inspector::preferred_height(false);
-        const int insp_h = composer_ui::Inspector::preferred_height(compact);
-        const int sel_h = juce::jlimit(110, 190, right_area.getHeight() - kGap - insp_h);
-        selection_.setBounds(right_area.removeFromTop(sel_h));
-        right_area.removeFromTop(kGap);
-        inspector_.set_horizontal(false);
-        inspector_.set_compact(compact);
-        inspector_.setBounds(right_area.withHeight(std::min(right_area.getHeight(), insp_h)));
     }
     channel_tab_.setVisible(right_tabs_);
     print_tab_.setVisible(right_tabs_);
@@ -822,6 +860,46 @@ void MainComponent::set_follow(bool on)
     context_.status(on ? "Follow on: the edit window scrolls with the playhead" : "Follow off: the edit window stays where you put it");
 }
 
+void MainComponent::set_inspector_shown(bool shown)
+{
+    hw::ui_settings().setValue("inspector_shown", shown);
+    if (shown) {
+        if (inspector_window_ == nullptr) {
+            const int w = InspectorBox::kWidth, h = InspectorBox::height();
+            auto* win = new dialogs::ToolWindow("Inspector", inspector_box_.get(), w, h, false);
+            win->setResizeLimits(w, 200, w + 200, 2000);
+            juce::Component::SafePointer<MainComponent> self(this);
+            win->on_close = [self] {
+                if (self == nullptr) return;
+                hw::ui_settings().setValue("inspector_shown", false);
+                self->context_.commands.commandStatusChanged();
+            };
+            // Where it was last (any connected display), else beside the edit window.
+            const auto saved = juce::StringArray::fromTokens(hw::ui_settings().getValue("inspector_bounds"), " ", "");
+            juce::Rectangle<int> r;
+            if (saved.size() == 4)
+                r = {saved[0].getIntValue(), saved[1].getIntValue(), saved[2].getIntValue(), saved[3].getIntValue()};
+            bool on_screen = false;
+            for (const auto& d : juce::Desktop::getInstance().getDisplays().displays)
+                on_screen = on_screen || d.userArea.intersects(r.reduced(20));
+            if (!on_screen) {
+                const auto me = getScreenBounds();
+                r = juce::Rectangle<int>(w, h).withPosition(me.getRight() - w - 30, me.getY() + 140);
+            }
+            win->setBounds(r);
+            inspector_window_ = win;
+        }
+        inspector_window_->setVisible(true);
+        inspector_window_->setMinimised(false);
+        inspector_window_->toFront(false);
+    } else if (inspector_window_ != nullptr) {
+        inspector_window_->closeButtonPressed();
+    }
+    context_.commands.commandStatusChanged();
+}
+
+bool MainComponent::inspector_shown() const { return inspector_window_ != nullptr && inspector_window_->isVisible(); }
+
 void MainComponent::show_right_tab(int tab)
 {
     right_tab_ = tab;
@@ -832,8 +910,6 @@ void MainComponent::apply_side_visibility()
 {
     const bool producer = workspace_ == Workspace::Producer, side = !work_view_;
     markers_.setVisible(side && !producer);
-    selection_.setVisible(side && !producer);
-    inspector_.setVisible(side && !producer);
     new_track_.setVisible(side && producer);
     clips_.setVisible(side && producer);
     tracks_.setVisible(side);
@@ -2157,7 +2233,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
                 cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController, cmd::scoreView, cmd::trackList, cmd::hearEntry,
-                cmd::builtinSounds, cmd::credits});
+                cmd::builtinSounds, cmd::credits, cmd::toggleInspector});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2382,6 +2458,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::midiSetup: info.setInfo("MIDI Setup...", "MIDI keyboards and controllers (USB, USB-C), on or off", "Studio", 0); break;
         case cmd::builtinSounds:
             info.setInfo("Built-in Sounds...", "The piano and General MIDI orchestra: download, status, credits", "Studio", 0);
+            break;
+        case cmd::toggleInspector:
+            info.setInfo("Inspector", "What is selected, with its articulation, dynamics, velocity and voice keys, in a floating window",
+                         "Window", 0);
+            info.setTicked(inspector_shown());
             break;
         case cmd::credits:
             info.setInfo("Credits...", "The open-source sounds, software and fonts in VC Composer, and trademark notices", "Help", 0);
@@ -2714,6 +2795,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::mixerController: show_mixer_controller_window(context_, *mixer_controller_); break;
         case cmd::builtinSounds: show_sounds_window(); break;
         case cmd::credits: show_credits_window(); break;
+        case cmd::toggleInspector: set_inspector_shown(!inspector_shown()); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;
         case cmd::reloadCrashedPlugins: {
             const int n = context_.engine.reload_crashed_plugins();
@@ -2880,6 +2962,9 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             m.addSeparator();
             for (auto id : {cmd::addTemplate, cmd::chordExplorer, cmd::ostinatoCreator, cmd::showCircleOfFifths})
                 m.addCommandItem(c, id);
+            m.addSeparator();
+            m.addCommandItem(c, cmd::toggleInspector);
+            m.addCommandItem(c, cmd::trackList);
             m.addSeparator();
             m.addCommandItem(c, cmd::account);
             const auto open = dialogs::open_tool_windows();

@@ -701,6 +701,23 @@ bool Session::set_percussion_map(const std::string& id, const std::string& map)
     }));
 }
 
+bool Session::set_accent_strength(const std::string& id, int strength)
+{
+    strength = std::clamp(strength, 1, 100);
+    if (!project_.edit_coalescing("Accent strength", [&](project::ProjectData& d) {
+            for (auto& t : d.tracks)
+                if (t.id == id) {
+                    if (t.accent_strength == strength) return false;
+                    t.accent_strength = strength;
+                    return true;
+                }
+            return false;
+        }))
+        return false;
+    document_changed();
+    return true;
+}
+
 bool Session::set_articulation_map(const std::string& id, const std::optional<notation::ExpressionMap>& map,
                                    const std::string& builtin)
 {

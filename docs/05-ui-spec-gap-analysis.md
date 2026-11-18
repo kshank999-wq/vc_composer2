@@ -2269,3 +2269,19 @@ macOS, Linux and Windows. What it took:
       trademark lines are text only (no logos).
     - **Checks**: sound_pack_checks (screenshots 103-105) with a tiny
       SoundFont written by the check itself.
+61. **Floating inspector; Select / Write and the accent dial on the staff
+    tools** (November 18, 2026).
+    - **Inspector**: the Composer view no longer gives a column to the
+      selection readout and inspector; the edit window takes the width. They
+      float together in Window > Inspector (off by default, remembered, its
+      place kept on any connected display).
+    - **Select / Write**: the staff tools start with two keys - the arrow
+      (Select: clicks select and drag notes, never write) and a quill (Write:
+      clicks write notes). The same switch as Note Entry.
+    - **Accent dial** at the tools' right end: the track's accent strength,
+      1-100 (`Track::accent_strength`, saved with the project). 50 plays the
+      articulation map's accent as it is; the lift above the dynamic scales
+      with the dial (accents and marcatos), the written accents never change.
+      A turn is one undo step.
+    - **Checks**: composer_lane_checks (29a), staff_tools_checks (44a),
+      test_accent_strength.

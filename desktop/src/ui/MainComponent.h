@@ -19,6 +19,7 @@
 #include "ui/SequencerView.h"
 #include "ui/TrackPanel.h"
 #include "ui/composer/Inspector.h"
+#include "ui/Dialogs.h"
 #include "ui/shell/KeyboardDeck.h"
 #include "ui/shell/MasterPanel.h"
 #include "ui/shell/MixerDeck.h"
@@ -95,6 +96,12 @@ public:
     TrackPanel& track_panel() noexcept { return tracks_; }
     shell::SelectionPanel& selection_panel() noexcept { return selection_; }
     composer_ui::Inspector& inspector() noexcept { return inspector_; }
+    /// Window > Inspector: what is selected and the inspector's keys and
+    /// knobs, in a floating window (movable to another screen). Off unless
+    /// turned on (the staff tools are at hand anyway); remembered.
+    void set_inspector_shown(bool shown);
+    bool inspector_shown() const;
+    dialogs::ToolWindow* inspector_window() const { return inspector_window_.getComponent(); }
     shell::KeyboardDeck& keyboard() noexcept { return keyboard_; }
     shell::MixerDeck& mixer_deck() noexcept { return mixer_deck_; }
     /// The Producer view's bottom deck: the mixer (default) or the keyboard.
@@ -200,6 +207,8 @@ private:
     shell::ClipsPanel clips_;
     shell::SelectionPanel selection_;
     composer_ui::Inspector inspector_;
+    std::unique_ptr<juce::Component> inspector_box_;  ///< Holds the selection readout and the inspector.
+    juce::Component::SafePointer<dialogs::ToolWindow> inspector_window_;
     shell::ChannelPanel channel_;
     shell::PrintPanel print_;
     shell::MasterPanel master_;

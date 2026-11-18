@@ -14,10 +14,97 @@ constexpr int kGroupGap = 10;
 constexpr int kHeader = 16;
 }  // namespace
 
+juce::Path IconKey::path(Icon icon, juce::Rectangle<float> a)
+{
+    juce::Path p;
+    if (icon == Icon::Arrow) {
+        // The pointer: a tall arrowhead with its tail, leaning left.
+        p.startNewSubPath(0.0f, 0.0f);
+        p.lineTo(0.0f, 15.0f);
+        p.lineTo(4.0f, 11.4f);
+        p.lineTo(6.6f, 17.4f);
+        p.lineTo(9.2f, 16.2f);
+        p.lineTo(6.6f, 10.4f);
+        p.lineTo(11.6f, 10.4f);
+        p.closeSubPath();
+    } else {
+        // An old quill: a curved feather, its vane notched where the barbs
+        // part, and the cut nib at the bottom left.
+        p.startNewSubPath(1.0f, 19.0f);                      // the nib's point
+        p.quadraticTo(3.0f, 15.0f, 5.0f, 13.0f);             // the bare shaft
+        p.cubicTo(5.5f, 8.0f, 11.0f, 2.0f, 19.0f, 0.0f);     // the vane's outer edge, up to the tip
+        p.cubicTo(17.5f, 3.0f, 15.0f, 5.0f, 13.2f, 6.4f);    // down the inner edge
+        p.lineTo(14.6f, 7.4f);                               // a notch where the barbs part
+        p.cubicTo(12.5f, 10.0f, 9.5f, 12.4f, 6.4f, 14.0f);
+        p.quadraticTo(4.0f, 16.0f, 2.4f, 19.4f);             // back down the shaft
+        p.closeSubPath();
+    }
+    p.applyTransform(p.getTransformToScaleToFit(a, true));
+    return p;
+}
+
+void IconKey::paintButton(juce::Graphics& g, bool highlighted, bool down)
+{
+    hw::Keycap::paintButton(g, highlighted, down);
+    const auto area = getLocalBounds().toFloat().reduced(getWidth() * 0.17f, getHeight() * 0.15f);
+    const auto colour = getToggleState() ? hw::Theme::get().led() : juce::Colour(0xffd9d4c8);
+    g.setColour(colour);
+    const auto p = path(icon_, area);
+    g.fillPath(p);
+    if (icon_ == Icon::Quill) {
+        // The rachis: the shaft running up the middle of the vane.
+        const auto b = p.getBounds();
+        juce::Path rib;
+        rib.startNewSubPath(b.getX() + b.getWidth() * 0.12f, b.getBottom() - b.getHeight() * 0.06f);
+        rib.quadraticTo(b.getX() + b.getWidth() * 0.45f, b.getY() + b.getHeight() * 0.45f, b.getRight() - b.getWidth() * 0.05f,
+                        b.getY() + b.getHeight() * 0.03f);
+        g.setColour(hw::tok::panel_bottom.withAlpha(0.85f));
+        g.strokePath(rib, juce::PathStrokeType(0.9f));
+    }
+}
+
 StaffTools::StaffTools(bool detached) : detached_(detached)
 {
     setComponentID(detached ? "staff_tools_window" : "staff_tools");
     setTitle("Staff tools");
+    // Select or Write: the arrow edits what is there, the quill writes notes.
+    select_.setComponentID("staff_tools_select");
+    select_.setTooltip("Select: click notes to select them, drag to move them; clicks never write");
+    select_.setTitle("Select (edit notes)");
+    write_.setComponentID("staff_tools_write");
+    write_.setTooltip("Write: click the staff to write notes (the quill)");
+    write_.setTitle("Write (enter notes)");
+    select_.onClick = [this] {
+        if (on_mode) on_mode(false);
+    };
+    write_.onClick = [this] {
+        if (on_mode) on_mode(true);
+    };
+    for (auto* k : {&select_, &write_}) {
+        k->setWantsKeyboardFocus(false);
+        k->setClickingTogglesState(false);
+        addAndMakeVisible(*k);
+    }
+    write_.setToggleState(true, juce::dontSendNotification);
+    // Accent strength: how hard the track's accents play.
+    accent_.setComponentID("staff_tools_accent");
+    accent_.setTitle("Accent strength");
+    accent_.setTooltip("Accent strength, 1-100: how hard this track's accents play (50 as written; double-click for 50)");
+    accent_.setRange(1.0, 100.0, 1.0);
+    accent_.setValue(50.0, juce::dontSendNotification);
+    accent_.setDoubleClickReturnValue(true, 50.0);
+    accent_.setWantsKeyboardFocus(false);
+    accent_.onValueChange = [this] {
+        accent_label_.setText("Accent\n" + juce::String(juce::roundToInt(accent_.getValue())), juce::dontSendNotification);
+        if (on_accent) on_accent(juce::roundToInt(accent_.getValue()));
+    };
+    addAndMakeVisible(accent_);
+    accent_label_.setText("Accent\n50", juce::dontSendNotification);
+    accent_label_.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+    accent_label_.setColour(juce::Label::textColourId, juce::Colour(0xffd9d4c8));
+    accent_label_.setJustificationType(juce::Justification::centredLeft);
+    accent_label_.setInterceptsMouseClicks(false, false);
+    addAndMakeVisible(accent_label_);
     using W = Key::When;
     // Note values, dot, triplet, rest: always.
     add(C::SelectDurationWhole, "", "\xee\xb2\xa2", "Whole note", W::Always, true);
@@ -155,6 +242,15 @@ void StaffTools::set_state(const StaffToolsState& s)
     }
     chord_.setToggleState(s.chord_mode, juce::dontSendNotification);
     chord_.setEnabled(s.editable && s.pitched);
+    select_.setToggleState(!s.writing, juce::dontSendNotification);
+    write_.setToggleState(s.writing, juce::dontSendNotification);
+    select_.setEnabled(s.editable);
+    write_.setEnabled(s.editable);
+    accent_.setEnabled(s.editable);
+    if (juce::roundToInt(accent_.getValue()) != s.accent) {
+        accent_.setValue(s.accent, juce::dontSendNotification);
+        accent_label_.setText("Accent\n" + juce::String(s.accent), juce::dontSendNotification);
+    }
     resized();
     repaint();
 }
@@ -172,6 +268,8 @@ void StaffTools::layout(int width, bool apply, int* height) const
         if (apply) c.setBounds(x, y, w, kKey);
         x += w + kGap;
     };
+    place(const_cast<IconKey&>(select_), kKey, false);
+    place(const_cast<IconKey&>(write_), kKey, false);
     for (const auto& k : keys_) {
         if (!k.cap->isVisible()) continue;
         const bool wide = k.cap->getButtonText().length() > 2;
@@ -180,6 +278,20 @@ void StaffTools::layout(int width, bool apply, int* height) const
     place(const_cast<hw::Keycap&>(chord_), 52, true);
     place(const_cast<hw::Keycap&>(circle_), 52, false);
     place(const_cast<hw::Keycap&>(detach_), 56, true);
+    // The accent dial at the right end: the knob, its name and value.
+    {
+        if (x > 6) x += kGroupGap - kGap;
+        const int w = kKey + 44;
+        if (x + w > width - 6 && x > 6) {
+            x = 6;
+            y += kKey + kGap;
+        }
+        if (apply) {
+            const_cast<hw::SmallKnob&>(accent_).setBounds(x, y, kKey, kKey);
+            const_cast<juce::Label&>(accent_label_).setBounds(x + kKey + 2, y, 42, kKey);
+        }
+        x += w + kGap;
+    }
     if (height) *height = y + kKey + 5;
 }
 

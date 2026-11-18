@@ -25,6 +25,8 @@ std::optional<notation::ExpressionMap> expression_map_from_json(const json::Valu
 
 /// What a track plays through: its own map, else the built-in it names.
 notation::ExpressionMap expression_map_for(const Track& track);
+/// `map` with its accent and marcato lift scaled by `strength` (1-100, 50 = as is).
+notation::ExpressionMap apply_accent_strength(notation::ExpressionMap map, int strength);
 /// Changes whenever what plays changes (the render cache keys on it).
 std::string expression_map_key(const Track& track);
 

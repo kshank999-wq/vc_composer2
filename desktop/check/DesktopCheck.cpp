@@ -1721,7 +1721,7 @@ void shell_checks(MainWindow& window, const juce::File& dir)
     ctx.commands.invokeDirectly(cmd::toggleView, false);
     pump(100);
     check(main.workspace() == MainComponent::Workspace::Composer && main.composer().isVisible() &&
-              main.markers().isVisible() && main.selection_panel().isVisible(),
+              main.markers().isVisible() && !main.selection_panel().isShowing(),
           "Ctrl+Tab (Switch Composer / Producer) flips back to the Composer view");
     check(main.edit_frame().stage_key(0).getToggleState() && !main.edit_frame().stage_key(2).getToggleState(),
           "the stage bar shows Compose in the Composer view");
@@ -1781,9 +1781,9 @@ void shell_checks(MainWindow& window, const juce::File& dir)
     window.setSize(1200, 800);
     main.setSize(1200, 800);
     pump(150);
-    check(main.deck().getHeight() > 150 && main.selection_panel().getY() > main.edit_frame().getY() &&
-              main.selection_panel().getRight() <= main.edit_frame().getRight() + 1,
-          "under 1280 px the top deck wraps and the right panel drops below the edit window");
+    check(main.deck().getHeight() > 150 && main.edit_frame().getRight() > main.getWidth() - 20 &&
+              main.edit_frame().getBottom() > main.keyboard().getY() - 20,
+          "under 1280 px the top deck wraps; the Composer's edit window takes the full width and height");
     shoot(main, dir, "25-shell-1200");
     window.setSize(1440, 900);
     main.setSize(1440, 900);
@@ -1983,6 +1983,15 @@ void composer_lane_checks(MainWindow& window, const juce::File& dir)
         if (!note.is_rest && note.start_tick >= bar) ids.push_back(note.id);
     session.select_notes(track, ids);
     pump(80);
+    // The inspector is a floating window, off until Window > Inspector.
+    check(!main.inspector_shown() && main.inspector_window() == nullptr && !main.inspector().isShowing(),
+          "the inspector is off by default: no column beside the edit window");
+    window.context().commands.invokeDirectly(cmd::toggleInspector, false);
+    pump(120);
+    check(main.inspector_shown() && main.inspector_window() != nullptr && main.inspector().isShowing() &&
+              main.inspector_window()->getContentComponent() != nullptr &&
+              main.selection_panel().findParentComponentOfClass<dialogs::ToolWindow>() == main.inspector_window(),
+          "Window > Inspector floats it in its own window (the selection readout over the inspector)");
     auto& insp = main.inspector();
     insp.articulation_key(1).triggerClick();  // staccato
     pump(80);
@@ -2015,6 +2024,10 @@ void composer_lane_checks(MainWindow& window, const juce::File& dir)
     check(varied && insp.performed_velocity() == 100,
           "Humanize writes timing overrides, keeps the velocity set, never the score");
     shoot(main, dir, "29-composer-inspector");
+    if (auto* w = main.inspector_window()) shoot(*w, dir, "29a-inspector-window");
+    window.context().commands.invokeDirectly(cmd::toggleInspector, false);
+    pump(150);
+    check(!main.inspector_shown(), "Window > Inspector again closes it");
 }
 
 /// Loop playback (L) and the keyboard deck (step 5).
@@ -5193,6 +5206,59 @@ void staff_tools_checks(MainWindow& window, const juce::File& dir)
           "the staff tools sit just above the selected staff (Piano), in room the lanes make for them: no staff is covered");
     shoot(main, dir, "44-staff-tools");
 
+    // Select and Write on the left: the arrow edits, the quill writes.
+    {
+        auto count = [&] {
+            std::size_t n = 0;
+            for (const auto& x : session.data().find_track(piano)->active_version()->score.notes(0)) n += x.is_rest ? 0 : 1;
+            return n;
+        };
+        check(tools.write_key().getToggleState() && !tools.select_key().getToggleState() && composer.note_entry() &&
+                  tools.select_key().getX() < tools.key_for(Command::SelectDurationWhole)->getX() &&
+                  tools.accent_knob().getRight() > tools.detach_key().getRight(),
+              "the tools start in Write (the quill lit); Select and Write sit at the left, the accent dial at the right end");
+        tools.select_key().triggerClick();
+        pump(60);
+        engraving::InsertionPoint p;
+        p.valid = true;
+        p.staff_index = 0;
+        p.tick = 0;
+        p.pitch = notation::Pitch{notation::Step::C, 5, 0};
+        const auto before = count();
+        if (composer.lane(0).on_staff_clicked) composer.lane(0).on_staff_clicked(p);
+        pump(60);
+        composer.update_staff_tools();
+        check(!composer.note_entry() && tools.select_key().getToggleState() && !tools.write_key().getToggleState() &&
+                  count() == before,
+              "Select (the arrow): a click on the staff writes nothing");
+        shoot(main, dir, "44a-staff-tools-select");
+        tools.write_key().triggerClick();
+        pump(60);
+        if (composer.lane(0).on_staff_clicked) composer.lane(0).on_staff_clicked(p);
+        pump(60);
+        composer.update_staff_tools();
+        check(composer.note_entry() && tools.write_key().getToggleState() && count() == before + 1,
+              "Write (the quill): the same click writes a note");
+        const auto quill = composer_ui::IconKey::path(composer_ui::IconKey::Icon::Quill, {0, 0, 20, 20});
+        check(!quill.isEmpty() && quill.getBounds().getWidth() > 15.0f, "the Write key's face is a quill");
+        session.undo();
+        pump(40);
+
+        // The accent dial: 1-100, the track's own, one undo step a turn.
+        auto& dial = tools.accent_knob();
+        check(dial.getMinimum() == 1.0 && dial.getMaximum() == 100.0 && juce::roundToInt(dial.getValue()) == 50,
+              "the accent dial runs 1-100 and starts at 50 (accents as the map plays them)");
+        for (int v = 55; v <= 85; v += 10) dial.setValue(v, juce::sendNotificationSync);
+        pump(60);
+        check(session.data().find_track(piano)->accent_strength == 85 && session.undo_label() == "Accent strength",
+              "turning it sets the Piano's accent strength (85), as one undo step");
+        session.undo();
+        pump(60);
+        composer.update_staff_tools();
+        check(session.data().find_track(piano)->accent_strength == 50 && juce::roundToInt(dial.getValue()) == 50,
+              "undo puts it back, and the dial follows");
+    }
+
     // Another staff selected: the tools follow it.
     session.select_track(flute);
     pump(80);
@@ -7192,7 +7258,7 @@ void layout_checks(MainWindow& window, const juce::File& dir)
     // Work view: no side panels.
     main.set_work_view(true);
     pump(150);
-    check(!main.track_panel().isVisible() && !main.inspector().isVisible() && main.edit_frame().getWidth() > edit_w + 300,
+    check(!main.track_panel().isVisible() && !main.inspector().isShowing() && main.edit_frame().getWidth() > edit_w + 200,
           "Work View hides the side panels; the edit window widens (" + juce::String(edit_w) + " -> " +
               juce::String(main.edit_frame().getWidth()) + ")");
     shoot(window, dir, "85-work-view");
@@ -10356,7 +10422,9 @@ int main(int argc, char** argv)
                 {"chord_mode_checks", chord_mode_checks},
                 {"chord_palette_checks", chord_palette_checks},
                 {"sound_pack_checks", sound_pack_checks},
-                {"range_checks", range_checks}};
+                {"range_checks", range_checks},
+                {"composer_lane_checks", composer_lane_checks},
+                {"staff_tools_checks", staff_tools_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)

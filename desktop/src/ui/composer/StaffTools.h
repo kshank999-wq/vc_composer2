@@ -28,7 +28,24 @@ struct StaffToolsState {
     bool dot = false, triplet = false, rest = false;
     int voice = 0;
     bool chord_mode = false;
+    bool writing = true;        ///< Write (the quill) or Select (the arrow).
+    int accent = 50;            ///< The track's accent strength, 1-100.
     juce::String track;         ///< The staff's name, for the header.
+};
+
+/// A key whose face is a drawn icon: the selection arrow or the quill.
+class IconKey final : public hw::Keycap {
+public:
+    enum class Icon { Arrow, Quill };
+    explicit IconKey(Icon icon) : hw::Keycap("", true), icon_(icon) {}
+    /// The icon's outline, fitted to `area` (the checks and the menus use it too).
+    static juce::Path path(Icon icon, juce::Rectangle<float> area);
+
+protected:
+    void paintButton(juce::Graphics& g, bool highlighted, bool down) override;
+
+private:
+    Icon icon_;
 };
 
 class StaffTools final : public juce::Component {
@@ -42,11 +59,18 @@ public:
 
     std::function<void(composer::Command)> on_command;
     std::function<void()> on_chord_mode, on_circle, on_detach, on_collapse;
+    /// Select (false) or Write (true) chosen on the mode keys.
+    std::function<void(bool)> on_mode;
+    /// The accent dial turned (1-100).
+    std::function<void(int)> on_accent;
 
     /// A key by its command (for checks), or null when not shown.
     hw::Keycap* key_for(composer::Command command);
     hw::Keycap& detach_key() { return detach_; }
     hw::Keycap& chord_key() { return chord_; }
+    hw::Keycap& select_key() { return select_; }
+    hw::Keycap& write_key() { return write_; }
+    hw::SmallKnob& accent_knob() { return accent_; }
     /// How many keys are shown now.
     int visible_keys() const;
 
@@ -68,6 +92,9 @@ private:
     StaffToolsState state_;
     std::vector<Key> keys_;
     hw::Keycap chord_{"Chord", true}, circle_{"Circle"}, detach_{"Detach"}, collapse_{"-"};
+    IconKey select_{IconKey::Icon::Arrow}, write_{IconKey::Icon::Quill};
+    hw::SmallKnob accent_;
+    juce::Label accent_label_;
 };
 
 }  // namespace vcc::desktop::composer_ui

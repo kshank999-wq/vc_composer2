@@ -77,6 +77,8 @@ MainWindow::MainWindow(const juce::String& file, bool show_welcome)
     if (const auto layout = layouts::to_open_with()) main_->apply_layout(*layout);
     if (hw::ui_settings().getBoolValue("console_at_startup", false))
         main_->show_console_window(hw::ui_settings().getValue("console_display", ""));
+    // The floating Inspector, if it was left open.
+    if (hw::ui_settings().getBoolValue("inspector_shown", false)) main_->set_inspector_shown(true);
     if (main_->workspace() == MainComponent::Workspace::Composer) main_->composer().grabKeyboardFocus();
 
     // The built-in sounds: loaded if installed, downloaded on first launch

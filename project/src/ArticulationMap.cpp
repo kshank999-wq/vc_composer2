@@ -114,15 +114,29 @@ std::optional<nt::ExpressionMap> expression_map_from_json(const json::Value& o)
     return m;
 }
 
+notation::ExpressionMap apply_accent_strength(notation::ExpressionMap map, int strength)
+{
+    strength = std::clamp(strength, 1, 100);
+    if (strength == 50) return map;
+    // The lift above the written dynamic, scaled: 50 is the map's own.
+    for (auto& rule : map.articulations)
+        if ((rule.articulation == notation::Articulation::Accent || rule.articulation == notation::Articulation::Marcato) &&
+            (rule.action == notation::ArticulationAction::ScaleVelocity ||
+             rule.action == notation::ArticulationAction::ScaleVelocityAndLength))
+            rule.velocity_scale = std::clamp(1.0 + (rule.velocity_scale - 1.0) * strength / 50.0, 1.0, 4.0);
+    return map;
+}
+
 notation::ExpressionMap expression_map_for(const Track& track)
 {
-    if (track.articulation_map) return *track.articulation_map;
-    return expression_map_named(track.expression_map);
+    if (track.articulation_map) return apply_accent_strength(*track.articulation_map, track.accent_strength);
+    return apply_accent_strength(expression_map_named(track.expression_map), track.accent_strength);
 }
 
 std::string expression_map_key(const Track& track)
 {
-    const std::string drums = track.percussion_map.empty() ? std::string() : "|drums:" + track.percussion_map;
+    const std::string drums = (track.percussion_map.empty() ? std::string() : "|drums:" + track.percussion_map) +
+                              (track.accent_strength == 50 ? std::string() : "|accent:" + std::to_string(track.accent_strength));
     if (!track.articulation_map) return track.expression_map + drums;
     return track.expression_map + "|" + expression_map_to_json(*track.articulation_map).to_text() + drums;
 }

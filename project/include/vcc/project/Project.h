@@ -312,6 +312,10 @@ struct Track {
     /// project so it plays the same anywhere. When set, `expression_map`
     /// is its name and this is what plays.
     std::optional<notation::ExpressionMap> articulation_map;
+    /// How strongly accents (and marcatos) play, 1-100 (the staff tools'
+    /// dial). 50 plays the map's own accent; 100 doubles its lift, 1 all but
+    /// removes it. The written accents never change.
+    int accent_strength = 50;
     /// A percussion map's id (vcc/project/Percussion.h), for a drum kit:
     /// staff positions and noteheads to drum sounds. Empty for pitched parts.
     std::string percussion_map;
