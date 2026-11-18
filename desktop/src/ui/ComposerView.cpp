@@ -1073,6 +1073,16 @@ void ComposerView::wire_tools(composer_ui::StaffTools& t)
     };
     t.on_circle = [this] { composer_ui::show_circle_of_fifths(context_); };
     t.on_detach = [this] { set_staff_tools_detached(!tools_detached_); };
+    t.on_drag_out = [this](juce::Point<int> top_left) {
+        // Floats where it was let go - on whichever screen that is.
+        set_staff_tools_detached(true);
+        if (auto* w = staff_tools_window()) {
+            w->setTopLeftPosition(top_left);
+            const auto b = w->getBounds();
+            hw::ui_settings().setValue("staff_tools_bounds", juce::String(b.getX()) + " " + juce::String(b.getY()) + " " +
+                                                                 juce::String(b.getWidth()) + " " + juce::String(b.getHeight()));
+        }
+    };
     t.on_collapse = [this] { set_staff_tools_collapsed(true); };
 }
 
@@ -1132,6 +1142,9 @@ void ComposerView::set_staff_tools_detached(bool detached)
         auto* w = new dialogs::ToolWindow("Staff Tools", content.release(), r.getWidth(), r.getHeight());
         w->setBounds(on_a_display(r));
         w->setAlwaysOnTop(true);
+        // Shown at once (it was made but never shown, so Detach seemed to lose the tools).
+        w->setVisible(true);
+        w->toFront(false);
         juce::Component::SafePointer<ComposerView> self(this);
         w->on_close = [self] {
             if (self) {

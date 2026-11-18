@@ -319,8 +319,42 @@ void StaffTools::paint(juce::Graphics& g)
     g.fillRoundedRectangle(r, 5.0f);
     g.setColour(hw::Theme::get().led().withAlpha(0.6f));
     g.drawRoundedRectangle(r.reduced(0.5f), 5.0f, 1.0f);
-    hw::paint::silk(g, "Staff tools" + (state_.track.isNotEmpty() ? "  -  " + state_.track : juce::String()),
+    hw::paint::silk(g, "Staff tools" + (state_.track.isNotEmpty() ? "  -  " + state_.track : juce::String()) +
+                           (detached_ ? juce::String() : juce::String("   (drag here to float it - another screen too)")),
                     juce::Rectangle<float>(8.0f, 1.0f, r.getWidth() - 40.0f, static_cast<float>(kHeader)), 9.5f);
+    if (dragging_out_) {
+        g.setColour(hw::Theme::get().led().withAlpha(0.25f));
+        g.fillRoundedRectangle(r, 5.0f);
+    }
+}
+
+void StaffTools::mouseMove(const juce::MouseEvent& e)
+{
+    setMouseCursor(!detached_ && e.y < kHeader ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void StaffTools::mouseDown(const juce::MouseEvent& e)
+{
+    dragging_out_ = false;
+    drag_from_ = e.getPosition();
+}
+
+void StaffTools::mouseDrag(const juce::MouseEvent& e)
+{
+    // Pulled by its title strip: it comes out of the edit window.
+    if (detached_ || drag_from_.y >= kHeader) return;
+    if (!dragging_out_ && e.getDistanceFromDragStart() > 12) {
+        dragging_out_ = true;
+        repaint();
+    }
+}
+
+void StaffTools::mouseUp(const juce::MouseEvent& e)
+{
+    if (!dragging_out_) return;
+    dragging_out_ = false;
+    repaint();
+    if (on_drag_out) on_drag_out(e.getScreenPosition() - drag_from_);
 }
 
 }  // namespace vcc::desktop::composer_ui

@@ -60,6 +60,9 @@ public:
 
     std::function<void(composer::Command)> on_command;
     std::function<void()> on_chord_mode, on_circle, on_detach, on_collapse;
+    /// Docked: its title strip dragged away - the tools float in their own
+    /// window where it is let go (another screen too). The point is on screen.
+    std::function<void(juce::Point<int>)> on_drag_out;
     /// Select (false) or Write (true) chosen on the mode keys.
     std::function<void(bool)> on_mode;
     /// The accent dial turned (1-100).
@@ -77,6 +80,10 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
+    void mouseMove(const juce::MouseEvent& e) override;
 
 private:
     struct Key {
@@ -90,6 +97,8 @@ private:
     void layout(int width, bool apply, int* height) const;
 
     bool detached_ = false;
+    bool dragging_out_ = false;
+    juce::Point<int> drag_from_;
     StaffToolsState state_;
     std::vector<Key> keys_;
     hw::Keycap chord_{"Chord", true}, circle_{"Circle"}, detach_{"Detach"}, collapse_{"-"};

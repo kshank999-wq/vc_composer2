@@ -5428,6 +5428,23 @@ void staff_tools_checks(MainWindow& window, const juce::File& dir)
               "undo puts it back, and the dial follows");
     }
 
+    // Dragged out by its title strip: it floats where it is let go.
+    {
+        const juce::Point<float> grab{60.0f, 6.0f}, drop{60.0f, 260.0f};
+        tools.mouseDown(mouse_event(tools, grab, grab, false));
+        tools.mouseDrag(mouse_event(tools, drop, grab, true));
+        tools.mouseUp(mouse_event(tools, drop, grab, true));
+        pump(200);
+        auto* w = composer.staff_tools_window();
+        const auto expected = tools.localPointToGlobal(juce::Point<int>(60, 260)) - juce::Point<int>(60, 6);
+        check(composer.staff_tools_detached() && w != nullptr && w->isVisible() &&
+                  w->getPosition().getDistanceFrom(expected) < 40,
+              "dragging the staff tools by their title strip floats them where they are let go (" +
+                  (w ? w->getPosition().toString() : juce::String("none")) + ", aimed at " + expected.toString() + ")");
+        composer.set_staff_tools_detached(false);
+        pump(100);
+    }
+
     // Another staff selected: the tools follow it.
     session.select_track(flute);
     pump(80);
