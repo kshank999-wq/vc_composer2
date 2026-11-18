@@ -78,8 +78,12 @@ juce::String spread_to_section(AppContext& c, const std::string& source, session
     const char* const strings[] = {"violins I", "violins II", "violas", "celli", "basses"};
     const char* const winds[] = {"flute", "oboe", "clarinet", "bassoon"};
     const char* const brass[] = {"trumpet", "horn", "trombone", "tuba"};
-    const char* const* names = section == S::Strings ? strings : section == S::Woodwinds ? winds : brass;
-    const juce::String what = section == S::Strings ? "strings" : section == S::Woodwinds ? "woodwinds" : "brass";
+    const char* const choir[] = {"soprano", "alto", "tenor", "bass"};
+    const char* const* names = section == S::Strings ? strings : section == S::Woodwinds ? winds : section == S::Brass ? brass : choir;
+    const juce::String what = section == S::Strings     ? "strings"
+                              : section == S::Woodwinds ? "woodwinds"
+                              : section == S::Brass     ? "brass"
+                                                        : "choir";
     if (std::all_of(targets.begin(), targets.end(), [](const std::string& t) { return t.empty(); }))
         return "No " + what + " in this project to spread to";
     const auto [from, to] = range_or_song(c);
@@ -134,7 +138,8 @@ juce::PopupMenu sketch_menu(AppContext& c, const std::string& source)
     using S = session::Session::Section;
     const std::pair<S, const char*> sections[] = {{S::Strings, "Spread Chords to Strings (open, 5 parts)"},
                                                   {S::Woodwinds, "Spread Chords to Woodwinds (4 parts)"},
-                                                  {S::Brass, "Spread Chords to Brass (4 parts)"}};
+                                                  {S::Brass, "Spread Chords to Brass (4 parts)"},
+                                                  {S::Choir, "Spread Chords to Choir (SATB)"}};
     for (const auto& [section, label] : sections) {
         const auto ids = c.session.section_tracks(section);
         const bool any = std::any_of(ids.begin(), ids.end(), [](const std::string& t) { return !t.empty(); });

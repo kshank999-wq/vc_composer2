@@ -144,8 +144,8 @@ public:
     /// A section's tracks, top voice first (an empty id where the project has
     /// none): Strings - violins I, violins II, violas, celli, basses;
     /// Woodwinds - flute, oboe, clarinet, bassoon; Brass - trumpet, horn,
-    /// trombone, tuba.
-    enum class Section { Strings, Woodwinds, Brass };
+    /// trombone, tuba; Choir - soprano, alto, tenor, bass.
+    enum class Section { Strings, Woodwinds, Brass, Choir };
     std::vector<std::string> section_tracks(Section section) const;
     std::vector<std::string> string_section() const { return section_tracks(Section::Strings); }
     /// One chord (as heard) spread over a section's tracks at `tick`, a note

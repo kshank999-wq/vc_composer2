@@ -260,6 +260,12 @@ std::vector<std::string> Session::section_tracks(Section section) const
                       {"brass.trombone", "brass.trombone_section"},
                       {"brass.tuba", "brass.bass_trombone", "brass.cimbasso"}};
             break;
+        case Section::Choir:
+            voices = {{"vocals.soprano", "vocals.mezzo"},
+                      {"vocals.alto", "vocals.countertenor", "vocals.mezzo"},
+                      {"vocals.tenor"},
+                      {"vocals.bass", "vocals.baritone"}};
+            break;
     }
     std::vector<std::string> out(voices.size());
     std::set<std::string> used;

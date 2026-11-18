@@ -30,7 +30,7 @@ struct ChordModeState {
     theory::VoicingStyle style = theory::VoicingStyle::Closed;
     int octave = 4;                      ///< The bass note's octave (C4 is middle C).
     int then = 0;                        ///< 0 after the chord, 1 next beat, 2 next bar
-    int send_to = 0;                     ///< 0 this track, 1 strings (open, 5 parts), 2 woodwinds, 3 brass
+    int send_to = 0;                     ///< 0 this track, 1 strings (open, 5 parts), 2 woodwinds, 3 brass, 4 choir
     bool write_symbol = true;            ///< Also set the chord symbol (the ruler's Chords row).
     /// What kind of chord, built in the key on the chosen (or clicked) root:
     /// "triad" and "seventh" are the key's own chords on that degree; "maj7",

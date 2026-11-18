@@ -1360,9 +1360,15 @@ bool ComposerView::enter_chord(bool replace_selection)
     // Send to a section: the chord spread over its players, a note each, at the cursor.
     if (chord_state_.send_to > 0) {
         using S = session::Session::Section;
-        const S section = chord_state_.send_to == 1 ? S::Strings : chord_state_.send_to == 2 ? S::Woodwinds : S::Brass;
+        const S section = chord_state_.send_to == 1   ? S::Strings
+                          : chord_state_.send_to == 2 ? S::Woodwinds
+                          : chord_state_.send_to == 3 ? S::Brass
+                                                      : S::Choir;
         const auto targets = context_.session.section_tracks(section);
-        const juce::String what = section == S::Strings ? "strings" : section == S::Woodwinds ? "woodwinds" : "brass";
+        const juce::String what = section == S::Strings     ? "strings"
+                                  : section == S::Woodwinds ? "woodwinds"
+                                  : section == S::Brass     ? "brass"
+                                                            : "choir";
         if (std::all_of(targets.begin(), targets.end(), [](const std::string& t) { return t.empty(); })) {
             context_.status("No " + what + " in this project to send the chord to");
             return false;

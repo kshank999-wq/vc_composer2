@@ -267,6 +267,7 @@ ChordPalette::ChordPalette(ChordModeState& state) : hw::Panel("Chord mode", fals
     send_.addItem("Send to: Strings (open, 5 parts)", 2);
     send_.addItem("Send to: Woodwinds (4 parts)", 3);
     send_.addItem("Send to: Brass (4 parts)", 4);
+    send_.addItem("Send to: Choir (SATB)", 5);
     send_.setTooltip("Where Insert writes the chord: on this track, or spread over a section - a note each, top down "
                      "(single-line instruments never get chords)");
     send_.onChange = [this] {
@@ -442,7 +443,7 @@ void ChordPalette::refresh()
     for (int i = 0; i < 4; ++i)
         if (styles[i] == state_.style) voicing_.setSelectedItemIndex(i, juce::dontSendNotification);
     then_.setSelectedItemIndex(std::clamp(state_.then, 0, 2), juce::dontSendNotification);
-    send_.setSelectedItemIndex(std::clamp(state_.send_to, 0, 3), juce::dontSendNotification);
+    send_.setSelectedItemIndex(std::clamp(state_.send_to, 0, 4), juce::dontSendNotification);
     for (std::size_t i = 0; i < types_.size(); ++i)
         types_[i]->setToggleState(chord_types()[i].first == state_.type, juce::dontSendNotification);
     {

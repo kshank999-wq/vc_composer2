@@ -4753,7 +4753,8 @@ void piano_sketch_checks(MainWindow& window, const juce::File& dir)
     juce::StringArray labels;
     for (juce::PopupMenu::MenuItemIterator it(menu); it.next();) labels.add(it.getItem().text);
     check(labels.contains("Send Top Line to") && labels.contains("Send Bass Line to") && labels.contains("Send All Notes (chords) to") &&
-              labels.contains("Spread Chords to Strings (open, 5 parts)") && labels.contains("Spread Chords to Woodwinds (4 parts)"),
+              labels.contains("Spread Chords to Strings (open, 5 parts)") && labels.contains("Spread Chords to Woodwinds (4 parts)") &&
+              labels.contains("Spread Chords to Choir (SATB)"),
           "the Piano's menu: send a line to any track, spread chords to a section (" + labels.joinIntoString(", ") + ")");
     // All Notes lists only instruments that play chords.
     bool violins_offered = false;
@@ -4782,7 +4783,8 @@ void piano_sketch_checks(MainWindow& window, const juce::File& dir)
     composer.set_chord_mode(true);
     pump(100);
     auto& palette = composer.chord_palette();
-    check(palette.send_box().isShowing() && palette.send_box().getNumItems() == 4, "the chord box has Send to: this track / Strings / Woodwinds / Brass");
+    check(palette.send_box().isShowing() && palette.send_box().getNumItems() == 5,
+          "the chord box has Send to: this track / Strings / Woodwinds / Brass / Choir");
     session.select_track(strings[0]);
     pump(80);
     palette.send_box().setSelectedItemIndex(0, juce::sendNotificationSync);

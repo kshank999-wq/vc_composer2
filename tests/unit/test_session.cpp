@@ -1056,6 +1056,20 @@ TEST_CASE("the piano sketch: send its top, middle or bass notes to a track; spre
     CHECK(sounding(ob, bar) == std::vector<int>{67});
     CHECK(sounding(cl, bar) == std::vector<int>{64});
     CHECK(sounding(bn, bar) == std::vector<int>{48});
+
+    // Choir: soprano, alto, tenor, bass - close, each in the voice's range.
+    const auto sop = s.add_track("Soprano", "vocals.soprano");
+    const auto alt = s.add_track("Alto", "vocals.alto");
+    const auto ten = s.add_track("Tenor", "vocals.tenor");
+    const auto bas = s.add_track("Bass", "vocals.bass");
+    const auto choir = s.section_tracks(session::Session::Section::Choir);
+    CHECK(choir == (std::vector<std::string>{sop, alt, ten, bas}));
+    CHECK(!session::Session::plays_chords("vocals.soprano") && session::Session::plays_chords("vocals.choir_satb"));
+    REQUIRE(s.spread_chord_at(2 * bar, notation::half(), {48, 64, 67, 72}, choir, false));
+    CHECK(sounding(sop, 2 * bar) == std::vector<int>{72});
+    CHECK(sounding(alt, 2 * bar) == std::vector<int>{67});
+    CHECK(sounding(ten, 2 * bar) == std::vector<int>{64});
+    CHECK(sounding(bas, 2 * bar) == std::vector<int>{48});
 }
 
 TEST_CASE("every template opens with a Piano track at the top")
