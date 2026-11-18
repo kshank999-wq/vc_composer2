@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ui/shell/Layouts.h"
+#include "ui/surface/MixerController.h"
 
 #include <map>
 #include <thread>
@@ -116,6 +117,8 @@ public:
     MixerComponent* full_console() noexcept { return full_console_.get(); }
     /// The jog/shuttle and transport controller (Tools > Control Surfaces).
     surface_ui::ControlSurface& surface() noexcept { return *surface_; }
+    /// The hardware mixer controller (Mackie Control), Studio > Mixer Controller.
+    MixerController& mixer_controller() noexcept { return *mixer_controller_; }
     /// In a short window the Producer column shows Channel (0) or Print (1).
     void show_right_tab(int tab);
     bool right_tabs() const noexcept { return right_tabs_; }
@@ -224,6 +227,7 @@ private:
     ComposerView composer_;
     SequencerView sequencer_;
     std::unique_ptr<surface_ui::ControlSurface> surface_;
+    std::unique_ptr<MixerController> mixer_controller_;
     std::uint64_t refusals_seen_ = 0;
     /// The autosave being written (serializing a large project off the message thread).
     std::thread autosave_thread_;

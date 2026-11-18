@@ -527,6 +527,7 @@ MainComponent::MainComponent(AppContext& context)
         use_shortcut_profile(saved.toStdString());
     // External jog/shuttle: the views follow where it puts the playhead.
     surface_ = std::make_unique<surface_ui::ControlSurface>(context_);
+    mixer_controller_ = std::make_unique<MixerController>(context_);
     surface_->on_moved = [this](Ticks tick, bool on_grid) {
         if (composer_.isVisible()) composer_.follow_jog(tick, on_grid);
         if (sequencer_.isVisible()) sequencer_.reveal(tick);
@@ -539,6 +540,7 @@ MainComponent::~MainComponent()
     stopTimer();
     if (autosave_thread_.joinable()) autosave_thread_.join();
     surface_.reset();
+    mixer_controller_.reset();
     close_video_window();
     context_.session.remove_listener(listener_);
     context_.engine.on_transport_changed = nullptr;
@@ -1997,7 +1999,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
-                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup});
+                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2220,6 +2222,10 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.addDefaultKeypress(',', cmdKey);
             break;
         case cmd::midiSetup: info.setInfo("MIDI Setup...", "MIDI keyboards and controllers (USB, USB-C), on or off", "Studio", 0); break;
+        case cmd::mixerController:
+            info.setInfo("Mixer Controller (Mackie Control)...",
+                         "A hardware mixer controller: SSL UF8, Avid S1, Icon, X-Touch, FaderPort, MCU", "Studio", 0);
+            break;
         case cmd::scanPlugins: info.setInfo("Plug-ins...", "", "Tools", 0); break;
         case cmd::reloadCrashedPlugins:
             info.setInfo("Reload Crashed Plug-ins", "Starts crashed plug-ins again from their last state", "Tools", 0);
@@ -2527,6 +2533,7 @@ bool MainComponent::perform(const InvocationInfo& info)
             break;
         case cmd::audioSettings: show_studio_setup(context_, 0); break;
         case cmd::midiSetup: show_studio_setup(context_, 1); break;
+        case cmd::mixerController: show_mixer_controller_window(context_, *mixer_controller_); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;
         case cmd::reloadCrashedPlugins: {
             const int n = context_.engine.reload_crashed_plugins();
@@ -2700,6 +2707,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             m.addCommandItem(c, cmd::scanPlugins);
             m.addCommandItem(c, cmd::reloadCrashedPlugins);
             m.addSeparator();
+            m.addCommandItem(c, cmd::mixerController);
             m.addCommandItem(c, cmd::showControlSurfaces);
             m.addCommandItem(c, cmd::midiInputFilter);
             m.addSeparator();

@@ -34,6 +34,16 @@ public:
         device_id_ = device_id;
         profile_ = profile;
         learning_ = learning;
+        all_ = false;
+    }
+    /// Every short message from `device_id` is the surface's (a Mackie
+    /// Control mixer controller: its faders and keys must never play).
+    void configure_all(const juce::String& device_id)
+    {
+        const juce::SpinLock::ScopedLockType lock(config_lock_);
+        device_id_ = device_id;
+        learning_ = false;
+        all_ = true;
     }
 
     /// MIDI thread: true when the message is the surface's (then it is
@@ -47,7 +57,7 @@ public:
             const juce::SpinLock::ScopedTryLockType lock(config_lock_);
             if (!lock.isLocked()) return false;  // being reconfigured: let it play
             if (device_id_.isEmpty() || device_id != device_id_) return false;
-            const bool mine = learning_ ? project::surface::source_of(raw.status, raw.data1, raw.data2).has_value() ||
+            const bool mine = all_ ? true : learning_ ? project::surface::source_of(raw.status, raw.data1, raw.data2).has_value() ||
                                               (raw.status & 0xF0) == 0x80
                                         : project::surface::claims(profile_, raw.status, raw.data1, raw.data2);
             if (!mine) return false;
@@ -78,6 +88,7 @@ private:
     juce::String device_id_;
     project::surface::Profile profile_;
     bool learning_ = false;
+    bool all_ = false;
     static constexpr int kSize = 512;
     juce::AbstractFifo fifo_{kSize};
     std::array<Raw, kSize> buffer_{};

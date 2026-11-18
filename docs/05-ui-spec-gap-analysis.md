@@ -2159,3 +2159,23 @@ macOS, Linux and Windows. What it took:
       Now* and the report. Nothing goes online.
     - **Checks**: `layout_checks`, `studio_checks`, `plugin_watch_checks`
       (screenshots 84-87).
+56. **Hardware mixer controllers (Mackie Control) and ASIO** (November 18, 2026).
+    - **Studio > Mixer Controller (Mackie Control)...**: SSL UF8 / UF1, Avid
+      S1, Icon Platform, Behringer X-Touch, PreSonus FaderPort, the Mackie MCU
+      and other controllers in Mackie Control mode. Choose the controller's
+      MIDI ports; its eight strips follow the mixer's tracks, eight at a time
+      (Bank and Channel move them): faders set levels (motorised faders follow
+      the mix and are not moved under a hand), the master fader the master
+      bus, V-Pots pan (a push centres), Rec / Solo / Mute / Select act on the
+      track, the scribble strips show names and levels, the meters move. The
+      transport keys (Play, Stop, Record, Rewind, Fast Forward, Cycle, Click,
+      Undo, Save, Marker) and the jog wheel run the transport. The whole
+      device is taken off the instrument path (nothing it sends plays or
+      records), the ports are remembered, and it is found again when plugged
+      back in. `vcc/project/Mackie.h` (the wire format, with `test_mackie`),
+      `ui/surface/MixerController`. HUI and Avid EuCon are not spoken.
+    - **ASIO** (Windows): wired in behind the repository variable `VCC_ASIO`
+      - on once Steinberg's signed ASIO licence agreement is in hand (01);
+      the SDK is fetched at build time and never committed.
+    - **Checks**: `test_mackie`; the desktop check's
+      `mixer_controller_checks` (screenshot 88).

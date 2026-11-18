@@ -928,7 +928,10 @@ public:
     void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& m) override
     {
         // A control surface's jog, shuttle and keys never play or record.
-        if (engine_.surface_input().take(source ? source->getIdentifier() : juce::String(), m)) return;
+        const auto device = source ? source->getIdentifier() : juce::String();
+        if (engine_.surface_input().take(device, m)) return;
+        // A mixer controller's faders and keys (Mackie Control): the whole device is the surface's.
+        if (engine_.mixer_surface_input().take(device, m)) return;
         // The Articulation Map window learning a keyswitch, controller or program.
         if (engine_.offer_learn(m)) return;
         // The input filter, and the retrospective record of what was played.

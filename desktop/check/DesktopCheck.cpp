@@ -34,6 +34,7 @@
 #include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
 #include "ui/StudioSetup.h"
+#include "vcc/project/Mackie.h"
 #include "system/PluginWatch.h"
 #include "ui/hw/HwGallery.h"
 #include "ui/console/MixActions.h"
@@ -6968,6 +6969,98 @@ void plugin_watch_checks(MainWindow& window, const juce::File& dir)
     folder.deleteRecursively();
 }
 
+void mixer_controller_checks(MainWindow& window, const juce::File& dir)
+{
+    namespace mk = project::mackie;
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    auto& mc = main.mixer_controller();
+    session.new_empty();
+    std::vector<std::string> ids;
+    for (int i = 0; i < 10; ++i) ids.push_back(session.add_track("Violins " + std::to_string(i + 1), "violins"));
+    std::vector<mk::Bytes> sent;
+    mc.sender = [&](const mk::Bytes& b) { sent.push_back(b); };
+    mc.set_bank_offset(0);
+    auto count = [&](std::uint8_t first, std::uint8_t mask = 0xF0) {
+        int n = 0;
+        for (const auto& b : sent) n += (b[0] & mask) == first ? 1 : 0;
+        return n;
+    };
+    check(count(0xE0) >= 9, "every fader and the master are sent their positions (" + juce::String(count(0xE0)) + ")");
+    bool named = false;
+    for (const auto& b : sent)
+        named = named || (b.size() > 8 && b[0] == 0xF0 && std::string(b.begin() + 7, b.end() - 1).find("Vln") != std::string::npos);
+    check(named, "the scribble strips show the track names");
+
+    // The surface's own messages: taken off the instrument path, then followed.
+    auto& input = ctx.engine.mixer_surface_input();
+    input.configure_all("check-controller");
+    check(input.take("check-controller", juce::MidiMessage::noteOn(1, mk::Mute1 + 1, static_cast<juce::uint8>(127))) &&
+              !input.take("a-keyboard", juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(100))),
+          "the controller's messages never play; a keyboard's still do");
+    sent.clear();
+    mc.tick();
+    check(session.data().find_track(ids[1])->mute, "Mute on strip 2 mutes the second track");
+    bool lit = false;
+    for (const auto& b : sent) lit = lit || (b == mk::led(mk::Mute1 + 1, mk::Led::On));
+    check(lit, "its Mute key lights");
+
+    // Faders: a move sets the level; a held fader is not moved under the hand.
+    mc.handle({mk::Event::Kind::Fader, 0, -1, false, 0.5, 0});
+    check(std::abs(session.data().find_track(ids[0])->gain_db - mk::fader_to_db(0.5)) < 0.01,
+          "fader 1 sets the first track's level (" + juce::String(session.data().find_track(ids[0])->gain_db, 1) + " dB)");
+    mc.handle({mk::Event::Kind::FaderTouch, 2, -1, true, 0.0, 0});
+    session.set_gain(ids[2], -12.0);
+    sent.clear();
+    mc.tick();
+    check(count(0xE2, 0xFF) == 0, "a fader held by a hand is not moved");
+    mc.handle({mk::Event::Kind::FaderTouch, 2, -1, false, 0.0, 0});
+    mc.tick();
+    check(count(0xE2, 0xFF) == 1, "let go, it moves to the mix");
+    mc.handle({mk::Event::Kind::Fader, mk::kMasterStrip, -1, false, mk::db_to_fader(-6.0), 0});
+    double master = 0.0;
+    for (const auto& b : session.data().buses)
+        if (b.id == "bus-master") master = b.gain_db;
+    check(std::abs(master + 6.0) < 0.05, "the master fader sets the master bus");
+
+    // V-Pots pan; a push centres.
+    mc.handle({mk::Event::Kind::VPot, 3, -1, false, 0.0, 5});
+    check(std::abs(session.data().find_track(ids[3])->pan - 0.1) < 1e-6, "a V-Pot pans");
+    mc.handle({mk::Event::Kind::Button, -1, mk::VPotPush1 + 3, true, 0.0, 0});
+    check(std::abs(session.data().find_track(ids[3])->pan) < 1e-9, "its push centres the pan");
+    mc.handle({mk::Event::Kind::Button, -1, mk::Select1 + 4, true, 0.0, 0});
+    check(session.selected_track() == ids[4], "Select selects the track");
+
+    // Banks.
+    mc.handle({mk::Event::Kind::Button, -1, mk::BankRight, true, 0.0, 0});
+    check(mc.bank_offset() == 8 && mc.strip_tracks()[0] == ids[8] && mc.strip_tracks()[2].empty(),
+          "Bank Right moves the strips to tracks 9-10");
+    mc.handle({mk::Event::Kind::Button, -1, mk::ChannelLeft, true, 0.0, 0});
+    check(mc.bank_offset() == 7, "Channel Left moves them one track");
+    mc.set_bank_offset(0);
+
+    // The transport.
+    mc.handle({mk::Event::Kind::Button, -1, mk::Play, true, 0.0, 0});
+    check(ctx.engine.playing(), "Play plays");
+    mc.handle({mk::Event::Kind::Button, -1, mk::Stop, true, 0.0, 0});
+    check(!ctx.engine.playing(), "Stop stops");
+    ctx.engine.locate(0);
+    mc.handle({mk::Event::Kind::Jog, -1, -1, false, 0.0, 4});
+    check(ctx.engine.position() == kTicksPerQuarter, "the jog wheel moves the playhead (four sixteenths: a beat)");
+
+    // The window.
+    ctx.commands.invokeDirectly(cmd::mixerController, false);
+    pump(300);
+    if (auto* w = find_dialog("Mixer Controller")) shoot(*w, dir, "88-mixer-controller");
+    else check(false, "Studio > Mixer Controller opens its window");
+    for (auto* w : dialogs::open_tool_windows()) w->closeButtonPressed();
+    pump(200);
+    input.configure_all({});
+    mc.sender = nullptr;
+    session.new_empty();
+}
+
 void updater_checks(MainWindow& window, const juce::File& dir)
 {
     auto& ctx = window.context();
@@ -9293,7 +9386,8 @@ int main(int argc, char** argv)
                 {"menu_checks", menu_checks},
                 {"layout_checks", layout_checks},
                 {"studio_checks", studio_checks},
-                {"plugin_watch_checks", plugin_watch_checks}};
+                {"plugin_watch_checks", plugin_watch_checks},
+                {"mixer_controller_checks", mixer_controller_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -9971,6 +10065,8 @@ int main(int argc, char** argv)
         studio_checks(window, dir);
         section("plugin_watch_checks");
         plugin_watch_checks(window, dir);
+        section("mixer_controller_checks");
+        mixer_controller_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");
