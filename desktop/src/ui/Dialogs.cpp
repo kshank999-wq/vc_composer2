@@ -74,11 +74,12 @@ void fit_to_screen(juce::Component& window, int width, int height)
     if (window.getY() < area.getY()) window.setTopLeftPosition(window.getX(), area.getY());
 }
 
-ToolWindow::ToolWindow(const juce::String& title, juce::Component* content, int width, int height)
+ToolWindow::ToolWindow(const juce::String& title, juce::Component* content, int width, int height, bool owns_content)
     : juce::DocumentWindow(title, colours::background, juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
 {
     setUsingNativeTitleBar(true);
-    setContentOwned(content, false);
+    if (owns_content) setContentOwned(content, false);
+    else setContentNonOwned(content, false);
     setResizable(true, false);
     setResizeLimits(std::min(760, width), std::min(480, height), 4000, 3000);
     fit_to_screen(*this, width, height);

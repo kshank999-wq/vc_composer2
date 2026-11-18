@@ -224,6 +224,12 @@ ComposerView::ComposerView(AppContext& context) : context_(context)
 ComposerView::~ComposerView()
 {
     stopTimer();
+    // The palette's window shows the palette, which goes with this view.
+    if (auto* w = palette_window_.getComponent()) {
+        w->on_close = nullptr;
+        w->clearContentComponent();
+        delete w;
+    }
     hw::Theme::get().removeChangeListener(this);
     context_.session.remove_listener(listener_);
 }
@@ -511,6 +517,15 @@ void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* 
             const auto& staff = working_.staff(std::min<std::size_t>(point->staff_index, working_.staff_count() - 1));
             const int sounding = notation::midi_note_number(point->pitch) + staff.total_transposition();
             chord_state_.octave = std::clamp(sounding / 12 - 1, 0, 8);
+            // The note clicked is the root, spelled as the key spells it there
+            // (sounding, for a transposing staff).
+            const auto concert = staff.total_transposition() == 0
+                                     ? point->pitch
+                                     : notation::spell_midi_note(sounding, working_.key_signature_at(point->tick));
+            chord_state_.letter = static_cast<int>(concert.step);
+            chord_state_.accidental = std::clamp(static_cast<int>(concert.alteration), -1, 1);
+            chord_state_.key = dialogs::project_key(context_);
+            if (chord_state_.type == "custom") chord_state_.type = "triad";
             if (palette_) palette_->refresh();
             enter_chord(false);
             return;
@@ -938,7 +953,6 @@ void ComposerView::update_staff_tools()
     const auto tab = juce::Rectangle<int>(area.getRight() - 58, area.getBottom() - 21, 58, 20);
     if (show_tab && tools_tab_.getBounds() != tab) tools_tab_.setBounds(tab);
     if (tools_tab_.isVisible() != show_tab) tools_tab_.setVisible(show_tab);
-    if (palette_ && palette_->isVisible()) palette_->toFront(false);
 }
 
 // --- Chord Mode -------------------------------------------------------------------------
@@ -966,10 +980,6 @@ composer_ui::ChordPalette& ComposerView::chord_palette()
             const auto [notes, warning] = chord_preview();
             palette_->set_preview(notes, warning);
         };
-        addChildComponent(*palette_);
-        // Over the right of the lanes, under the ruler.
-        palette_->setTopLeftPosition(std::max(0, getWidth() - composer_ui::ChordPalette::kWidth - 24),
-                                     composer_ui::ComposerRuler::kHeight + 12);
     }
     return *palette_;
 }
@@ -978,9 +988,29 @@ void ComposerView::set_chord_mode(bool on)
 {
     chord_mode_ = on;
     auto& p = chord_palette();
-    p.setVisible(on);
+    // Its own floating window: kept above VC Composer, movable to another screen.
     if (on) {
-        p.toFront(false);
+        if (palette_window_ == nullptr) {
+            p.setVisible(true);
+            auto* w = new dialogs::ToolWindow("Chord Mode", &p, composer_ui::ChordPalette::kWidth,
+                                              composer_ui::ChordPalette::kHeight, false);
+            w->setResizable(false, false);
+            w->on_close = [self = juce::Component::SafePointer<ComposerView>(this)] {
+                if (self) self->set_chord_mode(false);
+            };
+            w->setVisible(true);
+            palette_window_ = w;
+        }
+        palette_window_->toFront(true);
+    } else if (palette_window_ != nullptr) {
+        p.setVisible(false);
+        auto* w = palette_window_.getComponent();
+        palette_window_ = nullptr;
+        w->on_close = nullptr;
+        w->clearContentComponent();
+        w->closeButtonPressed();
+    }
+    if (on) {
         p.refresh();
         const auto [notes, warning] = chord_preview();
         p.set_preview(notes, warning);
@@ -994,7 +1024,7 @@ std::pair<juce::String, juce::String> ComposerView::chord_preview() const
     std::string problem;
     const auto chord = composer_ui::chord_for(chord_state_, &problem);
     if (!chord) return {{}, juce::String(problem)};
-    const auto voiced = theory::voice_for_entry(*chord, chord_state_.octave, chord_state_.style);
+    auto voiced = composer_ui::voice_chord_for_staves(*chord, chord_state_, false).upper;
     juce::String warning;
     if (const auto* t = context_.session.data().find_track(editing_track_)) {
         const auto [low, high] = context_.session.range_for(*t);
@@ -1037,15 +1067,42 @@ bool ComposerView::enter_chord(bool replace_selection)
         editor_->set_cursor(c);
     }
     const auto cur = editor_->cursor();
-    const auto staff_index = std::min(cur.staff_index, working_.staff_count() - 1);
-    const auto voiced = theory::voice_for_entry(*chord, chord_state_.octave, chord_state_.style);
+    auto staff_index = std::min(cur.staff_index, working_.staff_count() - 1);
     const auto* track = context_.session.data().find_track(editing_track_);
-    const auto pitches = composer_ui::written_chord(voiced, working_.staff(staff_index), track ? track->effective_transpose() : 0);
-    if (pitches.empty()) return false;
+    // A grand staff (piano): the right hand on the treble staff, the left
+    // hand on the bass staff, at the same place.
+    const bool grand = working_.staff_count() >= 2 && working_.staff(0).clef == notation::Clef::Treble &&
+                       working_.staff(1).clef == notation::Clef::Bass;
+    const auto hands = composer_ui::voice_chord_for_staves(*chord, chord_state_, grand);
+    const int trans = track ? track->effective_transpose() : 0;
+    std::vector<std::pair<std::size_t, std::vector<notation::Pitch>>> parts;
+    if (grand) {
+        if (!hands.upper.empty()) parts.push_back({0, composer_ui::written_chord(hands.upper, working_.staff(0), trans)});
+        if (!hands.lower.empty()) parts.push_back({1, composer_ui::written_chord(hands.lower, working_.staff(1), trans)});
+    } else {
+        parts.push_back({staff_index, composer_ui::written_chord(hands.upper, working_.staff(staff_index), trans)});
+    }
+    if (parts.empty() || parts.front().second.empty()) return false;
     const notation::Score before = working_;
-    auto r = editor_->insert_pitch(pitches.front());
-    bool ok = r.succeeded();
-    for (std::size_t i = 1; ok && i < pitches.size(); ++i) ok = editor_->add_to_chord(pitches[i]).succeeded();
+    editing::EditResult r;
+    bool ok = true;
+    for (const auto& [staff, pitches] : parts) {
+        if (pitches.empty()) continue;
+        auto c = editor_->cursor();
+        c.tick = cur.tick;
+        c.staff_index = staff;
+        editor_->set_cursor(c);
+        r = editor_->insert_pitch(pitches.front());
+        ok = ok && r.succeeded();
+        for (std::size_t i = 1; ok && i < pitches.size(); ++i) ok = editor_->add_to_chord(pitches[i]).succeeded();
+    }
+    staff_index = parts.front().first;
+    {
+        // Entry carries on from the staff written on first (the right hand).
+        auto c = editor_->cursor();
+        c.staff_index = staff_index;
+        editor_->set_cursor(c);
+    }
     if (!ok) {
         working_ = before;  // nothing half-entered
         reload_working_copy(false);

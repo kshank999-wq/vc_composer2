@@ -10,6 +10,8 @@
 // view and playback all see the same notes (Main Spec §8).
 #pragma once
 
+#include "ui/Dialogs.h"
+
 #include <memory>
 #include <optional>
 
@@ -180,6 +182,8 @@ private:
     void note_activity();
     composer_ui::ChordModeState chord_state_;
     std::unique_ptr<composer_ui::ChordPalette> palette_;
+    /// The palette's own floating window (movable to another screen).
+    juce::Component::SafePointer<dialogs::ToolWindow> palette_window_;
     void audition_chord();
     /// The range guardrail before a commit of the working copy: true to
     /// commit now. Strict refuses a single note outside the range and asks

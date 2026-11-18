@@ -31,15 +31,36 @@ struct ChordModeState {
     int octave = 4;                      ///< The bass note's octave (C4 is middle C).
     int then = 0;                        ///< 0 after the chord, 1 next beat, 2 next bar
     bool write_symbol = true;            ///< Also set the chord symbol (the ruler's Chords row).
+    /// What kind of chord, built in the key on the chosen (or clicked) root:
+    /// "triad" and "seventh" are the key's own chords on that degree; "maj7",
+    /// "add9", "sus2", "sus4", "dim", "aug" are those chords outright;
+    /// "custom" uses `quality` as chosen.
+    std::string type = "triad";
+    theory::Key key{};                   ///< The project's key, for "triad" and "seventh".
+    bool open = false;                   ///< Open voicing (else close).
+    int span = 1;                        ///< Spread over 1 or 2 octaves.
 };
+
+/// The chord types the palette offers, as (type id, key legend).
+const std::vector<std::pair<std::string, const char*>>& chord_types();
+
+/// The palette's chord as written notes, per staff: a single staff gets
+/// them all; a grand staff (piano) gets them split for two hands - the left
+/// hand the root (and, over two octaves, its fifth and octave) below
+/// middle C, the right hand the chord above it.
+struct ChordForStaves {
+    std::vector<theory::VoicedTone> upper;  ///< The staff written on (or the right hand).
+    std::vector<theory::VoicedTone> lower;  ///< The left hand, on a grand staff.
+};
+ChordForStaves voice_chord_for_staves(const theory::Chord& chord, const ChordModeState& state, bool grand_staff);
 
 /// The chord a state describes, or nullopt with the reason in `problem`.
 std::optional<theory::Chord> chord_for(const ChordModeState& state, std::string* problem = nullptr);
 
 class ChordPalette final : public hw::Panel {
 public:
-    static constexpr int kWidth = 372;
-    static constexpr int kHeight = 352;
+    static constexpr int kWidth = 420;
+    static constexpr int kHeight = 404;
 
     explicit ChordPalette(ChordModeState& state);
 
@@ -65,6 +86,11 @@ public:
     hw::Keycap& insert_key() { return insert_; }
     hw::Keycap& replace_key() { return replace_; }
     hw::Keycap& audition_key() { return audition_; }
+    hw::Keycap* type_key(const std::string& type);
+    hw::Keycap& inversion_key(int inversion) { return *inversions_[static_cast<std::size_t>(std::clamp(inversion, 0, 3))]; }
+    hw::Keycap& open_key() { return open_; }
+    hw::Keycap& close_key() { return close_voicing_; }
+    hw::Keycap& span_key(int octaves) { return octaves >= 2 ? span2_ : span1_; }
     hw::Keycap& symbol_key() { return symbol_; }
     const juce::String& preview_notes() const noexcept { return notes_; }
     const juce::String& preview_warning() const noexcept { return warning_; }
@@ -79,7 +105,8 @@ private:
     void fill_bass_box();
 
     ChordModeState& state_;
-    std::vector<std::unique_ptr<hw::Keycap>> roots_, accidentals_, alterations_;
+    std::vector<std::unique_ptr<hw::Keycap>> roots_, accidentals_, alterations_, types_, inversions_;
+    hw::Keycap close_voicing_{"Close", true}, open_{"Open", true}, span1_{"1 Oct", true}, span2_{"2 Oct", true};
     juce::ComboBox quality_, bass_, voicing_, then_;
     hw::Keycap octave_down_{"-"}, octave_up_{"+"}, symbol_{"Symbol", true}, close_{"x"};
     hw::Keycap insert_{"Insert"}, replace_{"Replace sel."}, audition_{"Audition"};

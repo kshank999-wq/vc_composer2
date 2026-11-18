@@ -3982,7 +3982,8 @@ void chord_mode_checks(MainWindow& window, const juce::File& dir)
     auto& session = ctx.session;
     ctx.engine.stop();
     session.new_empty();
-    const auto piano = session.add_track("Piano", "keys.piano");
+    // One staff here (the piano's two hands are checked after).
+    const auto piano = session.add_track("Celli", "strings.celli");
     main.show_workspace(MainComponent::Workspace::Composer);
     if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
     pump(100);
@@ -4073,22 +4074,24 @@ void chord_mode_checks(MainWindow& window, const juce::File& dir)
         if (qualities[i].id == "maj") palette.quality_box().setSelectedItemIndex(static_cast<int>(i), juce::sendNotificationSync);
     pump(30);
 
-    // A click on a staff in Chord Mode: the chord there, the bass in the octave clicked.
+    // A click on a staff in Chord Mode: the chord on the note clicked, in the
+    // key (E in C major: E minor), the bass in the octave clicked.
     {
         engraving::InsertionPoint p;
         p.valid = true;
         p.staff_index = 0;
         p.tick = 3 * Q;
-        p.pitch = notation::Pitch{notation::Step::E, 5, 0};
+        p.pitch = notation::Pitch{notation::Step::E, 4, 0};
         if (composer.lane(0).on_staff_clicked) composer.lane(0).on_staff_clicked(p);
         pump(50);
     }
     const auto clicked = notes_at(piano, 3 * Q);
-    check(clicked == "C5 E5 G5" && session.undo_label() == "Enter chord C",
-          "a click on the staff in Chord Mode enters the chord there, the bass in the octave clicked (" + clicked + ")");
+    check(clicked == "E4 G4 B4" && session.undo_label() == "Enter chord Em",
+          "a click on E in Chord Mode enters the key's chord on E there - E minor - in the octave clicked (" + clicked + ")");
 
     // Replace Selected: a note typed, then replaced by the chord at its place and value.
     composer.chord_state().octave = 4;
+    palette.root_key(0).triggerClick();
     palette.refresh();
     {
         engraving::InsertionPoint p;
@@ -4128,6 +4131,90 @@ void chord_mode_checks(MainWindow& window, const juce::File& dir)
     composer.set_chord_mode(false);
     pump(30);
     check(!palette.isVisible() && !composer.chord_mode(), "turning Chord mode off hides the palette");
+}
+
+void chord_palette_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& session = window.context().session;
+    session.new_empty();
+    const auto piano = session.add_track("Piano", "keys.piano");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(100);
+    auto& composer = main.composer();
+    session.select_track(piano);
+    pump(80);
+    composer.set_chord_mode(true);
+    pump(100);
+    auto& palette = composer.chord_palette();
+    auto* win = find_dialog("Chord Mode");
+    check(win != nullptr && win->isOnDesktop() && palette.isShowing(),
+          "the chord palette is a window of its own (it can go on another screen)");
+    if (win) shoot(*win, dir, "98-chord-palette");
+    auto on_staves = [&](Ticks tick) {
+        std::array<juce::String, 2> out;
+        const auto& score = session.data().find_track(piano)->active_version()->score;
+        for (std::size_t st = 0; st < std::min<std::size_t>(2, score.staff_count()); ++st) {
+            std::vector<notation::ScoreNote> ns;
+            for (const auto& n : score.notes(st))
+                if (n.start_tick == tick && !n.is_rest) ns.push_back(n);
+            std::sort(ns.begin(), ns.end(), [](const auto& a, const auto& b) {
+                return notation::midi_note_number(a.pitch) < notation::midi_note_number(b.pitch);
+            });
+            for (const auto& n : ns)
+                out[st] << (out[st].isEmpty() ? "" : " ") << juce::String::charToString("CDEFGAB"[static_cast<int>(n.pitch.step)])
+                        << (n.pitch.alteration > 0 ? "#" : n.pitch.alteration < 0 ? "b" : "") << n.pitch.octave;
+        }
+        return out;
+    };
+    auto click_note = [&](notation::Step step, int octave, Ticks tick) {
+        engraving::InsertionPoint p;
+        p.valid = true;
+        p.staff_index = 0;
+        p.tick = tick;
+        p.pitch = notation::Pitch{step, static_cast<std::int8_t>(octave), 0};
+        if (composer.lane(0).on_staff_clicked) composer.lane(0).on_staff_clicked(p);
+        pump(50);
+    };
+    const Ticks Q = kTicksPerQuarter;
+    if (auto* k = palette.type_key("triad")) k->triggerClick(), pump(40);
+    palette.inversion_key(0).triggerClick(), pump(40);
+    palette.close_key().triggerClick(), pump(40);
+    palette.span_key(1).triggerClick(), pump(40);
+    composer.keyPressed(juce::KeyPress('5'));
+    // Piano: the right hand the chord on the note clicked, the left hand its root.
+    click_note(notation::Step::C, 4, 0);
+    auto c = on_staves(0);
+    check(c[0] == "C4 E4 G4" && c[1] == "C3", "on piano a click on C: C E G in the right hand, C in the left (" + c[0] + " | " + c[1] + ")");
+    // The key's own seventh on G: G7, spelled in the key.
+    if (auto* k = palette.type_key("seventh")) k->triggerClick(), pump(40);
+    click_note(notation::Step::G, 4, Q);
+    c = on_staves(Q);
+    check(c[0] == "G4 B4 D5 F5" && c[1] == "G3", "7th on G in C major is G7 (" + c[0] + " | " + c[1] + ")");
+    // Sus4, first inversion... each a key.
+    if (auto* k = palette.type_key("sus4")) k->triggerClick(), pump(40);
+    click_note(notation::Step::D, 4, 2 * Q);
+    c = on_staves(2 * Q);
+    check(c[0] == "D4 G4 A4", "Sus4 on D is D G A (" + c[0] + ")");
+    if (auto* k = palette.type_key("triad")) k->triggerClick(), pump(40);
+    palette.inversion_key(1).triggerClick(), pump(40);
+    click_note(notation::Step::C, 4, 3 * Q);
+    c = on_staves(3 * Q);
+    check(c[0].startsWith("E4") && c[1] == "E3", "1st inversion: E in the bass of both hands (" + c[0] + " | " + c[1] + ")");
+    // Open, over two octaves: both hands, the left hand root, fifth and octave.
+    palette.inversion_key(0).triggerClick(), pump(40);
+    palette.open_key().triggerClick(), pump(40);
+    palette.span_key(2).triggerClick(), pump(40);
+    click_note(notation::Step::A, 4, 4 * Q);
+    c = on_staves(4 * Q);
+    check(c[1] == "A2 E3 A3" && c[0].startsWith("A4") && c[0].containsChar('C') && c[0].contains("5"),
+          "open over two octaves on A (A minor in C): the left hand A E A, the right hand spread above (" + c[0] + " | " +
+              c[1] + ")");
+    shoot(main, dir, "99-piano-chords", true);
+    composer.set_chord_mode(false);
+    pump(100);
+    check(find_dialog("Chord Mode") == nullptr, "turning Chord mode off closes its window");
+    session.new_empty();
 }
 
 /// Instrument range guardrails (Add-On spec §4): Strict refuses a note
@@ -9860,7 +9947,9 @@ int main(int argc, char** argv)
                 {"project_file_checks", project_file_checks},
                 {"hardware_insert_checks", hardware_insert_checks},
                 {"ostinato_audition_checks", ostinato_audition_checks},
-                {"view_tools_checks", view_tools_checks}};
+                {"view_tools_checks", view_tools_checks},
+                {"chord_mode_checks", chord_mode_checks},
+                {"chord_palette_checks", chord_palette_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -10488,6 +10577,8 @@ int main(int argc, char** argv)
         chord_symbol_checks(window, dir);
         section("chord_mode_checks");
         chord_mode_checks(window, dir);
+        section("chord_palette_checks");
+        chord_palette_checks(window, dir);
         section("range_checks");
         range_checks(window, dir);
         section("circle_checks");

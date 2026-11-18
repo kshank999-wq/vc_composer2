@@ -35,7 +35,8 @@ namespace dialogs {
 /// behind it, and steps back when another app comes forward.
 class ToolWindow final : public juce::DocumentWindow, private juce::DeletedAtShutdown, private juce::Timer {
 public:
-    ToolWindow(const juce::String& title, juce::Component* content, int width, int height);
+    /// With `owns_content` false the caller keeps the content (it outlives the window).
+    ToolWindow(const juce::String& title, juce::Component* content, int width, int height, bool owns_content = true);
     ~ToolWindow() override;
     void closeButtonPressed() override;
     /// Called when the close button is pressed, before the window goes.

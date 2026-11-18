@@ -75,7 +75,17 @@ std::optional<theory::Chord> chord_for(const ChordModeState& s, std::string* pro
         if (problem) *problem = why;
         return std::nullopt;
     };
-    const auto* q = theory::find_quality(s.quality);
+    // The type picks the quality: the key's own chord on that degree, or an outright one.
+    std::string quality_id = s.quality;
+    if (s.type == "triad" || s.type == "seventh") {
+        const auto chords = theory::diatonic_chords(s.key, s.type == "seventh" ? 4 : 3);
+        const int degree = ((s.letter - s.key.tonic.letter) % 7 + 7) % 7;
+        if (degree < static_cast<int>(chords.size())) quality_id = chords[static_cast<std::size_t>(degree)].quality.id;
+        else quality_id = s.type == "seventh" ? "7" : "maj";
+    } else if (s.type != "custom" && !s.type.empty()) {
+        quality_id = s.type;
+    }
+    const auto* q = theory::find_quality(quality_id);
     if (!q) return fail("Choose a chord quality");
     std::string text(1, kLetters[std::clamp(s.letter, 0, 6)]);
     if (s.accidental < 0) text += "b";
@@ -104,6 +114,65 @@ std::optional<theory::Chord> chord_for(const ChordModeState& s, std::string* pro
     }
     if (problem) problem->clear();
     return chord;
+}
+
+const std::vector<std::pair<std::string, const char*>>& chord_types()
+{
+    static const std::vector<std::pair<std::string, const char*>> list{
+        {"triad", "Triad"}, {"seventh", "7th"}, {"maj7", "Maj7"}, {"add9", "Add9"},
+        {"sus2", "Sus2"},   {"sus4", "Sus4"},   {"dim", "Dim"},   {"aug", "Aug"}};
+    return list;
+}
+
+ChordForStaves voice_chord_for_staves(const theory::Chord& chord, const ChordModeState& state, bool grand_staff)
+{
+    const auto style = state.open ? theory::VoicingStyle::Open : theory::VoicingStyle::Closed;
+    ChordForStaves out;
+    auto doubled_up = [](std::vector<theory::VoicedTone> tones) {
+        // Over two octaves: the same chord again an octave higher.
+        const auto n = tones.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            auto t = tones[i];
+            t.midi += 12;
+            if (t.midi <= 127) tones.push_back(t);
+        }
+        std::sort(tones.begin(), tones.end(), [](const auto& a, const auto& b) { return a.midi < b.midi; });
+        tones.erase(std::unique(tones.begin(), tones.end(), [](const auto& a, const auto& b) { return a.midi == b.midi; }),
+                    tones.end());
+        return tones;
+    };
+    if (!grand_staff) {
+        auto tones = theory::voice_for_entry(chord, state.octave, style);
+        // An open voicing already reaches across two octaves; a close one is doubled up.
+        out.upper = state.span >= 2 && !state.open ? doubled_up(tones) : tones;
+        return out;
+    }
+    // Two hands: the right hand the chord (with its inversion) from middle C
+    // up; the left hand the root below - with its fifth and octave over two octaves.
+    auto right = theory::voice_for_entry(chord, std::max(4, state.octave), style);
+    out.upper = state.span >= 2 && !state.open ? doubled_up(right) : right;
+    // The left hand plays the chord's bass: the root, or the inverted tone
+    // or slash bass when there is one.
+    const bool root_position = chord.inversion == 0 && !chord.bass.has_value();
+    const auto rooted = theory::voice_for_entry(chord, state.span >= 2 ? 2 : 3, theory::VoicingStyle::Closed);
+    if (!rooted.empty()) {
+        out.lower.push_back(rooted.front());  // the bass
+        if (state.span >= 2) {
+            if (root_position)
+                for (const auto& t : rooted)
+                    if (((t.midi - rooted.front().midi) % 12 + 12) % 12 == 7) {
+                        out.lower.push_back(t);  // the fifth
+                        break;
+                    }
+            auto octave = rooted.front();
+            octave.midi += 12;
+            out.lower.push_back(octave);
+        }
+    }
+    // Nothing of the left hand above middle C, nothing of the right below it.
+    out.lower.erase(std::remove_if(out.lower.begin(), out.lower.end(), [](const auto& t) { return t.midi >= 60; }),
+                    out.lower.end());
+    return out;
 }
 
 ChordPalette::ChordPalette(ChordModeState& state) : hw::Panel("Chord mode", false), state_(state)
@@ -153,6 +222,7 @@ ChordPalette::ChordPalette(ChordModeState& state) : hw::Panel("Chord mode", fals
         const int i = quality_.getSelectedItemIndex();
         const auto& all = theory::chord_qualities();
         if (i >= 0 && i < static_cast<int>(all.size())) state_.quality = all[static_cast<std::size_t>(i)].id;
+        state_.type = "custom";
         changed();
     };
     style_combo(bass_, "chord_bass");
@@ -191,7 +261,67 @@ ChordPalette::ChordPalette(ChordModeState& state) : hw::Panel("Chord mode", fals
         state_.then = std::max(0, then_.getSelectedItemIndex());
         changed();
     };
-    for (auto* c : {&quality_, &bass_, &voicing_, &then_}) addAndMakeVisible(*c);
+    // The quality, bass and voicing lists stay behind the keys (scripts and
+    // the checks still set them); Then stays a list.
+    for (auto* c : {&quality_, &bass_, &voicing_}) addChildComponent(*c);
+    addAndMakeVisible(then_);
+
+    // Type: the key's triad or seventh on the root, or a chord outright.
+    for (const auto& [id, legend] : chord_types()) {
+        types_.push_back(std::make_unique<hw::Keycap>(legend, false));
+        auto& k = *types_.back();
+        k.setComponentID("chord_type_" + juce::String(id));
+        const std::string type = id;
+        k.setTooltip(type == "triad"     ? juce::String("The key's own triad on the root (major, minor or diminished)")
+                     : type == "seventh" ? juce::String("The key's own seventh chord on the root")
+                                         : "A " + juce::String(legend) + " chord on the root");
+        k.onClick = [this, type] {
+            state_.type = type;
+            changed();
+        };
+        addAndMakeVisible(k);
+    }
+    // Inversion: root position, 1st, 2nd, 3rd.
+    const char* inv[] = {"Root", "1st", "2nd", "3rd"};
+    for (int i = 0; i < 4; ++i) {
+        inversions_.push_back(std::make_unique<hw::Keycap>(inv[i], false));
+        auto& k = *inversions_.back();
+        k.setComponentID("chord_inversion_" + juce::String(i));
+        k.onClick = [this, i] {
+            state_.inversion = i;
+            state_.slash_bass.clear();
+            changed();
+        };
+        addAndMakeVisible(k);
+    }
+    // Voicing: close or open; spread over one octave or two.
+    close_voicing_.setComponentID("chord_voicing_close");
+    open_.setComponentID("chord_voicing_open");
+    span1_.setComponentID("chord_span_1");
+    span2_.setComponentID("chord_span_2");
+    close_voicing_.setTooltip("Close: the chord's notes as near together as they go");
+    open_.setTooltip("Open: alternate notes raised an octave - a wider, orchestral sound");
+    span1_.setTooltip("Within about an octave");
+    span2_.setTooltip("Spread over two octaves (on piano: both hands, the left hand in the bass clef)");
+    close_voicing_.onClick = [this] {
+        state_.open = false;
+        state_.style = theory::VoicingStyle::Closed;
+        changed();
+    };
+    open_.onClick = [this] {
+        state_.open = true;
+        state_.style = theory::VoicingStyle::Open;
+        changed();
+    };
+    span1_.onClick = [this] {
+        state_.span = 1;
+        changed();
+    };
+    span2_.onClick = [this] {
+        state_.span = 2;
+        changed();
+    };
+    for (auto* k : {&close_voicing_, &open_, &span1_, &span2_}) addAndMakeVisible(*k);
 
     octave_down_.setComponentID("chord_octave_down");
     octave_up_.setComponentID("chord_octave_up");
@@ -238,6 +368,13 @@ ChordPalette::ChordPalette(ChordModeState& state) : hw::Panel("Chord mode", fals
     constrainer_.setMinimumOnscreenAmounts(40, 80, 40, 80);
     setSize(kWidth, kHeight);
     refresh();
+}
+
+hw::Keycap* ChordPalette::type_key(const std::string& type)
+{
+    for (std::size_t i = 0; i < types_.size(); ++i)
+        if (chord_types()[i].first == type) return types_[i].get();
+    return nullptr;
 }
 
 hw::Keycap* ChordPalette::alteration_key(const std::string& name)
@@ -291,6 +428,25 @@ void ChordPalette::refresh()
     for (int i = 0; i < 4; ++i)
         if (styles[i] == state_.style) voicing_.setSelectedItemIndex(i, juce::dontSendNotification);
     then_.setSelectedItemIndex(std::clamp(state_.then, 0, 2), juce::dontSendNotification);
+    for (std::size_t i = 0; i < types_.size(); ++i)
+        types_[i]->setToggleState(chord_types()[i].first == state_.type, juce::dontSendNotification);
+    {
+        ChordModeState plain = state_;
+        plain.inversion = 0;
+        plain.slash_bass.clear();
+        std::size_t core = 0;
+        if (const auto c = chord_for(plain))
+            for (const auto& t : c->intervals()) core += t.degree <= 7 ? 1 : 0;
+        for (std::size_t i = 0; i < inversions_.size(); ++i) {
+            inversions_[i]->setToggleState(state_.slash_bass.empty() && state_.inversion == static_cast<int>(i),
+                                           juce::dontSendNotification);
+            inversions_[i]->setEnabled(i < std::max<std::size_t>(core, 1));
+        }
+    }
+    close_voicing_.setToggleState(!state_.open, juce::dontSendNotification);
+    open_.setToggleState(state_.open, juce::dontSendNotification);
+    span1_.setToggleState(state_.span < 2, juce::dontSendNotification);
+    span2_.setToggleState(state_.span >= 2, juce::dontSendNotification);
     symbol_.setToggleState(state_.write_symbol, juce::dontSendNotification);
     octave_lcd_.set_text("BASS OCT " + juce::String(state_.octave));
     std::string problem;
@@ -327,10 +483,11 @@ void ChordPalette::paint(juce::Graphics& g)
     auto silk = [&](const juce::String& t, int y) {
         hw::paint::silk(g, t, juce::Rectangle<float>(static_cast<float>(r.getX()), static_cast<float>(y), 120.0f, 12.0f), 9.5f);
     };
-    silk("Root", r.getY());
-    silk("Quality", r.getY() + 46);
+    silk("Root (or click a staff)", r.getY());
+    silk("Type", r.getY() + 46);
     silk("Alter / omit", r.getY() + 92);
-    silk("Bass and voicing", r.getY() + 138);
+    silk("Inversion", r.getY() + 138);
+    silk("Voicing and spread", r.getY() + 184);
     // The notes and any warning, under the controls.
     const auto preview = juce::Rectangle<float>(static_cast<float>(r.getX()), static_cast<float>(getHeight() - 82),
                                                 static_cast<float>(r.getWidth()), 34.0f);
@@ -352,17 +509,24 @@ void ChordPalette::resized()
     row.removeFromLeft(8);
     for (auto& k : accidentals_) k->setBounds(row.removeFromLeft(30).withTrimmedRight(3));
     row = line(60, 26);
-    name_lcd_.setBounds(row.removeFromRight(124));
-    row.removeFromRight(6);
-    quality_.setBounds(row.withSizeKeepingCentre(row.getWidth(), 24));
+    {
+        const int tw = row.getWidth() / static_cast<int>(types_.size());
+        for (auto& k : types_) k->setBounds(row.removeFromLeft(tw).withTrimmedRight(3));
+    }
     row = line(106, 26);
     const int w = r.getWidth() / static_cast<int>(alterations_.size());
     for (auto& k : alterations_) k->setBounds(row.removeFromLeft(w).withTrimmedRight(3));
-    row = line(152, 24);
-    bass_.setBounds(row.removeFromLeft(r.getWidth() / 2 - 3));
-    row.removeFromLeft(6);
-    voicing_.setBounds(row);
-    row = line(182, 24);
+    row = line(152, 26);
+    for (auto& k : inversions_) k->setBounds(row.removeFromLeft(54).withTrimmedRight(3));
+    row.removeFromLeft(8);
+    name_lcd_.setBounds(row);
+    row = line(198, 26);
+    close_voicing_.setBounds(row.removeFromLeft(62).withTrimmedRight(3));
+    open_.setBounds(row.removeFromLeft(62).withTrimmedRight(3));
+    row.removeFromLeft(12);
+    span1_.setBounds(row.removeFromLeft(62).withTrimmedRight(3));
+    span2_.setBounds(row.removeFromLeft(62).withTrimmedRight(3));
+    row = line(234, 24);
     octave_down_.setBounds(row.removeFromLeft(28));
     row.removeFromLeft(3);
     octave_lcd_.setBounds(row.removeFromLeft(86));
