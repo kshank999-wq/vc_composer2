@@ -2121,3 +2121,41 @@ macOS, Linux and Windows. What it took:
       Templates window listed under Window, an oversized window fitted to the
       screen, Comedy added per articulation and per instrument; screenshots
       `82-template-per-articulation`, `83-tracks-per-articulation`).
+55. **Arranging the window, the studio's hardware, and plug-ins kept up to
+    date** (November 17, 2026).
+    - **Bottom deck**: the keyboard (or the mixer in Producer) hides to a
+      thin bar with *Show Keyboard* / *Show Mixer*; *Hide* sits on the deck
+      (View > Hide Keyboard / Mixer Deck, Cmd/Ctrl+Alt+B).
+    - **Work View** (View, Cmd/Ctrl+Alt+W): the side panels hidden in either
+      view, the edit window as wide as the window.
+    - **Layouts** (View > Layouts): Compose, Produce, Mix and Work built in,
+      and the composer's own (*Save Layout...*, *Delete Layout*). A layout
+      records the view, the deck, the side panels, the full-screen mixer and
+      the mixer window with its display. *Open VC Composer With* picks the
+      layout it opens with, or the one it was left in (recorded on quit).
+    - **Mixer on its own display** (Studio > Mixer Window on Display): the
+      console window fills the chosen display - a touch screen beside the
+      main monitor - remembered; *Open Mixer at Start-up* opens it there.
+    - **Studio menu** gathers the hardware. *Audio Setup...*: the interface
+      in one line (system, device, rate, buffer and latency, channels), keys
+      for 44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz as the interface offers
+      them, the project's rate beside it, and the system, device, buffer,
+      channels and test tone. *MIDI Setup...*: every MIDI input (USB, USB-C,
+      an interface's ports, Bluetooth, network) on or off, the outputs, and
+      "Turn on MIDI devices as they are plugged in". The interface, rate,
+      buffer, channels and MIDI inputs are remembered and opened again at
+      start-up (defaults when that interface is not connected); MIDI devices
+      plugged in while the app runs are found at once. Interfaces: every
+      Core Audio interface on macOS (Universal Audio, MOTU, RME, Focusrite,
+      Antelope... over USB-C, Thunderbolt or AVB); on Windows their Windows
+      Audio driver - ASIO waits on the Steinberg licence (01).
+    - **Plug-in folders checked at start-up** (`system/PluginWatch`): the
+      standard VST3 and Audio Unit locations (or the folders set in the
+      Plug-ins window), in the background and out of process: new plug-ins
+      added, updated ones scanned again (version old -> new), uninstalled
+      ones taken off the list, and any that crash, hang or wait for a licence
+      or authorisation dialog reported as needing attention. The status bar
+      says what changed; Studio > Plug-ins... has the switch, *Check Folders
+      Now* and the report. Nothing goes online.
+    - **Checks**: `layout_checks`, `studio_checks`, `plugin_watch_checks`
+      (screenshots 84-87).
