@@ -10,6 +10,8 @@
 // view and playback all see the same notes (Main Spec §8).
 #pragma once
 
+#include <map>
+
 #include "ui/Dialogs.h"
 
 #include <memory>
@@ -41,6 +43,14 @@ public:
     bool note_entry() const noexcept { return note_entry_; }
     /// Scrolls the lanes so a track's staff is in view (the Track List).
     void reveal_track(const std::string& track_id);
+    /// Zoom: staff size (pixels per staff space) and width (staff spaces per
+    /// quarter note) - the H and W sliders at the bottom right.
+    void set_zoom(double pixels_per_space, double spaces_per_quarter);
+    double zoom_height() const noexcept { return pixels_per_space_; }
+    double zoom_width() const noexcept { return spaces_per_quarter_; }
+    /// A staff's own room above and below (its slider at the lane's right edge).
+    double lane_room(const std::string& track_id) const;
+    void set_lane_room(const std::string& track_id, double spaces);
     /// The lanes' scroll position (for checks).
     int lanes_scroll() const { return viewport_.getViewPositionY(); }
     /// The checks: answers a marking click instead of the menu (staff, tick).
@@ -162,6 +172,10 @@ private:
     /// The spec's 100%: a 7 px staff space and a 120 px bar of 4/4.
     static constexpr double kSpaceAt100 = 7.0;
     static constexpr double kSpacesPerQuarter = 30.0 / 7.0;
+    double spaces_per_quarter_ = kSpacesPerQuarter;  ///< Horizontal zoom (the W slider).
+    std::map<std::string, double> lane_room_;          ///< Per staff: extra room above and below, in staff spaces.
+    juce::Slider zoom_w_, zoom_h_;
+    juce::Label zoom_w_label_, zoom_h_label_;
     double pixels_per_space_ = kSpaceAt100;
     bool committing_ = false;
     bool syncing_ = false;  ///< Exchanging the selection with the session.

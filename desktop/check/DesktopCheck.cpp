@@ -7583,6 +7583,37 @@ void view_tools_checks(MainWindow& window, const juce::File& dir)
     session.add_template("cinematic.orchestra.consolidated");
     main.apply_layout(*layouts::find("Compose"));
     pump(300);
+    // Zoom sliders at the bottom right: width (music across) and height (staff size).
+    {
+        auto& composer = main.composer();
+        auto* zw = dynamic_cast<juce::Slider*>(composer.findChildWithID("composer_zoom_width"));
+        auto* zh = dynamic_cast<juce::Slider*>(composer.findChildWithID("composer_zoom_height"));
+        check(zw != nullptr && zh != nullptr && zw->isShowing() && zh->isShowing(), "the edit window has width and height zoom sliders");
+        auto& lane = composer.lane(0);
+        const float bar_before = lane.x_of_tick(4 * kTicksPerQuarter) - lane.x_of_tick(0);
+        const int height_before = lane.getHeight();
+        if (zw) zw->setValue(composer.zoom_width() * 2.0, juce::sendNotificationSync);
+        if (zh) zh->setValue(composer.zoom_height() * 1.5, juce::sendNotificationSync);
+        pump(100);
+        const float bar_after = lane.x_of_tick(4 * kTicksPerQuarter) - lane.x_of_tick(0);
+        check(bar_after > bar_before * 1.8f && lane.getHeight() > height_before,
+              "W widens the bars, H enlarges the staves (bar " + juce::String(bar_before, 0) + " -> " + juce::String(bar_after, 0) +
+                  " px, lane " + juce::String(height_before) + " -> " + juce::String(lane.getHeight()) + " px)");
+        shoot(window, dir, "100-zoomed", true);
+        composer.set_zoom(7.0, 30.0 / 7.0);
+        pump(100);
+        // Each staff's own room.
+        const int before = lane.getHeight();
+        auto* room = dynamic_cast<juce::Slider*>(composer.lane(0).getParentComponent()->findChildWithID("lane_room"));
+        if (room) room->setValue(8.0, juce::sendNotificationSync);
+        pump(100);
+        check(room != nullptr && lane.getHeight() > before + 60, "a staff's room slider gives it more space above and below (" +
+                                                                   juce::String(before) + " -> " + juce::String(lane.getHeight()) + " px)");
+        shoot(window, dir, "101-staff-room", true);
+        if (room) room->setValue(0.0, juce::sendNotificationSync);
+        pump(50);
+    }
+
     // The Score view: a key on the toolbar and View > Score View.
     auto* score_key = main.toolbar().key("Score");
     check(score_key != nullptr, "the Composer toolbar has a Score key");

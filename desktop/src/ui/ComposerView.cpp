@@ -50,7 +50,20 @@ public:
                                         const engraving::InsertionPoint& to) { owner_.note_dragged(*this, id, from, to); };
         view_.on_zoom_requested = [this](bool larger) { owner_.zoom(larger); };
         view_.on_scrolled = [this](Ticks origin) { owner_.set_origin(origin); };
+        // This staff's own room: more space above and below it, for notes
+        // far off the staff and the markings around them.
+        room_.setSliderStyle(juce::Slider::LinearVertical);
+        room_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        room_.setRange(0.0, 12.0, 0.5);
+        room_.setValue(owner_.lane_room(track_id_), juce::dontSendNotification);
+        room_.setDoubleClickReturnValue(true, 0.0);
+        room_.setTooltip("Room above and below this staff (double-click: back to fitted)");
+        room_.setComponentID("lane_room");
+        room_.setTitle("Staff room");
+        room_.onValueChange = [this] { owner_.set_lane_room(track_id_, room_.getValue()); };
+        addAndMakeVisible(room_);
     }
+    juce::Slider& room_slider() noexcept { return room_; }
 
     const std::string& track_id() const noexcept { return track_id_; }
     ui::NotationView& view() noexcept { return view_; }
@@ -164,6 +177,7 @@ public:
     {
         auto r = getLocalBounds();
         header_.setBounds(r.removeFromLeft(composer_ui::TrackHeader::kWidth));
+        room_.setBounds(r.removeFromRight(14).reduced(0, 6));
         view_.setBounds(r.withTrimmedBottom(1));
         phrases_.setBounds(view_.getBounds());
     }
@@ -181,6 +195,7 @@ private:
     ui::NotationView view_;
     composer_ui::PhraseLayer phrases_;
     notation::Score shown_;
+    juce::Slider room_;
 };
 
 // --- ComposerView -----------------------------------------------------------------------------
@@ -208,6 +223,34 @@ ComposerView::ComposerView(AppContext& context) : context_(context)
     addAndMakeVisible(hint_);
     hint_.setColour(juce::Label::textColourId, colours::text_dim);
     hint_.setFont(hw::fonts::ui(11.5f));
+    for (auto* z : {&zoom_w_, &zoom_h_}) {
+        z->setSliderStyle(juce::Slider::LinearHorizontal);
+        z->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        addAndMakeVisible(*z);
+    }
+    zoom_w_.setComponentID("composer_zoom_width");
+    zoom_h_.setComponentID("composer_zoom_height");
+    zoom_w_.setTitle("Zoom width");
+    zoom_h_.setTitle("Zoom height");
+    zoom_w_.setTooltip("Width: more or less music across the window (double-click: 100%)");
+    zoom_h_.setTooltip("Height: bigger or smaller staves (double-click: 100%)");
+    zoom_w_.setRange(1.5, 14.0);
+    zoom_w_.setSkewFactorFromMidPoint(kSpacesPerQuarter);
+    zoom_h_.setRange(4.0, 16.0);
+    zoom_w_.setDoubleClickReturnValue(true, kSpacesPerQuarter);
+    zoom_h_.setDoubleClickReturnValue(true, kSpaceAt100);
+    zoom_w_.setValue(spaces_per_quarter_, juce::dontSendNotification);
+    zoom_h_.setValue(pixels_per_space_, juce::dontSendNotification);
+    zoom_w_.onValueChange = [this] { set_zoom(pixels_per_space_, zoom_w_.getValue()); };
+    zoom_h_.onValueChange = [this] { set_zoom(zoom_h_.getValue(), spaces_per_quarter_); };
+    for (auto* l : {&zoom_w_label_, &zoom_h_label_}) {
+        l->setColour(juce::Label::textColourId, colours::text_dim);
+        l->setFont(hw::fonts::ui(10.5f));
+        l->setJustificationType(juce::Justification::centredRight);
+        addAndMakeVisible(*l);
+    }
+    zoom_w_label_.setText("W", juce::dontSendNotification);
+    zoom_h_label_.setText("H", juce::dontSendNotification);
     listener_ = context_.session.add_listener([this](session::Change c) {
         if (committing_ || syncing_) {
             // Our own commit: the headers and blocks still follow it.
@@ -243,7 +286,7 @@ float ComposerView::x_of_tick(Ticks tick)
 {
     const auto header = static_cast<float>(composer_ui::TrackHeader::kWidth);
     if (strips_.empty()) {
-        const double px_per_tick = pixels_per_space_ * kSpacesPerQuarter / static_cast<double>(kTicksPerQuarter);
+        const double px_per_tick = pixels_per_space_ * spaces_per_quarter_ / static_cast<double>(kTicksPerQuarter);
         return header + static_cast<float>(46.0 + static_cast<double>(tick - origin_) * px_per_tick);
     }
     return header + strips_.front()->view().x_of_tick(tick);
@@ -419,7 +462,7 @@ void ComposerView::apply_view_settings()
             view.set_selection({});
         }
         view.set_vertical_zoom(pixels_per_space_);
-        view.set_horizontal_zoom(kSpacesPerQuarter);
+        view.set_horizontal_zoom(spaces_per_quarter_);
         view.set_origin_tick(origin_);
         view.score_changed();
     }
@@ -487,9 +530,33 @@ void ComposerView::discard_uncommitted()
     repaint();
 }
 
+double ComposerView::lane_room(const std::string& track_id) const
+{
+    const auto it = lane_room_.find(track_id);
+    return it == lane_room_.end() ? 0.0 : it->second;
+}
+
+void ComposerView::set_lane_room(const std::string& track_id, double spaces)
+{
+    lane_room_[track_id] = juce::jlimit(0.0, 12.0, spaces);
+    resized();
+}
+
+void ComposerView::set_zoom(double pixels_per_space, double spaces_per_quarter)
+{
+    pixels_per_space_ = juce::jlimit(4.0, 16.0, pixels_per_space);
+    spaces_per_quarter_ = juce::jlimit(1.5, 14.0, spaces_per_quarter);
+    zoom_h_.setValue(pixels_per_space_, juce::dontSendNotification);
+    zoom_w_.setValue(spaces_per_quarter_, juce::dontSendNotification);
+    apply_view_settings();
+    resized();
+    ruler_->repaint();
+}
+
 void ComposerView::zoom(bool larger)
 {
     pixels_per_space_ = juce::jlimit(4.0, 16.0, pixels_per_space_ * (larger ? 1.15 : 1.0 / 1.15));
+    zoom_h_.setValue(pixels_per_space_, juce::dontSendNotification);
     apply_view_settings();
     resized();
     ruler_->repaint();
@@ -1296,7 +1363,17 @@ void ComposerView::resized()
 {
     auto r = getLocalBounds();
     ruler_->setBounds(r.removeFromTop(composer_ui::ComposerRuler::kHeight));
-    hint_.setBounds(r.removeFromBottom(18).withTrimmedLeft(8));
+    {
+        // The bottom row: the hint, then the zoom sliders at the right -
+        // width (how much music across) and height (how big the staves are).
+        auto row = r.removeFromBottom(18);
+        zoom_h_.setBounds(row.removeFromRight(110).reduced(2, 1));
+        zoom_h_label_.setBounds(row.removeFromRight(16));
+        row.removeFromRight(8);
+        zoom_w_.setBounds(row.removeFromRight(110).reduced(2, 1));
+        zoom_w_label_.setBounds(row.removeFromRight(16));
+        hint_.setBounds(row.withTrimmedLeft(8));
+    }
     hscroll_.setBounds(r.removeFromBottom(12).withTrimmedLeft(composer_ui::TrackHeader::kWidth));
     viewport_.setBounds(r);
     int y = 0;
@@ -1307,7 +1384,8 @@ void ComposerView::resized()
         // Laid out at the lane's width first, the lane then grows to what is
         // drawn on it (ledger notes, dynamics, articulations): nothing cut off.
         if (s->getWidth() != w) s->setSize(w, s->preferred_height(pixels_per_space_, options));
-        s->view().fit_margins_to_content(options.margin_above, options.margin_below);
+        const double room = lane_room(s->track_id());
+        s->view().fit_margins_to_content(options.margin_above + room, options.margin_below + room);
         const int h = s->preferred_height(pixels_per_space_, s->view().layout_options());
         s->setBounds(0, y, w, h);
         y += h;
