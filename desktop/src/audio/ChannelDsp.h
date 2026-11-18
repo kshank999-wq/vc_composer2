@@ -20,6 +20,9 @@
 //   "delay"       time_ms 375 (1..2000), feedback 0.35 (0..0.95), mix 1
 //   "limiter"     ceiling_db -0.3, release_ms 80
 //   "saturation"  drive_db 6 (0..36), mix 1, output_db 0
+//   "hardware"    outboard gear through the interface: send_db 0, return_db 0, mix 1,
+//                 out_pair 2 (outputs 3-4), in_pair 2 (inputs 3-4), latency 0 (samples,
+//                 the measured round trip; delay compensation aligns the rest to it)
 // The reverb and delay defaults suit an effect return (100 % wet); lower
 // `mix` when they are used as a channel insert.
 // "plugin" hosts the effect named by `InsertSlot::plugin` (state restored
@@ -214,6 +217,37 @@ protected:
     std::array<float, kMaxAutomated> automated_{};
     std::uint32_t automated_mask_ = 0;
 };
+
+/// The audio interface as the hardware inserts see it during one chunk of
+/// processing (audio thread only): the device's inputs and outputs, where in
+/// the device block this chunk starts, and whether this is a live callback
+/// at all (offline bounces have no interface: hardware inserts pass dry).
+/// It also measures a round trip ("ping") for an outboard insert's latency.
+struct HardwareIo {
+    const float* const* inputs = nullptr;
+    int num_inputs = 0;
+    float* const* outputs = nullptr;
+    int num_outputs = 0;
+    int offset = 0;
+    bool live = false;
+
+    /// Message thread: sends a click out of `out_pair` and listens on
+    /// `in_pair` for it to come back (pairs 1-based: 2 = channels 3-4).
+    void request_ping(int out_pair, int in_pair) noexcept;
+    /// The round trip in samples once heard; -1 while listening; -2 when
+    /// nothing came back within a second (check the cables and levels).
+    int ping_result() const noexcept { return ping_result_.load(); }
+    bool pinging() const noexcept { return ping_state_.load() != 0; }
+    /// Audio thread, after the chunk's mix: plays and listens for the ping.
+    void service_ping(int n, double sample_rate) noexcept;
+
+private:
+    std::atomic<int> ping_state_{0};  // 0 idle, 1 requested, 2 listening
+    std::atomic<int> ping_result_{0};
+    std::atomic<int> ping_out_{2}, ping_in_{2};
+    int ping_elapsed_ = 0;
+};
+HardwareIo& hardware_io() noexcept;
 
 /// The automation index of a built-in insert's parameter (as named in
 /// InsertSlot::params and the table above), or -1.

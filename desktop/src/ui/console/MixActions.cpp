@@ -37,7 +37,8 @@ const std::vector<std::pair<std::string, const char*>>& builtin_inserts()
 {
     static const std::vector<std::pair<std::string, const char*>> list{{"eq", "EQ"},         {"compressor", "Compressor"},
                                                                        {"gate", "Gate"},     {"limiter", "Limiter"},
-                                                                       {"reverb", "Reverb"}, {"delay", "Delay"}};
+                                                                       {"reverb", "Reverb"}, {"delay", "Delay"},
+                                                                       {"hardware", "Outboard (Hardware Insert)"}};
     return list;
 }
 

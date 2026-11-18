@@ -30,7 +30,10 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include "ui/CueManager.h"
+#include <cstring>
+
 #include "ui/Dialogs.h"
+#include "audio/ChannelDsp.h"
 #include "system/PluginWatch.h"
 #include "ui/StudioSetup.h"
 #include "ui/RecentProjects.h"
@@ -127,7 +130,7 @@ private:
         std::unique_ptr<juce::Slider> slider;
     };
 
-    class Content final : public juce::Component {
+    class Content final : public juce::Component, private juce::Timer {
     public:
         explicit Content(BuiltinInsertWindow& w) : window_(w)
         {
@@ -151,10 +154,13 @@ private:
                 row.label->setColour(juce::Label::textColourId, colours::text_dim);
                 addAndMakeVisible(*row.label);
                 row.slider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight);
-                row.slider->setRange(p.min, p.max, p.toggle ? 1.0 : 0.0);
+                row.slider->setRange(p.min, p.max, p.toggle || p.unit == "pair" || p.unit == "smp" ? 1.0 : 0.0);
                 if (p.log_scale && p.min > 0.0) row.slider->setSkewFactorFromMidPoint(std::sqrt(p.min * p.max));
-                row.slider->setTextValueSuffix(p.unit.empty() ? juce::String() : " " + juce::String(p.unit));
-                row.slider->setNumDecimalPlacesToDisplay(p.unit == "Hz" || p.unit == "ms" ? 0 : 2);
+                const bool whole = p.unit == "Hz" || p.unit == "ms" || p.unit == "pair" || p.unit == "smp";
+                row.slider->setTextValueSuffix(p.unit.empty() || p.unit == "pair" ? juce::String()
+                                               : p.unit == "smp"                  ? juce::String(" samples")
+                                                                                  : " " + juce::String(p.unit));
+                row.slider->setNumDecimalPlacesToDisplay(whole ? 0 : 2);
                 row.slider->setDoubleClickReturnValue(true, p.default_value);
                 const std::string id = p.id;
                 const juce::String label_text = row.label->getText();
@@ -170,8 +176,66 @@ private:
                 empty_.setText("This processor has no settings to show.", juce::dontSendNotification);
                 addAndMakeVisible(empty_);
             }
+            if (w.kind_ == "hardware") {
+                // Outboard: which pair goes out and comes back, and the round
+                // trip measured with a click (delay compensation uses it).
+                hardware_ = true;
+                ping_.setButtonText("Ping (measure the round trip)");
+                ping_.setComponentID("hardware_ping");
+                ping_.onClick = [this] { start_ping(); };
+                addAndMakeVisible(ping_);
+                hw_info_.setColour(juce::Label::textColourId, colours::text_dim);
+                hw_info_.setJustificationType(juce::Justification::topLeft);
+                hw_info_.setComponentID("hardware_info");
+                addAndMakeVisible(hw_info_);
+            }
             refresh();
-            setSize(460, juce::jmax(80, 20 + static_cast<int>(rows_.size()) * 34));
+            setSize(460, juce::jmax(80, 20 + static_cast<int>(rows_.size()) * 34 + (hardware_ ? 96 : 0)));
+        }
+
+        /// Measures the round trip through the gear: a click out, listened for on the return.
+        void start_ping()
+        {
+            const auto pair = [this](const char* name, double fallback) {
+                for (auto& r : rows_)
+                    if (r.info.id.size() >= std::strlen(name) &&
+                        r.info.id.compare(r.info.id.size() - std::strlen(name), std::string::npos, name) == 0)
+                        return juce::roundToInt(r.slider->getValue());
+                return juce::roundToInt(fallback);
+            };
+            hardware_io().request_ping(pair("out_pair", 2), pair("in_pair", 2));
+            ping_message_ = "Listening for the click...";
+            startTimer(50);
+            refresh();
+        }
+        juce::String ping_message() const { return ping_message_; }
+
+        void timerCallback() override
+        {
+            const int r = hardware_io().ping_result();
+            if (hardware_io().pinging() || r == -1) {
+                if (++ticks_ > 60) {  // 3 s: the audio is not running
+                    stopTimer();
+                    ticks_ = 0;
+                    ping_message_ = "No answer: is the audio interface running? (Studio > Audio Setup)";
+                    refresh();
+                }
+                return;
+            }
+            stopTimer();
+            ticks_ = 0;
+            if (r >= 0) {
+                for (auto& row : rows_)
+                    if (juce::String(row.info.id).endsWith(":latency")) {
+                        apply(row.info.id, "Latency", static_cast<double>(r));
+                        break;
+                    }
+                ping_message_ = "Round trip: " + juce::String(r) + " samples - the rest of the mix waits for it";
+            } else {
+                ping_message_ = "Nothing came back within a second: check the cables, the gear's input and output "
+                                "levels, and the pairs";
+            }
+            refresh();
         }
 
         void refresh()
@@ -186,11 +250,38 @@ private:
                 r.slider->setValue(v ? *v : r.info.default_value, juce::dontSendNotification);
             }
             refreshing_ = false;
+            if (hardware_) {
+                // The pairs by the interface's own channel names.
+                auto& engine = window_.context_.engine;
+                int out_pair = 2, in_pair = 2;
+                for (auto& r : rows_) {
+                    if (juce::String(r.info.id).endsWith(":out_pair")) out_pair = juce::roundToInt(r.slider->getValue());
+                    if (juce::String(r.info.id).endsWith(":in_pair")) in_pair = juce::roundToInt(r.slider->getValue());
+                }
+                auto* device = engine.devices().getCurrentAudioDevice();
+                auto names = [](const juce::StringArray& all, int pair) {
+                    const int a = 2 * (pair - 1);
+                    return a + 1 < all.size() ? all[a] + " / " + all[a + 1]
+                                              : "channels " + juce::String(a + 1) + "-" + juce::String(a + 2) + " (not on this interface)";
+                };
+                juce::String text = device == nullptr
+                                        ? juce::String("No audio interface open (Studio > Audio Setup)")
+                                        : "Out to: " + names(device->getOutputChannelNames(), out_pair) +
+                                              "\nBack from: " + names(device->getInputChannelNames(), in_pair);
+                if (ping_message_.isNotEmpty()) text << "\n" << ping_message_;
+                hw_info_.setText(text, juce::dontSendNotification);
+            }
         }
 
         void resized() override
         {
             auto area = getLocalBounds().reduced(10);
+            if (hardware_) {
+                auto bottom = area.removeFromBottom(90);
+                ping_.setBounds(bottom.removeFromTop(26).removeFromLeft(240));
+                bottom.removeFromTop(4);
+                hw_info_.setBounds(bottom);
+            }
             empty_.setBounds(area);
             for (auto& r : rows_) {
                 auto line = area.removeFromTop(34).reduced(0, 4);
@@ -216,6 +307,11 @@ private:
         BuiltinInsertWindow& window_;
         std::vector<Row> rows_;
         juce::Label empty_;
+        bool hardware_ = false;
+        juce::TextButton ping_;
+        juce::Label hw_info_;
+        juce::String ping_message_;
+        int ticks_ = 0;
         int gesture_ = 0;
         bool refreshing_ = false;
     };

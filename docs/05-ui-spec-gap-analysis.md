@@ -2179,3 +2179,28 @@ macOS, Linux and Windows. What it took:
       the SDK is fetched at build time and never committed.
     - **Checks**: `test_mackie`; the desktop check's
       `mixer_controller_checks` (screenshot 88).
+57. **Notes by mouse, .vcc projects, and outboard gear** (November 18, 2026).
+    - **Notes**: in note entry a placed note clicked again (not dragged) is
+      taken away; a note dragged moves in time and pitch, with the selection
+      when it is selected (`ScoreEditor::move_notes`: spelled by the key, what
+      it lands on in its voice gives way, one undo step, measured from the
+      note's start so a two-beat drag is two beats; a ghost head shows where
+      it lands). Select All then Delete empties a staff.
+    - **Projects are `.vcc`** (New Project, Save As, packages, shared
+      projects, the Windows installer's and the iPad's file types); `.vcc2`
+      files from earlier previews still open. Save As and Open start in the
+      project's own folder - another drive, a cloud folder - else where the
+      last project was saved; *File > Open Recent* lists projects where they
+      live (`ui/RecentProjects`).
+    - **Outboard (Hardware Insert)** in any insert slot: the signal goes out
+      of the interface on a pair of outputs (default 3-4) to the gear and
+      comes back on a pair of inputs; Send, Return and Mix (automatable), the
+      pairs shown by the interface's own channel names. *Ping* sends a click
+      and times its return: that round trip is the insert's latency, so delay
+      compensation holds the rest of the mix back to match; a dry share is
+      delayed with it. Outputs or inputs the interface lacks are said plainly;
+      an offline bounce has no interface, so the insert passes dry there and
+      says to print it in real time. (`ChannelDsp` "hardware", `HardwareIo`.)
+    - **Checks**: `test_note_drag`; the desktop check's `note_mouse_checks`,
+      `project_file_checks`, `hardware_insert_checks` (a simulated cable:
+      the ping, the return in the strip, the messages; screenshots 89, 90).

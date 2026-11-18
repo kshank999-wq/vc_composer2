@@ -2732,7 +2732,18 @@ void PlaybackEngine::process(const float* const* inputs, int num_inputs, float* 
                 wrap = true;
             }
         }
-        if (n > 0) process_chunk(inputs, num_inputs, outputs, num_outputs, offset, n);
+        if (n > 0) {
+            // The interface as the outboard (hardware) inserts see it in this chunk.
+            auto& hw = hardware_io();
+            hw.inputs = inputs;
+            hw.num_inputs = inputs != nullptr ? num_inputs : 0;
+            hw.outputs = outputs;
+            hw.num_outputs = num_outputs;
+            hw.offset = offset;
+            hw.live = !offline_;
+            process_chunk(inputs, num_inputs, outputs, num_outputs, offset, n);
+            hw.service_ping(n, sample_rate_);
+        }
         if (wrap) locate_request_.store(loop_in_.load(std::memory_order_relaxed));
         offset += n;
     }

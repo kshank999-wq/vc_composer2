@@ -255,6 +255,7 @@ const char* const kReverbParams[] = {"room", "damping", "width", "mix"};
 const char* const kDelayParams[] = {"time_ms", "feedback", "mix"};
 const char* const kLimiterParams[] = {"ceiling_db", "release_ms"};
 const char* const kSaturationParams[] = {"drive_db", "mix", "output_db"};
+const char* const kHardwareParams[] = {"send_db", "return_db", "mix"};
 
 template <std::size_t N>
 int index_in(const char* const (&names)[N], const std::string& name)
@@ -274,6 +275,7 @@ int insert_automation_index(const std::string& kind, const std::string& name)
     if (kind == "delay") return index_in(kDelayParams, name);
     if (kind == "limiter") return index_in(kLimiterParams, name);
     if (kind == "saturation") return index_in(kSaturationParams, name);
+    if (kind == "hardware") return index_in(kHardwareParams, name);
     return -1;
 }
 
@@ -502,6 +504,88 @@ private:
     Mailbox<Params> box_;
 };
 
+/// Outboard gear in an insert: the signal goes out of the interface on one
+/// pair of outputs and comes back from the gear on a pair of inputs. What
+/// comes back is the gear's answer to what was sent `latency` samples ago;
+/// the insert reports that latency, so delay compensation holds everything
+/// else back by the same amount and the mix stays in time. A dry share
+/// (mix below 1) is delayed to match.
+class HardwareInsert final : public InsertProcessor {
+public:
+    void prepare(double, int) override {}
+    void set_params(const project::InsertSlot& slot) override
+    {
+        Params p;
+        p.send_db = static_cast<float>(insert_param(slot, "send_db", 0.0));
+        p.return_db = static_cast<float>(insert_param(slot, "return_db", 0.0));
+        p.mix = static_cast<float>(insert_param(slot, "mix", 1.0));
+        p.out_ch = 2 * (std::clamp(static_cast<int>(std::lround(insert_param(slot, "out_pair", 2.0))), 1, 32) - 1);
+        p.in_ch = 2 * (std::clamp(static_cast<int>(std::lround(insert_param(slot, "in_pair", 2.0))), 1, 32) - 1);
+        p.latency = std::clamp(static_cast<int>(std::lround(insert_param(slot, "latency", 0.0))), 0, kMaxDelay - 1);
+        latency_.store(p.latency);
+        box_.write(p);
+    }
+    int latency_samples() const noexcept override { return latency_.load(); }
+    juce::String status() const override
+    {
+        switch (state_.load()) {
+            case State::offline: return "Outboard gear plays only live: print it in real time (Print to audio)";
+            case State::no_output: return "Those outputs are not on: Studio > Audio Setup";
+            case State::no_input: return "Those inputs are not on: Studio > Audio Setup";
+            default: return {};
+        }
+    }
+    void process(float* l, float* r, int n) noexcept override
+    {
+        const Params& p = box_.latest();
+        auto& io = hardware_io();
+        if (!io.live) {
+            state_.store(State::offline);
+            return;  // dry: a bounce has no interface
+        }
+        const bool outs = p.out_ch + 1 < io.num_outputs && io.outputs[p.out_ch] && io.outputs[p.out_ch + 1];
+        const bool ins = p.in_ch + 1 < io.num_inputs && io.inputs[p.in_ch] && io.inputs[p.in_ch + 1];
+        state_.store(!outs ? State::no_output : !ins ? State::no_input : State::ok);
+        const float send = db_to_lin(std::clamp(automated(0, p.send_db), -60.0f, 24.0f));
+        const float ret = db_to_lin(std::clamp(automated(1, p.return_db), -60.0f, 24.0f));
+        const float mix = std::clamp(automated(2, p.mix), 0.0f, 1.0f);
+        // Out to the gear (added: a cue mix may share those outputs).
+        if (outs) {
+            juce::FloatVectorOperations::addWithMultiply(io.outputs[p.out_ch] + io.offset, l, send, n);
+            juce::FloatVectorOperations::addWithMultiply(io.outputs[p.out_ch + 1] + io.offset, r, send, n);
+        }
+        // The dry share, delayed by the round trip to line up with the return.
+        float* chans[2] = {l, r};
+        for (int c = 0; c < 2; ++c) {
+            float* d = chans[c];
+            const float* back = ins ? io.inputs[p.in_ch + c] + io.offset : nullptr;
+            for (int i = 0; i < n; ++i) {
+                auto& line = delay_[static_cast<std::size_t>(c)];
+                line[static_cast<std::size_t>(write_[c])] = d[i];
+                int read = write_[c] - p.latency;
+                if (read < 0) read += kMaxDelay;
+                const float dry = line[static_cast<std::size_t>(read)];
+                write_[c] = (write_[c] + 1) % kMaxDelay;
+                const float wet = back != nullptr ? back[i] * ret : 0.0f;
+                d[i] = dry * (1.0f - mix) + wet * mix;
+            }
+        }
+    }
+
+private:
+    static constexpr int kMaxDelay = 48000 * 4;  // up to a second at 192 kHz
+    enum class State { ok, offline, no_output, no_input };
+    struct Params {
+        float send_db = 0.0f, return_db = 0.0f, mix = 1.0f;
+        int out_ch = 2, in_ch = 2, latency = 0;
+    };
+    Mailbox<Params> box_;
+    std::atomic<int> latency_{0};
+    std::atomic<State> state_{State::ok};
+    std::array<std::vector<float>, 2> delay_{std::vector<float>(kMaxDelay, 0.0f), std::vector<float>(kMaxDelay, 0.0f)};
+    int write_[2] = {0, 0};
+};
+
 class PluginInsert final : public InsertProcessor {
 public:
     explicit PluginInsert(std::unique_ptr<juce::AudioPluginInstance> instance)
@@ -597,7 +681,7 @@ private:
 bool is_known_insert_kind(const std::string& k) noexcept
 {
     return k == "eq" || k == "compressor" || k == "gate" || k == "reverb" || k == "delay" || k == "limiter" ||
-           k == "saturation" || k == "plugin";
+           k == "saturation" || k == "hardware" || k == "plugin";
 }
 
 std::unique_ptr<InsertProcessor> create_insert(const project::InsertSlot& slot, PluginHost& host, double sr, int max_block)
@@ -609,6 +693,7 @@ std::unique_ptr<InsertProcessor> create_insert(const project::InsertSlot& slot, 
     else if (k == "delay") p = std::make_unique<DelayInsert>();
     else if (k == "limiter") p = std::make_unique<LimiterInsert>();
     else if (k == "saturation") p = std::make_unique<SaturationInsert>();
+    else if (k == "hardware") p = std::make_unique<HardwareInsert>();
     else if (k == "plugin") {
         if (slot.plugin.empty()) {
             p = std::make_unique<MissingInsert>("No plug-in chosen");
@@ -625,5 +710,48 @@ std::unique_ptr<InsertProcessor> create_insert(const project::InsertSlot& slot, 
     }
     return p;
 }
+
+HardwareIo& hardware_io() noexcept
+{
+    static HardwareIo io;
+    return io;
+}
+
+void HardwareIo::request_ping(int out_pair, int in_pair) noexcept
+{
+    ping_out_.store(out_pair);
+    ping_in_.store(in_pair);
+    ping_result_.store(-1);
+    ping_state_.store(1);
+}
+
+void HardwareIo::service_ping(int n, double sample_rate) noexcept
+{
+    const int state = ping_state_.load(std::memory_order_relaxed);
+    if (state == 0 || !live) return;
+    const int out_ch = 2 * (ping_out_.load() - 1), in_ch = 2 * (ping_in_.load() - 1);
+    if (state == 1) {
+        // The click: one full-scale-ish sample at the start of this chunk, left and right.
+        for (int ch : {out_ch, out_ch + 1})
+            if (ch >= 0 && ch < num_outputs && outputs[ch] != nullptr) outputs[ch][offset] += 0.5f;
+        ping_elapsed_ = 0;
+        ping_state_.store(2);
+    }
+    // Listening: the first sample over -30 dBFS on the return.
+    for (int i = 0; i < n; ++i) {
+        for (int ch : {in_ch, in_ch + 1})
+            if (ch >= 0 && ch < num_inputs && inputs[ch] != nullptr && std::abs(inputs[ch][offset + i]) > 0.0316f) {
+                ping_result_.store(ping_elapsed_ + i);
+                ping_state_.store(0);
+                return;
+            }
+    }
+    ping_elapsed_ += n;
+    if (ping_elapsed_ > static_cast<int>(sample_rate)) {
+        ping_result_.store(-2);
+        ping_state_.store(0);
+    }
+}
+
 
 }  // namespace vcc::desktop

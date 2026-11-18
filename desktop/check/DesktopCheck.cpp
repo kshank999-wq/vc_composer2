@@ -40,6 +40,7 @@
 #include "system/PluginWatch.h"
 #include "ui/hw/HwGallery.h"
 #include "ui/console/MixActions.h"
+#include "audio/ChannelDsp.h"
 #include "ui/console/ConsoleStrip.h"
 #include "ui/console/ConsoleView.h"
 #include "ui/TrackPanel.h"
@@ -7173,6 +7174,128 @@ void project_file_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+void hardware_insert_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    // A fake interface: 4 inputs, 4 outputs, and a cable from outputs 3-4 back
+    // to inputs 3-4 through "gear" that halves the level and takes 300 samples.
+    constexpr int kBlock = 256, kCable = 300;
+    juce::AudioBuffer<float> outs(4, kBlock), ins(4, kBlock);
+    std::vector<float> cable_l(kCable + kBlock * 2, 0.0f), cable_r(kCable + kBlock * 2, 0.0f);
+    std::vector<float> line_l(kCable, 0.0f), line_r(kCable, 0.0f);
+    int line_pos = 0;
+    auto& io = hardware_io();
+    auto cable = [&] {
+        // What went out this block comes back kCable samples later, at half level.
+        for (int i = 0; i < kBlock; ++i) {
+            const float back_l = line_l[static_cast<std::size_t>(line_pos)], back_r = line_r[static_cast<std::size_t>(line_pos)];
+            line_l[static_cast<std::size_t>(line_pos)] = outs.getSample(2, i) * 0.5f;
+            line_r[static_cast<std::size_t>(line_pos)] = outs.getSample(3, i) * 0.5f;
+            line_pos = (line_pos + 1) % kCable;
+            ins.setSample(2, i, back_l);
+            ins.setSample(3, i, back_r);
+        }
+    };
+    auto begin_block = [&] {
+        outs.clear();
+        io.inputs = ins.getArrayOfReadPointers();
+        io.num_inputs = 4;
+        io.outputs = outs.getArrayOfWritePointers();
+        io.num_outputs = 4;
+        io.offset = 0;
+        io.live = true;
+    };
+
+    // The ping measures the round trip.
+    ins.clear();
+    io.request_ping(2, 2);
+    int guard = 0;
+    while (io.pinging() && guard++ < 400) {
+        begin_block();
+        io.service_ping(kBlock, 48000.0);  // the click goes out
+        cable();                           // and comes back next blocks
+        // Listening happens on the next block's inputs.
+    }
+    // The cable plus one block of the interface's buffering (inputs heard in
+    // one callback come back in the next), exactly what the impulse shows below.
+    check(io.ping_result() == kCable + kBlock,
+          "Ping measures the round trip through the gear (" + juce::String(io.ping_result()) + " samples; cable " + juce::String(kCable) + ")");
+
+    // The insert: out on 3-4, back on 3-4, latency as measured.
+    project::InsertSlot slot;
+    slot.kind = "hardware";
+    slot.suggestion = false;
+    slot.params = {{"out_pair", 2.0}, {"in_pair", 2.0}, {"latency", static_cast<double>(kCable)}, {"return_db", 6.0206}};
+    auto ins_proc = create_insert(slot, ctx.plugins, 48000.0, kBlock);
+    check(ins_proc != nullptr && ins_proc->latency_samples() == kCable, "a hardware insert reports its latency for delay compensation");
+    // An impulse through it: back after the round trip, at its own level (the return makes up the gear's -6 dB).
+    std::vector<float> l(kBlock), r(kBlock);
+    int arrived = -1;
+    float arrived_level = 0.0f;
+    for (int b = 0; b < 4 && arrived < 0; ++b) {
+        begin_block();
+        std::fill(l.begin(), l.end(), 0.0f);
+        std::fill(r.begin(), r.end(), 0.0f);
+        if (b == 0) l[10] = r[10] = 0.8f;
+        // The return heard this block is what the cable gave back for earlier sends.
+        ins_proc->process(l.data(), r.data(), kBlock);
+        cable();
+        for (int i = 0; i < kBlock; ++i)
+            if (std::abs(l[static_cast<std::size_t>(i)]) > 0.1f) {
+                arrived = b * kBlock + i;
+                arrived_level = l[static_cast<std::size_t>(i)];
+                break;
+            }
+    }
+    check(arrived == 10 + kCable + kBlock && std::abs(arrived_level - 0.8f) < 0.05f,
+          "what comes back from the gear plays in the strip (impulse at " + juce::String(arrived) + ", level " +
+              juce::String(arrived_level, 2) + ")");
+    check(ins_proc->status().isEmpty(), "with the pairs on, it reports nothing wrong");
+
+    // Pairs the interface does not have, and offline bounces, are said plainly.
+    slot.params["out_pair"] = 5.0;
+    ins_proc->set_params(slot);
+    begin_block();
+    ins_proc->process(l.data(), r.data(), kBlock);
+    check(ins_proc->status().contains("outputs are not on"), "outputs the interface lacks: " + ins_proc->status());
+    io.live = false;
+    std::fill(l.begin(), l.end(), 0.3f);
+    ins_proc->process(l.data(), r.data(), kBlock);
+    check(ins_proc->status().contains("live") && std::abs(l[100] - 0.3f) < 1e-6f, "in an offline bounce it passes dry and says why");
+    io.inputs = nullptr;
+    io.outputs = nullptr;
+    io.num_inputs = io.num_outputs = 0;
+    io.live = false;
+    ins_proc.reset();
+
+    // In the mixer: Outboard (Hardware Insert) in the insert menu, its window with Ping.
+    check(console::insert_name(slot) == "Outboard (Hardware Insert)", "the insert menu offers Outboard (Hardware Insert)");
+    auto& session = ctx.session;
+    session.new_empty();
+    const auto track = session.add_audio_track("Vocal", true);
+    session.update_track_mix(track, "Outboard", [&](project::Track& t) { t.inserts.push_back(slot); });
+    window.main().show_insert_window(track, 0);
+    pump(300);
+    juce::Component* win = nullptr;
+    for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i)
+        if (auto* c = juce::Desktop::getInstance().getComponent(i); c && c->getName().startsWith("Hardware")) win = c;
+    juce::String names;
+    for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i)
+        if (auto* c = juce::Desktop::getInstance().getComponent(i)) names << c->getName() << "|";
+    std::function<juce::Component*(juce::Component&, const juce::String&)> find_id = [&](juce::Component& c, const juce::String& id) -> juce::Component* {
+        if (c.getComponentID() == id) return &c;
+        for (auto* k : c.getChildren())
+            if (auto* f = find_id(*k, id)) return f;
+        return nullptr;
+    };
+    check(win != nullptr && find_id(*win, "hardware_ping") != nullptr, "its window has Ping and names the channels (" + names + ")");
+    if (win) {
+        shoot(*win, dir, "90-hardware-insert");
+        win->setVisible(false);
+    }
+    session.new_empty();
+}
+
 void updater_checks(MainWindow& window, const juce::File& dir)
 {
     auto& ctx = window.context();
@@ -9501,7 +9624,8 @@ int main(int argc, char** argv)
                 {"plugin_watch_checks", plugin_watch_checks},
                 {"mixer_controller_checks", mixer_controller_checks},
                 {"note_mouse_checks", note_mouse_checks},
-                {"project_file_checks", project_file_checks}};
+                {"project_file_checks", project_file_checks},
+                {"hardware_insert_checks", hardware_insert_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -10185,6 +10309,8 @@ int main(int argc, char** argv)
         note_mouse_checks(window, dir);
         section("project_file_checks");
         project_file_checks(window, dir);
+        section("hardware_insert_checks");
+        hardware_insert_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

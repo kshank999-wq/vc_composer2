@@ -123,6 +123,12 @@ const std::map<std::string, std::vector<ParamInfo>>& insert_params()
          {P("ceiling_db", "Ceiling", "dB", -24, 0, -0.3), P("release_ms", "Release", "ms", 1, 1000, 80, false, true)}},
         {"saturation",
          {P("drive_db", "Drive", "dB", 0, 36, 6), P("mix", "Mix", "", 0, 1, 1), P("output_db", "Output", "dB", -24, 12, 0)}},
+        // Outboard gear through the interface (ChannelDsp.h "hardware"): the
+        // pairs and the measured latency are set in its window, not automated.
+        {"hardware",
+         {P("send_db", "Send", "dB", -24, 24, 0), P("return_db", "Return", "dB", -24, 24, 0), P("mix", "Mix", "", 0, 1, 1),
+          P("out_pair", "Out pair", "pair", 1, 16, 2), P("in_pair", "In pair", "pair", 1, 16, 2),
+          P("latency", "Latency", "smp", 0, 48000, 0)}},
         {"eq",
          {P("lf_gain", "LF Gain", "dB", -18, 18, 0), P("lf_freq", "LF Freq", "Hz", 30, 450, 100, false, true),
           P("lmf_gain", "LMF Gain", "dB", -18, 18, 0), P("lmf_freq", "LMF Freq", "Hz", 100, 2000, 400, false, true),
