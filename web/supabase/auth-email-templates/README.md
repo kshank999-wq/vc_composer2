@@ -14,7 +14,9 @@ Supabase → Authentication → Emails → Templates
 | Reset password | `Choose a new VC Composer password` | `reset-password.html` |
 | Confirm signup | `Confirm your email for VC Composer` | `confirm-signup.html` |
 
-`{{ .ConfirmationURL }}` is Supabase's placeholder for the link; keep it.
+`{{ .ConfirmationURL }}` is Supabase's placeholder for the link, and `{{ .Token }}` the
+one-time code the desktop app signs in with (Help > Account and Licence > Email
+Me a Code); keep both. Without `{{ .Token }}` the email has no code to type.
 
 For them to come from `VC Composer <noreply@vc-composer.com>` instead of
 Supabase, Authentication → Emails → SMTP Settings uses Resend:

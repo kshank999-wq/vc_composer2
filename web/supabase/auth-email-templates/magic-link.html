@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Your sign-in link</title></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Your sign-in link and code</title></head>
 <body style="margin:0;padding:0;background:#0f0e0c">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#0f0e0c">
     <tr><td align="center" style="padding:32px 16px">
@@ -9,12 +9,14 @@
           <img src="https://vc-composer.com/brand/logo-email.png" width="300" height="96" alt="VC COMPOSER" style="display:block;border:0;width:300px;max-width:100%;height:auto;color:#ede7da;font-family:system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:18px;font-weight:700;letter-spacing:0.08em">
         </td></tr>
         <tr><td style="background:#1a1815;border:1px solid #332e27;border-top:3px solid #d6a743;border-radius:6px;padding:32px 32px 28px">
-          <h1 style="margin:0 0 20px;font-family:system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:22px;font-weight:600;line-height:1.3;color:#ede7da">Your sign-in link</h1>
+          <h1 style="margin:0 0 20px;font-family:system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:22px;font-weight:600;line-height:1.3;color:#ede7da">Your sign-in link and code</h1>
           <p style="margin:0 0 20px;font-family:system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:16px;line-height:1.6;color:#ede7da">Press the button to sign in to your VC Composer account.</p>
           <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 20px"><tr>
             <td style="background:#d6a743;border-radius:4px"><a href="{{ .ConfirmationURL }}" style="display:inline-block;padding:12px 24px;font-family:system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;color:#140f06;text-decoration:none">Sign in to VC Composer</a></td>
           </tr></table>
-          <p style="margin:0;font-family:system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#a9a191">Open it in the same browser you asked from. The link works once and expires within the hour. If you did not ask to sign in, you can ignore this email.</p>
+          <p style="margin:0 0 8px;font-family:system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#a9a191">Signing in from the VC Composer app? Type this code into Help &gt; Account and Licence instead:</p>
+          <p style="margin:0 0 22px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:28px;font-weight:700;letter-spacing:0.18em;color:#d6a743">{{ .Token }}</p>
+          <p style="margin:0;font-family:system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#a9a191">Open the link in the same browser you asked from. The link works once and expires within the hour. If you did not ask to sign in, you can ignore this email.</p>
         </td></tr>
         <tr><td align="center" style="padding:22px 12px 8px">
           <p style="margin:0;font-family:system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:12px;line-height:1.6;color:#a9a191">VC Composer &middot; Windows and macOS &middot; a VC Software product<br><a href="https://vc-composer.com" style="color:#d6a743;text-decoration:none">vc-composer.com</a></p>

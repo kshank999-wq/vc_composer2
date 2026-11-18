@@ -1,5 +1,7 @@
-// Help > Account and Licence...: sign in with an emailed code, activate this
-// computer (a serial is optional), see how the licence stands, sign out.
+// Help > Account and Licence...: sign in with the vc-composer.com password
+// (or a code emailed instead), activate this computer (a serial is
+// optional), see how the licence stands, sign out. Signing in links the
+// account's licence and then looks for a newer VC Composer straight away.
 // Network calls run off the message thread.
 #pragma once
 
@@ -21,6 +23,7 @@ public:
     void sign_in(std::function<void()> done = {});
     void activate(std::function<void()> done = {});
     void set_fields(const juce::String& email, const juce::String& code, const juce::String& serial);
+    void set_password(const juce::String& password) { password_.setText(password, false); }
 
     void resized() override;
     void paint(juce::Graphics& g) override;
@@ -30,13 +33,17 @@ private:
 
     AppContext& context_;
     juce::Label title_, status_, standing_;
-    juce::TextEditor email_, code_, serial_;
+    void signed_in_follow_up(std::function<void()> done);
+
+    juce::TextEditor email_, password_, code_, serial_;
     juce::TextButton send_{"Email Me a Code"}, sign_in_{"Sign In"}, activate_{"Activate This Computer"},
-        check_{"Check Licence"}, sign_out_{"Sign Out"}, site_{"Your Account Online"};
+        check_{"Check Licence"}, sign_out_{"Sign Out"}, site_{"Your Account Online"}, forgot_{"Forgot Password?"};
     std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };
 
 void show_account_window(AppContext& context);
+/// Runs after each successful sign-in (the app then looks for an update).
+void set_after_sign_in(std::function<void()> fn);
 AccountPanel* account_panel();
 /// Whether saving is allowed now, telling the composer why not (preview
 /// ended, or the licence). False means: do not save.

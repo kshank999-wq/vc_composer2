@@ -58,6 +58,8 @@ public:
     // Blocking network calls (run them off the message thread).
     Result send_code(const juce::String& email);
     Result verify_code(const juce::String& email, const juce::String& code);
+    /// Signs in with the account's password, as vc-composer.com does.
+    Result sign_in_password(const juce::String& email, const juce::String& password);
     /// Optional serial; without one the account's own licences are tried.
     Result activate(const juce::String& serial = {});
     /// GET /api/licenses/standing and write it down. A failure changes nothing.

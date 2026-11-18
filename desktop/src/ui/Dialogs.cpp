@@ -98,7 +98,11 @@ void ToolWindow::timerCallback()
 {
     // Floating above our own windows only: off while another app is in front.
     const bool front = juce::Process::isForegroundProcess();
-    if (isAlwaysOnTop() != front) setAlwaysOnTop(front);
+    if (isAlwaysOnTop() != front) {
+        setAlwaysOnTop(front);
+        // Back in VC Composer: over the main window again, never left behind it.
+        if (front && isVisible() && !isMinimised()) toFront(false);
+    }
 }
 
 void ToolWindow::closeButtonPressed()

@@ -523,8 +523,17 @@ MainComponent::MainComponent(AppContext& context)
     // A little after start-up, quietly: is there a newer build on vc-composer.com?
     {
         juce::Component::SafePointer<MainComponent> self(this);
+        // Once signed in, a newer build is fetched and offered for install
+        // (and again right after signing in).
+        set_after_sign_in([self] {
+            if (self != nullptr) auto_update(self->context_, [self] { return self != nullptr && self->confirm_discard(); });
+        });
         juce::Timer::callAfterDelay(20000, [self] {
             if (self == nullptr) return;
+            if (Account::get().signed_in()) {
+                auto_update(self->context_, [self] { return self != nullptr && self->confirm_discard(); });
+                return;
+            }
             check_for_updates_quietly([self](juce::String version) {
                 if (self == nullptr) return;
                 self->update_waiting_ = version;

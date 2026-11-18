@@ -7112,10 +7112,16 @@ private:
         int status = 404;
         juce::String reply = R"({"error":"not found"})";
         const juce::ScopedLock sl(lock);
+        if (std::getenv("VCC_STORE_LOG")) std::fprintf(stderr, "    [store] %s %s body=%s\n", method.toRawUTF8(), path.toRawUTF8(), body.substring(0, 120).toRawUTF8());
         if (path.startsWith("/auth/v1/otp")) {
             ++codes_sent;
             status = 200;
             reply = "{}";
+        } else if (path.startsWith("/auth/v1/token?grant_type=password")) {
+            const bool good = body.contains("\"right-password\"");
+            status = good ? 200 : 400;
+            reply = good ? R"({"access_token":"tok","refresh_token":"ref","expires_in":3600})"
+                         : R"({"error":"invalid_grant","error_description":"Invalid login credentials"})";
         } else if (path.startsWith("/auth/v1/verify")) {
             const bool good = body.contains("\"123456\"");
             status = good ? 200 : 403;
@@ -8761,16 +8767,38 @@ void account_checks(MainWindow& window, const juce::File& dir)
     panel->sign_in([&] { done = true; });
     wait_for([&] { return done; }, 10000);
     check(!account.signed_in() && panel->standing_text().contains("invalid"), "a wrong code is refused with the server's reason");
+    // The password, as on vc-composer.com: a wrong one is refused plainly.
+    panel->set_fields("Composer@Example.com", "", "");
+    panel->set_password("wrong-password");
+    done = false;
+    panel->sign_in([&] { done = true; });
+    wait_for([&] { return done; }, 10000);
+    check(!account.signed_in() && panel->standing_text().contains("do not match"),
+          "a wrong password is refused, saying how to get in otherwise (an emailed code, or set a password)");
+    panel->set_password("right-password");
+    done = false;
+    panel->sign_in([&] { done = true; });
+    wait_for([&] { return done; }, 10000);
+    check(account.signed_in() && account.email() == "composer@example.com",
+          "the right password signs in, as on the website: " + panel->status_text());
+    // (It linked the licence too; the steps below begin from a fresh computer.)
+    account.sign_out();
+    account.folder().getChildFile("activation.json").deleteFile();
+    account.folder().getChildFile("license-standing.json").deleteFile();
+    panel->refresh();
+    // Signing in links the account's licence on its own; with no seat free
+    // that is refused (and said), so the steps below start unactivated.
+    {
+        const juce::ScopedLock sl(store.lock);
+        store.refuse = true;
+    }
     panel->set_fields("Composer@Example.com", "123456", "");
     done = false;
     panel->sign_in([&] { done = true; });
     wait_for([&] { return done; }, 10000);
     check(account.signed_in() && account.email() == "composer@example.com", "the right code signs in: " + panel->status_text());
-
-    {
-        const juce::ScopedLock sl(store.lock);
-        store.refuse = true;
-    }
+    check(account.activated() == std::optional<bool>(false) && panel->standing_text().contains("activations"),
+          "signing in tries to link the account's licence to this computer straight away (here: no seat free, said)");
     done = false;
     panel->activate([&] { done = true; });
     wait_for([&] { return done; }, 10000);
@@ -10699,7 +10727,8 @@ int main(int argc, char** argv)
                 {"composer_lane_checks", composer_lane_checks},
                 {"staff_tools_checks", staff_tools_checks},
                 {"page_view_checks", page_view_checks},
-                {"swell_checks", swell_checks}};
+                {"swell_checks", swell_checks},
+                {"account_checks", account_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)

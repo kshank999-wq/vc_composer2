@@ -1,5 +1,7 @@
 #include "licensing/UpdateWindow.h"
 
+#include <atomic>
+
 #include "licensing/Account.h"
 #include "licensing/AccountWindow.h"
 #include "ui/Dialogs.h"
@@ -159,6 +161,69 @@ void show_update_window(AppContext& context, std::function<bool()> before_quit)
 }
 
 UpdatePanel* update_panel() { return panel_slot(); }
+
+namespace {
+std::atomic<bool>& auto_busy()
+{
+    static std::atomic<bool> b{false};
+    return b;
+}
+}  // namespace
+
+bool auto_update_busy() { return auto_busy().load(); }
+
+void auto_update(AppContext& context, std::function<bool()> before_quit)
+{
+    if (!Updater::available() || !Account::get().signed_in() || auto_busy().exchange(true)) return;
+    AppContext* ctx = &context;
+    juce::Thread::launch([ctx, before_quit = std::move(before_quit)] {
+        const auto found = Updater::get().check();
+        if (!found.offer) {
+            auto_busy() = false;
+            return;
+        }
+        const auto offer = *found.offer;
+        const juce::String version(offer.version);
+        juce::MessageManager::callAsync([ctx, version] { ctx->status("Downloading VC Composer " + version + "..."); });
+        int last = -1;
+        const auto got = Updater::get().download(offer, [ctx, version, &last](double p) {
+            const int pct = static_cast<int>(p * 10.0) * 10;
+            if (pct == last) return;
+            last = pct;
+            juce::MessageManager::callAsync(
+                [ctx, version, pct] { ctx->status("Downloading VC Composer " + version + ": " + juce::String(pct) + "%"); });
+        });
+        juce::MessageManager::callAsync([ctx, version, got, before_quit] {
+            auto_busy() = false;
+            if (!got.ok) {
+                ctx->status("The update to " + version + " did not download (" + got.message + "): Help > Check for Updates");
+                return;
+            }
+            ctx->status("VC Composer " + version + " is downloaded and ready to install");
+            juce::AlertWindow::showAsync(
+                juce::MessageBoxOptions()
+                    .withIconType(juce::MessageBoxIconType::InfoIcon)
+                    .withTitle("VC Composer " + version + " is ready")
+                    .withMessage("The new version is downloaded and checked. Install it now? VC Composer closes (asking "
+                                 "about anything unsaved first) and opens again, updated.")
+                    .withButton("Install and Restart")
+                    .withButton("Later"),
+                [ctx, version, file = got.file, before_quit](int r) {
+                    if (r != 1) {
+                        ctx->status("VC Composer " + version + " is ready: Help > Check for Updates installs it");
+                        return;
+                    }
+                    if (before_quit && !before_quit()) return;
+                    if (const auto error = Updater::get().install(file); error.isNotEmpty()) {
+                        ctx->status(error);
+                        return;
+                    }
+                    ctx->status("Installing VC Composer " + version + "...");
+                    juce::JUCEApplicationBase::quit();
+                });
+        });
+    });
+}
 
 void check_for_updates_quietly(std::function<void(juce::String)> found)
 {

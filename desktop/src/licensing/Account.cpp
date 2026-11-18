@@ -38,7 +38,9 @@ struct Http {
 Http request(const juce::String& url, const juce::String& method, const juce::String& headers, const juce::String& body = {})
 {
     Http out;
-    juce::URL u(url);
+    // Taken as written: parsed, a query (?grant_type=password) would be moved
+    // into a POST's body and the JSON would no longer be JSON.
+    juce::URL u = juce::URL::createWithoutParsing(url);
     if (body.isNotEmpty()) u = u.withPOSTData(body);
     juce::WebInputStream stream(u, method == "POST");
     stream.withExtraHeaders("Accept: application/json\r\n" + headers +
@@ -186,7 +188,38 @@ Account::Result Account::verify_code(const juce::String& address, const juce::St
                            juce::String(json::write(json::Object{
                                {"type", "email"}, {"email", e.toStdString()}, {"token", code.trim().toStdString()}})));
     if (r.status < 200 || r.status >= 300 || r.body.get_string("access_token").empty())
-        return {false, error_of(r, "That code did not work")};
+        return {false, r.reached && r.status >= 400 && r.status < 500
+                           ? error_of(r, "That code did not work") +
+                                 " - use the code from the newest email, within the hour, or sign in with your password"
+                           : error_of(r, "That code did not work")};
+    const juce::ScopedLock sl(lock_);
+    email_ = e;
+    access_ = juce::String(r.body.get_string("access_token"));
+    refresh_ = juce::String(r.body.get_string("refresh_token"));
+    access_expires_ = now_seconds() + r.body.get_int("expires_in", 3600);
+    save_session();
+    return {true, "Signed in as " + e};
+}
+
+Account::Result Account::sign_in_password(const juce::String& address, const juce::String& password)
+{
+    const auto e = address.trim().toLowerCase();
+    if (!e.containsChar('@')) return {false, "Enter the email address of your VC Composer account"};
+    if (password.isEmpty()) return {false, "Enter your password (the one you sign in to vc-composer.com with)"};
+    Config c;
+    {
+        const juce::ScopedLock sl(lock_);
+        c = config_;
+    }
+    if (!c.configured()) return {false, "This build is not connected to vc-composer.com"};
+    const auto r = request(c.supabase_url + "/auth/v1/token?grant_type=password", "POST", "apikey: " + c.anon_key + "\r\n",
+                           juce::String(json::write(json::Object{{"email", e.toStdString()}, {"password", password.toStdString()}})));
+    if (r.status < 200 || r.status >= 300 || r.body.get_string("access_token").empty()) {
+        if (r.reached && r.status >= 400 && r.status < 500)
+            return {false, "That email and password do not match. Never set a password? Press Email Me a Code, or set one "
+                           "on your account page (Your Account Online)."};
+        return {false, error_of(r, "Could not sign in")};
+    }
     const juce::ScopedLock sl(lock_);
     email_ = e;
     access_ = juce::String(r.body.get_string("access_token"));

@@ -2323,3 +2323,25 @@ macOS, Linux and Windows. What it took:
       saved in the score with the hairpin (`expression_start`/`_end`), one
       undo step per drag.
     - **Checks**: swell_checks (107, 107a, 108), test_hairpin_expression.
+65. **Signing in, the licence, and updates that install themselves**
+    (November 18, 2026).
+    - **Password sign-in** in Help > Account and Licence, as on
+      vc-composer.com (Supabase password grant); Forgot Password? opens the
+      site's sign-in page. The emailed code stays as the other way in; the
+      sign-in email template now carries the code (`{{ .Token }}`) beside the
+      link - it has to be pasted into Supabase (web/supabase/auth-email-templates).
+    - **Fixed**: requests to Supabase with a query (`?grant_type=...`) had the
+      query moved into the POST body by JUCE, so the token refresh failed and
+      a session ended after an hour; URLs are now sent as written.
+    - **Licence**: the serial field and Activate work once signed in, previews
+      included; signing in links the account's licence to the computer on its
+      own (said when no seat is free).
+    - **Updates**: once signed in - at start-up and right after signing in -
+      VC Composer looks for a newer build, downloads it in the background
+      (checked against the site's checksum) and offers Install and Restart
+      (unsaved work is asked about first); Later leaves it for Help > Check
+      for Updates.
+    - **Windows**: floating windows come back over the main window when VC
+      Composer is in front again (they could stay behind it after switching
+      to the browser or mail).
+    - **Checks**: account_checks (password, code, automatic licence link).

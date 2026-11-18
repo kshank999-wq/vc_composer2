@@ -46,6 +46,14 @@ void show_update_window(AppContext& context, std::function<bool()> before_quit);
 UpdatePanel* update_panel();
 /// The quiet check after start-up: calls `found` (message thread) with the
 /// offered version when there is one. Does nothing in builds that cannot update.
+/// Signed in: looks for a newer VC Composer, downloads it in the background
+/// (checked against the site's checksum) and offers Install and Restart -
+/// at start-up and right after signing in. `before_quit` asks about unsaved
+/// work first. Does nothing when not signed in or already under way.
+void auto_update(AppContext& context, std::function<bool()> before_quit);
+/// Whether an automatic update is downloading now (the checks).
+bool auto_update_busy();
+
 void check_for_updates_quietly(std::function<void(juce::String version)> found);
 
 }  // namespace vcc::desktop
