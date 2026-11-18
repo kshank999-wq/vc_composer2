@@ -44,6 +44,7 @@ public:
         view_.on_staff_clicked = [this](const engraving::InsertionPoint& p) { owner_.strip_clicked(*this, &p, 0); };
         view_.on_event_clicked = [this](notation::EventId id) { owner_.strip_clicked(*this, nullptr, id); };
         view_.on_event_released = [this](notation::EventId id) { owner_.note_released(*this, id); };
+        view_.on_marking_clicked = [this](std::size_t staff, Ticks tick) { owner_.marking_clicked(*this, staff, tick); };
         view_.on_event_dragged = [this](notation::EventId id, const engraving::InsertionPoint& from,
                                         const engraving::InsertionPoint& to) { owner_.note_dragged(*this, id, from, to); };
         view_.on_zoom_requested = [this](bool larger) { owner_.zoom(larger); };
@@ -514,9 +515,33 @@ void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* 
             enter_chord(false);
             return;
         }
-        if (note_entry_) handle(editor_->insert_pitch(point->pitch));
-        else apply_view_settings();
+        if (note_entry_) {
+            handle(editor_->insert_pitch(point->pitch));
+            // Placed with the mouse, as typed: a value key now is for the next notes.
+            just_entered_ = true;
+        } else {
+            apply_view_settings();
+        }
     }
+}
+
+void ComposerView::marking_clicked(Strip& strip, std::size_t staff, Ticks tick)
+{
+    // A dynamic or hairpin clicked: offer to take it away (one undo step).
+    context_.session.select_track(strip.track_id());
+    if (!editor_ || strip.track_id() != editing_track_) return;
+    juce::PopupMenu m;
+    m.addSectionHeader("Marking");
+    juce::Component::SafePointer<ComposerView> self(this);
+    m.addItem("Remove", [self, staff, tick] {
+        if (self && self->editor_)
+            self->handle(self->editor_->remove_marking_near(staff, tick, notation::kTicksPerQuarter / 2));
+    });
+    if (marking_menu_hook) {
+        marking_menu_hook(staff, tick);  // the checks choose without a menu
+        return;
+    }
+    m.showMenuAsync(juce::PopupMenu::Options());
 }
 
 void ComposerView::note_released(Strip& strip, notation::EventId id)
@@ -1177,7 +1202,11 @@ void ComposerView::resized()
     const auto options = lane_layout();
     for (auto& s : strips_) {
         if (tools_gap_ > 0 && s->track_id() == tools_gap_track_) y += tools_gap_;  // the docked tools' place
-        const int h = s->preferred_height(pixels_per_space_, options);
+        // Laid out at the lane's width first, the lane then grows to what is
+        // drawn on it (ledger notes, dynamics, articulations): nothing cut off.
+        if (s->getWidth() != w) s->setSize(w, s->preferred_height(pixels_per_space_, options));
+        s->view().fit_margins_to_content(options.margin_above, options.margin_below);
+        const int h = s->preferred_height(pixels_per_space_, s->view().layout_options());
         s->setBounds(0, y, w, h);
         y += h;
     }

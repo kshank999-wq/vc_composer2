@@ -224,6 +224,10 @@ public:
     // --- Changing existing notes -------------------------------------------
 
     EditResult delete_selection();
+    /// Takes away the dynamic or hairpin written nearest `tick` on a staff
+    /// (within `tolerance` ticks; a hairpin also when `tick` is inside it).
+    /// One undo step. Clicking a marking in the Composer view offers this.
+    EditResult remove_marking_near(std::size_t staff_index, notation::Ticks tick, notation::Ticks tolerance);
 
     /// Moves the selection by diatonic steps, spelling the result with the
     /// key signature in force - so a step up from F sharp in D major is G,

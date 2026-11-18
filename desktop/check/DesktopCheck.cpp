@@ -7139,6 +7139,82 @@ void note_mouse_checks(MainWindow& window, const juce::File& dir)
     composer.perform(composer::Command::DeleteSelection);
     pump(150);
     check(notes().empty(), "Select All then Delete empties the staff");
+    // Nothing drawn is cut off: a note far below the staff on ledger lines
+    // and a dynamic under it, and the lane grows to show them.
+    composer.perform(composer::Command::SelectDurationQuarter);
+    click({view->x_of_tick(notation::kTicksPerQuarter), view->y_of_staff_position(0, -2.0)});
+    composer.perform(composer::Command::DynamicMezzoPiano);
+    click({view->x_of_tick(2 * notation::kTicksPerQuarter), view->y_of_staff_position(0, 14.0)});
+    main.composer().resized();
+    pump(200);
+    {
+        const auto& lay = view->layout();
+        const bool fits = lay.drawn_bounds.y >= lay.extent.y - 0.01 && lay.drawn_bounds.bottom() <= lay.extent.bottom() + 0.01;
+        check(fits && view->getHeight() > 100, "the lane grows to show ledger notes and dynamics (height " +
+                                                   juce::String(view->getHeight()) + ")");
+        shoot(main, dir, "94-lane-fits-markings", true);
+    }
+    // A marking clicked can be taken away: probe under the low note for its "mp".
+    {
+        auto dynamics = [&] {
+            const auto* t = session.data().find_track(track);
+            return t ? t->active_version()->score.dynamics().size() : std::size_t{0};
+        };
+        const auto had = dynamics();
+        if (composer.note_entry()) composer.perform(composer::Command::ToggleKeyboardEntryMode);
+        bool asked = false;
+        composer.marking_menu_hook = [&](std::size_t staff, Ticks tick) {
+            asked = true;
+            composer.remove_marking(staff, tick);
+        };
+        for (double p = -3.0; p > -16.0 && !asked; p -= 0.5) {
+            for (const double dx : {0.0, 4.0, 8.0}) {
+                const juce::Point<float> at(view->x_of_tick(notation::kTicksPerQuarter) + static_cast<float>(dx),
+                                            view->y_of_staff_position(0, p));
+                view->mouseDown(mouse_event(*view, at, at, false));
+                view->mouseUp(mouse_event(*view, at, at, false));
+                if (asked) break;
+            }
+        }
+        pump(150);
+        composer.marking_menu_hook = nullptr;
+        check(had == 1 && asked && dynamics() == 0, "clicking a dynamic offers Remove, and it goes");
+        if (!composer.note_entry()) composer.perform(composer::Command::ToggleKeyboardEntryMode);
+    }
+    composer.perform(composer::Command::SelectAll);
+    composer.perform(composer::Command::DeleteSelection);
+    pump(150);
+    // Note values: placed with the mouse, then a value key - the next notes
+    // take it; the note just placed keeps its own.
+    session.new_empty();
+    {
+        const auto t2 = session.add_track("Oboe", "oboe");
+        session.select_track(t2);
+        pump(300);
+        view = find_view(composer);
+    }
+    if (view != nullptr) {
+        auto staff_notes = [&] {
+            std::vector<notation::ScoreNote> out;
+            if (const auto* t = session.data().find_track(session.selected_track()))
+                for (const auto& n : t->active_version()->score.notes(0))
+                    if (!n.is_rest) out.push_back(n);
+            std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.start_tick < b.start_tick; });
+            return out;
+        };
+        composer.perform(composer::Command::SelectDurationQuarter);
+        click({view->x_of_tick(0), view->y_of_staff_position(0, 4.0)});
+        composer.perform(composer::Command::SelectDurationWhole);
+        click({view->x_of_tick(4 * notation::kTicksPerQuarter), view->y_of_staff_position(0, 4.0)});
+        composer.perform(composer::Command::SelectDurationSixteenth);
+        click({view->x_of_tick(8 * notation::kTicksPerQuarter), view->y_of_staff_position(0, 4.0)});
+        const auto ns = staff_notes();
+        check(ns.size() == 3 && ns[0].duration.value == notation::NoteValue::Quarter &&
+                  ns[1].duration.value == notation::NoteValue::Whole && ns[2].duration.value == notation::NoteValue::Sixteenth,
+              "a note value chosen after placing a note is for the next notes (" + juce::String(static_cast<int>(ns.size())) +
+                  " notes)");
+    }
+
     session.new_empty();
 }
 

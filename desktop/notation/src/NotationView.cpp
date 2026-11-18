@@ -1,5 +1,7 @@
 #include "vcc/ui/NotationView.h"
 
+#include <cmath>
+
 #include <algorithm>
 
 namespace vcc::ui {
@@ -152,6 +154,35 @@ void NotationView::set_layout_options(const engraving::LayoutOptions& options)
     score_changed();
 }
 
+bool NotationView::fit_margins_to_content(double min_above, double min_below)
+{
+    if (score_ == nullptr)
+        return false;
+    auto options = engine_.options();
+    const double before_above = options.margin_above, before_below = options.margin_below;
+    // Start from the minimum, then let what is drawn push the margins out.
+    options.margin_above = min_above;
+    options.margin_below = min_below;
+    engine_.set_options(options);
+    relayout();
+    const auto& extent = layout_.extent;
+    const auto& drawn = layout_.drawn_bounds;
+    if (drawn.width > 0.0 && drawn.height > 0.0) {
+        const double over_above = extent.y - drawn.y;
+        const double over_below = drawn.bottom() - extent.bottom();
+        if (over_above > 0.0)
+            options.margin_above = min_above + over_above + 1.2;
+        if (over_below > 0.0)
+            options.margin_below = min_below + over_below + 1.2;
+        if (over_above > 0.0 || over_below > 0.0) {
+            engine_.set_options(options);
+            relayout();
+        }
+    }
+    repaint();
+    return std::abs(options.margin_above - before_above) > 1e-6 || std::abs(options.margin_below - before_below) > 1e-6;
+}
+
 const engraving::LayoutOptions& NotationView::layout_options() const noexcept
 {
     return engine_.options();
@@ -292,6 +323,12 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
         return;
     }
     pressed_ = notation::kInvalidEventId;
+    if (hit.hit && (hit.role == engraving::ItemRole::Dynamic || hit.role == engraving::ItemRole::Hairpin) &&
+        on_marking_clicked) {
+        const auto at = engraving::insertion_point_at(layout_, *score_, timeline_, point, 0);
+        on_marking_clicked(at.valid ? at.staff_index : 0, tick_at_x(static_cast<float>(event.x)));
+        return;
+    }
 
     const engraving::InsertionPoint insertion =
         engraving::insertion_point_at(layout_, *score_, timeline_, point, entry_grid_);

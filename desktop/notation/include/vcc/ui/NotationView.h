@@ -107,6 +107,11 @@ public:
     void set_colours(const NotationColours& colours);
     void set_layout_options(const engraving::LayoutOptions& options);
     const engraving::LayoutOptions& layout_options() const noexcept;
+    /// Grows the space above and below the staves until everything drawn
+    /// fits - notes on ledger lines, dynamics, hairpins, articulations - so a
+    /// lane never cuts them off. Never below `min_above` / `min_below`.
+    /// True when the margins changed (the host then resizes the view).
+    bool fit_margins_to_content(double min_above, double min_below);
 
     /// Reports that the score changed, so the next paint lays out again.
     /// Also called implicitly when the score's revision has moved on.
@@ -124,6 +129,10 @@ public:
     std::function<void(notation::EventId, const engraving::InsertionPoint& from,
                        const engraving::InsertionPoint& to)>
         on_event_dragged;
+
+    /// A dynamic or hairpin was clicked: its staff and the tick under the
+    /// click (markings belong to no note, so they are found by place).
+    std::function<void(std::size_t staff_index, notation::Ticks tick)> on_marking_clicked;
 
     /// Empty staff was clicked: where a note would be entered (spec 5.2).
     std::function<void(const engraving::InsertionPoint&)> on_staff_clicked;

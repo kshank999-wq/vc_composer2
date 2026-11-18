@@ -37,6 +37,13 @@ public:
 
     void set_playhead(Ticks tick, bool playing);
     bool note_entry() const noexcept { return note_entry_; }
+    /// The checks: answers a marking click instead of the menu (staff, tick).
+    std::function<void(std::size_t, Ticks)> marking_menu_hook;
+    /// Takes away the dynamic or hairpin nearest a place (what the marking menu's Remove does).
+    void remove_marking(std::size_t staff, Ticks tick)
+    {
+        if (editor_) handle(editor_->remove_marking_near(staff, tick, kTicksPerQuarter / 2));
+    }
     /// The notes selected in the score being edited (the shared selection's notes).
     std::vector<notation::EventId> selected_notes() const;
     /// The editor's cursor (value, dots, rest, voice), when a track is being written on.
@@ -121,6 +128,7 @@ private:
     void timerCallback() override;
     void strip_clicked(Strip& strip, const engraving::InsertionPoint* point, notation::EventId id);
     void note_released(Strip& strip, notation::EventId id);
+    void marking_clicked(Strip& strip, std::size_t staff, Ticks tick);
     void note_dragged(Strip& strip, notation::EventId id, const engraving::InsertionPoint& from,
                       const engraving::InsertionPoint& to);
     Ticks visible_ticks() const;

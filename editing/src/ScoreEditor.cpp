@@ -942,6 +942,42 @@ EditResult ScoreEditor::move_notes(notation::EventId anchor, notation::Ticks tic
     return applied(tick_delta != 0 ? "Moved" : "Transposed", placed.size());
 }
 
+EditResult ScoreEditor::remove_marking_near(std::size_t staff_index, notation::Ticks tick, notation::Ticks tolerance)
+{
+    const auto staff = static_cast<std::uint8_t>(std::min<std::size_t>(staff_index, 255));
+    // The nearest dynamic first, then a hairpin under the click.
+    const notation::DynamicMarking* dynamic = nullptr;
+    notation::Ticks best = tolerance + 1;
+    for (const auto& d : score_->dynamics())
+        if (d.staff == staff && std::abs(d.tick - tick) < best) {
+            best = std::abs(d.tick - tick);
+            dynamic = &d;
+        }
+    EditStep step;
+    if (dynamic != nullptr) {
+        step.target = EditStep::Target::Dynamic;
+        step.had_before = true;
+        step.dynamic_before = *dynamic;
+    } else {
+        const notation::Hairpin* pin = nullptr;
+        for (const auto& h : score_->hairpins())
+            if (h.staff == staff && tick >= h.start_tick - tolerance && tick <= h.end_tick + tolerance) pin = &h;
+        if (pin == nullptr)
+            return nothing("No dynamic or hairpin there");
+        step.target = EditStep::Target::Hairpin;
+        step.had_before = true;
+        step.hairpin_before = *pin;
+    }
+    history_.begin(step.target == EditStep::Target::Dynamic ? "Remove dynamic" : "Remove hairpin", cursor_);
+    if (!apply_step(*score_, step, true)) {
+        history_.abandon();
+        return refused("The marking could not be removed");
+    }
+    history_.record(step);
+    history_.commit(cursor_);
+    return applied(step.target == EditStep::Target::Dynamic ? "Dynamic removed" : "Hairpin removed");
+}
+
 EditResult ScoreEditor::transpose_selection(int diatonic_steps)
 {
     if (diatonic_steps == 0)
