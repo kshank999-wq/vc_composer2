@@ -313,6 +313,11 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
     const engraving::Point point = to_staff_spaces(event.getPosition());
 
     const engraving::HitResult hit = engraving::hit_test(layout_, point);
+    if (hit.id != notation::kInvalidEventId && event.mods.isPopupMenu() && on_event_menu) {
+        pressed_ = notation::kInvalidEventId;
+        on_event_menu(hit.id);
+        return;
+    }
     if (hit.id != notation::kInvalidEventId) {
         // Pressed: selected now; let go in place, or dragged (mouseUp).
         pressed_ = hit.id;

@@ -45,6 +45,8 @@ public:
     int lanes_scroll() const { return viewport_.getViewPositionY(); }
     /// The checks: answers a marking click instead of the menu (staff, tick).
     std::function<void(std::size_t, Ticks)> marking_menu_hook;
+    /// The checks: receives a note's right-click menu instead of showing it.
+    std::function<void(juce::PopupMenu&)> note_menu_hook;
     /// Takes away the dynamic or hairpin nearest a place (what the marking menu's Remove does).
     void remove_marking(std::size_t staff, Ticks tick)
     {
@@ -135,6 +137,7 @@ private:
     void strip_clicked(Strip& strip, const engraving::InsertionPoint* point, notation::EventId id);
     void note_released(Strip& strip, notation::EventId id);
     void marking_clicked(Strip& strip, std::size_t staff, Ticks tick);
+    void note_menu(Strip& strip, notation::EventId id);
     void note_dragged(Strip& strip, notation::EventId id, const engraving::InsertionPoint& from,
                       const engraving::InsertionPoint& to);
     Ticks visible_ticks() const;

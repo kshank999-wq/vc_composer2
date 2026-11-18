@@ -7227,6 +7227,45 @@ void note_mouse_checks(MainWindow& window, const juce::File& dir)
     composer.perform(composer::Command::DeleteSelection);
     pump(150);
     check(notes().empty(), "Select All then Delete empties the staff");
+    // Right-click a note: Sharp, Flat, Natural, Delete...
+    {
+        click({view->x_of_tick(0), view->y_of_staff_position(0, 4.0)});  // B4
+        auto ns = notes();
+        if (!ns.empty()) {
+            juce::String chosen = "Sharp";
+            juce::StringArray offered;
+            composer.note_menu_hook = [&](juce::PopupMenu& menu) {
+                for (juce::PopupMenu::MenuItemIterator it(menu, true); it.next();) {
+                    offered.add(it.getItem().text);
+                    if (it.getItem().text == chosen && it.getItem().action) it.getItem().action();
+                }
+            };
+            auto right_click = [&](const notation::ScoreNote& n) {
+                const auto head = view->notehead_bounds(n.id).getCentre();
+                auto e = mouse_event(*view, head, head, false, false, juce::ModifierKeys::rightButtonModifier);
+                view->mouseDown(e);
+                view->mouseUp(e);
+                pump(100);
+            };
+            right_click(ns[0]);
+            ns = notes();
+            check(offered.contains("Sharp") && offered.contains("Flat") && offered.contains("Natural") && offered.contains("Delete") &&
+                      !ns.empty() && ns[0].pitch.alteration == 1,
+                  "right-click a note: Sharp, Flat, Natural, Delete... (Sharp made it " +
+                      juce::String(ns.empty() ? 0 : ns[0].pitch.alteration) + ")");
+            chosen = "Delete";
+            if (!ns.empty()) right_click(ns[0]);
+            check(notes().empty(), "and Delete from the menu takes it away");
+            composer.note_menu_hook = nullptr;
+        }
+        // The Mac keyboard's delete key (Backspace) deletes the selection.
+        click({view->x_of_tick(0), view->y_of_staff_position(0, 4.0)});
+        composer.perform(composer::Command::SelectAll);
+        composer.grabKeyboardFocus();
+        composer.keyPressed(juce::KeyPress(juce::KeyPress::backspaceKey));
+        pump(100);
+        check(notes().empty(), "Backspace (delete on a Mac) deletes the selected notes");
+    }
     // Nothing drawn is cut off: a note far below the staff on ledger lines
     // and a dynamic under it, and the lane grows to show them.
     composer.perform(composer::Command::SelectDurationQuarter);

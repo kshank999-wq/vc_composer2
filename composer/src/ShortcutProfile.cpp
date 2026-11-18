@@ -608,6 +608,8 @@ void add_common_bindings(ShortcutProfile& profile,
     bind(profile, Command::ClickFollowsThePart,
          KeyStroke{Key::K, combine(primary, to_mask(Modifier::Shift))});
     bind(profile, Command::DeleteSelection, KeyStroke{Key::Delete, 0});
+    // The Mac keyboard's "delete" key sends Backspace.
+    bind(profile, Command::DeleteSelection, KeyStroke{Key::Backspace, 0});
 
     bind(profile, Command::MoveCursorLeft, KeyStroke{Key::ArrowLeft, 0});
     bind(profile, Command::MoveCursorRight, KeyStroke{Key::ArrowRight, 0});

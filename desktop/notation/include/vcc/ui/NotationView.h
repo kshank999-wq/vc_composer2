@@ -120,6 +120,9 @@ public:
     /// A note or rest was clicked.
     std::function<void(notation::EventId)> on_event_clicked;
 
+    /// A note right-clicked (or Ctrl-clicked on a Mac): for its menu.
+    std::function<void(notation::EventId)> on_event_menu;
+
     /// A note was clicked and let go without moving (after `on_event_clicked`
     /// at the press). Note entry uses it to take the note away again.
     std::function<void(notation::EventId)> on_event_released;

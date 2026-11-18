@@ -45,6 +45,7 @@ public:
         view_.on_event_clicked = [this](notation::EventId id) { owner_.strip_clicked(*this, nullptr, id); };
         view_.on_event_released = [this](notation::EventId id) { owner_.note_released(*this, id); };
         view_.on_marking_clicked = [this](std::size_t staff, Ticks tick) { owner_.marking_clicked(*this, staff, tick); };
+        view_.on_event_menu = [this](notation::EventId id) { owner_.note_menu(*this, id); };
         view_.on_event_dragged = [this](notation::EventId id, const engraving::InsertionPoint& from,
                                         const engraving::InsertionPoint& to) { owner_.note_dragged(*this, id, from, to); };
         view_.on_zoom_requested = [this](bool larger) { owner_.zoom(larger); };
@@ -538,6 +539,41 @@ void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* 
             apply_view_settings();
         }
     }
+}
+
+void ComposerView::note_menu(Strip& strip, notation::EventId id)
+{
+    // A note right-clicked: what can be done to it, in one place.
+    context_.session.select_track(strip.track_id());
+    if (!editor_ || strip.track_id() != editing_track_) return;
+    const auto* n = working_.find_note(id);
+    if (n == nullptr) return;
+    handle(editor_->select_and_follow(id));
+    juce::PopupMenu m;
+    m.addSectionHeader(n->is_rest ? "Rest" : "Note");
+    juce::Component::SafePointer<ComposerView> self(this);
+    auto act = [self](std::function<editing::EditResult(editing::ScoreEditor&)> f) {
+        return [self, f] {
+            if (self && self->editor_) self->handle(f(*self->editor_));
+        };
+    };
+    const bool note = !n->is_rest;
+    m.addItem("Sharp", note, note && n->pitch.alteration == 1, act([](editing::ScoreEditor& e) { return e.set_accidental(1); }));
+    m.addItem("Flat", note, note && n->pitch.alteration == -1, act([](editing::ScoreEditor& e) { return e.set_accidental(-1); }));
+    m.addItem("Natural", note, note && n->pitch.alteration == 0, act([](editing::ScoreEditor& e) { return e.set_accidental(0); }));
+    m.addItem("Respell (enharmonic)", note, false, act([](editing::ScoreEditor& e) { return e.cycle_enharmonic(); }));
+    m.addSeparator();
+    m.addItem("Up a step", note, false, act([](editing::ScoreEditor& e) { return e.transpose_selection(1); }));
+    m.addItem("Down a step", note, false, act([](editing::ScoreEditor& e) { return e.transpose_selection(-1); }));
+    m.addItem("Up an octave", note, false, act([](editing::ScoreEditor& e) { return e.transpose_selection_octaves(1); }));
+    m.addItem("Down an octave", note, false, act([](editing::ScoreEditor& e) { return e.transpose_selection_octaves(-1); }));
+    m.addSeparator();
+    m.addItem("Delete", act([](editing::ScoreEditor& e) { return e.delete_selection(); }));
+    if (note_menu_hook) {
+        note_menu_hook(m);  // the checks pick an item
+        return;
+    }
+    m.showMenuAsync(juce::PopupMenu::Options());
 }
 
 void ComposerView::marking_clicked(Strip& strip, std::size_t staff, Ticks tick)
