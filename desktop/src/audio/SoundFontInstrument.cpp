@@ -67,7 +67,14 @@ void SoundFontInstrument::handle(const juce::MidiMessage& m) noexcept
         tsf_channel_note_on(player_, 0, m.getNoteNumber(), m.getFloatVelocity());
     else if (m.isNoteOff())
         tsf_channel_note_off(player_, 0, m.getNoteNumber());
-    else if (m.isPitchWheel())
+    else if (m.isProgramChange()) {
+        // An articulation's own General MIDI sound (pizzicato, tremolo,
+        // a mute), or back to the instrument's: in the bank it plays from.
+        if (voice_.bank_number != 128 && !voice_.name.startsWith("Salamander")) {
+            const int index = tsf_get_presetindex(player_, voice_.bank_number, m.getProgramChangeNumber());
+            if (index >= 0) tsf_channel_set_presetindex(player_, 0, index);
+        }
+    } else if (m.isPitchWheel())
         tsf_channel_set_pitchwheel(player_, 0, m.getPitchWheelValue());
     else if (m.isController())
         tsf_channel_midi_control(player_, 0, m.getControllerNumber(), m.getControllerValue());
@@ -107,6 +114,11 @@ void SoundFontInstrument::process(juce::AudioBuffer<float>& out, juce::MidiBuffe
         handle(meta.getMessage());
     }
     if (pos < num_samples) render(out, pos, num_samples - pos);
+}
+
+int SoundFontInstrument::current_program() const
+{
+    return player_ != nullptr ? tsf_channel_get_preset_number(player_, 0) : -1;
 }
 
 void SoundFontInstrument::all_notes_off() noexcept

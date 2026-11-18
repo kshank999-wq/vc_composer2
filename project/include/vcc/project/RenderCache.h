@@ -51,6 +51,10 @@ public:
     /// What `render_track(track, performance)` returns, from the cache.
     /// Valid until the next call for the same track, or `forget`/`clear`.
     const RenderedTrack& render(const Track& track, bool performance = true);
+    /// The same, played through `map` instead of the track's own (the built-in
+    /// sounds' General MIDI articulation map); `map_key` names it for the cache.
+    const RenderedTrack& render(const Track& track, const notation::ExpressionMap& map, const std::string& map_key,
+                                bool performance = true);
 
     /// How the last call was served.
     const RenderStats& last() const noexcept { return last_; }

@@ -127,6 +127,43 @@ notation::ExpressionMap apply_accent_strength(notation::ExpressionMap map, int s
     return map;
 }
 
+std::vector<GmArticulation> gm_articulation_programs(int p)
+{
+    using A = notation::Articulation;
+    std::vector<GmArticulation> out;
+    const bool bowed = (p >= 40 && p <= 44) || (p >= 48 && p <= 51) || p == 110;
+    if (bowed) {
+        out.push_back({A::Pizzicato, 45});
+        if (p != 44) out.push_back({A::Tremolo, 44});
+    }
+    if (p == 56 || p == 57 || p == 61) out.push_back({A::Mute, 59});
+    if (p >= 24 && p <= 30) {
+        out.push_back({A::Harmonic, 31});
+        if (p != 28) out.push_back({A::Mute, 28});
+    }
+    return out;
+}
+
+notation::ExpressionMap with_gm_articulations(notation::ExpressionMap base, int program)
+{
+    const auto switches = gm_articulation_programs(program);
+    if (switches.empty()) return base;
+    for (const auto& s : switches) {
+        notation::ArticulationRule r;
+        r.articulation = s.articulation;
+        r.action = notation::ArticulationAction::ProgramChange;
+        r.program = static_cast<std::uint8_t>(s.program);
+        base.set_rule(r);
+    }
+    // Back to the instrument's own sound for every other note.
+    base.has_natural = true;
+    base.natural = {};
+    base.natural.action = notation::ArticulationAction::ProgramChange;
+    base.natural.program = static_cast<std::uint8_t>(std::clamp(program, 0, 127));
+    base.name += " + General MIDI articulations";
+    return base;
+}
+
 notation::ExpressionMap expression_map_for(const Track& track)
 {
     if (track.articulation_map) return apply_accent_strength(*track.articulation_map, track.accent_strength);

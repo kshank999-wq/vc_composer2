@@ -27,6 +27,22 @@ std::optional<notation::ExpressionMap> expression_map_from_json(const json::Valu
 notation::ExpressionMap expression_map_for(const Track& track);
 /// `map` with its accent and marcato lift scaled by `strength` (1-100, 50 = as is).
 notation::ExpressionMap apply_accent_strength(notation::ExpressionMap map, int strength);
+
+/// The articulations General MIDI has sounds for, on an instrument played by
+/// its GM program `program`: written pizzicato and tremolo on bowed strings
+/// switch to Pizzicato Strings (45) and Tremolo Strings (44), a mute on a
+/// trumpet, trombone or brass section to Muted Trumpet (59), harmonics and
+/// mutes on a guitar to Guitar Harmonics (31) and Muted Guitar (28). Every
+/// other note switches back to `program`. Empty (no rules) when the
+/// instrument has none of these.
+struct GmArticulation {
+    notation::Articulation articulation;
+    int program;
+};
+std::vector<GmArticulation> gm_articulation_programs(int program);
+/// `base` with those program switches added (its own velocity and length
+/// rules kept), for the built-in sounds; `base` unchanged when there are none.
+notation::ExpressionMap with_gm_articulations(notation::ExpressionMap base, int program);
 /// Changes whenever what plays changes (the render cache keys on it).
 std::string expression_map_key(const Track& track);
 

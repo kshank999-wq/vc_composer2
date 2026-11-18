@@ -193,6 +193,12 @@ void RenderCache::retain(const std::vector<std::string>& keep)
 
 const RenderedTrack& RenderCache::render(const Track& track, bool performance)
 {
+    return render(track, expression_map_for(track), expression_map_key(track), performance);
+}
+
+const RenderedTrack& RenderCache::render(const Track& track, const nt::ExpressionMap& map, const std::string& map_key,
+                                         bool performance)
+{
     static const RenderedTrack kNothing;
     last_ = {};
     const TrackVersion* v = track.active_version();
@@ -200,8 +206,6 @@ const RenderedTrack& RenderCache::render(const Track& track, bool performance)
         entries_.erase(track.id);
         return kNothing;
     }
-    const auto map = expression_map_for(track);
-    const auto map_key = expression_map_key(track);
     const int channel = std::clamp(track.midi_channel, 0, 15);
     Entry& e = entries_[track.id];
     const nt::Score& now = v->score;

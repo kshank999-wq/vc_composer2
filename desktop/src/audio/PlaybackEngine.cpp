@@ -13,6 +13,7 @@
 #include "audio/PlaceholderSynth.h"
 #include "audio/SoundFontInstrument.h"
 #include "audio/SoundPack.h"
+#include "vcc/project/ArticulationMap.h"
 #include "audio/Recorder.h"
 #include "vcc/project/Automation.h"
 #include "vcc/project/Render.h"
@@ -1493,7 +1494,20 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
             const bool printing_this = (print_tap_ && print_tap_->track_id == t->id) || live_slot >= 0;
             // An expanded part plays through its articulation tracks, never itself.
             if ((t->playback != "audio" || printing_this) && !t->articulations_expanded) {
-                project::RenderedTrack r = render_cache_.render(*t);
+                // The built-in orchestra plays written pizzicato, tremolo,
+                // mutes and harmonics on General MIDI's own sounds for them.
+                const auto* pack = dynamic_cast<SoundFontInstrument*>(st.instrument.get());
+                const bool gm_switches = pack != nullptr && pack->voice().bank_number == 0 &&
+                                         pack->voice().bank == sounds::gm() && !t->articulation_map &&
+                                         (t->expression_map.empty() || t->expression_map == "default") &&
+                                         !project::gm_articulation_programs(pack->voice().program).empty();
+                project::RenderedTrack r =
+                    gm_switches ? render_cache_.render(*t,
+                                                       project::with_gm_articulations(project::expression_map_for(*t),
+                                                                                      pack->voice().program),
+                                                       project::expression_map_key(*t) + "|gm:" +
+                                                           std::to_string(pack->voice().program))
+                                : render_cache_.render(*t);
                 if (st.instrument->wants_keyswitches()) r.notes.insert(r.notes.end(), r.keyswitches.begin(), r.keyswitches.end());
                 st.events = to_events(r.notes, r.controllers, d.tempo, sample_rate_);
             }

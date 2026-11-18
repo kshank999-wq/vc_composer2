@@ -131,6 +131,10 @@ std::vector<CreditCategory> credits()
                      "request VC Software provides the corresponding source for three years."},
                     {"LAME", "The LAME project", "GNU LGPL",
                      "MP3 export, when the LAME library is present; loaded at run time, never linked."},
+                    {"ASIO SDK", "Steinberg Media Technologies GmbH", "Steinberg ASIO SDK licence agreement",
+                     "Low-latency audio on Windows (Universal Audio, MOTU, RME, Focusrite and other ASIO interfaces). "
+                     "ASIO Interface Technology by Steinberg Media Technologies GmbH. Used under licence from "
+                     "Steinberg; the SDK is not redistributed."},
                     {"VST 3 SDK", "Steinberg Media Technologies GmbH", "VST 3 SDK licence (as distributed with JUCE)",
                      "Hosts VST 3 instruments and effects."}}});
 
@@ -144,7 +148,7 @@ std::vector<CreditCategory> credits()
     out.push_back({"Trademarks",
                    {{"ASIO", "Steinberg Media Technologies GmbH", "",
                      "ASIO is a trademark and software of Steinberg Media Technologies GmbH, registered in Europe "
-                     "and other countries. (Windows, where ASIO support is included.)"},
+                     "and other countries."},
                     {"VST", "Steinberg Media Technologies GmbH", "",
                      "VST is a trademark of Steinberg Media Technologies GmbH, registered in Europe and other "
                      "countries."},

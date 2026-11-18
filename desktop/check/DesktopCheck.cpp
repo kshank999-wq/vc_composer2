@@ -4190,7 +4190,7 @@ juce::MemoryBlock tiny_soundfont()
     chunk(sdta, "smpl", smpl.getMemoryBlock());
     {
         juce::MemoryOutputStream phdr, pbag, pmod, pgen, inst, ibag, imod, igen, shdr;
-        const std::vector<std::tuple<const char*, int, int>> presets = {{"Test Piano", 0, 0}, {"Test Strings", 48, 0}, {"Test Kit", 0, 128}};
+        const std::vector<std::tuple<const char*, int, int>> presets = {{"Test Piano", 0, 0}, {"Test Strings", 48, 0}, {"Test Pizzicato", 45, 0}, {"Test Kit", 0, 128}};
         int bag = 0;
         for (const auto& [n, prog, bank] : presets) {
             name(phdr, n);
@@ -4343,6 +4343,26 @@ void sound_pack_checks(MainWindow& window, const juce::File& dir)
         check(peak > 0.05f && std::abs(hz - 440.0) < 3.0 && after < 1e-4f,
               "a note sounds at its pitch (A4: " + juce::String(hz, 1) + " Hz, peak " + juce::String(peak, 2) +
                   ") and stops when the notes are cut");
+    }
+
+    // Written pizzicato: the engine sends General MIDI's Pizzicato Strings
+    // before the note (and the instrument's own program before arco notes);
+    // the instrument follows it.
+    {
+        SoundFontInstrument inst(strings_voice);
+        inst.prepare(48000.0, 512);
+        juce::AudioBuffer<float> out(2, 512);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::programChange(1, 45), 0);
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.8f), 1);
+        inst.process(out, midi, 512);
+        const int pizz = inst.current_program();
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::programChange(1, 48), 0);
+        inst.process(out, midi, 512);
+        check(pizz == 45 && inst.current_program() == 48 &&
+                  !project::gm_articulation_programs(48).empty(),
+              "a pizzicato note switches the strings to Pizzicato Strings (45), the next arco note back (48)");
     }
 
     // Tracks without a plug-in swap to the pack; previews use it too.

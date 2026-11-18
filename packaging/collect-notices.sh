@@ -34,7 +34,8 @@ N="$OUT/THIRD-PARTY-NOTICES.txt"
   echo "Salamander Grand Piano by Alexander Holm, CC-BY 3.0 (reduced edition);"
   echo "MuseScore General by S. Christian Collins, MIT."
   echo
-  echo "ASIO is a trademark and software of Steinberg Media Technologies GmbH."
+  echo "ASIO Interface Technology by Steinberg Media Technologies GmbH, used under licence."
+  echo "ASIO is a trademark and software of Steinberg Media Technologies GmbH, registered in Europe and other countries."
   echo
   for font in Bravura BarlowCondensed Inter ShareTechMono; do
     f="$ROOT/resources/fonts/$font/OFL.txt"

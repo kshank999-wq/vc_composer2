@@ -2285,3 +2285,12 @@ macOS, Linux and Windows. What it took:
       A turn is one undo step.
     - **Checks**: composer_lane_checks (29a), staff_tools_checks (44a),
       test_accent_strength.
+62. **Articulation sounds on the built-in orchestra** (November 18, 2026).
+    Tracks the sound pack plays (no plug-in, the default articulation map)
+    play written articulations on General MIDI's own sounds for them:
+    pizzicato and tremolo on bowed strings (Pizzicato Strings 45, Tremolo
+    Strings 44), mutes on trumpet, trombone and brass section (Muted Trumpet
+    59), harmonics and mutes on guitars (31, 28). Each note carries its own
+    program switch - its articulation's, or back to the instrument's - so
+    playback from anywhere is right. `project::with_gm_articulations`;
+    test_gm_articulations; sound_pack_checks.

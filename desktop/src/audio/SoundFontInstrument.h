@@ -37,6 +37,8 @@ public:
     juce::String display_name() const override { return voice_.name; }
 
     const PackVoice& voice() const noexcept { return voice_; }
+    /// The General MIDI program playing now (an articulation's switch changes it).
+    int current_program() const;
 
 private:
     void render(juce::AudioBuffer<float>& out, int start, int count) noexcept;
