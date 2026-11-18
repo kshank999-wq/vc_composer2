@@ -38,6 +38,21 @@ target_compile_definitions(vcc_juce PUBLIC
     JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_APPLICATION_NAME_STRING="VC Composer"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
+# ASIO on Windows (Universal Audio, MOTU, RME... at their lowest latency):
+# Steinberg's ASIO SDK, fetched at build time and never kept in this
+# repository. It is used under Steinberg's proprietary ASIO licence, which
+# needs the licence agreement Steinberg has signed before a build with it is
+# published (docs/01-decisions-and-license-gates.md). Point VCC_ASIO_SDK_DIR
+# at the SDK's folder (the one holding common/iasiodrv.h) to turn it on.
+set(VCC_ASIO_SDK_DIR "" CACHE PATH "Steinberg ASIO SDK folder (Windows); empty: no ASIO")
+if(WIN32 AND VCC_ASIO_SDK_DIR)
+    if(NOT EXISTS "${VCC_ASIO_SDK_DIR}/common/iasiodrv.h")
+        message(FATAL_ERROR "VCC_ASIO_SDK_DIR has no common/iasiodrv.h: ${VCC_ASIO_SDK_DIR}")
+    endif()
+    target_compile_definitions(vcc_juce PUBLIC JUCE_ASIO=1)
+    target_include_directories(vcc_juce PUBLIC "${VCC_ASIO_SDK_DIR}/common")
+    message(STATUS "ASIO: on (${VCC_ASIO_SDK_DIR})")
+endif()
 target_compile_definitions(vcc_juce INTERFACE $<TARGET_PROPERTY:vcc_juce,COMPILE_DEFINITIONS>)
 target_include_directories(vcc_juce INTERFACE $<TARGET_PROPERTY:vcc_juce,INCLUDE_DIRECTORIES>)
 set_target_properties(vcc_juce PROPERTIES POSITION_INDEPENDENT_CODE ON)

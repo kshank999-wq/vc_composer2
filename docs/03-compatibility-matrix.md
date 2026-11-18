@@ -20,7 +20,7 @@ only with a recorded test run (date, build, machine). Until then it is
 | Driver | Status | Gate |
 |---|---|---|
 | Core Audio (macOS) | Enabled through JUCE; untested on hardware | |
-| ASIO (Windows) | Not enabled | ASIO SDK licence (01) |
+| ASIO (Windows) | Wired in, off: on when the repository variable `VCC_ASIO=1` (the SDK is fetched at build time) | Steinberg's signed ASIO licence agreement (01) |
 | WASAPI / DirectSound (Windows) | Enabled through JUCE; untested on hardware | |
 | ALSA (Linux) | Enabled through JUCE | Development only |
 

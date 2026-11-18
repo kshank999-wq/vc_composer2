@@ -79,10 +79,24 @@ jobs:
           v=$(sed -n 's/^    VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "expires=$(date -u -d '+60 days' +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      # ASIO: on once the repository variable VCC_ASIO is 1 - set it after
+      # Steinberg has signed the ASIO licence agreement. The SDK is fetched
+      # here and never committed.
+      - name: Steinberg ASIO SDK
+        if: vars.VCC_ASIO == '1'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://www.steinberg.net/asiosdk" -OutFile asiosdk.zip
+          Expand-Archive asiosdk.zip -DestinationPath C:\asio-dl
+          $dir = (Get-ChildItem C:\asio-dl -Recurse -Filter iasiodrv.h | Select-Object -First 1).Directory.Parent.FullName
+          if (-not $dir) { throw "The ASIO SDK has no common/iasiodrv.h" }
+          "ASIO_SDK=$($dir -replace '\\','/')" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "ASIO SDK at $dir"
       - name: Configure
         run: >
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DVCC_BUILD_DESKTOP=ON -DVCC_BUILD_TESTS=OFF
           -DVCC_FFMPEG_ROOT=C:/ffmpeg -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          "-DVCC_ASIO_SDK_DIR=${{ env.ASIO_SDK }}"
           -DVCC_PREVIEW_BUILD=${{ env.PREVIEW == 'true' && 'ON' || 'OFF' }}
           -DVCC_PREVIEW_EXPIRES=${{ steps.version.outputs.expires }}
           "-DVCC_BUILD_LABEL=${{ steps.version.outputs.version }}${{ env.PREVIEW == 'true' && format('-preview.{0}', github.run_number) || '' }}"
