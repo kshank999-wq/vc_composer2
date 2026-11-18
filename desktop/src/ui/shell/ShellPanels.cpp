@@ -70,6 +70,11 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
             if (on_command) on_command(composer::Command::ToggleKeyboardEntryMode);
         };
         command_keys_.emplace_back(&note, composer::Command::ToggleKeyboardEntryMode);
+        auto& hear = add(entry, "Hear", 58, false);
+        hear.set_led_dot(true);
+        hear.setComponentID("composer_hear");
+        hear.setTooltip("Hear each note as you place it");
+        hear.onClick = invoke(cmd::hearEntry);
         auto& chord = add(entry, "Chord mode", 104, false);
         chord.set_led_dot(true);
         chord.setComponentID("composer_chord_mode");

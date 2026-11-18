@@ -178,6 +178,7 @@ enum : juce::CommandID {
     mixerController,
     scoreView,
     trackList,
+    hearEntry,
 };
 }  // namespace cmd
 

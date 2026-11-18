@@ -7614,6 +7614,39 @@ void view_tools_checks(MainWindow& window, const juce::File& dir)
         pump(50);
     }
 
+    // Quick playback: hold a staff's key to hear it alone, let go to come back.
+    {
+        auto& composer = main.composer();
+        auto* lane_parent = composer.lane(2).getParentComponent();
+        auto* hold = lane_parent ? lane_parent->findChildWithID("lane_quick_play") : nullptr;
+        check(hold != nullptr && hold->isShowing(), "each staff has a quick playback key");
+        ctx.engine.stop();
+        ctx.engine.locate(6 * kTicksPerQuarter);
+        if (hold) {
+            const auto c = hold->getLocalBounds().getCentre().toFloat();
+            hold->mouseDown(mouse_event(*hold, c, c, false));
+            pump(100);
+            check(composer.quick_playing() && ctx.engine.playing(), "held: it plays (that staff alone)");
+            shoot(window, dir, "102-quick-playback", true);
+            hold->mouseUp(mouse_event(*hold, c, c, false));
+            pump(100);
+            check(!composer.quick_playing() && !ctx.engine.playing() && ctx.engine.position() == 6 * kTicksPerQuarter,
+                  "let go: it stops and the playhead is back where it was");
+        }
+    }
+    // Hear: notes sound as they are placed (a key, remembered).
+    {
+        auto* hear = main.toolbar().key("Hear");
+        const bool was = main.composer().hear_entry();
+        if (hear) hear->triggerClick();
+        pump(80);
+        check(hear != nullptr && main.composer().hear_entry() == !was && hear->getToggleState() == !was &&
+                  hw::ui_settings().getBoolValue("composer_hear_entry", true) == !was,
+              "the Hear key turns hearing notes as they are placed on and off (remembered)");
+        if (hear) hear->triggerClick();
+        pump(80);
+    }
+
     // The Score view: a key on the toolbar and View > Score View.
     auto* score_key = main.toolbar().key("Score");
     check(score_key != nullptr, "the Composer toolbar has a Score key");

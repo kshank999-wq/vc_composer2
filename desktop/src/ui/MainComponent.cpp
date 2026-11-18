@@ -1048,6 +1048,7 @@ void MainComponent::refresh_tool_keys()
 {
     toolbar_.update(punch_, sequencer_.pencil_mode(), static_cast<int>(sequencer_.edit_mode()), sequencer_.smart_tool());
     if (auto* k = toolbar_.key("Chord mode")) k->setToggleState(composer_.chord_mode(), juce::dontSendNotification);
+    if (auto* k = toolbar_.key("Hear")) k->setToggleState(composer_.hear_entry(), juce::dontSendNotification);
 }
 
 void MainComponent::timerCallback()
@@ -2152,7 +2153,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
-                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController, cmd::scoreView, cmd::trackList});
+                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController, cmd::scoreView, cmd::trackList, cmd::hearEntry});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2472,6 +2473,10 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
                          workspace_ == Workspace::Composer && page_mode_ ? juce::ApplicationCommandInfo::isTicked : 0);
             info.addDefaultKeypress('s', cmdKey | juce::ModifierKeys::altModifier);
             break;
+        case cmd::hearEntry:
+            info.setInfo("Hear Notes as Placed", "Each note sounds as it is placed", "Edit",
+                         composer_.hear_entry() ? juce::ApplicationCommandInfo::isTicked : 0);
+            break;
         case cmd::trackList:
             info.setInfo("Track List", "A floating list of the tracks: click one to go to it", "View",
                          track_list_shown() ? juce::ApplicationCommandInfo::isTicked : 0);
@@ -2714,6 +2719,11 @@ bool MainComponent::perform(const InvocationInfo& info)
             else set_page_view(true);
             break;
         case cmd::trackList: toggle_track_list(); break;
+        case cmd::hearEntry:
+            composer_.set_hear_entry(!composer_.hear_entry());
+            refresh_tool_keys();
+            context_.status(composer_.hear_entry() ? "Notes sound as they are placed" : "Notes are placed silently");
+            break;
         default: return false;
     }
     return true;
@@ -2765,6 +2775,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             for (auto id : {cmd::lyrics, cmd::addRepeat, cmd::unrollRepeats, cmd::explodeTracks, cmd::implodeTracks})
                 m.addCommandItem(c, id);
             m.addSeparator();
+            m.addCommandItem(c, cmd::hearEntry);
             m.addSubMenu("Keyboard Shortcuts", shortcuts_menu());
             break;
         case 2:

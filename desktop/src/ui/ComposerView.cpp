@@ -9,6 +9,8 @@
 #include "ui/Theme.h"
 #include "ui/TrackPanel.h"
 #include "ui/Dialogs.h"
+#include "audio/PlaybackEngine.h"
+#include "ui/hw/HwTheme.h"
 #include "ui/composer/CircleOfFifths.h"
 #include "ui/composer/ComposerRuler.h"
 #include "ui/composer/LaneParts.h"
@@ -22,6 +24,43 @@ using composer::Command;
 
 
 // --- Strip: one track's row: header, lane, phrase blocks ------------------------------------
+
+namespace {
+/// Quick playback's key: press and hold to hear, let go to stop.
+class HoldPlayButton final : public juce::Component, public juce::SettableTooltipClient {
+public:
+    std::function<void()> on_press, on_release;
+    bool held() const noexcept { return held_; }
+    void paint(juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced(1.0f);
+        g.setColour(held_ ? colours::accent : colours::panel.brighter(0.15f));
+        g.fillRoundedRectangle(r, 4.0f);
+        g.setColour(held_ ? colours::background : colours::text);
+        juce::Path tri;
+        const auto c = r.getCentre();
+        const float h = r.getHeight() * 0.42f;
+        tri.addTriangle(c.x - h * 0.45f, c.y - h * 0.5f, c.x - h * 0.45f, c.y + h * 0.5f, c.x + h * 0.55f, c.y);
+        g.fillPath(tri);
+    }
+    void mouseDown(const juce::MouseEvent&) override
+    {
+        held_ = true;
+        repaint();
+        if (on_press) on_press();
+    }
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        if (!held_) return;
+        held_ = false;
+        repaint();
+        if (on_release) on_release();
+    }
+
+private:
+    bool held_ = false;
+};
+}  // namespace
 
 class ComposerView::Strip final : public juce::Component {
 public:
@@ -62,7 +101,15 @@ public:
         room_.setTitle("Staff room");
         room_.onValueChange = [this] { owner_.set_lane_room(track_id_, room_.getValue()); };
         addAndMakeVisible(room_);
+        // Quick playback: hold to hear this staff alone, from the start of
+        // what is shown; let go and the playhead is back where it was.
+        play_.setComponentID("lane_quick_play");
+        play_.setTooltip("Quick playback: hold to hear this staff alone from where the view starts; let go to come back");
+        play_.on_press = [this] { owner_.quick_play_start(track_id_); };
+        play_.on_release = [this] { owner_.quick_play_stop(); };
+        addAndMakeVisible(play_);
     }
+    juce::Component& quick_play_button() noexcept { return play_; }
     juce::Slider& room_slider() noexcept { return room_; }
 
     const std::string& track_id() const noexcept { return track_id_; }
@@ -177,7 +224,11 @@ public:
     {
         auto r = getLocalBounds();
         header_.setBounds(r.removeFromLeft(composer_ui::TrackHeader::kWidth));
-        room_.setBounds(r.removeFromRight(14).reduced(0, 6));
+        {
+            auto side = r.removeFromRight(22);
+            play_.setBounds(side.removeFromTop(24).reduced(1, 2));
+            room_.setBounds(side.reduced(4, 4));
+        }
         view_.setBounds(r.withTrimmedBottom(1));
         phrases_.setBounds(view_.getBounds());
     }
@@ -196,6 +247,7 @@ private:
     composer_ui::PhraseLayer phrases_;
     notation::Score shown_;
     juce::Slider room_;
+    HoldPlayButton play_;
 };
 
 // --- ComposerView -----------------------------------------------------------------------------
@@ -223,6 +275,7 @@ ComposerView::ComposerView(AppContext& context) : context_(context)
     addAndMakeVisible(hint_);
     hint_.setColour(juce::Label::textColourId, colours::text_dim);
     hint_.setFont(hw::fonts::ui(11.5f));
+    hear_entry_ = hw::ui_settings().getBoolValue("composer_hear_entry", true);
     for (auto* z : {&zoom_w_, &zoom_h_}) {
         z->setSliderStyle(juce::Slider::LinearHorizontal);
         z->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -530,6 +583,57 @@ void ComposerView::discard_uncommitted()
     repaint();
 }
 
+void ComposerView::quick_play_start(const std::string& track_id)
+{
+    auto& engine = context_.engine;
+    if (quick_playing_) return;
+    quick_playing_ = true;
+    quick_return_ = engine.position();
+    quick_was_playing_ = engine.playing();
+    if (quick_was_playing_) engine.stop();
+    // This staff alone (render-only: the project's solo switches are untouched).
+    PlaybackEngine::RenderOverride solo;
+    solo.solo = {track_id};
+    engine.set_render_override(solo);
+    engine.locate(std::max<Ticks>(0, origin_));
+    engine.play();
+    context_.status("Quick playback: " +
+                    juce::String(context_.session.data().find_track(track_id) ? context_.session.data().find_track(track_id)->name
+                                                                              : std::string()) +
+                    " alone - let go to come back");
+}
+
+void ComposerView::quick_play_stop()
+{
+    if (!quick_playing_) return;
+    quick_playing_ = false;
+    auto& engine = context_.engine;
+    engine.stop();
+    engine.set_render_override(std::nullopt);
+    engine.locate(quick_return_);
+    set_playhead(quick_return_, false);
+    context_.status("Back where you were");
+}
+
+void ComposerView::set_hear_entry(bool on)
+{
+    hear_entry_ = on;
+    hw::ui_settings().setValue("composer_hear_entry", on);
+    hw::ui_settings().saveIfNeeded();
+}
+
+void ComposerView::sound_note(int midi)
+{
+    // The note just placed, on the track's own sound, briefly.
+    if (!hear_entry_ || midi < 0 || midi > 127) return;
+    context_.engine.set_live_track(editing_track_);
+    context_.engine.send_live(juce::MidiMessage::noteOn(1, midi, static_cast<juce::uint8>(90)));
+    juce::Component::SafePointer<ComposerView> self(this);
+    juce::Timer::callAfterDelay(350, [self, midi] {
+        if (self) self->context_.engine.send_live(juce::MidiMessage::noteOff(1, midi));
+    });
+}
+
 double ComposerView::lane_room(const std::string& track_id) const
 {
     const auto it = lane_room_.find(track_id);
@@ -757,6 +861,12 @@ bool ComposerView::range_ok(bool single_entry, std::function<void()> commit)
 
 void ComposerView::handle(const editing::EditResult& result)
 {
+    // A note placed (typed or clicked) is heard, when Hear is on.
+    if (result.score_changed && result.new_event != notation::kInvalidEventId)
+        if (const auto* n = working_.find_note(result.new_event); n && !n->is_rest) {
+            const auto staff = working_.staff_index_of(n->id);
+            sound_note(notation::midi_note_number(n->pitch) + working_.staff(staff).total_transposition());
+        }
     // Entered on a lane showing a Trans shift: the note was entered as
     // shown, so it is stored a shift lower and sounds once transposed.
     if (result.score_changed && result.new_event != notation::kInvalidEventId && !editing_track_.empty())

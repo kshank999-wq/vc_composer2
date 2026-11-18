@@ -2228,3 +2228,24 @@ macOS, Linux and Windows. What it took:
       slim bar and is listed under Window.
     - **Checks**: test_ostinato_send; ostinato_audition_checks,
       note_mouse_checks, view_tools_checks (screenshots 91-97).
+59. **Chord mode in one click, the note menu, zoom, quick playback**
+    (November 18, 2026).
+    - **Chord mode**: a click on a staff note builds the chord on that note in
+      the project's key, spelled as the key spells it; keys instead of lists -
+      Type (Triad, 7th: the key's own; Maj7, Add9, Sus2, Sus4, Dim, Aug),
+      Inversion (Root, 1st, 2nd, 3rd), Voicing (Close / Open) and Spread
+      (1 / 2 octaves). On a grand staff the chord is written for two hands
+      (left hand the bass, with its fifth and octave over two octaves). The
+      palette is a window of its own, movable to another screen.
+    - **Right-click a note**: Sharp, Flat, Natural, Respell, up or down a
+      step or an octave, Delete. Backspace deletes as Delete does (the Mac
+      "delete" key).
+    - **Zoom**: W and H sliders at the bottom right of the edit window; each
+      staff has its own room slider (space above and below it).
+    - **Quick playback**: each staff's hold key plays that staff alone
+      (render-only solo) from where the view starts while held; on release the
+      playhead returns. **Hear** (Entry group, Edit menu): each note sounds as
+      it is placed, remembered.
+    - Marketing: docs/marketing-notes.md (quick playback the headline).
+    - **Checks**: chord_mode_checks, chord_palette_checks, note_mouse_checks,
+      view_tools_checks (screenshots 98-102).

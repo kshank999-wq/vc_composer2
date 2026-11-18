@@ -51,6 +51,14 @@ public:
     /// A staff's own room above and below (its slider at the lane's right edge).
     double lane_room(const std::string& track_id) const;
     void set_lane_room(const std::string& track_id, double spaces);
+    /// Quick playback (each staff's hold key): this staff alone from where
+    /// the view starts while held; on release the playhead comes back.
+    void quick_play_start(const std::string& track_id);
+    void quick_play_stop();
+    bool quick_playing() const noexcept { return quick_playing_; }
+    /// Hear each note as it is placed (the Entry group's Hear key); remembered.
+    void set_hear_entry(bool on);
+    bool hear_entry() const noexcept { return hear_entry_; }
     /// The lanes' scroll position (for checks).
     int lanes_scroll() const { return viewport_.getViewPositionY(); }
     /// The checks: answers a marking click instead of the menu (staff, tick).
@@ -174,6 +182,9 @@ private:
     static constexpr double kSpacesPerQuarter = 30.0 / 7.0;
     double spaces_per_quarter_ = kSpacesPerQuarter;  ///< Horizontal zoom (the W slider).
     std::map<std::string, double> lane_room_;          ///< Per staff: extra room above and below, in staff spaces.
+    bool quick_playing_ = false, quick_was_playing_ = false, hear_entry_ = true;
+    Ticks quick_return_ = 0;
+    void sound_note(int midi);
     juce::Slider zoom_w_, zoom_h_;
     juce::Label zoom_w_label_, zoom_h_label_;
     double pixels_per_space_ = kSpaceAt100;
