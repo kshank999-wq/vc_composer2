@@ -1906,7 +1906,8 @@ void composer_lane_checks(MainWindow& window, const juce::File& dir)
     // the instrument and MIDI rows) and a 120 px bar at 100%.
     check(composer.strip_count() > 1 && composer.header(0).getWidth() == composer_ui::TrackHeader::kWidth,
           "each track row starts with its 220 px header");
-    const int row = composer.header(0).getHeight();
+    // The template's Piano (two staves) heads the list; the next is one staff.
+    const int row = composer.header(composer.strip_count() > 1 ? 1 : 0).getHeight();
     check(row == composer_ui::TrackHeader::kMinHeight, "a single-staff row fits its header at 100% (" + juce::String(row) + ")");
     auto& lane0 = composer.lane(0);
     const float bar_px = lane0.x_of_tick(2 * bar) - lane0.x_of_tick(bar);
@@ -4002,8 +4003,8 @@ void chord_mode_checks(MainWindow& window, const juce::File& dir)
     auto& session = ctx.session;
     ctx.engine.stop();
     session.new_empty();
-    // One staff here (the piano's two hands are checked after).
-    const auto piano = session.add_track("Celli", "strings.celli");
+    // One staff here (the piano's two hands are checked after); an instrument that plays chords.
+    const auto piano = session.add_track("Texture", "synth.ambient_texture");
     main.show_workspace(MainComponent::Workspace::Composer);
     if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
     pump(100);
@@ -4132,20 +4133,23 @@ void chord_mode_checks(MainWindow& window, const juce::File& dir)
     check(had_a && selected == 1 && replaced == "C4 E4 G4" && session.undo_label() == "Enter chord C",
           "Replace sel. puts the chord in place of the selected note, as one step (" + replaced + ")");
 
-    // A B-flat clarinet: the chord sounds C E G and is written a tone up, transposed once.
+    // A B-flat clarinet plays one line: Insert writes no chord there. Sent to the
+    // woodwinds, its note (C4 of C E G, close) is written a tone up, transposed once.
     const auto clarinet = session.add_track("Clarinet in Bb", "woodwinds.clarinet_bb");
     session.select_track(clarinet);
     pump(80);
-    {
-        auto cur = composer.cursor();
-        composer.chord_state().octave = 4;
-        palette.refresh();
-        palette.insert_key().triggerClick();
-        pump(50);
-        juce::ignoreUnused(cur);
-    }
+    composer.chord_state().octave = 4;
+    palette.refresh();
+    palette.insert_key().triggerClick();
+    pump(50);
+    const auto refused = notes_at(clarinet, 0);
+    palette.send_box().setSelectedItemIndex(2, juce::sendNotificationSync);
+    palette.insert_key().triggerClick();
+    pump(50);
+    palette.send_box().setSelectedItemIndex(0, juce::sendNotificationSync);
     const auto written = notes_at(clarinet, 0);
-    check(written == "D4 F#4 A4", "on a B-flat clarinet the chord is written a tone up, once (" + written + ")");
+    check(refused.isEmpty() && written == "D4",
+          "on a B-flat clarinet: no chord (one line); sent to the woodwinds, its C4 is written D4, transposed once (" + written + ")");
     check(palette.preview_warning().isEmpty() || palette.preview_warning().contains("range"),
           "the palette names any notes outside the instrument's range");
     composer.set_chord_mode(false);
