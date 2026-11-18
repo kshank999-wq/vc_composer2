@@ -1,4 +1,5 @@
 #include "ui/NewProjectWizard.h"
+#include "ui/RecentProjects.h"
 
 #include <set>
 
@@ -66,7 +67,8 @@ NewProjectWizard::NewProjectWizard(AppContext& context) : context_(context)
     folder_label_.setFont(juce::FontOptions(12.0f));
     choose_folder_.onClick = [this] {
         const juce::Component::SafePointer<NewProjectWizard> safe(this);
-        chooser_ = std::make_unique<juce::FileChooser>("Where to keep the project", folder_);
+        const auto start = folder_ != juce::File() ? folder_ : recent::last_folder();
+        chooser_ = std::make_unique<juce::FileChooser>("Where to keep the project", start);
         chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
                               [safe](const juce::FileChooser& fc) {
                                   if (safe && fc.getResult().isDirectory()) safe->set_folder(fc.getResult());
@@ -158,7 +160,7 @@ void NewProjectWizard::refresh_labels()
 {
     const auto name = juce::String(session::package::safe_name(name_.getText().trim().toStdString()));
     folder_label_.setText(folder_ == juce::File() ? juce::String("Not saved until you choose Save")
-                                                  : "Saved as " + folder_.getChildFile(name).getChildFile(name + ".vcc2").getFullPathName(),
+                                                  : "Saved as " + folder_.getChildFile(name).getChildFile(name + ".vcc").getFullPathName(),
                           juce::dontSendNotification);
     picture_file_.setText(picture_ == juce::File() ? juce::String("No picture (import it later from Picture)")
                                                    : picture_.getFileName(),
@@ -316,6 +318,7 @@ juce::String NewProjectWizard::create()
         return message_;
     }
     context_.engine.locate(0);
+    if (!r.project_file.empty()) recent::remember(juce::File(juce::String(r.project_file)));
     message_ = "Created " + juce::String(s.name);
     if (!r.warnings.empty())
         message_ << " - " << static_cast<int>(r.warnings.size()) << " track(s) use placeholders until you assign sounds (Library)";

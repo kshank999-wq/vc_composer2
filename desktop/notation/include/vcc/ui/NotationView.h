@@ -115,6 +115,16 @@ public:
     /// A note or rest was clicked.
     std::function<void(notation::EventId)> on_event_clicked;
 
+    /// A note was clicked and let go without moving (after `on_event_clicked`
+    /// at the press). Note entry uses it to take the note away again.
+    std::function<void(notation::EventId)> on_event_released;
+
+    /// A note was dragged: where it was picked up and where it was dropped
+    /// (both as entry would read them), for moving it in time and pitch.
+    std::function<void(notation::EventId, const engraving::InsertionPoint& from,
+                       const engraving::InsertionPoint& to)>
+        on_event_dragged;
+
     /// Empty staff was clicked: where a note would be entered (spec 5.2).
     std::function<void(const engraving::InsertionPoint&)> on_staff_clicked;
 
@@ -128,6 +138,8 @@ public:
     void paint(juce::Graphics& graphics) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent& event) override;
+    void mouseDrag(const juce::MouseEvent& event) override;
+    void mouseUp(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event,
                         const juce::MouseWheelDetails& wheel) override;
 
@@ -156,6 +168,12 @@ private:
     notation::Ticks origin_for_playhead() const;
 
     const notation::Score* score_ = nullptr;
+
+    // A note being pressed or dragged.
+    notation::EventId pressed_ = notation::kInvalidEventId;
+    juce::Point<int> press_at_;
+    juce::Point<int> drag_at_;
+    bool dragging_ = false;
 
     engraving::LayoutEngine engine_;
     engraving::TimelineMap timeline_{kDefaultSpacesPerQuarter};

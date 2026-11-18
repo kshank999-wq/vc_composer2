@@ -146,7 +146,7 @@ juce_add_gui_app(VCComposer2
     COMPANY_NAME "VC Software"
     BUNDLE_ID "com.vccomposer.vccomposer2"
     VERSION "${PROJECT_VERSION}"
-    DOCUMENT_EXTENSIONS vcc2
+    DOCUMENT_EXTENSIONS vcc vcc2
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "VC Composer records audio and MIDI input."
     # The app icon (brand/icons): JUCE makes the macOS .icns and the Windows

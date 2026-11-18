@@ -1005,7 +1005,7 @@ juce::File unpack(const juce::File& zip, juce::String& error)
         error = r.getErrorMessage();
         return {};
     }
-    const auto projects = into.findChildFiles(juce::File::findFiles, true, "*.vcc2");
+    const auto projects = into.findChildFiles(juce::File::findFiles, true, "*.vcc;*.vcc2");
     if (projects.isEmpty()) {
         error = zip.getFileName() + " holds no VC Composer project";
         return {};

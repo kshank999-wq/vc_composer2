@@ -1,10 +1,10 @@
 // Collaboration on the desktop (Main Spec §15): what a copy of a shared
 // project keeps beside its file, and the sync itself apart from the network.
 //
-//   <Name>.vcc2               the project, as always
-//   <Name>.vcc2.shared.json   which shared project it is, the composer's
+//   <Name>.vcc                the project, as always
+//   <Name>.vcc.shared.json   which shared project it is, the composer's
 //                             role in it, and the revision it last synced with
-//   <Name>.vcc2.shared-base   that revision's document: the common ancestor a
+//   <Name>.vcc.shared-base   that revision's document: the common ancestor a
 //                             three-way merge needs
 //
 // A sync is pull-then-push. Pull: when the server's head is newer than the

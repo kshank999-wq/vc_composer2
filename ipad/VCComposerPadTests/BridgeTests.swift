@@ -21,7 +21,7 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual(doc.performance().count, 1)
         XCTAssertEqual(doc.undoLabel, "Enter note")
 
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("BridgeTests.vcc2")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("BridgeTests.vcc")
         try doc.save(toPath: url.path)
         let back = try Core.make()
         try back.load(fromPath: url.path)

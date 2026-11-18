@@ -65,7 +65,7 @@ targets:
             UTTypeDescription: VC Composer Project
             UTTypeConformsTo: [public.data, public.content]
             UTTypeTagSpecification:
-              public.filename-extension: [vcc2]
+              public.filename-extension: [vcc, vcc2]
   VCComposerPadTests:
     type: bundle.unit-test
     platform: iOS

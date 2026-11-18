@@ -217,6 +217,9 @@ private:
     /// Which side panels show for the view (none in the Work view).
     void apply_side_visibility();
     juce::PopupMenu layouts_menu();
+    juce::PopupMenu recent_menu();
+    /// Where Open and Save As start: the project's folder, else the last one used.
+    juce::File project_folder_for_dialogs() const;
     void save_layout_as();
     std::unique_ptr<MixerComponent> full_console_;
     Workspace before_mixer_ = Workspace::Producer;  ///< Where Cmd/Ctrl+M returns to.

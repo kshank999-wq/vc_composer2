@@ -114,11 +114,11 @@ struct ScoreScreen: View {
     }
 
     /// Send to Desktop (spec §6.3's first step): the project as the desktop's
-    /// own .vcc2 file, through the share sheet (AirDrop to the Mac, iCloud
+    /// own .vcc file, through the share sheet (AirDrop to the Mac, iCloud
     /// Drive, Files). The desktop opens it as it is.
     private func send() {
         let name = document.core.title.isEmpty ? "Score" : document.core.title
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name + ".vcc2")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name + ".vcc")
         try? FileManager.default.removeItem(at: url)
         do {
             try document.core.save(toPath: url.path)

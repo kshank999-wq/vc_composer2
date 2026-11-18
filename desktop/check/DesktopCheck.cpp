@@ -34,6 +34,8 @@
 #include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
 #include "ui/StudioSetup.h"
+#include "ui/RecentProjects.h"
+#include "ui/Import.h"
 #include "vcc/project/Mackie.h"
 #include "system/PluginWatch.h"
 #include "ui/hw/HwGallery.h"
@@ -276,7 +278,7 @@ void console_and_recording_checks(AppContext& ctx, const juce::File& dir)
     auto& session = ctx.session;
     auto& engine = ctx.engine;
     session.new_empty();
-    const auto project_file = dir.getChildFile("mix-check.vcc2");
+    const auto project_file = dir.getChildFile("mix-check.vcc");
     dir.getChildFile("Audio Files").deleteRecursively();
     std::string error;
     check(session.save_as(project_file.getFullPathName().toStdString(), &error), "the console check project saves");
@@ -625,7 +627,7 @@ void automation_checks(AppContext& ctx, const juce::File& dir, const std::option
     engine.stop();
     session.new_empty();
     std::string error;
-    session.save_as(dir.getChildFile("automation-check.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(dir.getChildFile("automation-check.vcc").getFullPathName().toStdString(), &error);
     engine.prepare_offline(48000.0, 512);
     Rig rig(engine);
     auto T = [&](double seconds) { return session.data().tempo.tick_at_seconds(seconds); };
@@ -932,7 +934,7 @@ void delay_compensation_checks(AppContext& ctx, const juce::File& dir, const std
     engine.stop();
     session.new_empty();
     std::string error;
-    session.save_as(dir.getChildFile("pdc-check.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(dir.getChildFile("pdc-check.vcc").getFullPathName().toStdString(), &error);
     engine.prepare_offline(48000.0, 512);
     engine.set_delay_compensation(true);
     Rig rig(engine);
@@ -1010,7 +1012,7 @@ void delay_compensation_checks(AppContext& ctx, const juce::File& dir, const std
           "turning PDC off is a change to the project, with its own undo step");
     {
         std::string err;
-        const auto path = dir.getChildFile("pdc-off.vcc2").getFullPathName().toStdString();
+        const auto path = dir.getChildFile("pdc-off.vcc").getFullPathName().toStdString();
         session.save_as(path, &err);
         session.set_delay_compensation(true);
         check(session.open(path, &err) && !session.data().delay_compensation, "a project saved with PDC off reopens with it off");
@@ -2139,7 +2141,7 @@ void producer_track_checks(MainWindow& window, const juce::File& dir)
     ctx.engine.stop();
     session.new_from_template("cinematic.horror.psychological");
     std::string error;
-    session.save_as(dir.getChildFile("producer-check.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(dir.getChildFile("producer-check.vcc").getFullPathName().toStdString(), &error);
     main.show_workspace(MainComponent::Workspace::Producer);
     pump(200);
     auto& seq = main.sequencer();
@@ -2266,7 +2268,7 @@ void print_checks(MainWindow& window, const juce::File& dir)
     const auto project_dir = dir.getChildFile("print-check");
     project_dir.deleteRecursively();
     project_dir.createDirectory();
-    session.save_as(project_dir.getChildFile("print.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(project_dir.getChildFile("print.vcc").getFullPathName().toStdString(), &error);
     std::vector<std::string> inst;
     for (const auto* t : session.music_tracks())
         if (t->kind == project::TrackKind::Instrument) inst.push_back(t->id);
@@ -2540,7 +2542,7 @@ void master_checks(MainWindow& window, const juce::File& dir)
     project_dir.deleteRecursively();
     project_dir.createDirectory();
     std::string error;
-    session.save_as(project_dir.getChildFile("master.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(project_dir.getChildFile("master.vcc").getFullPathName().toStdString(), &error);
     std::vector<std::string> inst;
     for (const auto* t : session.music_tracks())
         if (t->kind == project::TrackKind::Instrument) inst.push_back(t->id);
@@ -2810,7 +2812,7 @@ void recording_workflow_checks(MainWindow& window, const juce::File& dir)
     project_dir.deleteRecursively();
     project_dir.createDirectory();
     std::string error;
-    session.save_as(project_dir.getChildFile("rec.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(project_dir.getChildFile("rec.vcc").getFullPathName().toStdString(), &error);
     engine.prepare_offline(48000.0, 512);
     Rig rig(engine);
     juce::String last_message;
@@ -3062,7 +3064,7 @@ void clip_editing_checks(MainWindow& window, const juce::File& dir)
     project_dir.deleteRecursively();
     project_dir.getChildFile("Audio Files").createDirectory();
     std::string error;
-    session.save_as(project_dir.getChildFile("clips.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(project_dir.getChildFile("clips.vcc").getFullPathName().toStdString(), &error);
     // A 4 s, 440 Hz mono tone at 48 kHz.
     const auto tone = project_dir.getChildFile("Audio Files").getChildFile("tone.wav");
     auto sine = [](std::int64_t i) { return 0.5f * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * 440.0 * i / 48000.0)); };
@@ -3197,7 +3199,7 @@ void edit_mode_checks(MainWindow& window, const juce::File& dir)
     project_dir.deleteRecursively();
     project_dir.getChildFile("Audio Files").createDirectory();
     std::string error;
-    session.save_as(project_dir.getChildFile("modes.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(project_dir.getChildFile("modes.vcc").getFullPathName().toStdString(), &error);
     const auto tone = project_dir.getChildFile("Audio Files").getChildFile("tone.wav");
     {
         juce::AudioBuffer<float> b(1, 4 * 48000);
@@ -3383,7 +3385,7 @@ void midi_tools_checks(MainWindow& window, const juce::File& dir)
     project_dir.deleteRecursively();
     project_dir.createDirectory();
     std::string error;
-    session.save_as(project_dir.getChildFile("midi.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(project_dir.getChildFile("midi.vcc").getFullPathName().toStdString(), &error);
     engine.prepare_offline(48000.0, 512);
     Rig rig(engine);
     const auto& d = session.data();
@@ -3588,7 +3590,7 @@ void drag_drop_checks(MainWindow& window, const juce::File& dir)
     project_dir.deleteRecursively();
     project_dir.createDirectory();
     std::string error;
-    session.save_as(project_dir.getChildFile("drop.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(project_dir.getChildFile("drop.vcc").getFullPathName().toStdString(), &error);
     // The files, somewhere outside the project.
     const auto source = dir.getChildFile("drop-source");
     source.deleteRecursively();
@@ -3733,7 +3735,7 @@ void drag_drop_checks(MainWindow& window, const juce::File& dir)
     {
         session.new_from_template("cinematic.horror.psychological");
         std::string e2;
-        const auto xml_project = source.getChildFile("xml-source.vcc2");
+        const auto xml_project = source.getChildFile("xml-source.vcc");
         session.save_as(xml_project.getFullPathName().toStdString(), &e2);
         main.show_workspace(MainComponent::Workspace::Composer);
         pump(50);
@@ -5496,7 +5498,7 @@ void package_checks(MainWindow& window, const juce::File& dir)
     session.add_audio_clips({{pad, a}, {pad, c}, {pad, lost}}, "Import", false);
     const auto horn = session.add_track("Horn", "brass.horn_f");
     session.update_track_mix(horn, "Library", [](project::Track& t) { t.plugin_requirements = {"Spitfire Symphonic Brass"}; });
-    session.save_as(project_dir.getChildFile("Cue 2M1.vcc2").getFullPathName().toStdString());
+    session.save_as(project_dir.getChildFile("Cue 2M1.vcc").getFullPathName().toStdString());
 
     ctx.commands.invokeDirectly(cmd::collectPackage, false);
     auto* panel = review::package_panel();
@@ -5719,7 +5721,7 @@ void articulation_map_checks(MainWindow& window, const juce::File& dir)
     // A plug-in this machine does not have: the project opens and says so.
     project::PluginRef ghost{"VST3", "VST3-Ghost Strings-0000", "Ghost Strings", "Nobody", "c3RhdGU="};
     session.set_instrument_plugin(vln, ghost);
-    const auto file = dir.getChildFile("missing-instrument.vcc2");
+    const auto file = dir.getChildFile("missing-instrument.vcc");
     session.save_as(file.getFullPathName().toStdString());
     session.new_empty();
     main.open_file(file);
@@ -5777,7 +5779,7 @@ void wizard_checks(MainWindow& window, const juce::File& dir)
     shoot(*wizard->getTopLevelComponent(), dir, "60-new-project");
     const auto error = wizard->create();
     const auto& d = session.data();
-    const auto file = folder.getChildFile("2M3 Chase/2M3 Chase.vcc2");
+    const auto file = folder.getChildFile("2M3 Chase/2M3 Chase.vcc");
     check(error.isEmpty() && file.existsAsFile() && juce::File(juce::String(session.path())) == file,
           "Create saves the project in a folder of its own: " + (error.isEmpty() ? file.getFullPathName() : error));
     check(d.name == "2M3 Chase" && d.key == "E minor" && d.meter.at_bar(1) == TimeSignature{7, 8} &&
@@ -5809,7 +5811,7 @@ void mix_tools_checks(MainWindow& window, const juce::File& dir)
     const auto folder = dir.getChildFile("mixtools-check");
     folder.deleteRecursively();
     folder.createDirectory();
-    session.save_as(folder.getChildFile("Mix.vcc2").getFullPathName().toStdString());
+    session.save_as(folder.getChildFile("Mix.vcc").getFullPathName().toStdString());
     engine.prepare_offline(48000.0, 512);
     Rig rig(engine);
     const auto a = session.add_audio_track("Tone A", false);
@@ -5945,7 +5947,7 @@ void edit_tools_checks(MainWindow& window, const juce::File& dir)
     const auto folder = dir.getChildFile("edit-check");
     folder.deleteRecursively();
     folder.createDirectory();
-    session.save_as(folder.getChildFile("Edit.vcc2").getFullPathName().toStdString());
+    session.save_as(folder.getChildFile("Edit.vcc").getFullPathName().toStdString());
     const auto wav = folder.getChildFile("Audio Files/Ramp.wav");
     wav.getParentDirectory().createDirectory();
     const int len = 48000;
@@ -6612,7 +6614,7 @@ private:
             return answer(200, json::Object{{"url", (url() + "/storage/media/" + id + "/" + parts[3]).toStdString()}, {"sizeBytes", 1}});
         }
         if (parts[2] == "upload") {
-            const auto key = id + "/" + juce::Uuid().toDashedString() + ".vcc2";
+            const auto key = id + "/" + juce::Uuid().toDashedString() + ".vcc";
             return answer(200, json::Object{{"path", key.toStdString()}, {"url", (url() + "/storage/" + key).toStdString()},
                                             {"token", "t"}, {"head", static_cast<long long>(p.revisions.size())}});
         }
@@ -7061,6 +7063,116 @@ void mixer_controller_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
 }
 
+void note_mouse_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& session = window.context().session;
+    session.new_empty();
+    const auto track = session.add_track("Flute", "flute");
+    session.select_track(track);
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(300);
+    auto& composer = main.composer();
+    if (!composer.note_entry()) composer.perform(composer::Command::ToggleKeyboardEntryMode);
+    pump(100);
+    std::function<vcc::ui::NotationView*(juce::Component&)> find_view = [&](juce::Component& c) -> vcc::ui::NotationView* {
+        if (auto* v = dynamic_cast<vcc::ui::NotationView*>(&c); v && v->isShowing()) return v;
+        for (auto* k : c.getChildren())
+            if (auto* v = find_view(*k)) return v;
+        return nullptr;
+    };
+    auto* view = find_view(composer);
+    if (view == nullptr) {
+        check(false, "the Flute staff is on screen");
+        return;
+    }
+    auto notes = [&] {
+        std::vector<notation::ScoreNote> out;
+        if (const auto* t = session.data().find_track(track))
+            for (const auto& n : t->active_version()->score.notes(0))
+                if (!n.is_rest) out.push_back(n);
+        return out;
+    };
+    auto click = [&](juce::Point<float> p) {
+        view->mouseDown(mouse_event(*view, p, p, false));
+        view->mouseUp(mouse_event(*view, p, p, false));
+        pump(150);
+    };
+    // A note placed by a click on the staff...
+    const float x = view->x_of_tick(notation::kTicksPerQuarter);
+    const float y = view->y_of_staff_position(0, 4.0);  // the middle line
+    click({x, y});
+    auto placed = notes();
+    check(placed.size() == 1, "a click on the staff places a note (" + juce::String(static_cast<int>(placed.size())) + ")");
+    if (placed.size() != 1) return;
+    // ...goes away when it is clicked again.
+    auto head = view->notehead_bounds(placed[0].id);
+    check(!head.isEmpty(), "its head is on screen");
+    click(head.getCentre());
+    check(notes().empty(), "clicking the placed note again takes it away");
+    shoot(main, dir, "89-note-clicked-away", true);
+
+    // Dragged: later in time and higher in pitch.
+    click({x, y});
+    placed = notes();
+    if (placed.size() != 1) {
+        check(false, "a note to drag");
+        return;
+    }
+    head = view->notehead_bounds(placed[0].id);
+    const auto to = juce::Point<float>(head.getCentreX() + view->x_of_tick(3 * notation::kTicksPerQuarter) -
+                                           view->x_of_tick(notation::kTicksPerQuarter),
+                                       view->y_of_staff_position(0, 6.0));  // two steps up, two beats later
+    drag(*view, head.getCentre(), to);
+    auto moved = notes();
+    check(moved.size() == 1 && moved[0].start_tick == placed[0].start_tick + 2 * notation::kTicksPerQuarter &&
+              notation::diatonic_index(moved[0].pitch) == notation::diatonic_index(placed[0].pitch) + 2,
+          "dragging a note moves it later and up (tick " + juce::String(moved.empty() ? -1 : static_cast<int>(moved[0].start_tick)) +
+              ")");
+    check(session.undo_label().find("Move") != std::string::npos || session.can_undo(), "the move can be undone");
+
+    // Select all, then Delete.
+    click({view->x_of_tick(0), y});
+    check(notes().size() == 2, "two notes on the staff");
+    composer.perform(composer::Command::SelectAll);
+    composer.perform(composer::Command::DeleteSelection);
+    pump(150);
+    check(notes().empty(), "Select All then Delete empties the staff");
+    session.new_empty();
+}
+
+void project_file_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& session = window.context().session;
+    // Projects are .vcc; earlier previews' .vcc2 still open.
+    check(is_project_file(juce::File("/x/Cue.vcc")) && is_project_file(juce::File("/x/Old.vcc2")) &&
+              !is_project_file(juce::File("/x/a.wav")),
+          "project files: .vcc (and .vcc2 from earlier previews)");
+    session::ProjectSetup setup;
+    setup.name = "Drive Cue";
+    const auto other_drive = dir.getChildFile("Other Drive");
+    other_drive.deleteRecursively();
+    setup.folder = other_drive.getFullPathName().toStdString();
+    const auto r = session.create_project(setup);
+    check(r.ok && juce::String(r.project_file).endsWith("Drive Cue/Drive Cue.vcc"), "a new project is saved as .vcc (" + juce::String(r.project_file) + ")");
+    // Opened from another drive: remembered there, for Open Recent and the next Save As.
+    recent::clear();
+    main.open_file(juce::File(juce::String(r.project_file)));
+    pump(100);
+    const auto list = recent::projects();
+    check(!list.isEmpty() && list[0] == juce::String(r.project_file), "Open Recent lists it where it lives");
+    check(recent::last_folder() == juce::File(juce::String(r.project_file)).getParentDirectory(),
+          "the next Open or Save As starts in its folder");
+    // A legacy .vcc2 still opens.
+    const auto legacy = other_drive.getChildFile("Legacy.vcc2");
+    std::string error;
+    check(session.save_as(legacy.getFullPathName().toStdString(), &error), "a .vcc2 copy saves " + juce::String(error));
+    main.open_file(legacy);
+    check(session.path() == legacy.getFullPathName().toStdString(), "and opens");
+    session.new_empty();
+}
+
 void updater_checks(MainWindow& window, const juce::File& dir)
 {
     auto& ctx = window.context();
@@ -7298,7 +7410,7 @@ void collab_checks(MainWindow& window, const juce::File& dir)
         d.pictures.push_back(pv);
         return true;
     });
-    const auto file = root.getChildFile("Ann").getChildFile("Night Cue").getChildFile("Night Cue.vcc2");
+    const auto file = root.getChildFile("Ann").getChildFile("Night Cue").getChildFile("Night Cue.vcc");
     file.getParentDirectory().createDirectory();
     check(session.save_as(file.getFullPathName().toStdString()), "the project is saved before sharing");
     const auto path = session.path();
@@ -7455,7 +7567,7 @@ void collab_checks(MainWindow& window, const juce::File& dir)
             got = true;
         });
         wait_for([&] { return got; }, 20000);
-        const auto there = elsewhere.getChildFile("Night Cue").getChildFile("Night Cue.vcc2");
+        const auto there = elsewhere.getChildFile("Night Cue").getChildFile("Night Cue.vcc");
         check(session.path() == there.getFullPathName().toStdString() && has_track(session, "Harp") &&
                   shared::read_link(session.path()).has_value() && session.data().site == collab::Controller::site(),
               "Open Shared Project downloads the latest revision, opens it, and it syncs from there: " + opened.message);
@@ -7752,7 +7864,7 @@ void freeze_checks(MainWindow& window, const juce::File& dir)
     folder.deleteRecursively();
     folder.createDirectory();
     std::string error;
-    session.save_as(folder.getChildFile("Freeze.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(folder.getChildFile("Freeze.vcc").getFullPathName().toStdString(), &error);
     ctx.engine.prepare_offline(48000.0, 512);
     const auto t = session.add_track("Violins", "strings.violins_1");
     if (!session.set_instrument_plugin(t, *instrument)) {
@@ -8029,7 +8141,7 @@ void usage_checks(MainWindow& window, const juce::File& dir)
     folder.deleteRecursively();
     folder.createDirectory();
     std::string error;
-    session.save_as(folder.getChildFile("Usage.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(folder.getChildFile("Usage.vcc").getFullPathName().toStdString(), &error);
     std::map<std::string, std::string> ids;
     for (const auto& [name, std_id] : std::vector<std::pair<std::string, std::string>>{
              {"Violins", "strings.violins_1"}, {"Horns", "brass.horn_section"}, {"Flute", "woodwinds.flute"}, {"Piano", "keys.piano"}}) {
@@ -8206,7 +8318,7 @@ void relink_checks(MainWindow& window, const juce::File& dir)
         return c;
     };
     session.add_audio_clips({{track, clip(pad, 0.0)}, {track, clip(choir, 1.0)}, {track, clip(hit, 2.0)}}, "Import", false);
-    const auto project_file = project_dir.getChildFile("Cue 3M2.vcc2");
+    const auto project_file = project_dir.getChildFile("Cue 3M2.vcc");
     session.save_as(project_file.getFullPathName().toStdString());
     session.new_empty();
 
@@ -8390,7 +8502,7 @@ void scrub_checks(MainWindow& window, const juce::File& dir)
     const auto project_dir = dir.getChildFile("scrub-check");
     project_dir.deleteRecursively();
     project_dir.getChildFile("Audio Files").createDirectory();
-    session.save_as(project_dir.getChildFile("scrub.vcc2").getFullPathName().toStdString());
+    session.save_as(project_dir.getChildFile("scrub.vcc").getFullPathName().toStdString());
     {
         const auto tone = project_dir.getChildFile("Audio Files/tone.wav");
         juce::AudioBuffer<float> b(1, 8 * 48000);
@@ -8601,7 +8713,7 @@ void perf_checks(MainWindow& window, const juce::File& dir)
     pump(150);
     paint_ms(main.sequencer());
     const double producer_paint = paint_ms(main.sequencer());
-    const auto file = dir.getChildFile("perf-check.vcc2");
+    const auto file = dir.getChildFile("perf-check.vcc");
     t0 = juce::Time::getMillisecondCounterHiRes();
     session.save_as(file.getFullPathName().toStdString());
     const double save = ms_since(t0);
@@ -8946,7 +9058,7 @@ void realtime_print_checks(MainWindow& window, const juce::File& dir)
     project_dir.deleteRecursively();
     project_dir.createDirectory();
     std::string error;
-    session.save_as(project_dir.getChildFile("rt.vcc2").getFullPathName().toStdString(), &error);
+    session.save_as(project_dir.getChildFile("rt.vcc").getFullPathName().toStdString(), &error);
     main.show_workspace(MainComponent::Workspace::Producer);
     pump(100);
     // New track > MIDI makes a MIDI track.
@@ -9122,7 +9234,7 @@ void hosting_checks(AppContext& ctx, const juce::File& dir)
     session::Session s(ctx.catalogs);
     s.new_empty();
     std::string error;
-    s.save_as(dir.getChildFile("hosting-check.vcc2").getFullPathName().toStdString(), &error);
+    s.save_as(dir.getChildFile("hosting-check.vcc").getFullPathName().toStdString(), &error);
     // A steady tone on an audio track, through the plug-in that crashes when
     // its gain is turned all the way down.
     const auto file = dir.getChildFile("Audio Files").getChildFile("tone.wav");
@@ -9387,7 +9499,9 @@ int main(int argc, char** argv)
                 {"layout_checks", layout_checks},
                 {"studio_checks", studio_checks},
                 {"plugin_watch_checks", plugin_watch_checks},
-                {"mixer_controller_checks", mixer_controller_checks}};
+                {"mixer_controller_checks", mixer_controller_checks},
+                {"note_mouse_checks", note_mouse_checks},
+                {"project_file_checks", project_file_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -9942,7 +10056,7 @@ int main(int argc, char** argv)
         }
 
         // Save and reopen.
-        const auto file = dir.getChildFile("check.vcc2");
+        const auto file = dir.getChildFile("check.vcc");
         std::string error;
         check(session.save_as(file.getFullPathName().toStdString(), &error), "project saves");
         check(session.open(file.getFullPathName().toStdString(), &error), "project reopens");
@@ -10067,6 +10181,10 @@ int main(int argc, char** argv)
         plugin_watch_checks(window, dir);
         section("mixer_controller_checks");
         mixer_controller_checks(window, dir);
+        section("note_mouse_checks");
+        note_mouse_checks(window, dir);
+        section("project_file_checks");
+        project_file_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

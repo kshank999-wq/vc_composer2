@@ -120,6 +120,9 @@ private:
     void changeListenerCallback(juce::ChangeBroadcaster*) override { apply_colours(); }
     void timerCallback() override;
     void strip_clicked(Strip& strip, const engraving::InsertionPoint* point, notation::EventId id);
+    void note_released(Strip& strip, notation::EventId id);
+    void note_dragged(Strip& strip, notation::EventId id, const engraving::InsertionPoint& from,
+                      const engraving::InsertionPoint& to);
     Ticks visible_ticks() const;
     engraving::LayoutOptions lane_layout() const;
 

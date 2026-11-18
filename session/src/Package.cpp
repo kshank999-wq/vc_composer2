@@ -255,7 +255,7 @@ Result collect(const project::Project& project, const std::string& project_path,
             else if (!is_absolute(p.path)) p.path = resolve(p.path, project_path);  // left out: still found here
         }
     });
-    const std::string file_name = safe_name(d.name) + ".vcc2";
+    const std::string file_name = safe_name(d.name) + ".vcc";
     res.project_file = (root / fs::u8path(file_name)).generic_u8string();
     std::string err;
     if (!out.save(res.project_file, &err)) return fail("could not save the project: " + err);

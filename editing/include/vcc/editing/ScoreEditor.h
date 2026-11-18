@@ -231,6 +231,13 @@ public:
     EditResult transpose_selection(int diatonic_steps);
     EditResult transpose_selection_octaves(int octaves);
 
+    /// Moves notes by dragging: the note `anchor` - with the rest of the
+    /// selection when it is selected - later or earlier by `tick_delta` and
+    /// up or down by `diatonic_steps` (spelled by the key in force). What the
+    /// moved notes land on in their voice is replaced, as entry replaces it.
+    /// One undo step; the moved notes are selected afterwards.
+    EditResult move_notes(notation::EventId anchor, notation::Ticks tick_delta, int diatonic_steps);
+
     EditResult toggle_articulation(notation::Articulation articulation);
 
     /// Ties the selection into what follows. With no selection this sets

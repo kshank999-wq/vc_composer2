@@ -33,6 +33,7 @@
 #include "ui/Dialogs.h"
 #include "system/PluginWatch.h"
 #include "ui/StudioSetup.h"
+#include "ui/RecentProjects.h"
 #include "ui/Import.h"
 #include "ui/console/ConsoleView.h"
 #include "ui/ScoreExchange.h"
@@ -1053,6 +1054,38 @@ void MainComponent::open_package(const juce::File& zip)
                     " (its Package Report.txt lists the plug-ins and libraries it needs)");
 }
 
+
+juce::File MainComponent::project_folder_for_dialogs() const
+{
+    // The project's own folder; else the last place a project was saved or
+    // opened; else Documents.
+    if (const auto path = context_.session.path(); !path.empty()) {
+        const auto dir = juce::File(juce::String(path)).getParentDirectory();
+        if (dir.isDirectory()) return dir;
+    }
+    const juce::File last = recent::last_folder();
+    if (last.isDirectory()) return last;
+    return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+}
+
+juce::PopupMenu MainComponent::recent_menu()
+{
+    juce::PopupMenu m;
+    for (const auto& path : recent::projects()) {
+        const juce::File f(path);
+        m.addItem(f.getFileNameWithoutExtension() + "  -  " + f.getParentDirectory().getFullPathName(), f.existsAsFile(),
+                  false, [this, f] {
+                      if (confirm_discard()) open_file(f);
+                  });
+    }
+    if (m.getNumItems() == 0) m.addItem("No recent projects", false, false, [] {});
+    else {
+        m.addSeparator();
+        m.addItem("Clear Recent", [] { recent::clear(); });
+    }
+    return m;
+}
+
 void MainComponent::open_file(const juce::File& file)
 {
     std::string path = file.getFullPathName().toStdString();
@@ -1073,6 +1106,7 @@ void MainComponent::open_file(const juce::File& file)
         context_.session.edit("Recovered from autosave", [](project::ProjectData&) { return true; });
     }
     context_.engine.locate(0);
+    recent::remember(juce::File(juce::String(context_.session.path())));
     const auto missing = session::relink::missing(context_.session.data(), context_.session.path()).size();
     context_.status("Opened " + file.getFileName() +
                     (missing > 0 ? " - " + juce::String(static_cast<int>(missing)) +
@@ -1094,18 +1128,22 @@ bool MainComponent::save(bool save_as)
     capture_plugin_states();
     std::string path = context_.session.path();
     if (save_as || path.empty()) {
-        juce::FileChooser chooser("Save project", juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-                                                      .getChildFile(juce::String(context_.session.data().name) + ".vcc2"),
-                                  "*.vcc2");
+        // Starts where this project lives (another drive, a cloud folder),
+        // or where the last one was saved.
+        juce::FileChooser chooser("Save project",
+                                  project_folder_for_dialogs().getChildFile(
+                                      juce::File::createLegalFileName(juce::String(context_.session.data().name)) + ".vcc"),
+                                  "*.vcc");
         if (!chooser.browseForFileToSave(true)) return false;
-        path = chooser.getResult().withFileExtension("vcc2").getFullPathName().toStdString();
+        path = chooser.getResult().withFileExtension("vcc").getFullPathName().toStdString();
     }
     std::string error;
     if (!context_.session.save_as(path, &error)) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Could not save", error);
         return false;
     }
-    context_.status("Saved " + juce::File(path).getFileName());
+    recent::remember(juce::File(juce::String(path)));
+    context_.status("Saved " + juce::File(path).getFullPathName());
     return true;
 }
 
@@ -2333,7 +2371,7 @@ bool MainComponent::perform(const InvocationInfo& info)
             break;
         case cmd::open:
             if (!confirm_discard()) break;
-            chooser_ = std::make_unique<juce::FileChooser>("Open project", juce::File(), "*.vcc2");
+            chooser_ = std::make_unique<juce::FileChooser>("Open project", project_folder_for_dialogs(), "*.vcc;*.vcc2");
             chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                                   [this](const juce::FileChooser& fc) {
                                       if (fc.getResult() != juce::File()) open_file(fc.getResult());
@@ -2565,8 +2603,10 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
     const int index = juce::StringArray{"File", "Edit", "View", "Transport", "Track", "Tools", "Help", "Templates", "Window", "Studio"}.indexOf(name);
     switch (index) {
         case 0:
-            for (auto id : {cmd::newProjectWizard, cmd::newFromTemplate, cmd::newProject, cmd::open, cmd::openPackage})
+            for (auto id : {cmd::newProjectWizard, cmd::newFromTemplate, cmd::newProject, cmd::open})
                 m.addCommandItem(c, id);
+            m.addSubMenu("Open Recent", recent_menu());
+            m.addCommandItem(c, cmd::openPackage);
             m.addSeparator();
             for (auto id : {cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart})
                 m.addCommandItem(c, id);

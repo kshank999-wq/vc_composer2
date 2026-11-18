@@ -414,7 +414,7 @@ TEST_CASE("new project setup: template defaults overridden, timecode and sample 
     setup.sample_rate = 96000;
     const auto r = s.create_project(setup);
     REQUIRE(r.ok);
-    CHECK_EQ(r.project_file, root + "/1M1 Arrival/1M1 Arrival.vcc2");
+    CHECK_EQ(r.project_file, root + "/1M1 Arrival/1M1 Arrival.vcc");
     CHECK(std::filesystem::exists(r.project_file));
     CHECK_EQ(s.path(), r.project_file);
     CHECK_EQ(s.data().name, std::string("1M1 Arrival"));

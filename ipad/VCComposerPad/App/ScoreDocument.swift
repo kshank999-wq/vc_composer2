@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension UTType {
-    /// The desktop's project file (.vcc2), unchanged: a score saved here opens
+    /// The desktop's project file (.vcc), unchanged: a score saved here opens
     /// on the desktop as it is, and the other way round.
     static let vccProject = UTType(exportedAs: "com.vccomposer.project")
 }
@@ -39,7 +39,7 @@ final class ScoreDocument: ReferenceFileDocument {
     required init(configuration: ReadConfiguration) throws {
         core = try Core.make()
         guard let data = configuration.file.regularFileContents else { throw CocoaError(.fileReadCorruptFile) }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".vcc2")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".vcc")
         try data.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
         try core.load(fromPath: url.path)
@@ -47,7 +47,7 @@ final class ScoreDocument: ReferenceFileDocument {
     }
 
     func snapshot(contentType: UTType) throws -> Data {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".vcc2")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".vcc")
         defer { try? FileManager.default.removeItem(at: url) }
         try core.save(toPath: url.path)
         return try Data(contentsOf: url)

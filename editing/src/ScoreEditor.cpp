@@ -1,3 +1,4 @@
+#include <limits>
 #include "vcc/editing/ScoreEditor.h"
 
 #include <algorithm>
@@ -862,6 +863,83 @@ EditResult ScoreEditor::delete_selection()
     selection_.clear();
     history_.commit(cursor_);
     return applied("Deleted", removed);
+}
+
+EditResult ScoreEditor::move_notes(notation::EventId anchor, notation::Ticks tick_delta, int diatonic_steps)
+{
+    if (tick_delta == 0 && diatonic_steps == 0)
+        return nothing("The note did not move");
+    const bool group = std::find(selection_.begin(), selection_.end(), anchor) != selection_.end();
+    const std::vector<notation::EventId> ids = group ? selection_ : std::vector<notation::EventId>{anchor};
+
+    struct Moving {
+        std::size_t staff;
+        notation::ScoreNote note;
+    };
+    std::vector<Moving> moving;
+    notation::Ticks earliest = std::numeric_limits<notation::Ticks>::max();
+    for (const notation::EventId id : ids) {
+        const notation::ScoreNote* n = score_->find_note(id);
+        if (n == nullptr || n->is_rest)
+            continue;
+        moving.push_back({score_->staff_index_of(id), *n});
+        earliest = std::min(earliest, n->start_tick);
+    }
+    if (moving.empty())
+        return nothing("Nothing to move");
+    // Never before the start of the score.
+    if (earliest + tick_delta < 0)
+        tick_delta = -earliest;
+
+    // Where each lands, checked before anything changes.
+    for (auto& m : moving) {
+        notation::ScoreNote& n = m.note;
+        n.start_tick += tick_delta;
+        if (diatonic_steps != 0) {
+            const int diatonic = notation::diatonic_index(n.pitch) + diatonic_steps;
+            if (diatonic < 0)
+                return refused("A note would go below the lowest pitch");
+            notation::Pitch moved;
+            moved.octave = static_cast<std::int8_t>(diatonic / 7);
+            moved.step = static_cast<notation::Step>(diatonic % 7);
+            moved.alteration =
+                static_cast<std::int8_t>(score_->key_signature_at(n.start_tick).alteration_for(moved.step));
+            if (!moved.is_valid() || notation::midi_note_number(moved) < 0 || notation::midi_note_number(moved) > 127)
+                return refused("A note would go out of range");
+            n.pitch = moved;
+        }
+        // A tie into a note that stays behind no longer holds.
+        if (tick_delta != 0)
+            n.tied_to_next = false;
+    }
+
+    history_.begin(tick_delta != 0 ? "Move notes" : "Transpose", cursor_);
+    for (const auto& m : moving)
+        remove_recorded(m.note.id);
+    // What they land on in their voice gives way (cleared first, so moved
+    // chord members never clear each other).
+    if (tick_delta != 0)
+        for (const auto& m : moving)
+            if (!m.note.grace)
+                clear_span_on(m.staff, m.note.start_tick, m.note.end_tick(), m.note.voice);
+    std::vector<notation::EventId> placed;
+    for (auto m : moving) {
+        m.note.id = notation::kInvalidEventId;
+        const notation::EventId id = insert_recorded(m.staff, m.note);
+        if (id != notation::kInvalidEventId)
+            placed.push_back(id);
+    }
+    if (placed.empty()) {
+        history_.abandon();
+        return refused("The notes could not be placed there");
+    }
+    selection_ = placed;
+    if (const notation::ScoreNote* first = score_->find_note(placed.front())) {
+        cursor_.tick = first->start_tick;
+        cursor_.staff_index = score_->staff_index_of(placed.front());
+    }
+    history_.commit(cursor_);
+    return applied(tick_delta != 0 ? "Moved" : "Transposed", placed.size());
 }
 
 EditResult ScoreEditor::transpose_selection(int diatonic_steps)

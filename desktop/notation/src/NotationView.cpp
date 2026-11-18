@@ -263,6 +263,14 @@ void NotationView::paint(juce::Graphics& graphics)
         graphics.fillRect(static_cast<float>(x - 1.0), 0.0f, 2.0f,
                           static_cast<float>(getHeight()));
     }
+
+    if (dragging_) {
+        // Where the dragged note will land: a ghost head under the pointer.
+        const float space = static_cast<float>(settings_.pixels_per_staff_space);
+        const auto c = drag_at_.toFloat();
+        graphics.setColour(settings_.colours.playhead.withAlpha(0.55f));
+        graphics.fillEllipse(c.x - space * 0.65f, c.y - space * 0.5f, space * 1.3f, space);
+    }
 }
 
 void NotationView::mouseDown(const juce::MouseEvent& event)
@@ -275,15 +283,63 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
 
     const engraving::HitResult hit = engraving::hit_test(layout_, point);
     if (hit.id != notation::kInvalidEventId) {
+        // Pressed: selected now; let go in place, or dragged (mouseUp).
+        pressed_ = hit.id;
+        press_at_ = drag_at_ = event.getPosition();
+        dragging_ = false;
         if (on_event_clicked)
             on_event_clicked(hit.id);
         return;
     }
+    pressed_ = notation::kInvalidEventId;
 
     const engraving::InsertionPoint insertion =
         engraving::insertion_point_at(layout_, *score_, timeline_, point, entry_grid_);
     if (insertion.valid && on_staff_clicked)
         on_staff_clicked(insertion);
+}
+
+void NotationView::mouseDrag(const juce::MouseEvent& event)
+{
+    if (pressed_ == notation::kInvalidEventId)
+        return;
+    drag_at_ = event.getPosition();
+    if (!dragging_ && drag_at_.getDistanceFrom(press_at_) > 4) {
+        dragging_ = true;
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+    }
+    if (dragging_)
+        repaint();
+}
+
+void NotationView::mouseUp(const juce::MouseEvent& event)
+{
+    const notation::EventId id = pressed_;
+    const bool dragged = dragging_;
+    pressed_ = notation::kInvalidEventId;
+    dragging_ = false;
+    setMouseCursor(juce::MouseCursor::NormalCursor);
+    if (id == notation::kInvalidEventId || score_ == nullptr)
+        return;
+    if (!dragged) {
+        if (on_event_released)
+            on_event_released(id);
+        return;
+    }
+    repaint();
+    relayout_if_needed();
+    // Measured from the note's own start, not from where on its head it was
+    // grabbed: a drag of two beats moves it exactly two beats.
+    juce::Point<int> pick = press_at_, drop = event.getPosition();
+    if (const auto* n = score_->find_note(id)) {
+        const int start_x = juce::roundToInt(x_of_tick(n->start_tick));
+        drop.x -= pick.x - start_x;
+        pick.x = start_x;
+    }
+    const auto from = engraving::insertion_point_at(layout_, *score_, timeline_, to_staff_spaces(pick), entry_grid_);
+    const auto to = engraving::insertion_point_at(layout_, *score_, timeline_, to_staff_spaces(drop), entry_grid_);
+    if (from.valid && to.valid && on_event_dragged)
+        on_event_dragged(id, from, to);
 }
 
 void NotationView::mouseWheelMove(const juce::MouseEvent& event,

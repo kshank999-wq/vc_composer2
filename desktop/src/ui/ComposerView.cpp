@@ -43,6 +43,9 @@ public:
         view_.setWantsKeyboardFocus(false);
         view_.on_staff_clicked = [this](const engraving::InsertionPoint& p) { owner_.strip_clicked(*this, &p, 0); };
         view_.on_event_clicked = [this](notation::EventId id) { owner_.strip_clicked(*this, nullptr, id); };
+        view_.on_event_released = [this](notation::EventId id) { owner_.note_released(*this, id); };
+        view_.on_event_dragged = [this](notation::EventId id, const engraving::InsertionPoint& from,
+                                        const engraving::InsertionPoint& to) { owner_.note_dragged(*this, id, from, to); };
         view_.on_zoom_requested = [this](bool larger) { owner_.zoom(larger); };
         view_.on_scrolled = [this](Ticks origin) { owner_.set_origin(origin); };
     }
@@ -514,6 +517,27 @@ void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* 
         if (note_entry_) handle(editor_->insert_pitch(point->pitch));
         else apply_view_settings();
     }
+}
+
+void ComposerView::note_released(Strip& strip, notation::EventId id)
+{
+    // Note entry: a note clicked again (not dragged) is taken away - no
+    // need to reach for Delete after a wrong note.
+    if (!editor_ || strip.track_id() != editing_track_ || !note_entry_ || chord_mode_) return;
+    const auto* n = working_.find_note(id);
+    if (n == nullptr || n->is_rest) return;
+    editor_->set_selection({id});
+    handle(editor_->delete_selection());
+}
+
+void ComposerView::note_dragged(Strip& strip, notation::EventId id, const engraving::InsertionPoint& from,
+                                const engraving::InsertionPoint& to)
+{
+    // Dragging a note (or the selection it belongs to) moves it in time and pitch.
+    if (!editor_ || strip.track_id() != editing_track_) return;
+    note_activity();
+    const int steps = notation::diatonic_index(to.pitch) - notation::diatonic_index(from.pitch);
+    handle(editor_->move_notes(id, to.tick - from.tick, steps));
 }
 
 void ComposerView::set_playhead(Ticks tick, bool playing)

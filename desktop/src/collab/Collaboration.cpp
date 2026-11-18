@@ -429,7 +429,7 @@ void Controller::open_shared(const ProjectSummary& project, const juce::File& fo
     if (project.head < 1) return done({false, "Nothing has been pushed to \"" + project.name + "\" yet"});
     const auto safe = juce::File::createLegalFileName(project.name).trim();
     const auto dir = folder.getChildFile(safe.isEmpty() ? juce::String("Shared Project") : safe);
-    const auto file = dir.getChildFile(dir.getFileName() + ".vcc2");
+    const auto file = dir.getChildFile(dir.getFileName() + ".vcc");
     if (file.existsAsFile() && !shared::read_link(file.getFullPathName().toStdString()))
         return done({false, file.getFullPathName() + " already exists and is not this shared project: choose another folder"});
     busy_ = true;

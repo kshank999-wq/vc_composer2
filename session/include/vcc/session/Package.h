@@ -2,7 +2,7 @@
 // packages"): collect a project and the media it uses into one folder that
 // opens anywhere, and say what it still needs there.
 //
-//   <Name>/<Name>.vcc2        the project, its media paths made relative
+//   <Name>/<Name>.vcc         the project, its media paths made relative
 //   <Name>/Audio Files/       every audio file any version uses (takes too)
 //   <Name>/Picture/           the picture cuts (optional: they can be large)
 //   <Name>/Package Report.txt what is in it, what is missing, and the

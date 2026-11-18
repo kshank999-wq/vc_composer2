@@ -59,7 +59,7 @@ struct ImportSummary {
 /// can be overridden without rebuilding the project.
 struct ProjectSetup {
     std::string name = "Untitled";
-    /// Where it is saved: <folder>/<name>/<name>.vcc2 (a folder of its own,
+    /// Where it is saved: <folder>/<name>/<name>.vcc (a folder of its own,
     /// for its audio). Empty: not saved yet.
     std::string folder;
     std::string template_id;  ///< Empty: an empty project.

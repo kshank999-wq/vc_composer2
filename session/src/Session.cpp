@@ -220,7 +220,7 @@ SetupResult Session::create_project(const ProjectSetup& setup)
     std::string file;
     if (!setup.folder.empty()) {
         const auto dir = fs::u8path(setup.folder) / fs::u8path(package::safe_name(setup.name));
-        file = (dir / fs::u8path(package::safe_name(setup.name) + ".vcc2")).generic_u8string();
+        file = (dir / fs::u8path(package::safe_name(setup.name) + ".vcc")).generic_u8string();
         std::error_code ec;
         if (fs::exists(fs::u8path(file), ec)) {
             out.error = file + " already exists: choose another name or folder";
@@ -324,7 +324,7 @@ bool Session::save_as(const std::string& path, std::string* error)
 std::string Session::autosave_path(const std::string& fallback_dir) const
 {
     if (!path_.empty()) return path_ + ".autosave";
-    return (fs::u8path(fallback_dir) / "Untitled.vcc2.autosave").u8string();
+    return (fs::u8path(fallback_dir) / "Untitled.vcc.autosave").u8string();
 }
 
 bool Session::write_autosave(const std::string& fallback_dir, std::string* error) const

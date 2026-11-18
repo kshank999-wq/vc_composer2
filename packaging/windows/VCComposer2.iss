@@ -61,7 +61,8 @@ Name: "{group}\Uninstall {#AppTitle}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppTitle}"; Filename: "{app}\VC Composer.exe"; Tasks: desktopicon
 
 [Registry]
-; .vcc2 projects open in VC Composer.
+; .vcc projects (and .vcc2 from earlier previews) open in VC Composer.
+Root: HKA; Subkey: "Software\Classes\.vcc"; ValueType: string; ValueName: ""; ValueData: "VCComposer2.Project"; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.vcc2"; ValueType: string; ValueName: ""; ValueData: "VCComposer2.Project"; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\VCComposer2.Project"; ValueType: string; ValueName: ""; ValueData: "VC Composer Project"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\VCComposer2.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\VC Composer.exe,0"
