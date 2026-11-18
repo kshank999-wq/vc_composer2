@@ -1,5 +1,7 @@
 #include "ui/ComposerView.h"
 
+#include <limits>
+
 #include <algorithm>
 
 #include <cmath>
@@ -87,6 +89,9 @@ public:
         view_.on_event_menu = [this](notation::EventId id) { owner_.note_menu(*this, id); };
         view_.on_event_dragged = [this](notation::EventId id, const engraving::InsertionPoint& from,
                                         const engraving::InsertionPoint& to) { owner_.note_dragged(*this, id, from, to); };
+        view_.on_span_drawn = [this](std::size_t staff, Ticks start, Ticks end) {
+            owner_.hairpin_drawn(track_id_, staff, start, end);
+        };
         view_.on_zoom_requested = [this](bool larger) { owner_.zoom(larger); };
         view_.on_scrolled = [this](Ticks origin) { owner_.set_origin(origin); };
         // This staff's own room: more space above and below it, for notes
@@ -937,6 +942,29 @@ void ComposerView::perform(Command command)
         context_.status("Select an instrument track first");
         return;
     }
+    if (command == Command::StartCrescendo || command == Command::StartDiminuendo) {
+        const int kind = command == Command::StartCrescendo ? 1 : 2;
+        // Notes selected: across them, at once. Otherwise draw it with the
+        // mouse: press where it starts, drag to where it ends.
+        const auto sel = editor_->selection();
+        if (!sel.empty()) {
+            Ticks from = std::numeric_limits<Ticks>::max(), to = 0;
+            std::size_t staff = editor_->cursor().staff_index;
+            for (const auto id : sel)
+                if (const auto* n = working_.find_note(id)) {
+                    from = std::min(from, n->start_tick);
+                    to = std::max(to, n->end_tick());
+                    staff = working_.staff_index_of(id);
+                }
+            if (to > from) {
+                handle(editor_->add_hairpin(staff, from, to,
+                                            kind == 1 ? notation::HairpinKind::Crescendo : notation::HairpinKind::Diminuendo));
+                return;
+            }
+        }
+        set_hairpin_drawing(hairpin_drawing_ == kind ? 0 : kind);
+        return;
+    }
     // Right after typing a note, a value, dot, triplet or rest is for the
     // next note, as in Finale and Sibelius; with notes the user selected, it
     // changes them.
@@ -998,6 +1026,27 @@ void ComposerView::set_note_entry(bool write)
     }
     context_.status(note_entry_ ? "Write: click the staff to write notes" : "Select: click notes to select them, drag to move them");
     update_staff_tools();
+}
+
+void ComposerView::set_hairpin_drawing(int kind)
+{
+    hairpin_drawing_ = kind;
+    for (auto& s : strips_) s->view().set_span_drawing(kind);
+    context_.status(kind == 0   ? juce::String("Hairpin drawing off")
+                    : kind == 1 ? juce::String("Crescendo: press on the staff where it starts and drag to where it ends (Esc cancels)")
+                                : juce::String("Diminuendo: press on the staff where it starts and drag to where it ends (Esc cancels)"));
+    update_staff_tools();
+}
+
+void ComposerView::hairpin_drawn(const std::string& track_id, std::size_t staff, Ticks start, Ticks end)
+{
+    const int kind = hairpin_drawing_;
+    set_hairpin_drawing(0);
+    if (kind == 0) return;
+    context_.session.select_track(track_id);
+    if (!editor_ || editing_track_ != track_id) return;
+    handle(editor_->add_hairpin(staff, start, end,
+                                kind == 1 ? notation::HairpinKind::Crescendo : notation::HairpinKind::Diminuendo));
 }
 
 void ComposerView::wire_tools(composer_ui::StaffTools& t)
@@ -1110,6 +1159,7 @@ composer_ui::StaffToolsState ComposerView::tools_state() const
     s.editable = editor_ != nullptr;
     s.chord_mode = chord_mode_;
     s.writing = note_entry_;
+    s.hairpin = hairpin_drawing_;
     if (const auto* t = context_.session.data().find_track(context_.session.selected_track())) {
         s.track = t->name;
         s.accent = t->accent_strength;
@@ -1140,7 +1190,7 @@ void ComposerView::update_staff_tools()
     auto same = [](const composer_ui::StaffToolsState& a, const composer_ui::StaffToolsState& b) {
         return a.editable == b.editable && a.has_selection == b.has_selection && a.pitched == b.pitched && a.value == b.value &&
                a.dot == b.dot && a.triplet == b.triplet && a.rest == b.rest && a.voice == b.voice &&
-               a.chord_mode == b.chord_mode && a.track == b.track && a.writing == b.writing && a.accent == b.accent;
+               a.chord_mode == b.chord_mode && a.track == b.track && a.writing == b.writing && a.accent == b.accent && a.hairpin == b.hairpin;
     };
     if (!same(s, tools.state())) tools.set_state(s);
     if (tools_floating_ && !same(s, tools_floating_->state())) tools_floating_->set_state(s);
@@ -1464,6 +1514,10 @@ void ComposerView::ask_for_input(Command command)
 bool ComposerView::keyPressed(const juce::KeyPress& key)
 {
     note_activity();
+    if (key == juce::KeyPress::escapeKey && hairpin_drawing_ != 0) {
+        set_hairpin_drawing(0);
+        return true;
+    }
     if (key == juce::KeyPress::spaceKey) {
         context_.engine.toggle_play();
         return true;

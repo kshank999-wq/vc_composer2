@@ -4459,6 +4459,155 @@ void sound_pack_checks(MainWindow& window, const juce::File& dir)
     root.deleteRecursively();
 }
 
+/// Crescendos and diminuendos: drawn with the mouse (press where it starts,
+/// drag to where it ends) or across selected notes; each plays as a swell of
+/// expression (CC11) from 0 to 100 (or 100 to 0), and the swell is edited in
+/// the Producer's CC11 lane.
+void swell_checks(MainWindow& window, const juce::File& dir)
+{
+    using composer::Command;
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const Ticks Q = kTicksPerQuarter;
+    const auto track = session.add_track("Violins", "strings.violins_1");
+    // Two bars of whole notes to swell.
+    session.update_track_mix(track, "Write", [Q](project::Track& t) {
+        editing::ScoreEditor editor(t.active_version()->score);
+        editor.set_duration(notation::NoteValue::Whole);
+        notation::Pitch c;
+        c.step = notation::Step::C;
+        c.octave = 5;
+        editor.insert_at(0, 0, c);
+        editor.insert_at(0, 4 * Q, c);
+    });
+    main.show_workspace(MainComponent::Workspace::Composer);
+    if (auto* track_key = main.toolbar().key("Track")) track_key->triggerClick();
+    pump(150);
+    auto& composer = main.composer();
+    composer.set_staff_tools_detached(false);
+    composer.set_staff_tools_collapsed(false);
+    session.select_track(track);
+    pump(100);
+    composer.update_staff_tools();
+    auto& tools = composer.staff_tools();
+    auto hairpins = [&] { return session.data().find_track(track)->active_version()->score.hairpins(); };
+
+    // < arms drawing: the key lights.
+    auto* cresc_key = tools.key_for(Command::StartCrescendo);
+    check(cresc_key != nullptr, "the staff tools always offer < and > (no selection needed)");
+    if (cresc_key == nullptr) return;
+    cresc_key->triggerClick();
+    pump(80);
+    composer.update_staff_tools();
+    check(composer.hairpin_drawing() == 1 && tools.key_for(Command::StartCrescendo)->getToggleState(),
+          "< arms crescendo drawing: the key lights");
+
+    std::function<vcc::ui::NotationView*(juce::Component&)> find_view = [&](juce::Component& c) -> vcc::ui::NotationView* {
+        if (auto* v = dynamic_cast<vcc::ui::NotationView*>(&c); v && v->isShowing()) return v;
+        for (auto* k : c.getChildren())
+            if (auto* v = find_view(*k)) return v;
+        return nullptr;
+    };
+    auto* view = find_view(composer);
+    if (view == nullptr) {
+        check(false, "the Violins staff is on screen");
+        return;
+    }
+    // Press where it starts (bar 1), drag to where it ends (bar 2), let go.
+    const float y = view->y_of_staff_position(0, 4.0);
+    const juce::Point<float> from{view->x_of_tick(0) + 2.0f, y}, to{view->x_of_tick(4 * Q), y};
+    view->mouseDown(mouse_event(*view, from, from, false));
+    view->mouseDrag(mouse_event(*view, {(from.x + to.x) / 2.0f, y}, from, true));
+    view->mouseDrag(mouse_event(*view, to, from, true));
+    shoot(main, dir, "107-hairpin-drawing", true);
+    view->mouseUp(mouse_event(*view, to, from, true));
+    pump(150);
+    auto hs = hairpins();
+    check(hs.size() == 1 && hs[0].kind == notation::HairpinKind::Crescendo && hs[0].start_tick == 0 &&
+              hs[0].end_tick == 4 * Q && composer.hairpin_drawing() == 0,
+          "pressing at bar 1 and dragging to bar 2 draws a crescendo there (" +
+              (hs.empty() ? juce::String("none") : juce::String(hs[0].start_tick) + "-" + juce::String(hs[0].end_tick)) +
+              "); drawing switches off after it");
+
+    // It plays as a swell: CC11 from 0 to 100 across it.
+    auto cc11 = [&](Ticks at) {
+        int v = -1;
+        for (const auto& c : project::render_track(*session.data().find_track(track)).controllers)
+            if (c.controller == 11 && c.tick <= at) v = c.value;
+        return v;
+    };
+    check(cc11(0) == 0 && cc11(2 * Q) > 35 && cc11(2 * Q) < 65 && cc11(4 * Q) == 100,
+          "it plays as a swell of expression, CC11 0 -> 100 (" + juce::String(cc11(0)) + ", " + juce::String(cc11(2 * Q)) +
+              ", " + juce::String(cc11(4 * Q)) + ")");
+    shoot(main, dir, "107a-crescendo", true);
+
+    // Esc cancels drawing; > across the selected bar-2 note draws a diminuendo at once.
+    tools.key_for(Command::StartDiminuendo)->triggerClick();
+    pump(60);
+    composer.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));
+    const bool cancelled = composer.hairpin_drawing() == 0;
+    const auto& score = session.data().find_track(track)->active_version()->score;
+    notation::EventId second = notation::kInvalidEventId;
+    for (const auto& n : score.notes(0))
+        if (!n.is_rest && n.start_tick == 4 * Q) second = n.id;
+    session.select_notes(track, {second});
+    pump(100);
+    tools.key_for(Command::StartDiminuendo)->triggerClick();
+    pump(120);
+    hs = hairpins();
+    const bool dim = hs.size() == 2 && hs[1].kind == notation::HairpinKind::Diminuendo && hs[1].start_tick == 4 * Q &&
+                     hs[1].end_tick == 8 * Q;
+    check(cancelled && dim && cc11(4 * Q) == 100 && cc11(8 * Q - 1) <= 4,
+          "Esc cancels drawing; > with a note selected draws a diminuendo across it, 100 -> 0");
+
+    // The Producer's CC11 lane shows each swell; dragging its end handle edits it.
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(200);
+    auto& seq = main.sequencer();
+    session.select_track(track);
+    seq.set_cc_lane(11);
+    pump(150);
+    const auto sw = seq.swells(track);
+    check(sw.size() == 2 && sw[0].start_value == 0 && sw[0].end_value == 100 && sw[1].start_value == 100 &&
+              sw[1].end_value == 0,
+          "the Producer's CC11 lane shows both swells (0 -> 100, 100 -> 0)");
+    for (int v = 105; v <= 127; v += 11) seq.set_swell(track, 0, true, v);
+    seq.set_swell(track, 1, false, 90);
+    pump(100);
+    hs = hairpins();
+    check(hs.size() == 2 && notation::hairpin_expression_end(hs[0]) == 127 && notation::hairpin_expression_start(hs[1]) == 90 &&
+              cc11(4 * Q - 1) > 120 && session.undo_label().rfind("Swell", 0) == 0,
+          "dragging the handles edits the swells (crescendo up to 127, diminuendo from 90): playback follows");
+    // The piano roll, its bottom lane on CC11: the swells with their handles.
+    {
+        auto* roll = find_named(main, "vcc-piano-roll");
+        if (roll == nullptr || !roll->isShowing()) {
+            std::function<juce::Button*(juce::Component&)> find_key = [&](juce::Component& c) -> juce::Button* {
+                if (auto* b = dynamic_cast<juce::TextButton*>(&c); b && b->getButtonText() == "Piano Roll" && b->isShowing()) return b;
+                for (auto* k : c.getChildren())
+                    if (auto* b = find_key(*k)) return b;
+                return nullptr;
+            };
+            if (auto* key = find_key(main)) key->triggerClick();
+            pump(250);
+            roll = find_named(main, "vcc-piano-roll");
+        }
+        seq.set_cc_lane(11);
+        pump(150);
+        if (roll != nullptr && roll->isShowing()) shoot(*roll, dir, "108-swell-lane", true);
+        else shoot(main, dir, "108-swell-lane", true);
+    }
+    session.undo();
+    session.undo();
+    pump(80);
+    check(notation::hairpin_expression_end(hairpins()[0]) == 100, "undo puts the swell back");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(100);
+}
+
 void chord_palette_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -10549,7 +10698,8 @@ int main(int argc, char** argv)
                 {"range_checks", range_checks},
                 {"composer_lane_checks", composer_lane_checks},
                 {"staff_tools_checks", staff_tools_checks},
-                {"page_view_checks", page_view_checks}};
+                {"page_view_checks", page_view_checks},
+                {"swell_checks", swell_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -11181,6 +11331,8 @@ int main(int argc, char** argv)
         chord_palette_checks(window, dir);
         section("sound_pack_checks");
         sound_pack_checks(window, dir);
+        section("swell_checks");
+        swell_checks(window, dir);
         section("range_checks");
         range_checks(window, dir);
         section("circle_checks");

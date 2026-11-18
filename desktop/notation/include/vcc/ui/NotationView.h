@@ -137,6 +137,13 @@ public:
     /// click (markings belong to no note, so they are found by place).
     std::function<void(std::size_t staff_index, notation::Ticks tick)> on_marking_clicked;
 
+    /// Drawing a hairpin: while set (1 crescendo, 2 diminuendo; 0 off), a
+    /// press on the staff marks where it starts and a drag stretches it to
+    /// where it ends - drawn as it goes - and letting go reports the span.
+    void set_span_drawing(int kind);
+    int span_drawing() const noexcept { return span_kind_; }
+    std::function<void(std::size_t staff_index, notation::Ticks start, notation::Ticks end)> on_span_drawn;
+
     /// Empty staff was clicked: where a note would be entered (spec 5.2).
     std::function<void(const engraving::InsertionPoint&)> on_staff_clicked;
 
@@ -186,6 +193,10 @@ private:
     juce::Point<int> press_at_;
     juce::Point<int> drag_at_;
     bool dragging_ = false;
+    int span_kind_ = 0;                 ///< Drawing a hairpin: 1 crescendo, 2 diminuendo.
+    bool spanning_ = false;             ///< A hairpin is being dragged out.
+    std::size_t span_staff_ = 0;
+    notation::Ticks span_start_ = 0;
 
     engraving::LayoutEngine engine_;
     engraving::TimelineMap timeline_{kDefaultSpacesPerQuarter};

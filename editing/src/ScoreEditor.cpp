@@ -1258,6 +1258,39 @@ EditResult ScoreEditor::start_hairpin(notation::HairpinKind kind)
                                                             : "Started a diminuendo");
 }
 
+EditResult ScoreEditor::add_hairpin(std::size_t staff, notation::Ticks start, notation::Ticks end,
+                                    notation::HairpinKind kind)
+{
+    if (end < start) std::swap(start, end);
+    if (end - start <= 0) return refused("Drag across the notes the hairpin should span");
+    notation::Hairpin hairpin;
+    hairpin.start_tick = std::max<notation::Ticks>(0, start);
+    hairpin.end_tick = end;
+    hairpin.kind = kind;
+    hairpin.voice = cursor_.voice;
+    hairpin.staff = static_cast<std::uint8_t>(std::min<std::size_t>(staff, 255));
+    if (!hairpin.is_valid()) return refused("That hairpin is not one this model represents");
+
+    EditStep step;
+    step.target = EditStep::Target::Hairpin;
+    step.has_after = true;
+    step.hairpin_after = hairpin;
+    for (const notation::Hairpin& existing : score_->hairpins())
+        if (existing.start_tick == hairpin.start_tick && existing.voice == hairpin.voice && existing.staff == hairpin.staff) {
+            step.had_before = true;
+            step.hairpin_before = existing;
+            break;
+        }
+    history_.begin(kind == notation::HairpinKind::Crescendo ? "Crescendo" : "Diminuendo", cursor_);
+    if (!apply_step(*score_, step, true)) {
+        history_.abandon();
+        return refused("The hairpin was rejected by the score");
+    }
+    history_.record(step);
+    history_.commit(cursor_);
+    return applied(kind == notation::HairpinKind::Crescendo ? "Drew a crescendo" : "Drew a diminuendo");
+}
+
 EditResult ScoreEditor::start_slur()
 {
     const notation::Ticks length = cursor_.duration.ticks();

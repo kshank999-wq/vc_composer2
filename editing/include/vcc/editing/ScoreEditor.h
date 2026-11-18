@@ -253,6 +253,9 @@ public:
 
     EditResult add_dynamic(notation::DynamicLevel level);
     EditResult start_hairpin(notation::HairpinKind kind);
+    /// A crescendo or diminuendo from `start` to `end` on a staff (the mouse
+    /// drag that draws one). One undo step; it replaces one starting there.
+    EditResult add_hairpin(std::size_t staff, notation::Ticks start, notation::Ticks end, notation::HairpinKind kind);
     EditResult start_slur();
 
     /// Lengthens or shortens the span started most recently, by the entry

@@ -33,7 +33,8 @@ bool same(const nt::Hairpin& a, const nt::Hairpin& b)
 {
     return a.start_tick == b.start_tick && a.end_tick == b.end_tick && a.kind == b.kind && a.shape == b.shape &&
            a.voice == b.voice && a.staff == b.staff && a.has_start_level == b.has_start_level &&
-           a.start_level == b.start_level && a.has_end_level == b.has_end_level && a.end_level == b.end_level;
+           a.start_level == b.start_level && a.has_end_level == b.has_end_level && a.end_level == b.end_level &&
+           a.expression_start == b.expression_start && a.expression_end == b.expression_end;
 }
 
 bool same(const NoteEvent& a, const NoteEvent& b) { return a == b && a.articulation == b.articulation; }

@@ -1,6 +1,8 @@
 #include "vcc/project/Render.h"
 
 #include <algorithm>
+#include <cmath>
+#include <tuple>
 #include <deque>
 #include <map>
 
@@ -88,6 +90,59 @@ RenderedTrack render_track(const Track& track, const notation::ExpressionMap& ma
     return finish_render(track, map, render_score_events(track, map), performance);
 }
 
+namespace {
+std::vector<Ticks> notes_starts(const std::vector<std::pair<NoteEvent, notation::EventId>>& notes)
+{
+    std::vector<Ticks> out;
+    out.reserve(notes.size());
+    for (const auto& n : notes) out.push_back(n.first.start);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+}  // namespace
+
+void add_hairpin_expression(const notation::Score& score, int channel, const std::vector<Ticks>& note_starts,
+                            std::vector<ControllerEvent>& out)
+{
+    const auto& hairpins = score.hairpins();
+    if (hairpins.empty()) return;
+    std::vector<notation::Hairpin> sorted(hairpins.begin(), hairpins.end());
+    std::sort(sorted.begin(), sorted.end(),
+              [](const notation::Hairpin& a, const notation::Hairpin& b) {
+                  return std::tie(a.start_tick, a.end_tick, a.staff) < std::tie(b.start_tick, b.end_tick, b.staff);
+              });
+    // The same hairpin written twice plays once.
+    sorted.erase(std::unique(sorted.begin(), sorted.end(),
+                             [](const notation::Hairpin& a, const notation::Hairpin& b) {
+                                 return a.start_tick == b.start_tick && a.end_tick == b.end_tick && a.kind == b.kind &&
+                                        a.expression_start == b.expression_start && a.expression_end == b.expression_end;
+                             }),
+                 sorted.end());
+    constexpr int kCc = 11;
+    out.push_back(ControllerEvent{0, channel, kCc, notation::kNeutralExpression});
+    const Ticks step = std::max<Ticks>(1, notation::kTicksPerQuarter / 8);  // a 32nd: smooth to the ear
+    for (std::size_t i = 0; i < sorted.size(); ++i) {
+        const auto& h = sorted[i];
+        const int v0 = notation::hairpin_expression_start(h), v1 = notation::hairpin_expression_end(h);
+        const Ticks span = std::max<Ticks>(1, h.end_tick - h.start_tick);
+        int last = -1;
+        for (Ticks t = h.start_tick; t < h.end_tick; t += step) {
+            const double f = notation::evaluate_curve(h.shape, static_cast<double>(t - h.start_tick) / static_cast<double>(span));
+            const int v = std::clamp(static_cast<int>(std::lround(v0 + (v1 - v0) * f)), 0, 127);
+            if (v != last) out.push_back(ControllerEvent{t, channel, kCc, v});
+            last = v;
+        }
+        out.push_back(ControllerEvent{h.end_tick, channel, kCc, v1});
+        // Back to the neutral level at the next note after it (unless the
+        // next hairpin begins first, or it already ended there).
+        if (v1 != notation::kNeutralExpression) {
+            const auto next = std::lower_bound(note_starts.begin(), note_starts.end(), h.end_tick);
+            if (next != note_starts.end() && (i + 1 >= sorted.size() || *next < sorted[i + 1].start_tick))
+                out.push_back(ControllerEvent{*next, channel, kCc, notation::kNeutralExpression});
+        }
+    }
+}
+
 RenderedTrack finish_render(const Track& track, const notation::ExpressionMap& map, const notation::RenderResult& r,
                             bool performance)
 {
@@ -159,6 +214,13 @@ RenderedTrack finish_render(const Track& track, const notation::ExpressionMap& m
     for (auto a : r.unmapped_articulations)
         out.warnings.push_back(std::string("no mapping for articulation '") + notation::to_string(a) +
                                "' in this expression map");
+
+    // Crescendos and diminuendos swell what is sounding: each hairpin is a
+    // ramp of expression (CC11) from its start value to its end value, so a
+    // held chord grows or dies away, not only the next note's attack. A part
+    // with hairpins plays at the neutral expression elsewhere; after one that
+    // ends away from it, the next note brings it back.
+    add_hairpin_expression(version->score, channel, notes_starts(notes), out.controllers);
 
     std::stable_sort(out.controllers.begin(), out.controllers.end(),
                      [](const ControllerEvent& a, const ControllerEvent& b) { return a.tick < b.tick; });

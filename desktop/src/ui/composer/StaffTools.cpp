@@ -132,8 +132,10 @@ StaffTools::StaffTools(bool detached) : detached_(detached)
     add(C::DynamicMezzoPiano, "mp", nullptr, "Mezzo piano", W::Selection);
     add(C::DynamicMezzoForte, "mf", nullptr, "Mezzo forte", W::Selection);
     add(C::DynamicForte, "f", nullptr, "Forte", W::Selection);
-    add(C::StartCrescendo, "<", nullptr, "Crescendo", W::Selection);
-    add(C::StartDiminuendo, ">", nullptr, "Diminuendo", W::Selection);
+    // Hairpins: across the selected notes, or drawn - press on the staff
+    // where it starts and drag to where it ends.
+    add(C::StartCrescendo, "<", nullptr, "Crescendo: drag it out on the staff (or across the selected notes)", W::Always, true);
+    add(C::StartDiminuendo, ">", nullptr, "Diminuendo: drag it out on the staff (or across the selected notes)", W::Always);
     // Voices.
     for (int v = 0; v < 4; ++v)
         add(static_cast<C>(static_cast<int>(C::SelectVoice1) + v), juce::String(v + 1), nullptr, "Voice " + juce::String(v + 1),
@@ -236,6 +238,8 @@ void StaffTools::set_state(const StaffToolsState& s)
         else if (k.command == C::ToggleDot) lit = s.dot;
         else if (k.command == C::ToggleTuplet) lit = s.triplet;
         else if (k.command == C::ToggleRest) lit = s.rest;
+        else if (k.command == C::StartCrescendo) lit = s.hairpin == 1;
+        else if (k.command == C::StartDiminuendo) lit = s.hairpin == 2;
         else if (c >= static_cast<int>(C::SelectVoice1) && c <= static_cast<int>(C::SelectVoice4))
             lit = s.voice == c - static_cast<int>(C::SelectVoice1);
         k.cap->setToggleState(lit, juce::dontSendNotification);

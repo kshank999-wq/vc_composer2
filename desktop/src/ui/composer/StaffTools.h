@@ -30,6 +30,7 @@ struct StaffToolsState {
     bool chord_mode = false;
     bool writing = true;        ///< Write (the quill) or Select (the arrow).
     int accent = 50;            ///< The track's accent strength, 1-100.
+    int hairpin = 0;            ///< Drawing a crescendo (1) or diminuendo (2) with the mouse.
     juce::String track;         ///< The staff's name, for the header.
 };
 

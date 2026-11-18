@@ -44,6 +44,13 @@ public:
     /// Write (the quill: clicks write notes) or Select (the arrow: clicks
     /// select and drag, never write). The staff tools' mode keys.
     void set_note_entry(bool write);
+    /// Drawing a crescendo (1) or diminuendo (2) with the mouse, 0 off: the
+    /// < and > keys arm it; a press on a staff and a drag to the end draws
+    /// it, once. Esc cancels.
+    void set_hairpin_drawing(int kind);
+    int hairpin_drawing() const noexcept { return hairpin_drawing_; }
+    /// A hairpin drawn on a staff of the track being written (the drag's end).
+    void hairpin_drawn(const std::string& track_id, std::size_t staff, Ticks start, Ticks end);
     /// Scrolls the lanes so a track's staff is in view (the Track List).
     void reveal_track(const std::string& track_id);
     /// Zoom: staff size (pixels per staff space) and width (staff spaces per
@@ -180,6 +187,7 @@ private:
     std::string editing_track_;
     std::string editing_version_;
     bool note_entry_ = true;
+    int hairpin_drawing_ = 0;
     Ticks origin_ = 0;
     std::uint64_t generation_ = 0;
     /// The spec's 100%: a 7 px staff space and a 120 px bar of 4/4.

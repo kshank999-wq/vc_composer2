@@ -249,6 +249,12 @@ public:
     /// Replaces the active version's score with an edited copy (the Composer
     /// view edits a working copy and commits each change here).
     bool commit_score(const std::string& track_id, const notation::Score& score, const std::string& label);
+    /// A crescendo's or diminuendo's swell, as the Producer's CC11 lane edits
+    /// it: the expression (0-127) at its start and end. The hairpin on
+    /// `staff` starting at `start_tick`; same-hairpin calls coalesce (a drag
+    /// is one undo step).
+    bool set_hairpin_expression(const std::string& track_id, std::size_t staff, Ticks start_tick, int start_value,
+                                int end_value);
     /// The same, also setting the chord symbol at `tick` (Chord Mode writes
     /// the chord it entered), as one undo step. An empty symbol sets none.
     bool commit_score_with_chord(const std::string& track_id, const notation::Score& score, const std::string& label,

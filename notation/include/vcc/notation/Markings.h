@@ -170,9 +170,22 @@ struct Hairpin {
     bool has_end_level = false;
     DynamicLevel end_level = DynamicLevel::Forte;
 
+    /// The swell it plays: MIDI expression (CC11) from `expression_start` to
+    /// `expression_end`, 0-127; -1 is the default - a crescendo 0 to 100, a
+    /// diminuendo 100 to 0 (100 is a part's level outside any hairpin).
+    /// Edited in the Producer's CC11 lane.
+    std::int16_t expression_start = -1;
+    std::int16_t expression_end = -1;
+
     Ticks length() const noexcept { return end_tick - start_tick; }
     bool is_valid() const noexcept;
 };
+
+/// A hairpin's expression (CC11) at its start and end, defaults applied.
+int hairpin_expression_start(const Hairpin& hairpin) noexcept;
+int hairpin_expression_end(const Hairpin& hairpin) noexcept;
+/// A part's expression outside any hairpin.
+constexpr int kNeutralExpression = 100;
 
 /// A slur or phrase marking (spec 5.3).
 struct Slur {

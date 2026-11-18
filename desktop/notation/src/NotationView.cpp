@@ -295,6 +295,25 @@ void NotationView::paint(juce::Graphics& graphics)
                           static_cast<float>(getHeight()));
     }
 
+    if (spanning_) {
+        // The hairpin being drawn, from where the press was to the pointer.
+        const float space = static_cast<float>(settings_.pixels_per_staff_space);
+        const float x0 = static_cast<float>(x_of_tick(span_start_));
+        const float x1 = static_cast<float>(drag_at_.x);
+        const float y = static_cast<float>(press_at_.y);
+        const float open = space * 0.9f;
+        const bool cresc = (span_kind_ == 1) == (x1 >= x0);
+        const float narrow_x = cresc ? x0 : x1, wide_x = cresc ? x1 : x0;
+        juce::Path wedge;
+        wedge.startNewSubPath(wide_x, y - open);
+        wedge.lineTo(narrow_x, y);
+        wedge.lineTo(wide_x, y + open);
+        graphics.setColour(settings_.colours.playhead.withAlpha(0.85f));
+        graphics.strokePath(wedge, juce::PathStrokeType(1.6f));
+        graphics.setColour(settings_.colours.playhead.withAlpha(0.12f));
+        graphics.fillRect(juce::Rectangle<float>(std::min(x0, x1), y - open - 2.0f, std::abs(x1 - x0), 2.0f * open + 4.0f));
+    }
+
     if (dragging_) {
         // Where the dragged note will land: a ghost head under the pointer.
         const float space = static_cast<float>(settings_.pixels_per_staff_space);
@@ -304,6 +323,14 @@ void NotationView::paint(juce::Graphics& graphics)
     }
 }
 
+void NotationView::set_span_drawing(int kind)
+{
+    span_kind_ = kind;
+    spanning_ = false;
+    setMouseCursor(kind != 0 ? juce::MouseCursor::CrosshairCursor : juce::MouseCursor::NormalCursor);
+    repaint();
+}
+
 void NotationView::mouseDown(const juce::MouseEvent& event)
 {
     if (score_ == nullptr)
@@ -311,6 +338,18 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
 
     relayout_if_needed();
     const engraving::Point point = to_staff_spaces(event.getPosition());
+
+    if (span_kind_ != 0 && !event.mods.isPopupMenu()) {
+        // Drawing a hairpin: the press is where it starts, on any staff.
+        const auto at = engraving::insertion_point_at(layout_, *score_, timeline_, point, entry_grid_);
+        if (!at.valid) return;
+        spanning_ = true;
+        span_staff_ = at.staff_index;
+        span_start_ = at.tick;
+        press_at_ = drag_at_ = event.getPosition();
+        repaint();
+        return;
+    }
 
     const engraving::HitResult hit = engraving::hit_test(layout_, point);
     if (hit.id != notation::kInvalidEventId && event.mods.isPopupMenu() && on_event_menu) {
@@ -343,6 +382,11 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
 
 void NotationView::mouseDrag(const juce::MouseEvent& event)
 {
+    if (spanning_) {
+        drag_at_ = event.getPosition();
+        repaint();
+        return;
+    }
     if (pressed_ == notation::kInvalidEventId)
         return;
     drag_at_ = event.getPosition();
@@ -356,6 +400,16 @@ void NotationView::mouseDrag(const juce::MouseEvent& event)
 
 void NotationView::mouseUp(const juce::MouseEvent& event)
 {
+    if (spanning_) {
+        spanning_ = false;
+        repaint();
+        // Where it ends: the tick under the pointer, on the entry grid.
+        notation::Ticks end = tick_at_x(static_cast<float>(event.x));
+        if (entry_grid_ > 0) end = ((end + entry_grid_ / 2) / entry_grid_) * entry_grid_;
+        if (on_span_drawn && end != span_start_)
+            on_span_drawn(span_staff_, std::min(span_start_, end), std::max(span_start_, end));
+        return;
+    }
     const notation::EventId id = pressed_;
     const bool dragged = dragging_;
     pressed_ = notation::kInvalidEventId;

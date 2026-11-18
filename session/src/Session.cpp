@@ -701,6 +701,38 @@ bool Session::set_percussion_map(const std::string& id, const std::string& map)
     }));
 }
 
+bool Session::set_hairpin_expression(const std::string& id, std::size_t staff, Ticks start_tick, int start_value,
+                                     int end_value)
+{
+    start_value = std::clamp(start_value, 0, 127);
+    end_value = std::clamp(end_value, 0, 127);
+    if (!project_.edit_coalescing("Swell " + std::to_string(staff) + ":" + std::to_string(start_tick),
+                                  [&](project::ProjectData& d) {
+                                      for (auto& t : d.tracks) {
+                                          if (t.id != id) continue;
+                                          auto* v = t.active_version();
+                                          if (v == nullptr) return false;
+                                          for (const auto& h : v->score.hairpins()) {
+                                              if (h.staff != staff || h.start_tick != start_tick) continue;
+                                              auto changed = h;
+                                              changed.expression_start = static_cast<std::int16_t>(start_value);
+                                              changed.expression_end = static_cast<std::int16_t>(end_value);
+                                              if (notation::hairpin_expression_start(h) == start_value &&
+                                                  notation::hairpin_expression_end(h) == end_value)
+                                                  return false;
+                                              v->score.remove_hairpin(h.start_tick, h.voice, h.staff);
+                                              v->score.add_hairpin(changed);
+                                              return true;
+                                          }
+                                          return false;
+                                      }
+                                      return false;
+                                  }))
+        return false;
+    document_changed();
+    return true;
+}
+
 bool Session::set_accent_strength(const std::string& id, int strength)
 {
     strength = std::clamp(strength, 1, 100);

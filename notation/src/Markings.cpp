@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "vcc/notation/Markings.h"
 
 #include <cstddef>
@@ -219,6 +220,18 @@ double evaluate_curve(CurveShape shape, double position) noexcept
             return position * position * (3.0 - 2.0 * position);
     }
     return position;
+}
+
+int hairpin_expression_start(const Hairpin& h) noexcept
+{
+    if (h.expression_start >= 0) return std::min<int>(127, h.expression_start);
+    return h.kind == HairpinKind::Crescendo ? 0 : kNeutralExpression;
+}
+
+int hairpin_expression_end(const Hairpin& h) noexcept
+{
+    if (h.expression_end >= 0) return std::min<int>(127, h.expression_end);
+    return h.kind == HairpinKind::Crescendo ? kNeutralExpression : 0;
 }
 
 bool Hairpin::is_valid() const noexcept

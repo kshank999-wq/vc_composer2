@@ -389,6 +389,9 @@ json::Value score_to_json(const Score& score)
             entry.set("start_level", text(to_string(hairpin.start_level)));
         if (hairpin.has_end_level)
             entry.set("end_level", text(to_string(hairpin.end_level)));
+        // The swell's expression, when edited (absent: the defaults).
+        if (hairpin.expression_start >= 0) entry.set("expression_start", integer(hairpin.expression_start));
+        if (hairpin.expression_end >= 0) entry.set("expression_end", integer(hairpin.expression_end));
 
         hairpins.push_back(std::move(entry));
     }
@@ -659,6 +662,10 @@ ScoreLoadResult score_from_json(const json::Value& value, Score& out)
             hairpin.has_start_level = dynamic_from_string(level_name, hairpin.start_level);
         if (read_string(entry, "end_level", level_name))
             hairpin.has_end_level = dynamic_from_string(level_name, hairpin.end_level);
+        for (const auto& [key, field] : {std::pair<const char*, std::int16_t*>{"expression_start", &hairpin.expression_start},
+                                         std::pair<const char*, std::int16_t*>{"expression_end", &hairpin.expression_end}})
+            if (const json::Value* v = entry.get(key); v != nullptr && v->is_number())
+                *field = static_cast<std::int16_t>(std::clamp<std::int64_t>(v->as_int(), -1, 127));
 
         if (!hairpin.is_valid()) {
             result.warnings.push_back(at("hairpin", index) + " was skipped: it is not usable");

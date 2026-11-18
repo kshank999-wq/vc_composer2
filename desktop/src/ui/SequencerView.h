@@ -127,6 +127,16 @@ public:
     int cc_lane() const;
     /// Draws a straight ramp of controller `cc` from `v0` to `v1` over [from, to).
     bool draw_cc(int cc, Ticks from, Ticks to, int v0, int v1);
+    /// The score's crescendos and diminuendos as the CC11 lane shows them:
+    /// each a swell of expression from its start value to its end value.
+    struct Swell {
+        std::size_t staff = 0;
+        Ticks start = 0, end = 0;
+        int start_value = 0, end_value = 0;
+    };
+    std::vector<Swell> swells(const std::string& track_id) const;
+    /// Drags one end of swell `index` to `value` (as its handle in the lane does).
+    bool set_swell(const std::string& track_id, std::size_t index, bool at_end, int value);
 
     /// A track header's Print (freeze false) or Freeze (true) key.
     std::function<void(const std::string& track_id, bool freeze)> on_print_track;

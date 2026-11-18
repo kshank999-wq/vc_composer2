@@ -3403,6 +3403,15 @@ public:
             show_lane_menu();
             return;
         }
+        if (velocity_area().contains(e.getPosition()) && m_.cc_lane == 11) {
+            // A crescendo's or diminuendo's swell: its start or end handle.
+            if (const auto h = swell_handle_at(*l, pos)) {
+                swell_ = *h;
+                drag_ = Drag::Swell;
+                drag_swell(pos);
+                return;
+            }
+        }
         if (velocity_area().contains(e.getPosition()) && m_.cc_lane >= 0) {
             // Drawing a controller: points along the drag, committed on release.
             cc_points_.clear();
@@ -3536,6 +3545,7 @@ public:
             case Drag::Velocity:
             case Drag::PerfVelocity: vel_value_ = velocity_at(pos.y); break;
             case Drag::Cc: add_cc_point(pos); break;
+            case Drag::Swell: drag_swell(pos); break;
             case Drag::PerfMove:
             case Drag::PerfLength: {
                 // Snapped, the written note moves on the grid and the score
@@ -3587,6 +3597,7 @@ public:
                 break;
             case Drag::PerfVelocity: commit_performance(Drag::PerfVelocity); break;
             case Drag::Cc: commit_cc(); break;
+            case Drag::Swell: break;  // each move was already one (coalesced) undo step
             case Drag::None: break;
         }
         publish_selection();
@@ -3826,6 +3837,31 @@ private:
             g.setColour(colours::accent);
             g.strokePath(p, juce::PathStrokeType(1.4f));
         }
+        // The score's crescendos and diminuendos: each swell a ramp from its
+        // start value to its end value, with a handle at each end to drag.
+        if (m_.cc_lane == 11) {
+            for (const auto& h : swells(l.id)) {
+                const float x0 = static_cast<float>(m_.x_of(static_cast<double>(h.start)));
+                const float x1 = static_cast<float>(m_.x_of(static_cast<double>(h.end)));
+                const float y0 = y_of_value(h.start_value), y1 = y_of_value(h.end_value);
+                juce::Path ramp;
+                ramp.startNewSubPath(x0, bottom);
+                ramp.lineTo(x0, y0);
+                ramp.lineTo(x1, y1);
+                ramp.lineTo(x1, bottom);
+                ramp.closeSubPath();
+                g.setColour(colours::playhead.withAlpha(0.18f));
+                g.fillPath(ramp);
+                g.setColour(colours::playhead);
+                g.drawLine(x0, y0, x1, y1, 1.8f);
+                for (const auto& [x, y, val] : {std::tuple<float, float, int>{x0, y0, h.start_value}, {x1, y1, h.end_value}}) {
+                    g.fillEllipse(x - 4.5f, y - 4.5f, 9.0f, 9.0f);
+                    g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+                    g.drawText(juce::String(val), juce::Rectangle<float>(x - 16.0f, y - 18.0f, 32.0f, 12.0f),
+                               juce::Justification::centred);
+                }
+            }
+        }
         // The stroke being drawn.
         if (drag_ == Drag::Cc && cc_points_.size() > 1) {
             juce::Path p;
@@ -3842,7 +3878,65 @@ private:
 
     std::vector<std::pair<Ticks, int>> cc_points_;
 
-    enum class Drag { None, Create, Move, Resize, Velocity, PerfMove, PerfLength, PerfVelocity, Cc };
+    enum class Drag { None, Create, Move, Resize, Velocity, PerfMove, PerfLength, PerfVelocity, Cc, Swell };
+
+public:
+    /// A hairpin's swell in the CC11 lane: which hairpin, and which end.
+    struct SwellHandle {
+        std::size_t staff = 0;
+        Ticks start = 0, end = 0;
+        bool at_end = false;
+        int start_value = 0, end_value = 0;
+    };
+    /// The score's hairpins on a track, as the CC11 lane shows them.
+    std::vector<SwellHandle> swells(const std::string& track_id) const
+    {
+        std::vector<SwellHandle> out;
+        const auto* t = m_.ctx.session.data().find_track(track_id);
+        const auto* v = t ? t->active_version() : nullptr;
+        if (!v) return out;
+        for (const auto& h : v->score.hairpins())
+            out.push_back({h.staff, h.start_tick, h.end_tick, false, notation::hairpin_expression_start(h),
+                           notation::hairpin_expression_end(h)});
+        return out;
+    }
+    /// Sets a swell's value at one end (the check, and a handle drag, come here).
+    bool set_swell(const std::string& track_id, const SwellHandle& h, int value)
+    {
+        const bool ok = m_.ctx.session.set_hairpin_expression(track_id, h.staff, h.start, h.at_end ? h.start_value : value,
+                                                               h.at_end ? value : h.end_value);
+        if (ok) status(juce::String(h.at_end ? "Swell ends at " : "Swell starts at ") + juce::String(value) + " (CC11)");
+        repaint();
+        return ok;
+    }
+
+private:
+    SwellHandle swell_;
+
+    std::optional<SwellHandle> swell_handle_at(const LaneView& l, juce::Point<float> p) const
+    {
+        const auto vel = velocity_area();
+        const float bottom = static_cast<float>(vel.getBottom()) - 4.0f, span = static_cast<float>(vel.getHeight() - 10);
+        for (auto h : swells(l.id))
+            for (bool end : {true, false}) {
+                const float x = static_cast<float>(m_.x_of(static_cast<double>(end ? h.end : h.start)));
+                const float y = bottom - span * static_cast<float>(end ? h.end_value : h.start_value) / 127.0f;
+                if (std::abs(p.x - x) <= 7.0f && std::abs(p.y - y) <= 9.0f) {
+                    h.at_end = end;
+                    return h;
+                }
+            }
+        return std::nullopt;
+    }
+
+    void drag_swell(juce::Point<float> p)
+    {
+        const auto* l = m_.selected_lane();
+        if (!l) return;
+        const int v = cc_value_at(p.y);
+        set_swell(l->id, swell_, v);
+        (swell_.at_end ? swell_.end_value : swell_.start_value) = v;
+    }
 
     juce::Rectangle<int> grid_area() const
     {
@@ -5315,6 +5409,22 @@ int SequencerView::cc_lane() const
     impl_->deferred.flush();
     return impl_->model.cc_lane;
 }
+std::vector<SequencerView::Swell> SequencerView::swells(const std::string& track_id) const
+{
+    std::vector<Swell> out;
+    for (const auto& h : impl_->roll.swells(track_id)) out.push_back({h.staff, h.start, h.end, h.start_value, h.end_value});
+    return out;
+}
+
+bool SequencerView::set_swell(const std::string& track_id, std::size_t index, bool at_end, int value)
+{
+    auto all = impl_->roll.swells(track_id);
+    if (index >= all.size()) return false;
+    auto h = all[index];
+    h.at_end = at_end;
+    return impl_->roll.set_swell(track_id, h, value);
+}
+
 bool SequencerView::draw_cc(int cc, Ticks from, Ticks to, int v0, int v1)
 {
     impl_->deferred.flush();

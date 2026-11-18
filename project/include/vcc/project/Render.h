@@ -37,6 +37,13 @@ notation::ExpressionMap expression_map_named(const std::string& name);
 /// note overrides are applied (what playback and export use); without, the
 /// notes are as written (what the piano roll shows as the written position).
 RenderedTrack render_track(const Track& track, const notation::ExpressionMap& map, bool performance = true);
+
+/// The expression (CC11) a score's crescendos and diminuendos play: the
+/// neutral level at the start, a ramp across each hairpin from its start
+/// value to its end value, and back to neutral at the next note (of
+/// `note_starts`, sorted) after one that ends elsewhere. Appended to `out`.
+void add_hairpin_expression(const notation::Score& score, int channel, const std::vector<Ticks>& note_starts,
+                            std::vector<ControllerEvent>& out);
 RenderedTrack render_track(const Track& track, bool performance = true);
 
 /// The notation render of a track's active version, before performance

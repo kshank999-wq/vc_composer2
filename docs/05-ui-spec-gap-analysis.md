@@ -2307,3 +2307,19 @@ macOS, Linux and Windows. What it took:
       crowd), 10 and 12. The full-score export dialog has the same
       Orientation and bars choices, and the PDF prints landscape.
     - **Checks**: layout_checks (86), page_view_checks (36d, 36e, landscape PDF).
+64. **Crescendos and diminuendos that swell** (November 18, 2026).
+    - **Drawing**: the < and > keys (staff tools, inspector, shortcuts) arm
+      hairpin drawing - the key lights; press on the staff where it starts
+      and drag to where it ends (the wedge is drawn as you go); it is written
+      on release, one undo step, and drawing switches off. Esc cancels. With
+      notes selected, the key spans them at once.
+    - **Sound**: every hairpin plays as a swell of expression (CC11) - a
+      crescendo 0 to 100, a diminuendo 100 to 0 by default - so held notes
+      grow and die away (the built-in sounds and plug-ins alike). A part
+      with hairpins plays at 100 elsewhere; after one that ends elsewhere the
+      next note is back at 100. Velocity shaping across the hairpin stays.
+    - **Editing**: the Producer's CC11 lane shows each swell as a ramp with a
+      handle at each end; dragging a handle sets that end's value (0-127),
+      saved in the score with the hairpin (`expression_start`/`_end`), one
+      undo step per drag.
+    - **Checks**: swell_checks (107, 107a, 108), test_hairpin_expression.
