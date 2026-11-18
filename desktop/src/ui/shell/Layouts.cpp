@@ -20,7 +20,11 @@ bool ViewLayout::operator==(const ViewLayout& o) const
 {
     return name == o.name && producer == o.producer && page_view == o.page_view && bottom_mixer == o.bottom_mixer &&
            dock_hidden == o.dock_hidden && work_view == o.work_view && mixer_full == o.mixer_full &&
-           console_window == o.console_window && console_display == o.console_display;
+           console_window == o.console_window && console_display == o.console_display &&
+           // Which floating windows are open counts; exactly where they sit does not.
+           (!has_windows || !o.has_windows ||
+            (inspector.shown == o.inspector.shown && staff_tools.shown == o.staff_tools.shown &&
+             track_list.shown == o.track_list.shown));
 }
 
 juce::var to_var(const ViewLayout& l)
@@ -35,6 +39,19 @@ juce::var to_var(const ViewLayout& l)
     o->setProperty("mixer_full", l.mixer_full);
     o->setProperty("console_window", l.console_window);
     o->setProperty("console_display", l.console_display);
+    if (l.has_windows) {
+        auto* w = new juce::DynamicObject();
+        auto win = [](const FloatingWindow& f) {
+            auto* x = new juce::DynamicObject();
+            x->setProperty("shown", f.shown);
+            if (!f.bounds.isEmpty()) x->setProperty("bounds", f.bounds.toString());
+            return juce::var(x);
+        };
+        w->setProperty("inspector", win(l.inspector));
+        w->setProperty("staff_tools", win(l.staff_tools));
+        w->setProperty("track_list", win(l.track_list));
+        o->setProperty("windows", juce::var(w));
+    }
     return juce::var(o);
 }
 
@@ -50,6 +67,20 @@ ViewLayout from_var(const juce::var& v)
     l.mixer_full = static_cast<bool>(v.getProperty("mixer_full", false));
     l.console_window = static_cast<bool>(v.getProperty("console_window", false));
     l.console_display = v.getProperty("console_display", "").toString();
+    const auto w = v.getProperty("windows", juce::var());
+    if (w.isObject()) {
+        l.has_windows = true;
+        auto win = [&](const char* key) {
+            FloatingWindow f;
+            const auto x = w.getProperty(key, juce::var());
+            f.shown = static_cast<bool>(x.getProperty("shown", false));
+            f.bounds = juce::Rectangle<int>::fromString(x.getProperty("bounds", "").toString());
+            return f;
+        };
+        l.inspector = win("inspector");
+        l.staff_tools = win("staff_tools");
+        l.track_list = win("track_list");
+    }
     return l;
 }
 

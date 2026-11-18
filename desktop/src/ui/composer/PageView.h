@@ -43,6 +43,9 @@ public:
     hw::Keycap& bars_key() { return bars_; }
     hw::Keycap& hide_key() { return hide_; }
     hw::Keycap& order_key() { return order_; }
+    hw::Keycap& landscape_key() { return landscape_; }
+    /// Pages side by side (2) when the view is wide, else one under another (1).
+    int columns() const noexcept;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -69,7 +72,7 @@ private:
     juce::ScrollBar vbar_{true};
     FullScoreSettings settings_;
     hw::Keycap paper_{"Paper"}, concert_{"Concert pitch", true}, bars_{"Bars"}, hide_{"Hide empty", true},
-        order_{"Orchestral order", true};
+        order_{"Orchestral order", true}, landscape_{"Landscape", true};
     void refresh_keys();
     int bar_top() const noexcept { return 34; }
 };

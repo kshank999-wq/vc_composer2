@@ -13,9 +13,15 @@
 #include <optional>
 #include <vector>
 
-#include <juce_core/juce_core.h>
+#include <juce_graphics/juce_graphics.h>
 
 namespace vcc::desktop::layouts {
+
+/// A floating window in a layout: open or not, and where (any display).
+struct FloatingWindow {
+    bool shown = false;
+    juce::Rectangle<int> bounds;  ///< Empty: where it opens by default.
+};
 
 struct ViewLayout {
     juce::String name;
@@ -27,6 +33,11 @@ struct ViewLayout {
     bool mixer_full = false;    ///< The mixer fills the window.
     bool console_window = false;  ///< The console in a window of its own...
     juce::String console_display;  ///< ...on this display (its name), full screen there; empty: wherever it was.
+    /// The floating windows: Window > Inspector, the staff tools (detached)
+    /// and the track list, each open or closed and where. A built-in layout
+    /// (and one saved before these were recorded) leaves them as they are.
+    bool has_windows = false;
+    FloatingWindow inspector, staff_tools, track_list;
 
     bool operator==(const ViewLayout& o) const;
     bool operator!=(const ViewLayout& o) const { return !(*this == o); }

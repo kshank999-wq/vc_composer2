@@ -43,7 +43,13 @@ PageView::PageView(AppContext& context) : context_(context)
     };
     bars_.onClick = [this] {
         juce::PopupMenu m;
-        for (int n : {1, 2, 3, 4, 5, 6, 8})
+        m.addItem("As many as fit", true, settings_.bars_per_system <= 0, [this] {
+            auto s = settings_;
+            s.bars_per_system = 0;
+            set_settings(s);
+        });
+        m.addSeparator();
+        for (int n : {1, 2, 3, 4, 5, 6, 8, 10, 12})
             m.addItem(juce::String(n) + (n == 1 ? " bar" : " bars") + " per system", true, settings_.bars_per_system == n, [this, n] {
                 auto s = settings_;
                 s.bars_per_system = n;
@@ -61,6 +67,13 @@ PageView::PageView(AppContext& context) : context_(context)
         s.hide_empty_staves = hide_.getToggleState();
         set_settings(s);
     };
+    landscape_.setTooltip("Turn the paper sideways: wider lines, more bars on each (prints that way too)");
+    landscape_.onClick = [this] {
+        auto s = settings_;
+        s.landscape = landscape_.getToggleState();
+        set_settings(s);
+    };
+    addAndMakeVisible(landscape_);
     order_.onClick = [this] {
         auto s = settings_;
         s.score_order = order_.getToggleState();
@@ -94,7 +107,10 @@ void PageView::set_settings(const FullScoreSettings& s)
 void PageView::refresh_keys()
 {
     paper_.setButtonText("Paper " + juce::String(settings_.paper));
-    bars_.setButtonText(juce::String(settings_.bars_per_system) + (settings_.bars_per_system == 1 ? " bar" : " bars") + " / line");
+    bars_.setButtonText(settings_.bars_per_system <= 0
+                            ? juce::String("Fit bars / line")
+                            : juce::String(settings_.bars_per_system) + (settings_.bars_per_system == 1 ? " bar" : " bars") + " / line");
+    landscape_.setToggleState(settings_.landscape, juce::dontSendNotification);
     concert_.setToggleState(settings_.concert_pitch, juce::dontSendNotification);
     hide_.setToggleState(settings_.hide_empty_staves, juce::dontSendNotification);
     order_.setToggleState(settings_.score_order, juce::dontSendNotification);
@@ -141,7 +157,8 @@ double PageView::px_per_space() const
     // printed size at 96 dpi.
     const auto& extent = layout_->laid.pages.front().layout.extent;
     const double page_w = std::max(1.0, extent.width);
-    const double fit = (getWidth() - kScroll - 2.0 * kGap) / page_w;
+    const int cols = columns();
+    const double fit = (getWidth() - kScroll - (cols + 1.0) * kGap) / (cols * page_w);
     const double printed = layout_->staff_space_mm / 25.4 * 96.0;
     return std::max(1.0, std::min(fit, printed * 1.6) * zoom_);
 }
@@ -149,25 +166,36 @@ double PageView::px_per_space() const
 juce::Rectangle<float> PageView::page_rect(int i) const
 {
     if (!layout_ || i < 0 || i >= page_count()) return {};
+    // Rows of `columns()` pages (all pages of a score are one size), centred.
     const double s = px_per_space();
-    float y = static_cast<float>(bar_top() + kGap - scroll_y_);
-    for (int k = 0; k < page_count(); ++k) {
-        const auto& extent = layout_->laid.pages[static_cast<std::size_t>(k)].layout.extent;
-        const auto w = static_cast<float>(extent.width * s), h = static_cast<float>(extent.height * s);
-        const float x = std::max(static_cast<float>(kGap), (static_cast<float>(getWidth() - kScroll) - w) / 2.0f);
-        if (k == i) return {x, y, w, h};
-        y += h + static_cast<float>(kGap);
-    }
-    return {};
+    const int cols = columns();
+    const auto& extent = layout_->laid.pages[static_cast<std::size_t>(i)].layout.extent;
+    const auto w = static_cast<float>(extent.width * s), h = static_cast<float>(extent.height * s);
+    const float row_w = static_cast<float>(cols) * w + static_cast<float>((cols - 1) * kGap);
+    const float x0 = std::max(static_cast<float>(kGap), (static_cast<float>(getWidth() - kScroll) - row_w) / 2.0f);
+    const int row = i / cols, col = i % cols;
+    return {x0 + static_cast<float>(col) * (w + static_cast<float>(kGap)),
+            static_cast<float>(bar_top() + kGap - scroll_y_) + static_cast<float>(row) * (h + static_cast<float>(kGap)), w, h};
 }
 
 int PageView::content_height() const
 {
     if (!layout_) return 0;
+    if (page_count() == 0) return bar_top() + kGap;
     const double s = px_per_space();
-    double h = bar_top() + kGap;
-    for (const auto& p : layout_->laid.pages) h += p.layout.extent.height * s + kGap;
-    return static_cast<int>(std::ceil(h));
+    const int rows = (page_count() + columns() - 1) / columns();
+    const double page_h = layout_->laid.pages.front().layout.extent.height * s;
+    return static_cast<int>(std::ceil(bar_top() + kGap + rows * (page_h + kGap)));
+}
+
+int PageView::columns() const noexcept
+{
+    // Wide enough for two pages as tall as the view (a spread), and more than one page.
+    if (page_count() < 2) return 1;
+    const auto& extent = layout_->laid.pages.front().layout.extent;
+    const double view_h = std::max(1, getHeight() - bar_top() - 2 * kGap);
+    const double page_w_at_height = view_h * extent.width / std::max(1.0, extent.height);
+    return getWidth() - kScroll >= 2.0 * page_w_at_height + 3.0 * kGap ? 2 : 1;
 }
 
 int PageView::bar_at(juce::Point<float> p) const
@@ -247,7 +275,7 @@ void PageView::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions(10.5f));
     g.drawText(juce::String(layout_->parts) + " parts  -  " + juce::String(page_count()) + (page_count() == 1 ? " page" : " pages") +
                    "  -  " + juce::String(juce::roundToInt(zoom_ * 100.0)) + "%",
-               juce::Rectangle<int>(order_.getRight() + 12, 0, getWidth() - kScroll - order_.getRight() - 20, bar_top()),
+               juce::Rectangle<int>(landscape_.getRight() + 12, 0, getWidth() - kScroll - landscape_.getRight() - 20, bar_top()),
                juce::Justification::centredRight);
 }
 
@@ -264,6 +292,8 @@ void PageView::resized()
     hide_.setBounds(bar.removeFromLeft(96));
     bar.removeFromLeft(6);
     order_.setBounds(bar.removeFromLeft(128));
+    bar.removeFromLeft(6);
+    landscape_.setBounds(bar.removeFromLeft(96));
     update_scroll();
 }
 

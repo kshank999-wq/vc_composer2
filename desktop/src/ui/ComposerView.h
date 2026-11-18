@@ -111,6 +111,8 @@ public:
     /// The floating window's tools while detached, else null.
     composer_ui::StaffTools* detached_staff_tools();
     bool staff_tools_detached() const noexcept { return tools_detached_; }
+    /// The detached staff tools' window (null when docked).
+    juce::DocumentWindow* staff_tools_window() const { return tools_window_.getComponent(); }
     void set_staff_tools_detached(bool detached);
     /// Folded to a small tab (by its key, the shortcut, or after a while untouched).
     bool staff_tools_collapsed() const noexcept { return tools_collapsed_; }

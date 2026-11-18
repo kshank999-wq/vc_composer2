@@ -7308,6 +7308,52 @@ void layout_checks(MainWindow& window, const juce::File& dir)
     check(layouts::to_open_with() && layouts::to_open_with()->name == "Check Focus", "it can be the layout the app opens with");
     check(layouts::remove("Check Focus") && !layouts::find("Check Focus") && layouts::startup().isEmpty(),
           "deleting it forgets it, as the start-up layout too");
+
+    // The floating windows go with a layout: open or closed, and where.
+    {
+        main.set_inspector_shown(true);
+        main.composer().set_staff_tools_detached(true);
+        if (!track_list_open()) window.context().commands.invokeDirectly(cmd::trackList, false);
+        pump(200);
+        const juce::Rectangle<int> ib(140, 160, 300, 640), tb(500, 120, 560, 140), lb(1100, 150, 260, 420);
+        if (auto* w = main.inspector_window()) w->setBounds(ib);
+        if (auto* w = main.composer().staff_tools_window()) w->setBounds(tb);
+        if (auto* w = track_list_window()) w->setBounds(lb);
+        pump(100);
+        auto floating = main.capture_layout();
+        floating.name = "Check Floating";
+        layouts::save(floating);
+        const auto stored = layouts::find("Check Floating");
+        check(stored && stored->has_windows && stored->inspector.shown && stored->staff_tools.shown && stored->track_list.shown &&
+                  stored->inspector.bounds == main.inspector_window()->getBounds(),
+              "a saved layout records the Inspector, the staff tools and the track list, open and where (" +
+                  (stored ? stored->inspector.bounds.toString() : juce::String()) + ")");
+        // Everything closed and moved...
+        main.set_inspector_shown(false);
+        main.composer().set_staff_tools_detached(false);
+        window.context().commands.invokeDirectly(cmd::trackList, false);
+        pump(200);
+        // ...and the layout brings each one back, where it was.
+        main.apply_layout(*stored);
+        pump(250);
+        const bool back = main.inspector_shown() && main.composer().staff_tools_detached() && track_list_open() &&
+                          main.inspector_window() != nullptr && main.inspector_window()->getBounds() == stored->inspector.bounds &&
+                          main.composer().staff_tools_window() != nullptr &&
+                          main.composer().staff_tools_window()->getBounds() == stored->staff_tools.bounds &&
+                          track_list_window() != nullptr && track_list_window()->getBounds() == stored->track_list.bounds;
+        check(back, "recalling it reopens each floating window where it was");
+        shoot(window, dir, "86-layout-floating", true);
+        // A built-in layout leaves the floating windows as they are.
+        main.apply_layout(*layouts::find("Compose"));
+        pump(150);
+        check(main.inspector_shown() && track_list_open(), "a built-in layout leaves the floating windows alone");
+        layouts::remove("Check Floating");
+        main.set_inspector_shown(false);
+        main.composer().set_staff_tools_detached(false);
+        if (track_list_open()) window.context().commands.invokeDirectly(cmd::trackList, false);
+        pump(150);
+    }
+
     main.apply_layout(*layouts::find("Mix"));
     pump(150);
     check(main.mixer_full(), "the Mix layout: the mixer full screen");
@@ -9953,6 +9999,64 @@ void page_view_checks(MainWindow& window, const juce::File& dir)
         pv.set_settings(original);
     }
 
+    // Using the width: pages side by side when the view is wide, landscape
+    // paper, and as many bars on a line as fit - on screen and in the PDF.
+    {
+        const auto original = pv.settings();
+        auto s = original;
+        s.paper = "A3";
+        s.landscape = false;
+        s.bars_per_system = 1;  // sixteen systems: several pages
+        pv.set_settings(s);
+        const bool spread = pv.page_count() >= 2 &&
+                            (pv.columns() == 2 && std::abs(pv.page_rect(1).getY() - pv.page_rect(0).getY()) < 1.0f &&
+                             pv.page_rect(1).getX() > pv.page_rect(0).getRight());
+        check(spread, "on a wide view the pages sit side by side, as a printed spread (" + juce::String(pv.columns()) +
+                          " across, " + juce::String(pv.page_count()) + " pages)");
+        shoot(main, dir, "36d-page-view-spread");
+        s.bars_per_system = 4;
+        pv.set_settings(s);
+        const int systems4 = pv.layout() ? static_cast<int>(pv.layout()->laid.system_count) : 0;
+        pv.landscape_key().triggerClick();
+        pump(120);
+        const auto r = pv.page_rect(0);
+        const bool landscape = pv.settings().landscape && saved_full_score_settings().landscape && r.getWidth() > r.getHeight();
+        s = pv.settings();
+        s.bars_per_system = 0;
+        pv.set_settings(s);
+        const int systems_fit = pv.layout() ? static_cast<int>(pv.layout()->laid.system_count) : 0;
+        const int first_bars = pv.layout() && !pv.layout()->laid.pages.empty() && !pv.layout()->laid.pages[0].systems.empty()
+                                   ? pv.layout()->laid.pages[0].systems[0].last_bar - pv.layout()->laid.pages[0].systems[0].first_bar + 1
+                                   : 0;
+        check(landscape && systems_fit < systems4 && first_bars > 4 && pv.bars_key().getButtonText().startsWith("Fit"),
+              "Landscape turns the page sideways; As many as fit puts more bars on a line (" + juce::String(first_bars) +
+                  " on the first, " + juce::String(systems_fit) + " systems instead of " + juce::String(systems4) + ")");
+        shoot(main, dir, "36e-page-view-landscape-fit");
+        // The PDF prints the same way: landscape sheets.
+        const auto pdf = dir.getChildFile("full-score-landscape.pdf");
+        juce::String message;
+        const int printed = export_full_score_pdf(ctx, pdf, pv.settings(), message);
+        juce::MemoryBlock bytes;
+        pdf.loadFileAsData(bytes);
+        const std::string raw(static_cast<const char*>(bytes.getData()), bytes.getSize());
+        double mw = 0, mh = 0;
+        const auto at = raw.find("/MediaBox");
+        if (at != std::string::npos) {
+            const juce::String box(raw.substr(at + 9, 60));
+            juce::StringArray nums;
+            nums.addTokens(box.fromFirstOccurrenceOf("[", false, false).upToFirstOccurrenceOf("]", false, false), " ", "");
+            nums.removeEmptyStrings();
+            if (nums.size() == 4) {
+                mw = nums[2].getDoubleValue() - nums[0].getDoubleValue();
+                mh = nums[3].getDoubleValue() - nums[1].getDoubleValue();
+            }
+        }
+        check(printed >= 1 && mw > mh && mh > 0,
+              "the full-score PDF prints landscape too (" + juce::String(mw, 0) + " x " + juce::String(mh, 0) + " pt, " +
+                  juce::String(printed) + " pages)");
+        pv.set_settings(original);
+    }
+
     // It follows edits: a new track appears as another part.
     const int parts = pv.layout() ? pv.layout()->parts : 0;
     session.add_track("Felt Piano", "keys.felt_piano");
@@ -10444,7 +10548,8 @@ int main(int argc, char** argv)
                 {"sound_pack_checks", sound_pack_checks},
                 {"range_checks", range_checks},
                 {"composer_lane_checks", composer_lane_checks},
-                {"staff_tools_checks", staff_tools_checks}};
+                {"staff_tools_checks", staff_tools_checks},
+                {"page_view_checks", page_view_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)

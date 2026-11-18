@@ -51,5 +51,7 @@ void show_track_list(AppContext& context, std::function<void(const std::string&)
 void close_track_list();
 bool track_list_open();
 TrackListPanel* track_list_panel();
+/// The floating track list's window (null when it was never opened).
+juce::DocumentWindow* track_list_window();
 
 }  // namespace vcc::desktop

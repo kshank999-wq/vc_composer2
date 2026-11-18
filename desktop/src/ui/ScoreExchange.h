@@ -35,7 +35,11 @@ struct FullScoreSettings {
     bool concert_pitch = false;  ///< Sounding pitch; false: transposed score.
     std::string paper = "A3";    ///< "A3", "Tabloid", "A4", "Letter".
     bool hide_empty_staves = true;
+    /// Bars on a line, at most; 0: as many as fit (a line takes fewer only
+    /// when its notes would crowd).
     int bars_per_system = 4;
+    /// The paper turned sideways: wider lines, more bars on each.
+    bool landscape = false;
     /// Orchestral order (woodwinds, brass, percussion, keyboards, voices,
     /// strings, then the rest) instead of track order.
     bool score_order = true;

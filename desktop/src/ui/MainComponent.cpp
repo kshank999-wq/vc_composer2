@@ -962,6 +962,19 @@ layouts::ViewLayout MainComponent::capture_layout() const
     l.mixer_full = mixer_full_;
     l.console_window = mixer_ != nullptr && mixer_->isVisible();
     l.console_display = console_display_;
+    // The floating windows, open or not, and where.
+    l.has_windows = true;
+    auto window = [](juce::DocumentWindow* w, bool shown) {
+        layouts::FloatingWindow f;
+        f.shown = shown && w != nullptr && w->isVisible();
+        if (w != nullptr) f.bounds = w->getBounds();
+        return f;
+    };
+    l.inspector = window(inspector_window_.getComponent(), inspector_shown());
+    auto& composer = const_cast<ComposerView&>(composer_);
+    l.staff_tools = window(composer.staff_tools_window(), composer.staff_tools_detached());
+    l.staff_tools.shown = composer.staff_tools_detached();  // its window shows itself a moment later
+    l.track_list = window(track_list_window(), track_list_open());
     return l;
 }
 
@@ -976,6 +989,24 @@ void MainComponent::apply_layout(const layouts::ViewLayout& l)
     if (l.mixer_full) set_mixer_full(true);
     if (l.console_window) show_console_window(l.console_display);
     else if (mixer_ != nullptr) mixer_->setVisible(false);
+    if (l.has_windows) {
+        // Each floating window opened or closed as saved, and put back where
+        // it was - on another display too, while that display is connected.
+        auto place = [](juce::DocumentWindow* w, const layouts::FloatingWindow& f) {
+            if (w == nullptr || f.bounds.isEmpty()) return;
+            for (const auto& d : juce::Desktop::getInstance().getDisplays().displays)
+                if (d.userArea.intersects(f.bounds.reduced(20))) {
+                    w->setBounds(f.bounds);
+                    return;
+                }
+        };
+        set_inspector_shown(l.inspector.shown);
+        if (l.inspector.shown) place(inspector_window_.getComponent(), l.inspector);
+        composer_.set_staff_tools_detached(l.staff_tools.shown);
+        if (l.staff_tools.shown) place(composer_.staff_tools_window(), l.staff_tools);
+        if (l.track_list.shown != track_list_open()) toggle_track_list();
+        if (l.track_list.shown) place(track_list_window(), l.track_list);
+    }
     resized();
     context_.commands.commandStatusChanged();
     if (l.name.isNotEmpty()) context_.status("Layout: " + l.name);
@@ -1440,7 +1471,8 @@ void MainComponent::export_full_score_dialog()
                                     juce::MessageBoxIconType::NoIcon);
     w->addComboBox("pitch", {"Transposed score", "Score in C (concert pitch)"}, "Pitch");
     w->addComboBox("paper", {"A3", "Tabloid", "A4", "Letter"}, "Paper");
-    w->addComboBox("bars", {"2", "3", "4", "5", "6", "8"}, "Bars per system");
+    w->addComboBox("orientation", {"Portrait", "Landscape"}, "Orientation");
+    w->addComboBox("bars", {"As many as fit", "1", "2", "3", "4", "5", "6", "8", "10", "12"}, "Bars per system");
     w->addComboBox("hide", {"Hide staves where a part rests", "Show every staff on every system"}, "Empty staves");
     w->addComboBox("order", {"Orchestral score order", "Track order"}, "Order");
     {
@@ -1448,8 +1480,10 @@ void MainComponent::export_full_score_dialog()
         const auto saved = saved_full_score_settings();
         w->getComboBoxComponent("pitch")->setSelectedItemIndex(saved.concert_pitch ? 1 : 0);
         w->getComboBoxComponent("paper")->setText(juce::String(saved.paper));
-        w->getComboBoxComponent("bars")->setText(juce::String(saved.bars_per_system));
-        if (w->getComboBoxComponent("bars")->getSelectedItemIndex() < 0) w->getComboBoxComponent("bars")->setSelectedItemIndex(2);
+        w->getComboBoxComponent("orientation")->setSelectedItemIndex(saved.landscape ? 1 : 0);
+        if (saved.bars_per_system <= 0) w->getComboBoxComponent("bars")->setSelectedItemIndex(0);
+        else w->getComboBoxComponent("bars")->setText(juce::String(saved.bars_per_system));
+        if (w->getComboBoxComponent("bars")->getSelectedItemIndex() < 0) w->getComboBoxComponent("bars")->setSelectedItemIndex(4);
         w->getComboBoxComponent("hide")->setSelectedItemIndex(saved.hide_empty_staves ? 0 : 1);
         w->getComboBoxComponent("order")->setSelectedItemIndex(saved.score_order ? 0 : 1);
     }
@@ -1460,7 +1494,10 @@ void MainComponent::export_full_score_dialog()
         FullScoreSettings settings;
         settings.concert_pitch = w->getComboBoxComponent("pitch")->getSelectedItemIndex() == 1;
         settings.paper = w->getComboBoxComponent("paper")->getText().toStdString();
-        settings.bars_per_system = w->getComboBoxComponent("bars")->getText().getIntValue();
+        settings.bars_per_system = w->getComboBoxComponent("bars")->getSelectedItemIndex() == 0
+                                       ? 0
+                                       : w->getComboBoxComponent("bars")->getText().getIntValue();
+        settings.landscape = w->getComboBoxComponent("orientation")->getSelectedItemIndex() == 1;
         settings.hide_empty_staves = w->getComboBoxComponent("hide")->getSelectedItemIndex() == 0;
         settings.score_order = w->getComboBoxComponent("order")->getSelectedItemIndex() == 0;
         save_full_score_settings(settings);

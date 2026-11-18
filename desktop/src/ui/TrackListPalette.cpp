@@ -176,4 +176,6 @@ bool track_list_open() { return list_window() != nullptr && list_window()->isVis
 
 TrackListPanel* track_list_panel() { return panel_slot(); }
 
+juce::DocumentWindow* track_list_window() { return list_window().getComponent(); }
+
 }  // namespace vcc::desktop

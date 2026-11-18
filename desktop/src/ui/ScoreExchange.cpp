@@ -238,7 +238,8 @@ FullScoreSettings saved_full_score_settings()
     const auto paper = s.getValue("score.paper", "A3");
     f.paper = (paper == "Tabloid" || paper == "A4" || paper == "Letter") ? paper.toStdString() : std::string("A3");
     f.hide_empty_staves = s.getBoolValue("score.hide_empty", true);
-    f.bars_per_system = juce::jlimit(1, 12, s.getIntValue("score.bars_per_system", 4));
+    f.bars_per_system = juce::jlimit(0, 12, s.getIntValue("score.bars_per_system", 4));
+    f.landscape = s.getBoolValue("score.landscape", false);
     f.score_order = s.getBoolValue("score.orchestral_order", true);
     return f;
 }
@@ -250,6 +251,7 @@ void save_full_score_settings(const FullScoreSettings& f)
     s.setValue("score.paper", juce::String(f.paper));
     s.setValue("score.hide_empty", f.hide_empty_staves);
     s.setValue("score.bars_per_system", f.bars_per_system);
+    s.setValue("score.landscape", f.landscape);
     s.setValue("score.orchestral_order", f.score_order);
     s.saveIfNeeded();
 }
@@ -330,6 +332,7 @@ std::unique_ptr<FullScoreLayout> lay_out_full_score(AppContext& context, const F
     if (settings.paper == "Tabloid") { w = 279.4; h = 431.8; }
     else if (settings.paper == "A4") { w = 210; h = 297; space = 1.0; }
     else if (settings.paper == "Letter") { w = 215.9; h = 279.4; space = 1.0; }
+    if (settings.landscape) std::swap(w, h);
     // Large orchestras get a smaller staff so a system fits the page.
     const std::size_t staves = [&] {
         std::size_t n = 0;
@@ -343,7 +346,8 @@ std::unique_ptr<FullScoreLayout> lay_out_full_score(AppContext& context, const F
     opts.subtitle = settings.concert_pitch ? "Score in C" : "Transposed score";
     opts.composer = d.production.composer;
     opts.hide_empty_staves = settings.hide_empty_staves;
-    opts.bars_per_system = std::max(1, settings.bars_per_system);
+    // "As many as fit": the layout takes fewer bars only where notes would crowd.
+    opts.bars_per_system = settings.bars_per_system <= 0 ? 16 : settings.bars_per_system;
     out->laid = engraving::lay_out_score(parts, engine, opts);
     out->staff_space_mm = space;
     out->page_width_mm = w;

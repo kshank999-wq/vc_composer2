@@ -2294,3 +2294,16 @@ macOS, Linux and Windows. What it took:
     program switch - its articulation's, or back to the instrument's - so
     playback from anywhere is right. `project::with_gm_articulations`;
     test_gm_articulations; sound_pack_checks.
+63. **Layouts keep the floating windows; Score view uses the width**
+    (November 18, 2026).
+    - **Layouts**: a saved layout records the Inspector, the detached staff
+      tools and the track list - open or closed, and where (another display
+      too). Recalling it reopens each where it was. The built-in layouts
+      (Compose, Produce, Mix, Work) and layouts saved before leave them as
+      they are.
+    - **Score view**: pages sit side by side (a spread) when the view is wide
+      enough for two; a Landscape key turns the paper sideways; Bars / line
+      gains "As many as fit" (the layout takes fewer only where notes would
+      crowd), 10 and 12. The full-score export dialog has the same
+      Orientation and bars choices, and the PDF prints landscape.
+    - **Checks**: layout_checks (86), page_view_checks (36d, 36e, landscape PDF).
