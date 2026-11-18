@@ -599,7 +599,7 @@ MainComponent::MainComponent(AppContext& context)
     context_.capture_plugin_states = [this] { capture_plugin_states(); };
     context_.show_comment = [this](const std::string& id) { review::show_comments(context_, id); };
     context_.show_library_for_track = [this] {
-        tracks_.show_library(true);
+        set_library_shown(true);
         tracks_.library().set_view(LibraryBrowser::View::ForTrack);
     };
 
@@ -811,14 +811,10 @@ void MainComponent::resized()
         // New track, the tracks, then the clips (docs/spec/ui, Producer left rack).
         new_track_.setBounds(rack.removeFromTop(200));
         rack.removeFromTop(kGap);
-        clips_.setBounds(rack.removeFromBottom(juce::jlimit(120, 240, rack.getHeight() / 3)));
-        rack.removeFromBottom(kGap);
-        tracks_.setBounds(rack);
+        clips_.setBounds(rack);
     } else {
-        const int markers_h = juce::jlimit(120, 260, rack.getHeight() / 3);
-        markers_.setBounds(rack.removeFromBottom(markers_h));
-        rack.removeFromBottom(kGap);
-        tracks_.setBounds(rack);
+        // The tracks are the edit window's own lanes; the library floats (Window > Library).
+        markers_.setBounds(rack);
     }
     auto edit = edit_.getBounds();
     if (narrow && producer) {
@@ -919,6 +915,43 @@ void MainComponent::set_inspector_shown(bool shown)
 
 bool MainComponent::inspector_shown() const { return inspector_window_ != nullptr && inspector_window_->isVisible(); }
 
+void MainComponent::set_library_shown(bool shown)
+{
+    if (shown) {
+        if (library_window_ == nullptr) {
+            auto& lib = tracks_.library();
+            lib.setVisible(true);
+            auto* win = new dialogs::ToolWindow("Library", &lib, 380, 640, false);
+            win->setResizeLimits(300, 320, 1400, 3000);
+            juce::Component::SafePointer<MainComponent> self(this);
+            juce::Component::SafePointer<dialogs::ToolWindow> safe(win);
+            win->on_close = [self, safe] {
+                if (self == nullptr) return;
+                if (safe != nullptr) {
+                    hw::ui_settings().setValue("library_bounds", safe->getBounds().toString());
+                    hw::ui_settings().saveIfNeeded();
+                }
+                self->context_.commands.commandStatusChanged();
+            };
+            // Where it was last (any connected display), else at the edit window's left.
+            const auto r = juce::Rectangle<int>::fromString(hw::ui_settings().getValue("library_bounds"));
+            bool on_screen = false;
+            for (const auto& d : juce::Desktop::getInstance().getDisplays().displays)
+                on_screen = on_screen || d.userArea.intersects(r.reduced(20));
+            win->setBounds(on_screen ? r : juce::Rectangle<int>(380, 640).withPosition(getScreenX() + 30, getScreenY() + 160));
+            library_window_ = win;
+        }
+        library_window_->setVisible(true);
+        library_window_->setMinimised(false);
+        library_window_->toFront(true);
+    } else if (library_window_ != nullptr) {
+        library_window_->closeButtonPressed();
+    }
+    context_.commands.commandStatusChanged();
+}
+
+bool MainComponent::library_shown() const { return library_window_ != nullptr && library_window_->isVisible(); }
+
 void MainComponent::show_right_tab(int tab)
 {
     right_tab_ = tab;
@@ -931,7 +964,7 @@ void MainComponent::apply_side_visibility()
     markers_.setVisible(side && !producer);
     new_track_.setVisible(side && producer);
     clips_.setVisible(side && producer);
-    tracks_.setVisible(side);
+    tracks_.setVisible(false);  // every track is in the edit window; the library floats
     if (divider_) divider_->setVisible(side);
 }
 
@@ -2289,7 +2322,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
                 cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController, cmd::scoreView, cmd::trackList, cmd::hearEntry,
-                cmd::builtinSounds, cmd::credits, cmd::toggleInspector});
+                cmd::builtinSounds, cmd::credits, cmd::toggleInspector, cmd::libraryWindow});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2514,6 +2547,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::midiSetup: info.setInfo("MIDI Setup...", "MIDI keyboards and controllers (USB, USB-C), on or off", "Studio", 0); break;
         case cmd::builtinSounds:
             info.setInfo("Built-in Sounds...", "The piano and General MIDI orchestra: download, status, credits", "Studio", 0);
+            break;
+        case cmd::libraryWindow:
+            info.setInfo("Library", "Sounds, libraries and players: search, audition, assign - in a floating window", "Window", 0);
+            info.setTicked(library_shown());
+            info.addDefaultKeypress('l', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
             break;
         case cmd::toggleInspector:
             info.setInfo("Inspector", "What is selected, with its articulation, dynamics, velocity and voice keys, in a floating window",
@@ -2852,6 +2890,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::builtinSounds: show_sounds_window(); break;
         case cmd::credits: show_credits_window(); break;
         case cmd::toggleInspector: set_inspector_shown(!inspector_shown()); break;
+        case cmd::libraryWindow: set_library_shown(!library_shown()); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;
         case cmd::reloadCrashedPlugins: {
             const int n = context_.engine.reload_crashed_plugins();
@@ -3020,6 +3059,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
                 m.addCommandItem(c, id);
             m.addSeparator();
             m.addCommandItem(c, cmd::toggleInspector);
+            m.addCommandItem(c, cmd::libraryWindow);
             m.addCommandItem(c, cmd::trackList);
             m.addSeparator();
             m.addCommandItem(c, cmd::account);

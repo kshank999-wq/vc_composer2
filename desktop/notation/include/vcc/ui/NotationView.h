@@ -141,6 +141,9 @@ public:
     /// press on the staff marks where it starts and a drag stretches it to
     /// where it ends - drawn as it goes - and letting go reports the span.
     void set_span_drawing(int kind);
+    /// The pointer over the staff when nothing is being dragged or drawn
+    /// (Composer: the quill while writing).
+    void set_idle_cursor(const juce::MouseCursor& cursor);
     int span_drawing() const noexcept { return span_kind_; }
     std::function<void(std::size_t staff_index, notation::Ticks start, notation::Ticks end)> on_span_drawn;
 
@@ -194,6 +197,7 @@ private:
     juce::Point<int> drag_at_;
     bool dragging_ = false;
     int span_kind_ = 0;                 ///< Drawing a hairpin: 1 crescendo, 2 diminuendo.
+    juce::MouseCursor idle_cursor_;
     bool spanning_ = false;             ///< A hairpin is being dragged out.
     std::size_t span_staff_ = 0;
     notation::Ticks span_start_ = 0;

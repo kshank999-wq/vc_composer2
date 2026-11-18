@@ -19,6 +19,9 @@ public:
 
     /// Popup menu of track actions (also used by other views).
     static void show_track_menu(AppContext& context, const std::string& track_id);
+    /// The instruments a track can play: built-in, virtual instruments by
+    /// maker, the instrument window, the library, a scan.
+    static juce::PopupMenu instrument_menu(AppContext& context, const std::string& track_id);
     /// The instrument range report (Add-On spec §4): the notes outside each
     /// track's range (one track, or every track when `track_id` is empty),
     /// with Move into range. Non-modal; returns the text it shows.
@@ -28,8 +31,7 @@ public:
     /// Popup menu to add a track from the instrument registry.
     static void show_add_track_menu(AppContext& context, juce::Component* target);
 
-    /// The Library tab (Main Spec §10) or the Tracks tab.
-    void show_library(bool library) { tabs_.setCurrentTabIndex(library ? 1 : 0); }
+    /// The sound library (Main Spec §10); it shows in its own window (Window > Library).
     LibraryBrowser& library() noexcept { return *library_; }
 
 private:

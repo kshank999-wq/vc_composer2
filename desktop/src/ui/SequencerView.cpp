@@ -4402,23 +4402,16 @@ private:
     /// be read more than one way asks which reading was meant.
     using ScoreEdits = std::vector<std::pair<notation::EventId, session::NoteTarget>>;
 
-    /// The track a score-note edit belongs to: an articulation track's part
-    /// (it shows the part's notes, with the same ids), else the lane's own.
-    std::string part_of(const std::string& lane) const
-    {
-        const auto* t = m_.ctx.session.data().find_track(lane);
-        return t && !t->articulation_parent.empty() ? t->articulation_parent : lane;
-    }
+    /// The track a score-note edit belongs to: the lane's own (articulation
+    /// tracks hold their own notes).
+    std::string part_of(const std::string& lane) const { return lane; }
 
     void commit_score_edit(Drag kind)
     {
         const auto* l = m_.selected_lane();
         if (!l || perf_sel_.empty()) return;
         auto& session = m_.ctx.session;
-        // An articulation track shows its part's notes (the same ids): the
-        // edit is the part's.
-        std::string track = l->id;
-        if (const auto* t = session.data().find_track(track); t && !t->articulation_parent.empty()) track = t->articulation_parent;
+        const std::string track = l->id;
         const bool move = kind == Drag::PerfMove;
         const Ticks dt = dt_;
         const int dp = dp_;
@@ -4623,9 +4616,7 @@ private:
         rule.addItem(22, "Always apply to the score", true, policy == "apply");
         rule.addItem(23, "Always keep as Producer overrides", true, policy == "keep");
         menu.addSubMenu("Edits that change the score", rule);
-        std::string track = l->id;
-        if (const auto* t = m_.ctx.session.data().find_track(track); t && !t->articulation_parent.empty())
-            track = t->articulation_parent;
+        const std::string track = l->id;
         const auto ids = perf_sel_;
         juce::Component::SafePointer<PianoRoll> self(this);
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition(),

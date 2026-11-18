@@ -1434,6 +1434,14 @@ std::vector<const project::Track*> Session::music_tracks() const
     return out;
 }
 
+std::vector<const project::Track*> Session::composer_tracks() const
+{
+    std::vector<const project::Track*> out;
+    for (const auto* t : music_tracks())
+        if (!t->articulations_expanded) out.push_back(t);
+    return out;
+}
+
 std::vector<const project::Track*> Session::staff_tracks() const
 {
     std::vector<const project::Track*> out;
@@ -1926,10 +1934,19 @@ std::string Session::add_midi_track(const std::string& name)
     return id;
 }
 
+bool Session::set_midi_input(const std::string& id, const std::string& device)
+{
+    return edit(device.empty() ? "MIDI in: all inputs" : "MIDI in: " + device, on_track(id, [&](project::Track& t) {
+        if ((t.kind != project::TrackKind::MidiOnly && t.kind != project::TrackKind::Instrument) || t.midi_input == device) return false;
+        t.midi_input = device;
+        return true;
+    }));
+}
+
 bool Session::set_midi_output(const std::string& id, const std::string& device)
 {
     return edit(device.empty() ? "MIDI out: none" : "MIDI out: " + device, on_track(id, [&](project::Track& t) {
-        if (t.kind != project::TrackKind::MidiOnly || t.midi_output == device) return false;
+        if ((t.kind != project::TrackKind::MidiOnly && t.kind != project::TrackKind::Instrument) || t.midi_output == device) return false;
         t.midi_output = device;
         return true;
     }));

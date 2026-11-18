@@ -277,36 +277,94 @@ void ProjectData::sync_scores()
                 }
         }
     }
-    // Articulation tracks: the parent's notes of their sound, kept in step.
-    std::map<std::string, std::vector<std::string>> siblings;  // parent -> its tracks' groups
-    for (const auto& t : tracks)
-        if (!t.articulation_parent.empty()) siblings[t.articulation_parent].push_back(t.articulation_group);
-    for (auto& child : tracks) {
-        if (child.articulation_parent.empty()) continue;
-        const Track* parent = find_track(child.articulation_parent);
-        const TrackVersion* pv = parent ? parent->active_version() : nullptr;
-        TrackVersion* cv = child.active_version();
-        if (!pv || !cv) continue;
-        const notation::ExpressionMap map = expression_map_for(*parent);
-        std::uint64_t perf = pv->performance.size();
-        for (const auto& [id, ov] : pv->performance)
-            perf = perf * 1099511628211ull + id * 31u + static_cast<std::uint64_t>(ov.onset * 7 + ov.length * 13 + ov.velocity * 17 + ov.cc + ov.pitch * 19);
-        const auto& groups = siblings[child.articulation_parent];
-        std::string group_list;
-        for (const auto& g : groups) group_list += g + ",";
-        const std::string source_key = std::to_string(pv->score.revision()) + "|" + expression_map_key(*parent) + "|" +
-                                       child.articulation_group + "|" + group_list + "|" + std::to_string(perf);
-        if (child.derived_key == source_key) continue;
-        notation::Score derived = pv->score;
-        std::vector<notation::EventId> drop;
-        for (std::size_t s = 0; s < derived.staff_count(); ++s)
-            for (const auto& n : derived.notes(s))
-                if (!n.is_rest && articulation_route(map, n.articulations, groups) != child.articulation_group)
-                    drop.push_back(n.id);
-        for (const auto id : drop) derived.remove_note(id);
-        cv->score = std::move(derived);
-        cv->performance = pv->performance;
-        child.derived_key = source_key;
+    // Articulation tracks own their notes (each its own lane); the part they
+    // came from is the printed part: their notes combined, each marked with
+    // its track's articulation.
+    for (auto& part : tracks) {
+        if (!part.articulations_expanded) continue;
+        TrackVersion* pv = part.active_version();
+        if (!pv) continue;
+        std::vector<Track*> children;
+        for (auto& t : tracks)
+            if (t.articulation_parent == part.id && t.active_version()) children.push_back(&t);
+        if (children.empty()) continue;
+        auto fingerprint = [](const notation::Score& sc) {
+            return std::to_string(sc.revision()) + ":" + std::to_string(sc.total_note_count());
+        };
+        auto children_key = [&] {
+            std::string k = "combined";
+            for (const auto* c : children)
+                k += "|" + c->id + ":" + c->articulation_group + ":" + fingerprint(c->active_version()->score);
+            return k;
+        };
+        // The part itself was edited (the score view, an import, Send to
+        // Track): its notes are shared out to the tracks by sound.
+        const auto hash = part.derived_key.rfind('#');
+        if (hash != std::string::npos && part.derived_key.substr(hash + 1) != fingerprint(pv->score)) {
+            const notation::ExpressionMap map = expression_map_for(part);
+            std::vector<std::string> groups;
+            for (const auto* c : children) groups.push_back(c->articulation_group);
+            for (auto* c : children) {
+                notation::Score mine = pv->score;
+                std::vector<notation::EventId> drop;
+                for (std::size_t st = 0; st < mine.staff_count(); ++st)
+                    for (const auto& n : mine.notes(st))
+                        if (!n.is_rest && articulation_route(map, n.articulations, groups) != c->articulation_group) drop.push_back(n.id);
+                for (const auto id : drop) mine.remove_note(id);
+                c->active_version()->score = std::move(mine);
+                c->active_version()->performance = pv->performance;
+            }
+        }
+        const std::string combined_key = children_key();
+        if (hash != std::string::npos && part.derived_key.substr(0, hash) == combined_key) continue;
+        notation::Score combined = children.front()->active_version()->score;
+        std::vector<notation::EventId> all;
+        for (std::size_t st = 0; st < combined.staff_count(); ++st)
+            for (const auto& n : combined.notes(st)) all.push_back(n.id);
+        for (const auto id : all) combined.remove_note(id);
+        // Rests only where no other track plays.
+        auto sounding = [&](std::size_t st, Ticks from, Ticks to) {
+            for (const auto* c : children) {
+                const auto& sc = c->active_version()->score;
+                if (st >= sc.staff_count()) continue;
+                for (const auto& n : sc.notes(st))
+                    if (!n.is_rest && n.start_tick < to && n.end_tick() > from) return true;
+            }
+            return false;
+        };
+        for (const auto* c : children) {
+            const auto& sc = c->active_version()->score;
+            notation::Articulation mark{};
+            const bool marked = c->articulation_group != "natural" && notation::articulation_from_string(c->articulation_group, mark);
+            for (std::size_t st = 0; st < sc.staff_count() && st < combined.staff_count(); ++st)
+                for (auto n : sc.notes(st)) {
+                    if (n.is_rest && sounding(st, n.start_tick, n.end_tick())) continue;
+                    if (n.is_rest && !combined.notes_in_range(st, n.start_tick, n.end_tick()).empty()) continue;
+                    if (!n.is_rest && marked) n.articulations |= notation::to_mask(mark);
+                    if (!combined.restore_note(st, n)) combined.insert_note(st, n);
+                }
+            if (c == children.front()) continue;
+            // Markings written on any of the tracks.
+            for (const auto& m : sc.dynamics())
+                if (std::none_of(combined.dynamics().begin(), combined.dynamics().end(),
+                                 [&](const auto& x) { return x.tick == m.tick && x.staff == m.staff && x.voice == m.voice; }))
+                    combined.add_dynamic(m);
+            for (const auto& h : sc.hairpins())
+                if (std::none_of(combined.hairpins().begin(), combined.hairpins().end(),
+                                 [&](const auto& x) { return x.start_tick == h.start_tick && x.staff == h.staff && x.voice == h.voice; }))
+                    combined.add_hairpin(h);
+            for (const auto& sl : sc.slurs())
+                if (std::none_of(combined.slurs().begin(), combined.slurs().end(), [&](const auto& x) {
+                        return x.start_tick == sl.start_tick && x.end_tick == sl.end_tick && x.staff == sl.staff && x.voice == sl.voice;
+                    }))
+                    combined.add_slur(sl);
+            for (const auto& tx : sc.texts())
+                if (std::none_of(combined.texts().begin(), combined.texts().end(),
+                                 [&](const auto& x) { return x.tick == tx.tick && x.text == tx.text; }))
+                    combined.add_text(tx);
+        }
+        pv->score = std::move(combined);
+        part.derived_key = combined_key + "#" + fingerprint(pv->score);
     }
 }
 
@@ -1070,6 +1128,7 @@ static json::Value track_to_json(const Track& t)
     if (!t.articulation_parent.empty()) o.set("articulation_parent", t.articulation_parent);
     if (!t.articulation_group.empty()) o.set("articulation_group", t.articulation_group);
     if (!t.midi_output.empty()) o.set("midi_output", t.midi_output);
+    if (!t.midi_input.empty()) o.set("midi_input", t.midi_input);
     if (t.record_source != "midi") o.set("record_source", t.record_source);
     if (!t.sidechain.empty()) o.set("sidechain", t.sidechain);
     if (t.input_quantize > 0) o.set("input_quantize", t.input_quantize);
@@ -1413,6 +1472,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.articulation_parent = j.get_string("articulation_parent");
         t.articulation_group = j.get_string("articulation_group");
         t.midi_output = j.get_string("midi_output", "");
+        t.midi_input = j.get_string("midi_input", "");
         t.record_source = j.get_string("record_source", "midi") == "audio" ? "audio" : "midi";
         t.sidechain = j.get_string("sidechain", "");
         t.input_quantize = std::max<Ticks>(0, j.get_int("input_quantize", 0));

@@ -131,7 +131,7 @@ public:
         const auto* score = view_.score();
         const int staves = score ? std::max(1, static_cast<int>(score->staff_count())) : 1;
         const double spaces = o.margin_above + o.margin_below + 4.0 * staves + o.staff_gap * (staves - 1);
-        return std::max(100, static_cast<int>(std::lround(pixels_per_space * spaces)));
+        return std::max(composer_ui::TrackHeader::kMinHeight, static_cast<int>(std::lround(pixels_per_space * spaces)));
     }
 
     void paint(juce::Graphics& g) override
@@ -398,7 +398,7 @@ void ComposerView::timerCallback()
 
 void ComposerView::rebuild()
 {
-    const auto tracks = context_.session.staff_tracks();
+    const auto tracks = context_.session.composer_tracks();
     std::vector<std::string> ids;
     for (const auto* t : tracks)
         if (t->kind == project::TrackKind::Instrument || t->kind == project::TrackKind::MidiOnly) ids.push_back(t->id);
@@ -502,6 +502,10 @@ void ComposerView::apply_view_settings()
         const auto* v = t ? t->active_version() : nullptr;
         auto& view = s->view();
         view.set_layout_options(options);
+        // Writing: the quill is the pointer over the staff that writes.
+        view.set_idle_cursor(note_entry_ && !chord_mode_ && s->track_id() == editing_track_
+                                 ? composer_ui::IconKey::quill_cursor()
+                                 : juce::MouseCursor(juce::MouseCursor::NormalCursor));
         // Track Trans in notation mode: the lane shows the notes as heard,
         // on a copy with the same note ids (selection and editing still work).
         const int shown_shift = t && t->transpose_mode == "notation" ? t->effective_transpose() : 0;
@@ -678,7 +682,13 @@ void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* 
     note_activity();
     grabKeyboardFocus();
     just_entered_ = false;
+    // A click on another track selects it, in Select mode: it never writes a note.
+    const bool already_editing = strip.track_id() == editing_track_;
     context_.session.select_track(strip.track_id());
+    if (!already_editing) {
+        if (note_entry_ && !chord_mode_) set_note_entry(false);
+        return;
+    }
     if (!editor_ || strip.track_id() != editing_track_) return;
     if (id != notation::kInvalidEventId) {
         handle(editor_->select_and_follow(id));

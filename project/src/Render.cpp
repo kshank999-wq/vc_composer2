@@ -87,6 +87,24 @@ notation::RenderResult render_score_events(const Track& track, const notation::E
 
 RenderedTrack render_track(const Track& track, const notation::ExpressionMap& map, bool performance)
 {
+    // An articulation track plays every note with its sound, marked or not.
+    notation::Articulation mark{};
+    if (!track.articulation_parent.empty() && track.articulation_group != "natural" &&
+        notation::articulation_from_string(track.articulation_group, mark)) {
+        Track marked = track;
+        if (auto* v = marked.active_version()) {
+            std::vector<std::pair<notation::EventId, notation::ScoreNote>> changes;
+            for (std::size_t st = 0; st < v->score.staff_count(); ++st)
+                for (const auto& n : v->score.notes(st))
+                    if (!n.is_rest && !notation::has_articulation(n.articulations, mark)) {
+                        auto m = n;
+                        m.articulations |= notation::to_mask(mark);
+                        changes.emplace_back(n.id, m);
+                    }
+            for (const auto& [id, m] : changes) v->score.modify_note(id, m);
+        }
+        return finish_render(marked, map, render_score_events(marked, map), performance);
+    }
     return finish_render(track, map, render_score_events(track, map), performance);
 }
 
@@ -293,7 +311,7 @@ std::string export_project_midi(const Project& project, bool include_keyswitches
 {
     std::vector<MidiFileTrack> tracks;
     for (const Track* t : project.export_tracks()) {
-        if (!t->articulation_parent.empty()) continue;  // its notes are its parent's
+        if (t->articulations_expanded) continue;  // its articulation tracks hold the notes
         if (t->kind != TrackKind::Instrument && t->kind != TrackKind::MidiOnly) continue;
         RenderedTrack r = render_track(*t);
         MidiFileTrack mt{t->name, r.notes, t->midi_channel == 9 ? -1 : t->assignment.placeholder_program, r.controllers};

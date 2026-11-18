@@ -186,7 +186,7 @@ private:
     std::unique_ptr<editing::ScoreEditor> editor_;
     std::string editing_track_;
     std::string editing_version_;
-    bool note_entry_ = true;
+    bool note_entry_ = false;  ///< Select (the arrow) until Write (the quill) is chosen.
     int hairpin_drawing_ = 0;
     Ticks origin_ = 0;
     std::uint64_t generation_ = 0;

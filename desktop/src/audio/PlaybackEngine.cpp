@@ -937,6 +937,8 @@ public:
         if (engine_.mixer_surface_input().take(device, m)) return;
         // The Articulation Map window learning a keyswitch, controller or program.
         if (engine_.offer_learn(m)) return;
+        // The selected track's MIDI In: only its device plays it.
+        if (!engine_.live_input_allows(source ? source->getName() : juce::String())) return;
         // The input filter, and the retrospective record of what was played.
         if (!engine_.accept_live(m)) return;
         // The deck's Octave keys shift what a MIDI keyboard plays.
@@ -982,6 +984,7 @@ PlaybackEngine::PlaybackEngine(session::Session& session, PluginHost& plugins)
     for (auto& m : input_meters_) m.store(0.0f);
     listener_ = session_.add_listener([this](session::Change c) {
         if (c != session::Change::Document) return;
+        refresh_live_input();
         sync_processors();  // mix changes are heard at once; structure follows with the rebuild
         request_rebuild();
         if (writing_pass_ && !committing_) refresh_writes();
@@ -1471,7 +1474,8 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         if (live_slot >= 0) st.strip.fx_bypassed = false;
         // External MIDI: notes to the hardware (a virtual port also offline;
         // real hardware only while the device runs), never to the instrument.
-        if (t->kind == project::TrackKind::MidiOnly && !t->midi_output.empty() && (t->playback != "audio" || live_slot >= 0)) {
+        if ((t->kind == project::TrackKind::MidiOnly || t->kind == project::TrackKind::Instrument) && !t->midi_output.empty() &&
+            (t->playback != "audio" || live_slot >= 0)) {
             st.external = true;
             st.midi_out = midi_router_->sink_for(juce::String(t->midi_output), !offline_);
             st.midi_channel = std::clamp(t->midi_channel, 0, 15);
@@ -2278,7 +2282,21 @@ float PlaybackEngine::take_input_peak(int channel)
 void PlaybackEngine::set_live_track(const std::string& id)
 {
     live_track_ = id;
+    refresh_live_input();
     request_rebuild();
+}
+
+void PlaybackEngine::refresh_live_input()
+{
+    const auto* t = session_.data().find_track(live_track_);
+    const juce::ScopedLock sl(live_input_lock_);
+    live_input_device_ = t ? juce::String(t->midi_input) : juce::String();
+}
+
+bool PlaybackEngine::live_input_allows(const juce::String& device) const
+{
+    const juce::ScopedLock sl(live_input_lock_);
+    return live_input_device_.isEmpty() || device.isEmpty() || device == live_input_device_;
 }
 
 // --- Recording (message thread) -----------------------------------------------------------

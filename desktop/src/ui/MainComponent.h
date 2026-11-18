@@ -100,6 +100,9 @@ public:
     /// knobs, in a floating window (movable to another screen). Off unless
     /// turned on (the staff tools are at hand anyway); remembered.
     void set_inspector_shown(bool shown);
+    /// Window > Library: the sound library in a floating window (another screen too).
+    void set_library_shown(bool shown);
+    bool library_shown() const;
     bool inspector_shown() const;
     dialogs::ToolWindow* inspector_window() const { return inspector_window_.getComponent(); }
     shell::KeyboardDeck& keyboard() noexcept { return keyboard_; }
@@ -209,6 +212,7 @@ private:
     composer_ui::Inspector inspector_;
     std::unique_ptr<juce::Component> inspector_box_;  ///< Holds the selection readout and the inspector.
     juce::Component::SafePointer<dialogs::ToolWindow> inspector_window_;
+    juce::Component::SafePointer<dialogs::ToolWindow> library_window_;
     shell::ChannelPanel channel_;
     shell::PrintPanel print_;
     shell::MasterPanel master_;

@@ -43,6 +43,33 @@ juce::Path IconKey::path(Icon icon, juce::Rectangle<float> a)
     return p;
 }
 
+const juce::MouseCursor& IconKey::quill_cursor()
+{
+    static const juce::MouseCursor cursor = [] {
+        // Drawn at twice the size for sharp screens; the nib (bottom left) writes.
+        constexpr int size = 64;
+        juce::Image img(juce::Image::ARGB, size, size, true);
+        juce::Graphics g(img);
+        const auto area = juce::Rectangle<float>(2.0f, 2.0f, size - 4.0f, size - 4.0f);
+        const auto p = path(Icon::Quill, area);
+        g.setColour(juce::Colours::black.withAlpha(0.85f));
+        g.strokePath(p, juce::PathStrokeType(3.0f));
+        g.setColour(juce::Colour(0xfff4efe2));
+        g.fillPath(p);
+        const auto b = p.getBounds();
+        juce::Path rib;
+        rib.startNewSubPath(b.getX() + b.getWidth() * 0.12f, b.getBottom() - b.getHeight() * 0.06f);
+        rib.quadraticTo(b.getX() + b.getWidth() * 0.45f, b.getY() + b.getHeight() * 0.45f, b.getRight() - b.getWidth() * 0.05f,
+                        b.getY() + b.getHeight() * 0.03f);
+        g.setColour(juce::Colour(0xff5a4a32));
+        g.strokePath(rib, juce::PathStrokeType(1.6f));
+        // The nib's point: where a note goes.
+        const auto nib = p.getBounds().getBottomLeft();
+        return juce::MouseCursor(juce::ScaledImage(img, 2.0), juce::Point<int>(juce::roundToInt(nib.x / 2.0f), juce::roundToInt(nib.y / 2.0f - 1.0f)));
+    }();
+    return cursor;
+}
+
 void IconKey::paintButton(juce::Graphics& g, bool highlighted, bool down)
 {
     hw::Keycap::paintButton(g, highlighted, down);

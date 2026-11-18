@@ -387,8 +387,11 @@ public:
     /// A MIDI track: notes, sent to an external MIDI device (set_midi_output)
     /// or played by its instrument. Its audio input is the hardware's return.
     std::string add_midi_track(const std::string& name);
-    /// A MIDI track's external MIDI output device by name (empty: none). One undo step.
+    /// An instrument or MIDI track's external MIDI output device by name
+    /// (empty: none - its instrument plays). One undo step.
     bool set_midi_output(const std::string& track_id, const std::string& device);
+    /// The MIDI input a track listens to (empty: every input). One undo step.
+    bool set_midi_input(const std::string& track_id, const std::string& device);
     /// Record-arms a track. Not an undo step and does not dirty the project.
     void set_record_armed(const std::string& track_id, bool armed);
 
@@ -706,9 +709,12 @@ public:
     // --- Queries for views ----------------------------------------------------------
     /// Instrument tracks in display order (folders and video excluded).
     std::vector<const project::Track*> music_tracks() const;
-    /// The tracks that are staves: music tracks but expanded articulation
-    /// tracks (those belong to Producer; their notes are their parent's).
+    /// The tracks that are printed staves: an expanded part stands for its
+    /// articulation tracks (its score is theirs combined).
     std::vector<const project::Track*> staff_tracks() const;
+    /// The edit window's tracks: each articulation track on its own (with its
+    /// own notes) in place of the part it was expanded from.
+    std::vector<const project::Track*> composer_tracks() const;
     /// Whether a track is audible given mute and solo across the project.
     bool audible(const project::Track& track) const;
     /// Total length worth showing: the last note or region end, at least 32 bars.

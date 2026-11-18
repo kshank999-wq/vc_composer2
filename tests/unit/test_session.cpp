@@ -945,11 +945,32 @@ TEST_CASE("articulation tracks: expand a part, play the same notes once, follow 
     CHECK_EQ(back.articulation_tracks(part).size(), 3u);
     CHECK_EQ(back.data().find_track(ids[1])->active_version()->score.total_note_count(), 2u);
     std::filesystem::remove_all(dir);
+    // Written on an articulation track itself (its own lane): the track holds
+    // it, plays it with its sound, and the printed part shows it, marked.
+    {
+        notation::Score own = s.data().find_track(ids[1])->active_version()->score;
+        notation::ScoreNote plain;
+        plain.start_tick = 5 * kTicksPerQuarter;
+        plain.duration = notation::quarter();
+        plain.pitch = notation::spell_midi_note(76, {});
+        own.insert_note(0, plain);
+        REQUIRE(s.commit_score(ids[1], own, "Write"));
+        CHECK_EQ(s.data().find_track(ids[1])->active_version()->score.total_note_count(), 3u);
+        const auto& combined = s.data().find_track(part)->active_version()->score;
+        bool marked = false;
+        for (const auto& n : combined.notes(0))
+            if (n.start_tick == 5 * kTicksPerQuarter)
+                marked = notation::has_articulation(n.articulations, notation::Articulation::Staccato);
+        CHECK(marked);
+        CHECK_EQ(combined.total_note_count(), 6u);
+        CHECK_EQ(s.composer_tracks().size(), 3u);  // the edit window: a lane per sound
+        CHECK_EQ(s.staff_tracks().size(), 1u);     // the printed part: one
+    }
     // Consolidate: one track again, the same music.
     REQUIRE(s.consolidate_articulations(part));
     CHECK_EQ(s.music_tracks().size(), 1u);
     CHECK(!s.data().find_track(part)->articulations_expanded);
-    CHECK_EQ(project::render_track(*s.data().find_track(part)).notes.size(), before.notes.size() + 1);
+    CHECK_EQ(project::render_track(*s.data().find_track(part)).notes.size(), before.notes.size() + 2);
     // Removing an expanded part takes its tracks with it.
     REQUIRE(s.expand_articulations(part).size() == 3u);
     REQUIRE(s.remove_track(part));

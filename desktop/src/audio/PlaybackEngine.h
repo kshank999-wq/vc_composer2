@@ -250,6 +250,8 @@ public:
     /// MIDI thread: false when the filter drops the message. Logs it for
     /// the retrospective record.
     bool accept_live(const juce::MidiMessage& m) noexcept;
+    /// Whether a message from `device` may play the selected track (its MIDI In). Any thread.
+    bool live_input_allows(const juce::String& device) const;
     /// What was played on MIDI inputs while not recording (the last ten
     /// minutes): wall time, and the transport position when it was playing.
     struct LiveEvent {
@@ -704,6 +706,9 @@ private:
     std::atomic<int> live_octave_{0};
     std::array<std::atomic<int>, 128> live_held_{};
     std::string live_track_;
+    void refresh_live_input();
+    juce::CriticalSection live_input_lock_;
+    juce::String live_input_device_;
     std::atomic<int> live_track_index_{-1};
     SurfaceInput surface_input_;
     SurfaceInput mixer_surface_input_;

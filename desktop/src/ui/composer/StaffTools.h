@@ -28,7 +28,7 @@ struct StaffToolsState {
     bool dot = false, triplet = false, rest = false;
     int voice = 0;
     bool chord_mode = false;
-    bool writing = true;        ///< Write (the quill) or Select (the arrow).
+    bool writing = false;       ///< Write (the quill) or Select (the arrow).
     int accent = 50;            ///< The track's accent strength, 1-100.
     int hairpin = 0;            ///< Drawing a crescendo (1) or diminuendo (2) with the mouse.
     juce::String track;         ///< The staff's name, for the header.
@@ -41,6 +41,8 @@ public:
     explicit IconKey(Icon icon) : hw::Keycap("", true), icon_(icon) {}
     /// The icon's outline, fitted to `area` (the checks and the menus use it too).
     static juce::Path path(Icon icon, juce::Rectangle<float> area);
+    /// The quill as a mouse pointer, its nib the hot spot.
+    static const juce::MouseCursor& quill_cursor();
 
 protected:
     void paintButton(juce::Graphics& g, bool highlighted, bool down) override;

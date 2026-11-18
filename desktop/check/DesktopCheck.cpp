@@ -4608,6 +4608,119 @@ void swell_checks(MainWindow& window, const juce::File& dir)
     pump(100);
 }
 
+/// Each track's header: the instrument insert, MIDI in and out; an articulation
+/// track per lane; a click on another track never writes; the quill pointer;
+/// the library in its own window.
+void track_header_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& session = window.context().session;
+    auto& engine = window.context().engine;
+    session.new_empty();
+    const auto vln = session.add_track("Violins I", "strings.violins_1");
+    const auto vla = session.add_track("Violas", "strings.viola");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    session.select_track(vln);
+    pump(150);
+    auto& composer = main.composer();
+    check(composer.strip_count() == 2, "two tracks, two lanes");
+    auto& h = composer.header(0);
+    check(h.instrument_key().getButtonText() == "Instrument" && h.instrument_key().isShowing(),
+          "the header's instrument insert says Instrument until one is assigned");
+    const auto tag = h.trans_key().getBounds();
+    const auto ins = h.instrument_key().getBounds();
+    check(ins.getY() > tag.getBottom() && ins.getX() <= 11 && ins.getRight() >= tag.getRight() - 1,
+          "the instrument insert sits under Treble and Trans, as wide as both");
+    project::PluginRef ref;
+    ref.format = "VST3";
+    ref.identifier = "VST3-Opus-test";
+    ref.name = "Opus";
+    ref.vendor = "EastWest";
+    session.set_instrument_plugin(vln, ref);
+    pump(120);
+    check(composer.header(0).instrument_key().getButtonText() == "Opus", "assigned, it shows the plug-in's name: " +
+                                                                              composer.header(0).instrument_key().getButtonText());
+    session.set_instrument_plugin(vln, {});
+    // MIDI in: the selected track hears only its device.
+    check(session.set_midi_input(vln, "Keys A"), "a track's MIDI In is set");
+    pump(80);
+    check(composer.header(0).midi_in_key().getButtonText() == "In: Keys A", "the header shows MIDI In");
+    check(engine.live_input_allows("Keys A") && !engine.live_input_allows("Pads B"),
+          "the selected track plays from its MIDI In only");
+    session.set_midi_input(vln, {});
+    pump(40);
+    check(engine.live_input_allows("Pads B"), "All inputs: any device plays it");
+    check(session.set_midi_output(vln, "Synth Out"), "an instrument track can send to external MIDI");
+    pump(80);
+    check(composer.header(0).midi_out_key().getButtonText() == "Out: Synth Out" &&
+              composer.header(0).instrument_key().getButtonText() == "External MIDI",
+          "the header shows MIDI Out");
+    session.set_midi_output(vln, {});
+    pump(40);
+    shoot(composer, dir, "track-header");
+
+    // Selecting another track by clicking its staff, while writing: no note.
+    session.select_track(vln);
+    pump(60);
+    composer.set_note_entry(true);
+    pump(40);
+    check(composer.lane(0).getMouseCursor() == composer_ui::IconKey::quill_cursor(), "writing: the pointer is the quill");
+    const auto notes_before = session.data().find_track(vla)->active_version()->score.total_note_count();
+    engraving::InsertionPoint p;
+    p.valid = true;
+    p.staff_index = 0;
+    p.tick = 0;
+    p.pitch = notation::Pitch{notation::Step::C, 4, 0};
+    if (composer.lane(1).on_staff_clicked) composer.lane(1).on_staff_clicked(p);
+    pump(80);
+    check(session.selected_track() == vla && session.data().find_track(vla)->active_version()->score.total_note_count() == notes_before &&
+              !composer.note_entry(),
+          "a click on another track selects it, in Select mode, and writes no note");
+    check(composer.lane(1).getMouseCursor() != composer_ui::IconKey::quill_cursor(), "selecting: the ordinary pointer");
+
+    // Expanded: a lane per articulation, each with its own notes, named so.
+    session.select_track(vln);
+    const auto kids = session.expand_articulations(vln, {"natural", "pizzicato"});
+    pump(150);
+    bool names = composer.strip_count() == 3;
+    juce::StringArray lane_names;
+    for (int i = 0; i < composer.strip_count(); ++i) lane_names.add(composer.header(i).scribble().text().upToFirstOccurrenceOf("\n", false, false));
+    names = names && lane_names.contains("VIOLINS I - NATURAL") && lane_names.contains("VIOLINS I - PIZZICATO");
+    check(kids.size() == 2 && names, "expanded: a lane per articulation, named with it (" + lane_names.joinIntoString(", ") + ")");
+    int pizz_lane = -1;
+    for (int i = 0; i < composer.strip_count(); ++i)
+        if (lane_names[i] == "VIOLINS I - PIZZICATO") pizz_lane = i;
+    if (pizz_lane >= 0) {
+        session.select_track(kids[1]);
+        pump(80);
+        composer.set_note_entry(true);
+        pump(40);
+        if (composer.lane(pizz_lane).on_staff_clicked) composer.lane(pizz_lane).on_staff_clicked(p);
+        pump(80);
+        const auto& own = session.data().find_track(kids[1])->active_version()->score;
+        const auto& part = session.data().find_track(vln)->active_version()->score;
+        bool marked = false;
+        for (const auto& n : part.notes(0)) marked = marked || notation::has_articulation(n.articulations, notation::Articulation::Pizzicato);
+        check(own.total_note_count() == 1 && marked, "written on the Pizzicato lane: the track holds it, the printed part shows pizz.");
+        composer.set_note_entry(false);
+    }
+    shoot(composer, dir, "articulation-lanes");
+    session.consolidate_articulations(vln);
+    pump(80);
+
+    // The left Tracks/Library panel is gone; the library floats.
+    check(!main.track_panel().isVisible(), "no Tracks/Library panel beside the edit window");
+    main.set_library_shown(true);
+    pump(120);
+    auto* lib = find_dialog("Library");
+    check(lib != nullptr && lib->isOnDesktop() && main.library_shown() && main.track_panel().library().isShowing(),
+          "Window > Library: the library in its own window");
+    if (lib) shoot(*lib, dir, "library-window");
+    main.set_library_shown(false);
+    pump(80);
+    check(!main.library_shown(), "and it closes");
+}
+
 void chord_palette_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -6250,7 +6363,7 @@ void library_checks(MainWindow& window, const juce::File& dir)
     // The browser, on the Library tab.
     session.new_empty();
     main.show_workspace(MainComponent::Workspace::Composer);
-    main.track_panel().show_library(true);
+    main.set_library_shown(true);
     pump(100);
     auto& browser = main.track_panel().library();
     browser.set_view(LibraryBrowser::View::Sounds);
@@ -6321,7 +6434,7 @@ void library_checks(MainWindow& window, const juce::File& dir)
     } else {
         check(false, "a template with horns exists");
     }
-    main.track_panel().show_library(false);
+    main.set_library_shown(false);
     session.new_empty();
 }
 
@@ -6401,7 +6514,7 @@ void articulation_map_checks(MainWindow& window, const juce::File& dir)
               "Find substitute shows the library's candidates for that track");
         missing->getTopLevelComponent()->setVisible(false);
     }
-    main.track_panel().show_library(false);
+    main.set_library_shown(false);
     session.new_empty();
 }
 
@@ -9327,10 +9440,11 @@ void articulation_template_checks(MainWindow& window, const juce::File& dir)
     main.show_workspace(MainComponent::Workspace::Composer);
     pump(400);
     const auto linked = rows_in_composer("Violins I");
+    const auto pizz = rows_in_composer("Violins I - Pizzicato");
     const auto timpani = rows_in_composer("Timpani");
     shoot(main, dir, "75-expanded-template-composer");
-    check(linked.endsWith("EXPANDED: 4 ARTIC. TRACKS") && timpani.isNotEmpty() && !timpani.contains("EXPANDED"),
-          "Composer's staff header says the Violins I play through 4 articulation tracks; Timpani plays its own sound");
+    check(linked.isEmpty() && pizz.isNotEmpty() && timpani.isNotEmpty() && !timpani.contains("EXPANDED"),
+          "Composer: each of the Violins I's articulations is its own lane (Violins I - Pizzicato...); Timpani one lane");
 
     main.show_workspace(MainComponent::Workspace::Sequencer);
     pump(400);
@@ -10790,6 +10904,7 @@ int main(int argc, char** argv)
         if (const auto only = juce::SystemStats::getEnvironmentVariable("VCC_CHECK_ONLY", {}); only.isNotEmpty()) {
             const std::vector<std::pair<const char*, void (*)(MainWindow&, const juce::File&)>> sections = {
                 {"freeze_checks", freeze_checks},
+                {"track_header_checks", track_header_checks},
                 {"articulation_checks", articulation_checks},
                 {"articulation_template_checks", articulation_template_checks},
                 {"usage_checks", usage_checks},
@@ -11444,6 +11559,8 @@ int main(int argc, char** argv)
         chord_mode_checks(window, dir);
         section("chord_palette_checks");
         chord_palette_checks(window, dir);
+        section("track_header_checks");
+        track_header_checks(window, dir);
         section("sound_pack_checks");
         sound_pack_checks(window, dir);
         section("swell_checks");

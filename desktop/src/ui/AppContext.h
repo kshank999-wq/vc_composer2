@@ -182,6 +182,7 @@ enum : juce::CommandID {
     builtinSounds,
     credits,
     toggleInspector,
+    libraryWindow,
 };
 }  // namespace cmd
 

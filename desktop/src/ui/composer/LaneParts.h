@@ -31,15 +31,22 @@ public:
     hw::Keycap& solo_key() { return solo_; }
     hw::Keycap& mute_key() { return mute_; }
     hw::Keycap& trans_key() { return trans_; }
+    hw::Keycap& instrument_key() { return instrument_; }
+    hw::Keycap& midi_in_key() { return midi_in_; }
+    hw::Keycap& midi_out_key() { return midi_out_; }
+    /// The header's height with every row showing.
+    static constexpr int kMinHeight = 144;
     hw::SmallKnob& volume() { return vol_; }
     const hw::Lcd& scribble() const { return scribble_; }
 
 private:
     void show_menu();
+    void show_midi_menu(bool input);
     AppContext& context_;
     std::string track_;
     hw::Lcd number_{{}, 11.0f}, scribble_{{}, 12.0f}, vol_lcd_{{}, 9.5f}, pan_lcd_{{}, 9.5f};
     hw::Keycap rec_{"R", true}, solo_{"S", true}, mute_{"M", true}, tag_{"Treble"}, trans_{"Trans"};
+    hw::Keycap instrument_{"Instrument"}, midi_in_{"In: All"}, midi_out_{"Out: None"};
     hw::SmallKnob vol_, pan_;
     hw::Meter meter_{hw::Meter::Orientation::Vertical, 12};
 };

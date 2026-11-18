@@ -327,8 +327,14 @@ void NotationView::set_span_drawing(int kind)
 {
     span_kind_ = kind;
     spanning_ = false;
-    setMouseCursor(kind != 0 ? juce::MouseCursor::CrosshairCursor : juce::MouseCursor::NormalCursor);
+    setMouseCursor(kind != 0 ? juce::MouseCursor(juce::MouseCursor::CrosshairCursor) : idle_cursor_);
     repaint();
+}
+
+void NotationView::set_idle_cursor(const juce::MouseCursor& cursor)
+{
+    idle_cursor_ = cursor;
+    if (span_kind_ == 0 && !dragging_) setMouseCursor(idle_cursor_);
 }
 
 void NotationView::mouseDown(const juce::MouseEvent& event)
@@ -414,7 +420,7 @@ void NotationView::mouseUp(const juce::MouseEvent& event)
     const bool dragged = dragging_;
     pressed_ = notation::kInvalidEventId;
     dragging_ = false;
-    setMouseCursor(juce::MouseCursor::NormalCursor);
+    setMouseCursor(idle_cursor_);
     if (id == notation::kInvalidEventId || score_ == nullptr)
         return;
     if (!dragged) {

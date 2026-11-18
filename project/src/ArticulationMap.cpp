@@ -272,7 +272,17 @@ std::vector<Track> make_articulation_tracks(const Track& part, const std::vector
         TrackVersion v;
         v.id = ids.next("ver");
         v.name = "Version 1";
-        if (const auto* pv = part.active_version()) v.score = pv->score;  // filtered by sync_scores
+        // Its own notes from now on: the part's notes that play this sound.
+        if (const auto* pv = part.active_version()) {
+            v.score = pv->score;
+            v.performance = pv->performance;
+            const auto map = expression_map_for(part);
+            std::vector<notation::EventId> drop;
+            for (std::size_t st = 0; st < v.score.staff_count(); ++st)
+                for (const auto& n : v.score.notes(st))
+                    if (!n.is_rest && articulation_route(map, n.articulations, groups) != g) drop.push_back(n.id);
+            for (const auto id : drop) v.score.remove_note(id);
+        }
         c.versions = {std::move(v)};
         c.active_version_id = c.versions.front().id;
         out.push_back(std::move(c));

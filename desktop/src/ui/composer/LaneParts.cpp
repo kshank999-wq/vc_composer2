@@ -15,8 +15,26 @@ namespace vcc::desktop::composer_ui {
 TrackHeader::TrackHeader(AppContext& context, std::string track_id) : context_(context), track_(std::move(track_id))
 {
     for (auto* c : std::initializer_list<juce::Component*>{&number_, &scribble_, &rec_, &solo_, &mute_, &tag_, &trans_, &vol_, &pan_,
-                                                           &vol_lcd_, &pan_lcd_, &meter_})
+                                                           &vol_lcd_, &pan_lcd_, &meter_, &instrument_, &midi_in_, &midi_out_})
         addAndMakeVisible(c);
+    // The instrument insert (as on a Pro Tools track): "Instrument" until one
+    // is assigned, then its name. Click: built-in, virtual instruments, library.
+    instrument_.set_legend_size(9.0f);
+    instrument_.setComponentID("track_instrument");
+    instrument_.setWantsKeyboardFocus(false);
+    instrument_.onClick = [this] {
+        context_.session.select_track(track_);
+        TrackPanel::instrument_menu(context_, track_)
+            .showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&instrument_));
+    };
+    for (auto* k : {&midi_in_, &midi_out_}) {
+        k->set_legend_size(8.5f);
+        k->setWantsKeyboardFocus(false);
+    }
+    midi_in_.setComponentID("track_midi_in");
+    midi_out_.setComponentID("track_midi_out");
+    midi_in_.onClick = [this] { show_midi_menu(true); };
+    midi_out_.onClick = [this] { show_midi_menu(false); };
     // Trans (Add-On spec §10): the track's transpose, at hand.
     trans_.set_legend_size(9.0f);
     trans_.setWantsKeyboardFocus(false);
@@ -102,6 +120,21 @@ void TrackHeader::refresh()
                                     juce::String(session::Session::interval_name(s)) + (t->transpose_bypass ? ", bypassed)" : ")")
                               : juce::String(why));
     }
+    // The instrument insert: the plug-in's name once one is assigned.
+    {
+        juce::String name = !t->instrument_plugin.empty() ? juce::String(t->instrument_plugin.name) : juce::String("Instrument");
+        if (!t->midi_output.empty()) name = "External MIDI";
+        instrument_.setButtonText(name);
+        instrument_.setToggleState(!t->instrument_plugin.empty(), juce::dontSendNotification);
+        instrument_.setTooltip(t->instrument_plugin.empty() ? juce::String("Instrument: the built-in sound. Click to assign a virtual instrument")
+                                                            : "Instrument: " + juce::String(t->instrument_plugin.vendor) + " " +
+                                                                  juce::String(t->instrument_plugin.name) + ". Click to change");
+        midi_in_.setButtonText(t->midi_input.empty() ? juce::String("In: All") : "In: " + juce::String(t->midi_input));
+        midi_in_.setTooltip("MIDI In: " + (t->midi_input.empty() ? juce::String("every input") : juce::String(t->midi_input)));
+        midi_out_.setButtonText(t->midi_output.empty() ? juce::String("Out: None") : "Out: " + juce::String(t->midi_output));
+        midi_out_.setTooltip("MIDI Out: " + (t->midi_output.empty() ? juce::String("none (the instrument plays)")
+                                                                      : juce::String(t->midi_output) + " (external)"));
+    }
     // The staff tag: what the staff reads.
     juce::String tag = "Treble";
     if (const auto* v = t->active_version()) {
@@ -170,6 +203,10 @@ void TrackHeader::resized()
     mute_.setBounds(65, 44, 24, 22);
     tag_.setBounds(11, 70, 50, 20);
     trans_.setBounds(63, 70, 42, 20);
+    // Under Treble and Trans, as wide as both: the instrument; then MIDI in and out.
+    instrument_.setBounds(11, 94, 94, 20);
+    midi_in_.setBounds(11, 118, 84, 18);
+    midi_out_.setBounds(98, 118, 84, 18);
     vol_.setBounds(112, 52, 28, 28);
     pan_.setBounds(150, 52, 28, 28);
     vol_lcd_.setBounds(106, 82, 40, 15);
@@ -181,6 +218,35 @@ void TrackHeader::mouseDown(const juce::MouseEvent& e)
 {
     context_.session.select_track(track_);
     if (e.mods.isPopupMenu()) show_menu();
+}
+
+void TrackHeader::show_midi_menu(bool input)
+{
+    context_.session.select_track(track_);
+    const auto* t = context_.session.data().find_track(track_);
+    if (!t) return;
+    juce::PopupMenu m;
+    const std::string current = input ? t->midi_input : t->midi_output;
+    m.addSectionHeader(input ? "MIDI In" : "MIDI Out");
+    m.addItem(input ? "All inputs" : "None (the instrument plays)", true, current.empty(), [this, input] {
+        if (input) context_.session.set_midi_input(track_, {});
+        else context_.session.set_midi_output(track_, {});
+    });
+    const auto devices = input ? juce::MidiInput::getAvailableDevices() : juce::MidiOutput::getAvailableDevices();
+    if (devices.isEmpty()) m.addItem(input ? "No MIDI inputs connected" : "No MIDI outputs connected", false, false, [] {});
+    for (const auto& d : devices) {
+        const std::string name = d.name.toStdString();
+        m.addItem(d.name, true, name == current, [this, input, name] {
+            if (input) context_.session.set_midi_input(track_, name);
+            else context_.session.set_midi_output(track_, name);
+        });
+    }
+    // One saved with the project but not connected now.
+    if (!current.empty() && std::none_of(devices.begin(), devices.end(), [&](const auto& d) { return d.name.toStdString() == current; }))
+        m.addItem(juce::String(current) + " (not connected)", false, true, [] {});
+    m.addSeparator();
+    m.addItem("MIDI Setup...", [this] { context_.commands.invokeDirectly(cmd::midiSetup, true); });
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(input ? &midi_in_ : &midi_out_));
 }
 
 void TrackHeader::show_menu()
@@ -201,7 +267,8 @@ void TrackHeader::show_menu()
     // Its Producer track(s): consolidated (one track switches articulations)
     // or expanded (a track per sound).
     const auto* t = d.find_track(track_);
-    const bool expanded = t && t->articulations_expanded;
+    const auto* part = t && !t->articulation_parent.empty() ? d.find_track(t->articulation_parent) : t;
+    const bool expanded = part && part->articulations_expanded;
     m.addItem("Show in Producer", [this] {
         context_.session.select_track(track_);
         context_.commands.invokeDirectly(cmd::showSequencer, true);

@@ -1,5 +1,7 @@
 #include "ui/TrackPanel.h"
 
+#include <map>
+
 #include "ui/library/ArticulationMapWindow.h"
 #include "vcc/project/Percussion.h"
 #include "ui/library/LibraryBrowser.h"
@@ -416,7 +418,6 @@ TrackPanel::TrackPanel(AppContext& c) : context_(c)
     tracks_ = std::make_unique<TrackList>(c);
     library_ = std::make_unique<LibraryBrowser>(c);
     tabs_.addTab("Tracks", colours::panel, tracks_.get(), false);
-    tabs_.addTab("Library", colours::panel, library_.get(), false);
     tabs_.setTabBarDepth(28);
     tabs_.setOutline(0);
     addAndMakeVisible(tabs_);
@@ -427,6 +428,38 @@ TrackPanel::~TrackPanel() = default;
 void TrackPanel::paint(juce::Graphics& g) { g.fillAll(colours::panel); }
 
 void TrackPanel::resized() { tabs_.setBounds(getLocalBounds()); }
+
+juce::PopupMenu TrackPanel::instrument_menu(AppContext& c, const std::string& id)
+{
+    juce::PopupMenu instruments;
+    const auto* t = c.session.data().find_track(id);
+    if (!t) return instruments;
+    instruments.addItem(sounds::state() == sounds::State::Ready ? "Built-in sound (piano / General MIDI)" : "Built-in placeholder sound", true,
+                        t->instrument_plugin.empty(), [&c, id] { c.session.set_instrument_plugin(id, {}); });
+    instruments.addSeparator();
+    // Virtual instruments by maker (EastWest, Spitfire, Native Instruments...).
+    auto list = c.plugins.instruments();
+    if (list.isEmpty()) instruments.addItem("No instrument plug-ins scanned yet", false, false, [] {});
+    std::map<juce::String, juce::PopupMenu> by_maker;
+    for (const auto& d : list) {
+        auto ref = c.plugins.ref_for(d);
+        const bool current = ref.identifier == t->instrument_plugin.identifier;
+        const auto maker = d.manufacturerName.isEmpty() ? juce::String("Other") : d.manufacturerName;
+        by_maker[maker].addItem(d.name + (d.pluginFormatName.isEmpty() ? juce::String() : "  (" + d.pluginFormatName + ")"), true,
+                                current, [&c, id, ref] { c.session.set_instrument_plugin(id, ref); });
+    }
+    for (auto& [maker, menu] : by_maker) instruments.addSubMenu(maker, menu);
+    instruments.addSeparator();
+    instruments.addItem("Open instrument window", !t->instrument_plugin.empty(), false, [&c, id] {
+        if (c.show_plugin_window) c.show_plugin_window(id);
+    });
+    instruments.addItem("Library...", [&c, id] {
+        c.session.select_track(id);
+        if (c.show_library_for_track) c.show_library_for_track();
+    });
+    instruments.addItem("Scan for plug-ins...", [&c] { c.commands.invokeDirectly(cmd::scanPlugins, true); });
+    return instruments;
+}
 
 void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
 {
@@ -442,23 +475,8 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
         else
             m.addItem("Approve " + juce::String(v->name) + " (lock it)", [&c, id, vid] { c.session.set_version_approved(id, vid, true); });
     }
-    juce::PopupMenu instruments;
-    instruments.addItem(sounds::state() == sounds::State::Ready ? "Built-in sound (piano / General MIDI)" : "Built-in placeholder sound", true, t->instrument_plugin.empty(),
-                        [&c, id] { c.session.set_instrument_plugin(id, {}); });
-    instruments.addSeparator();
-    auto list = c.plugins.instruments();
-    if (list.isEmpty()) instruments.addItem("No instrument plug-ins scanned yet", false, false, [] {});
-    for (const auto& d : list) {
-        auto ref = c.plugins.ref_for(d);
-        const bool current = ref.identifier == t->instrument_plugin.identifier;
-        instruments.addItem(d.manufacturerName + " - " + d.name, true, current,
-                            [&c, id, ref] { c.session.set_instrument_plugin(id, ref); });
-    }
-    instruments.addSeparator();
-    instruments.addItem("Scan for plug-ins...", [&c] { c.commands.invokeDirectly(cmd::scanPlugins, true); });
+    juce::PopupMenu instruments = instrument_menu(c, id);
     m.addSubMenu("Instrument", instruments);
-    m.addItem("Open instrument window", !t->instrument_plugin.empty(),
-              false, [&c, id] { if (c.show_plugin_window) c.show_plugin_window(id); });
     m.addItem("Articulation map...", [&c, id] { show_articulation_map(c, id); });
     {
         juce::PopupMenu drums;
