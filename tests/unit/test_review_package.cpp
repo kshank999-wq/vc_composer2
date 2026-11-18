@@ -239,7 +239,7 @@ TEST_CASE("package: media are collected, paths made relative, dependencies liste
     CHECK(fs::exists(fs::u8path(out + "/Audio Files/Choir.wav")));
     CHECK(fs::exists(fs::u8path(out + "/Picture/Cut3.mov")));
     CHECK_EQ(fs::file_size(fs::u8path(out + "/Audio Files/Vln_01 2.wav")), static_cast<std::uintmax_t>(500));
-    CHECK_EQ(res.project_file, out + "/Cue 1M3_ Arrival.vcc2");
+    CHECK_EQ(res.project_file, out + "/Cue 1M3_ Arrival.vcc");
     const auto report = files::read_file(out + "/Package Report.txt");
     REQUIRE(report);
     CHECK(report->find("MISSING (1)") != std::string::npos);
@@ -251,7 +251,7 @@ TEST_CASE("package: media are collected, paths made relative, dependencies liste
     const auto moved = tmp("pkg-out") + "/Moved";
     fs::rename(fs::u8path(out), fs::u8path(moved));
     Session r(catalogs());
-    REQUIRE(r.open(moved + "/Cue 1M3_ Arrival.vcc2"));
+    REQUIRE(r.open(moved + "/Cue 1M3_ Arrival.vcc"));
     int found = 0, lost = 0;
     for (const auto& c : r.data().find_track(vox)->active_version()->audio_clips)
         (fs::exists(fs::u8path(r.resolve_audio_path(c.file))) ? found : lost) += 1;
