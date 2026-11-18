@@ -37,6 +37,9 @@ public:
     static juce::String channel();
     /// Whether this build can look for updates at all (a site is configured).
     static bool available();
+    /// Whether this copy may download updates: signed in, activated with a
+    /// licence, or a preview (previews update with no account at all).
+    static bool may_download();
 
     struct Check {
         bool ok = false;  ///< False: the site could not be asked (message says why).

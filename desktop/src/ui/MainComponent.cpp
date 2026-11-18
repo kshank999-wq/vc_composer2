@@ -523,15 +523,25 @@ MainComponent::MainComponent(AppContext& context)
     // A little after start-up, quietly: is there a newer build on vc-composer.com?
     {
         juce::Component::SafePointer<MainComponent> self(this);
-        // Once signed in, a newer build is fetched and offered for install
-        // (and again right after signing in).
-        set_after_sign_in([self] {
-            if (self != nullptr) auto_update(self->context_, [self] { return self != nullptr && self->confirm_discard(); });
+        // A newer build is fetched in the background - previews with no
+        // account, releases once signed in or activated - and installed by
+        // itself when nothing is unsaved or playing (or at the next start).
+        auto idle = [self] {
+            return self != nullptr && !self->context_.session.dirty() && !self->context_.engine.playing() &&
+                   !self->context_.engine.recording();
+        };
+        auto ask = [self] { return self != nullptr && self->confirm_discard(); };
+        set_after_sign_in([self, ask, idle] {
+            if (self != nullptr) auto_update(self->context_, ask, idle);
         });
-        juce::Timer::callAfterDelay(20000, [self] {
+        // One downloaded last time goes in first, before any work starts.
+        juce::Timer::callAfterDelay(2500, [self, idle] {
+            if (self != nullptr) install_ready_update(self->context_, idle);
+        });
+        juce::Timer::callAfterDelay(20000, [self, ask, idle] {
             if (self == nullptr) return;
-            if (Account::get().signed_in() || Account::get().device_activated()) {
-                auto_update(self->context_, [self] { return self != nullptr && self->confirm_discard(); });
+            if (Updater::may_download()) {
+                auto_update(self->context_, ask, idle);
                 return;
             }
             check_for_updates_quietly([self](juce::String version) {

@@ -17,6 +17,7 @@ public:
     ~UpdatePanel() override;
 
     void check(std::function<void()> done = {});
+    juce::ToggleButton& automatic_button() { return automatic_; }
     /// Download and verify; with `then_install`, install and quit after.
     void download(bool then_install, std::function<void()> done = {});
 
@@ -36,6 +37,7 @@ private:
     double progress_value_ = 0.0;
     juce::ProgressBar progress_{progress_value_};
     juce::TextButton check_{"Check Again"}, install_{"Install and Restart"}, later_{"Later"};
+    juce::ToggleButton automatic_;
     std::optional<licensing::UpdateOffer> offer_;
     juce::File file_;
     bool busy_ = false;
@@ -50,7 +52,17 @@ UpdatePanel* update_panel();
 /// (checked against the site's checksum) and offers Install and Restart -
 /// at start-up and right after signing in. `before_quit` asks about unsaved
 /// work first. Does nothing when not signed in or already under way.
-void auto_update(AppContext& context, std::function<bool()> before_quit);
+/// Previews need no account. With "Install updates automatically" on (the
+/// default) the download installs at once when `idle` says nothing is unsaved
+/// or playing, else by itself at the next start; off, Install and Restart is offered.
+void auto_update(AppContext& context, std::function<bool()> before_quit, std::function<bool()> idle = {});
+/// At start-up: installs an update downloaded earlier (and quits) when the
+/// setting is on and `idle`. True if it did.
+bool install_ready_update(AppContext& context, std::function<bool()> idle);
+/// The version downloaded and waiting to install, or empty.
+juce::String ready_update_version();
+bool install_updates_automatically();
+void set_install_updates_automatically(bool on);
 /// Whether an automatic update is downloading now (the checks).
 bool auto_update_busy();
 

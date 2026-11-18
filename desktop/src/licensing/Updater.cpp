@@ -76,11 +76,17 @@ Updater::Check Updater::check()
     return c;
 }
 
+bool Updater::may_download()
+{
+    auto& account = Account::get();
+    return channel() == "preview" || account.signed_in() || account.device_activated();
+}
+
 Updater::Downloaded Updater::download(const licensing::UpdateOffer& offer, const std::function<void(double)>& progress)
 {
     Downloaded d;
     auto& account = Account::get();
-    if (!account.signed_in() && !account.device_activated()) {
+    if (!may_download()) {
         d.message = "Sign in first (Help > Account and Licence...): updates download through your account";
         return d;
     }

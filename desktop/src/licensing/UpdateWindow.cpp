@@ -6,6 +6,8 @@
 #include "licensing/AccountWindow.h"
 #include "ui/Dialogs.h"
 #include "ui/Theme.h"
+#include "ui/hw/HwTheme.h"
+#include "vcc/licensing/Update.h"
 
 namespace vcc::desktop {
 
@@ -48,7 +50,12 @@ UpdatePanel::UpdatePanel(AppContext& context, std::function<bool()> before_quit)
         if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed();
     };
     for (auto* b : {&check_, &install_, &later_}) addAndMakeVisible(*b);
-    setSize(560, 330);
+    automatic_.setButtonText("Install updates automatically (when nothing is unsaved or playing, else at the next start)");
+    automatic_.setColour(juce::ToggleButton::textColourId, colours::text);
+    automatic_.setToggleState(install_updates_automatically(), juce::dontSendNotification);
+    automatic_.onClick = [this] { set_install_updates_automatically(automatic_.getToggleState()); };
+    addAndMakeVisible(automatic_);
+    setSize(560, 360);
     update_buttons();
 }
 
@@ -62,7 +69,7 @@ void UpdatePanel::update_buttons()
 {
     check_.setEnabled(!busy_);
     install_.setEnabled(!busy_ && offer_.has_value());
-    install_.setButtonText(Account::get().signed_in() || Account::get().device_activated() || !offer_ ? "Install and Restart"
+    install_.setButtonText(Updater::may_download() || !offer_ ? "Install and Restart"
                                                                                                         : "Sign In to Install...");
 }
 
@@ -90,7 +97,7 @@ void UpdatePanel::check(std::function<void()> done)
 void UpdatePanel::download(bool then_install, std::function<void()> done)
 {
     if (!offer_) return;
-    if (!Account::get().signed_in() && !Account::get().device_activated()) {
+    if (!Updater::may_download()) {
         status_.setText("Updates download through your account: sign in, then press Install again.", juce::dontSendNotification);
         show_account_window(context_);
         if (done) done();
@@ -144,6 +151,8 @@ void UpdatePanel::resized()
     r.removeFromTop(6);
     status_.setBounds(r.removeFromTop(44));
     auto buttons = r.removeFromBottom(32);
+    r.removeFromBottom(4);
+    automatic_.setBounds(r.removeFromBottom(24));
     install_.setBounds(buttons.removeFromLeft(170).reduced(0, 2));
     buttons.removeFromLeft(8);
     check_.setBounds(buttons.removeFromLeft(120).reduced(0, 2));
@@ -156,7 +165,7 @@ void UpdatePanel::resized()
 
 void show_update_window(AppContext& context, std::function<bool()> before_quit)
 {
-    dialogs::show_tool(update_window(), "Check for Updates", 560, 330,
+    dialogs::show_tool(update_window(), "Check for Updates", 560, 360,
                        [&context, before_quit] { return new UpdatePanel(context, before_quit); });
     if (auto* p = panel_slot()) p->check();
 }
@@ -173,15 +182,68 @@ std::atomic<bool>& auto_busy()
 
 bool auto_update_busy() { return auto_busy().load(); }
 
-void auto_update(AppContext& context, std::function<bool()> before_quit)
+namespace {
+constexpr const char* kAutoInstall = "updates_install_automatically";
+constexpr const char* kReadyFile = "update_ready_file";
+constexpr const char* kReadyVersion = "update_ready_version";
+
+void forget_ready_update()
 {
-    // Signed in, or activated with a licence: an activated computer updates
-    // without ever being asked to sign in again.
-    if (!Updater::available() || (!Account::get().signed_in() && !Account::get().device_activated()) ||
-        auto_busy().exchange(true))
-        return;
+    hw::ui_settings().removeValue(kReadyFile);
+    hw::ui_settings().removeValue(kReadyVersion);
+    hw::ui_settings().saveIfNeeded();
+}
+
+/// Installs `file` and quits. False (with the reason in the status line) if it could not start.
+bool install_now(AppContext& ctx, const juce::File& file, const juce::String& version)
+{
+    if (const auto error = Updater::get().install(file); error.isNotEmpty()) {
+        ctx.status(error);
+        return false;
+    }
+    forget_ready_update();
+    ctx.status("Installing VC Composer " + version + "...");
+    juce::JUCEApplicationBase::quit();
+    return true;
+}
+}  // namespace
+
+bool install_updates_automatically() { return hw::ui_settings().getBoolValue(kAutoInstall, true); }
+
+void set_install_updates_automatically(bool on)
+{
+    hw::ui_settings().setValue(kAutoInstall, on);
+    hw::ui_settings().saveIfNeeded();
+}
+
+juce::String ready_update_version()
+{
+    const auto version = hw::ui_settings().getValue(kReadyVersion);
+    const juce::File file(hw::ui_settings().getValue(kReadyFile));
+    if (version.isEmpty() || !juce::File::isAbsolutePath(file.getFullPathName()) || !file.existsAsFile() ||
+        !licensing::is_newer(version.toStdString(), Updater::current_version().toStdString()))
+        return {};
+    return version;
+}
+
+bool install_ready_update(AppContext& context, std::function<bool()> idle)
+{
+    const auto version = ready_update_version();
+    if (version.isEmpty()) {
+        if (hw::ui_settings().containsKey(kReadyVersion)) forget_ready_update();  // installed, or gone
+        return false;
+    }
+    if (!install_updates_automatically() || (idle && !idle())) return false;
+    return install_now(context, juce::File(hw::ui_settings().getValue(kReadyFile)), version);
+}
+
+void auto_update(AppContext& context, std::function<bool()> before_quit, std::function<bool()> idle)
+{
+    // Signed in, activated with a licence, or a preview: none of them is ever
+    // asked to sign in for an update.
+    if (!Updater::available() || !Updater::may_download() || auto_busy().exchange(true)) return;
     AppContext* ctx = &context;
-    juce::Thread::launch([ctx, before_quit = std::move(before_quit)] {
+    juce::Thread::launch([ctx, before_quit = std::move(before_quit), idle = std::move(idle)] {
         const auto found = Updater::get().check();
         if (!found.offer) {
             auto_busy() = false;
@@ -198,10 +260,22 @@ void auto_update(AppContext& context, std::function<bool()> before_quit)
             juce::MessageManager::callAsync(
                 [ctx, version, pct] { ctx->status("Downloading VC Composer " + version + ": " + juce::String(pct) + "%"); });
         });
-        juce::MessageManager::callAsync([ctx, version, got, before_quit] {
+        juce::MessageManager::callAsync([ctx, version, got, before_quit, idle] {
             auto_busy() = false;
             if (!got.ok) {
                 ctx->status("The update to " + version + " did not download (" + got.message + "): Help > Check for Updates");
+                return;
+            }
+            if (install_updates_automatically()) {
+                // Remembered, so it goes in at the next start if not now.
+                hw::ui_settings().setValue(kReadyFile, got.file.getFullPathName());
+                hw::ui_settings().setValue(kReadyVersion, version);
+                hw::ui_settings().saveIfNeeded();
+                // Nothing unsaved and nothing playing: in now, no questions.
+                // Otherwise it never interrupts: it installs the next time
+                // VC Composer starts.
+                if (idle && idle() && install_now(*ctx, got.file, version)) return;
+                ctx->status("VC Composer " + version + " is downloaded: it installs by itself the next time VC Composer starts");
                 return;
             }
             ctx->status("VC Composer " + version + " is downloaded and ready to install");
@@ -219,12 +293,7 @@ void auto_update(AppContext& context, std::function<bool()> before_quit)
                         return;
                     }
                     if (before_quit && !before_quit()) return;
-                    if (const auto error = Updater::get().install(file); error.isNotEmpty()) {
-                        ctx->status(error);
-                        return;
-                    }
-                    ctx->status("Installing VC Composer " + version + "...");
-                    juce::JUCEApplicationBase::quit();
+                    install_now(*ctx, file, version);
                 });
         });
     });

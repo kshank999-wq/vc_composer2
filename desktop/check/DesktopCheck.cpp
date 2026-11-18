@@ -4626,6 +4626,29 @@ void chord_palette_checks(MainWindow& window, const juce::File& dir)
     check(win != nullptr && win->isOnDesktop() && palette.isShowing(),
           "the chord palette is a window of its own (it can go on another screen)");
     if (win) shoot(*win, dir, "98-chord-palette");
+    if (win) {
+        // Its header strip drags the whole window (to another screen), not the
+        // palette inside its frame.
+        const auto win_before = win->getScreenPosition();
+        const auto palette_in_win = palette.getBounds().getPosition();
+        const juce::Point<float> grab(60.0f, 12.0f);
+        auto src = juce::Desktop::getInstance().getMainMouseSource();
+        const auto now = juce::Time::getCurrentTime();
+        juce::MouseEvent down(src, grab, {}, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, &palette, &palette, now, grab, now, 1, false);
+        palette.mouseDown(down);
+        const auto moved = grab + juce::Point<float>(120.0f, 70.0f);
+        juce::MouseEvent drag(src, moved, juce::ModifierKeys::leftButtonModifier, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, &palette,
+                              &palette, now, grab, now, 1, false);
+        palette.mouseDrag(drag);
+        pump(40);
+        check(win->getScreenPosition() == win_before + juce::Point<int>(120, 70) &&
+                  palette.getBounds().getPosition() == palette_in_win,
+              "dragging the chord palette's header moves its window, not the palette inside it (" +
+                  win_before.toString() + " -> " + win->getScreenPosition().toString() + ", palette " +
+                  palette_in_win.toString() + " -> " + palette.getBounds().getPosition().toString() + ")");
+        win->setTopLeftPosition(win_before);
+        pump(20);
+    }
     auto on_staves = [&](Ticks tick) {
         std::array<juce::String, 2> out;
         const auto& score = session.data().find_track(piano)->active_version()->score;
@@ -8374,7 +8397,11 @@ void updater_checks(MainWindow& window, const juce::File& dir)
     }
 
     auto d = updater.download(*c.offer);
-    check(!d.ok && d.message.contains("Sign in"), "downloading needs the account: " + d.message);
+    if (preview::is_preview())
+        check(d.ok, "a preview updates with no account at all: " + d.message);
+    else
+        check(!d.ok && d.message.contains("Sign in"), "a release downloads through the account: " + d.message);
+    downloads.deleteRecursively();
     check(account.verify_code("ann@example.com", "123456").ok, "signed in");
 
     double last = 0.0;
@@ -8398,7 +8425,9 @@ void updater_checks(MainWindow& window, const juce::File& dir)
     check(!account.signed_in() && as_device.ok && device_sent.length() == 64,
           "signed out but activated: the update still downloads, the computer vouching for itself (" + as_device.message + ")");
     account.folder().getChildFile("activation.json").deleteFile();
-    check(!updater.download(*c.offer).ok, "neither signed in nor activated: no download");
+    check(updater.download(*c.offer).ok == preview::is_preview(),
+          preview::is_preview() ? "a preview, neither signed in nor activated: still downloads"
+                                : "a release, neither signed in nor activated: no download");
     check(account.verify_code("ann@example.com", "123456").ok, "signed in again");
 
     // A file that does not match the catalogue's checksum never stays.
@@ -8424,12 +8453,32 @@ void updater_checks(MainWindow& window, const juce::File& dir)
           "macOS swaps the app from the disk image once this copy has quit");
 #endif
 
+    // "Install updates automatically": on by default; a download is remembered
+    // and goes in at the next start, never while something is unsaved or playing.
+    check(install_updates_automatically(), "updates install automatically unless turned off");
+    c = updater.check();
+    if (c.offer) {
+        const auto ready = updater.download(*c.offer);
+        hw::ui_settings().setValue("update_ready_file", ready.file.getFullPathName());
+        hw::ui_settings().setValue("update_ready_version", juce::String(c.offer->version));
+        check(ready.ok && ready_update_version() == juce::String(c.offer->version),
+              "a downloaded update waits for the next start: " + ready_update_version());
+        check(!install_ready_update(ctx, [] { return false; }), "with unsaved work or playing, it does not install");
+        set_install_updates_automatically(false);
+        check(!install_ready_update(ctx, [] { return true; }), "turned off, it never installs by itself");
+        set_install_updates_automatically(true);
+        hw::ui_settings().setValue("update_ready_version", Updater::current_version());
+        check(ready_update_version().isEmpty() && !install_ready_update(ctx, [] { return true; }) &&
+                  !hw::ui_settings().containsKey("update_ready_version"),
+              "once that version is running, the reminder is cleared");
+    }
     show_update_window(ctx, [] { return true; });
     UpdatePanel* panel = nullptr;
     wait_for([&] { return (panel = update_panel()) != nullptr && panel->has_offer(); }, 15000);
     check(panel && panel->has_offer() && panel->status_text().contains("0.2.0-preview.1"),
           "Help > Check for Updates shows the offer: " + (panel ? panel->status_text() : juce::String()));
     if (panel) {
+        check(panel->automatic_button().getToggleState(), "the update window shows Install updates automatically, ticked");
         panel->getTopLevelComponent()->setSize(760, 480);
         shoot(*panel->getTopLevelComponent(), dir, "81-updates");
         panel->getTopLevelComponent()->setVisible(false);

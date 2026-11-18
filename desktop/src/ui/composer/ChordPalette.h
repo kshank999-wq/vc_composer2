@@ -103,6 +103,7 @@ public:
 private:
     void changed();
     void fill_bass_box();
+    juce::Component& drag_target();
 
     ChordModeState& state_;
     std::vector<std::unique_ptr<hw::Keycap>> roots_, accidentals_, alterations_, types_, inversions_;
@@ -113,6 +114,7 @@ private:
     hw::Lcd octave_lcd_{"", 12.0f}, name_lcd_{"", 15.0f};
     juce::String notes_, warning_;
     juce::ComponentDragger dragger_;
+    juce::Point<int> drag_from_, window_from_;
     juce::ComponentBoundsConstrainer constrainer_;
     bool refreshing_ = false;
 };

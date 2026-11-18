@@ -263,3 +263,29 @@ describe('an activated computer (automatic updates, no sign-in)', () => {
     expect(stub.reads.length).toBe(before);
   });
 });
+
+describe('an installed preview updating itself (no account)', () => {
+  it('downloads the preview build with only its computer fingerprint', async () => {
+    const stub = stubClient({ licenses: [], release_builds: builds, device_activations: [] });
+    const answer = await issueDownload(
+      { platform: 'windows', channel: 'preview', userId: null, deviceFingerprint: 'ef'.repeat(32) },
+      deps(stub.client),
+    );
+    expect(answer.status).toBe(200);
+  });
+
+  it('never the stable build, and not a malformed fingerprint', async () => {
+    const stub = stubClient({ licenses: [], release_builds: builds, device_activations: [] });
+    const stable = await issueDownload(
+      { platform: 'windows', channel: 'stable', userId: null, deviceFingerprint: 'ef'.repeat(32) },
+      deps(stub.client),
+    );
+    expect(stable.status).toBe(401);
+    const bad = await issueDownload(
+      { platform: 'windows', channel: 'preview', userId: null, deviceFingerprint: 'nope' },
+      deps(stub.client),
+    );
+    expect(bad.status).toBe(401);
+    expect(stub.signed).toEqual([]);
+  });
+});

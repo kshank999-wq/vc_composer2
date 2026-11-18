@@ -544,14 +544,36 @@ void ChordPalette::resized()
     audition_.setBounds(row);
 }
 
+juce::Component& ChordPalette::drag_target()
+{
+    // In its own window the header moves the window (to any screen), not
+    // the palette inside it.
+    auto* top = getTopLevelComponent();
+    return top != nullptr && top != this && top->isOnDesktop() ? *top : *this;
+}
+
 void ChordPalette::mouseDown(const juce::MouseEvent& e)
 {
-    if (e.y < 30) dragger_.startDraggingComponent(this, e);
+    if (e.y >= 30) return;
+    auto& target = drag_target();
+    if (&target == this) {
+        dragger_.startDraggingComponent(this, e);
+        return;
+    }
+    // Moved in screen coordinates: the window goes anywhere on the desktop.
+    drag_from_ = e.getScreenPosition();
+    window_from_ = target.getScreenPosition();
 }
 
 void ChordPalette::mouseDrag(const juce::MouseEvent& e)
 {
-    if (e.mouseDownPosition.y < 30) dragger_.dragComponent(this, e, &constrainer_);
+    if (e.mouseDownPosition.y >= 30) return;
+    auto& target = drag_target();
+    if (&target == this) {
+        dragger_.dragComponent(this, e, &constrainer_);  // docked: stays in its parent
+        return;
+    }
+    target.setTopLeftPosition(window_from_ + (e.getScreenPosition() - drag_from_));
 }
 
 }  // namespace vcc::desktop::composer_ui

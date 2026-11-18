@@ -114,7 +114,13 @@ export const issueDownload = async (incoming: DownloadRequest, deps: DownloadDep
     if (owner) request = { ...request, userId: owner };
   }
 
-  if (!request.userId) {
+  // An installed preview updating itself needs no account: the free preview is
+  // anyone's, and the app always identifies its computer. (The website's
+  // download button still asks for a sign-in.)
+  const installedPreview =
+    request.channel === 'preview' && !!request.deviceFingerprint && FINGERPRINT.test(request.deviceFingerprint);
+
+  if (!request.userId && !installedPreview) {
     return {
       status: 401,
       body: {
@@ -132,7 +138,7 @@ export const issueDownload = async (incoming: DownloadRequest, deps: DownloadDep
     const { data: rows, error } = await client
       .from('licenses')
       .select(LICENSE_COLUMNS)
-      .eq('user_id', request.userId)
+      .eq('user_id', request.userId as string)
       .eq('status', 'active');
     if (error) return { status: 500, body: { error: 'Could not read your licences' } };
     licenses = ((rows ?? []) as Record<string, unknown>[])
