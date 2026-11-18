@@ -104,7 +104,7 @@ Gallery::Gallery()
         k->setRadioGroupId(2);
         k->set_led_dot(true);
     }
-    for (const char* n : {"Track", "Page", "Mixer"}) key(views_, n, true, juce::String(n) == "Track").setRadioGroupId(3);
+    for (const char* n : {"Track", "Score", "Mixer"}) key(views_, n, true, juce::String(n) == "Track").setRadioGroupId(3);
     grid_ = &lcd("1/16", 16.0f);
     grid_->set_justification(juce::Justification::centred);
     key(zoom_, "-", false);

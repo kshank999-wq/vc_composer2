@@ -37,6 +37,10 @@ public:
 
     void set_playhead(Ticks tick, bool playing);
     bool note_entry() const noexcept { return note_entry_; }
+    /// Scrolls the lanes so a track's staff is in view (the Track List).
+    void reveal_track(const std::string& track_id);
+    /// The lanes' scroll position (for checks).
+    int lanes_scroll() const { return viewport_.getViewPositionY(); }
     /// The checks: answers a marking click instead of the menu (staff, tick).
     std::function<void(std::size_t, Ticks)> marking_menu_hook;
     /// Takes away the dynamic or hairpin nearest a place (what the marking menu's Remove does).

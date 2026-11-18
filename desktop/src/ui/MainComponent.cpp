@@ -37,6 +37,7 @@
 #include "system/PluginWatch.h"
 #include "ui/StudioSetup.h"
 #include "ui/RecentProjects.h"
+#include "ui/TrackListPalette.h"
 #include "ui/Import.h"
 #include "ui/console/ConsoleView.h"
 #include "ui/ScoreExchange.h"
@@ -847,11 +848,29 @@ void MainComponent::set_dock_hidden(bool hidden)
 void MainComponent::set_work_view(bool on)
 {
     work_view_ = on;
+    toolbar_.set_work_view(on);
     apply_side_visibility();
     resized();
     context_.commands.commandStatusChanged();
     context_.status(on ? "Work view: side panels hidden (View > Work View or Cmd/Ctrl+Alt+W brings them back)"
                        : "Side panels shown");
+}
+
+void MainComponent::toggle_track_list()
+{
+    if (track_list_open()) close_track_list();
+    else show_track_list(context_, [this](const std::string& id) { go_to_track(id); });
+    context_.commands.commandStatusChanged();
+}
+
+bool MainComponent::track_list_shown() const { return track_list_open(); }
+
+void MainComponent::go_to_track(const std::string& track_id)
+{
+    context_.session.select_track(track_id);
+    if (workspace_ == Workspace::Composer && !page_mode_) composer_.reveal_track(track_id);
+    else if (workspace_ == Workspace::Producer) sequencer_.reveal_track(track_id);
+    if (const auto* t = context_.session.data().find_track(track_id)) context_.status("Track: " + juce::String(t->name));
 }
 
 layouts::ViewLayout MainComponent::capture_layout() const
@@ -1021,7 +1040,7 @@ void MainComponent::set_page_view(bool page)
     toolbar_.set_page_view(page);
     if (workspace_ != Workspace::Composer) show_workspace(Workspace::Composer);
     else show_workspace(Workspace::Composer);  // shows the one and hides the other
-    context_.status(page ? "Page view: the full score as it prints - click a system to move the playhead there"
+    context_.status(page ? "Score view: the full score as it prints and exports - click a system to move the playhead there"
                          : "Track view");
 }
 
@@ -2133,7 +2152,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
-                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController});
+                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController, cmd::scoreView, cmd::trackList});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2448,6 +2467,16 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.addDefaultKeypress('w', cmdKey | juce::ModifierKeys::altModifier);
             break;
         case cmd::saveLayout: info.setInfo("Save Layout...", "Saves how the window is arranged now, by name", "View", 0); break;
+        case cmd::scoreView:
+            info.setInfo("Score View", "The full score on pages, laid out as it prints and exports", "View",
+                         workspace_ == Workspace::Composer && page_mode_ ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.addDefaultKeypress('s', cmdKey | juce::ModifierKeys::altModifier);
+            break;
+        case cmd::trackList:
+            info.setInfo("Track List", "A floating list of the tracks: click one to go to it", "View",
+                         track_list_shown() ? juce::ApplicationCommandInfo::isTicked : 0);
+            info.addDefaultKeypress('l', cmdKey | juce::ModifierKeys::altModifier);
+            break;
         default: break;
     }
 }
@@ -2680,6 +2709,11 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::toggleDock: set_dock_hidden(!dock_hidden_); break;
         case cmd::toggleWorkView: set_work_view(!work_view_); break;
         case cmd::saveLayout: save_layout_as(); break;
+        case cmd::scoreView:
+            if (workspace_ == Workspace::Composer && page_mode_) set_page_view(false);
+            else set_page_view(true);
+            break;
+        case cmd::trackList: toggle_track_list(); break;
         default: return false;
     }
     return true;
@@ -2738,8 +2772,10 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
                             cmd::showCueManager})
                 m.addCommandItem(c, id);
             m.addSeparator();
+            m.addCommandItem(c, cmd::scoreView);
             m.addCommandItem(c, cmd::toggleWorkView);
             m.addCommandItem(c, cmd::toggleDock);
+            m.addCommandItem(c, cmd::trackList);
             m.addSubMenu("Layouts", layouts_menu());
             m.addSeparator();
             m.addCommandItem(c, cmd::toggleFollow);

@@ -565,6 +565,15 @@ void ComposerView::note_dragged(Strip& strip, notation::EventId id, const engrav
     handle(editor_->move_notes(id, to.tick - from.tick, steps));
 }
 
+void ComposerView::reveal_track(const std::string& track_id)
+{
+    for (auto& s : strips_)
+        if (s->track_id() == track_id) {
+            viewport_.setViewPosition(viewport_.getViewPositionX(), std::max(0, s->getY() - 8));
+            return;
+        }
+}
+
 void ComposerView::set_playhead(Ticks tick, bool playing)
 {
     for (auto& s : strips_) s->view().set_playhead(tick, playing || tick > 0);

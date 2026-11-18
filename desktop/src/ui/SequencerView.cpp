@@ -5248,6 +5248,12 @@ void SequencerView::visibilityChanged()
 
 void SequencerView::bring_up_to_date() { impl_->deferred.flush(); }
 
+void SequencerView::reveal_track(const std::string& track_id)
+{
+    impl_->lanes.ensure_visible(track_id);
+    impl_->lanes.repaint();
+}
+
 void SequencerView::reveal(Ticks tick)
 {
     impl_->deferred.flush();

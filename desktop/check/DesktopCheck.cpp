@@ -35,6 +35,7 @@
 #include "ui/Dialogs.h"
 #include "ui/StudioSetup.h"
 #include "ui/RecentProjects.h"
+#include "ui/TrackListPalette.h"
 #include "ui/Import.h"
 #include "vcc/project/Mackie.h"
 #include "system/PluginWatch.h"
@@ -7447,6 +7448,87 @@ void ostinato_audition_checks(MainWindow& window, const juce::File& dir)
     ctx.session.new_empty();
 }
 
+void view_tools_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    session.new_empty();
+    session.add_template("cinematic.orchestra.consolidated");
+    main.apply_layout(*layouts::find("Compose"));
+    pump(300);
+    // The Score view: a key on the toolbar and View > Score View.
+    auto* score_key = main.toolbar().key("Score");
+    check(score_key != nullptr, "the Composer toolbar has a Score key");
+    if (score_key) score_key->triggerClick();
+    pump(300);
+    check(main.page_view_shown() && main.page_view().isVisible(), "Score shows the full score on pages");
+    shoot(window, dir, "95-score-view");
+    ctx.commands.invokeDirectly(cmd::scoreView, false);
+    pump(200);
+    check(!main.page_view_shown(), "View > Score View switches back to the tracks");
+
+    // Work: a key on the toolbar, lit while the side panels are hidden.
+    auto* work_key = main.toolbar().key("Work");
+    if (work_key) work_key->triggerClick();
+    pump(200);
+    check(work_key != nullptr && main.work_view() && work_key->getToggleState(), "the Work key hides the side panels and lights");
+    if (work_key) work_key->triggerClick();
+    pump(100);
+    check(!main.work_view() && !work_key->getToggleState(), "pressed again, the panels come back");
+
+    // The floating track list: grouped, searchable, a click goes to the track; it collapses.
+    main.set_work_view(true);
+    if (auto* list_key = main.toolbar().key("List")) list_key->triggerClick();
+    pump(300);
+    auto* panel = track_list_panel();
+    check(panel != nullptr && main.track_list_shown(), "List opens the floating track list");
+    if (panel != nullptr) {
+        const auto rows = panel->rows();
+        int headings = 0, tracks = 0;
+        std::string last;
+        for (const auto& [id, text] : rows) {
+            if (id.empty()) ++headings;
+            else {
+                ++tracks;
+                last = id;
+            }
+        }
+        check(tracks >= 10 && headings >= 3, "it lists the tracks under their sections (" + juce::String(tracks) + " tracks, " +
+                                                 juce::String(headings) + " sections)");
+        if (auto* w = find_dialog("Track List")) shoot(*w, dir, "96-track-list");
+        main.composer().reveal_track(rows[1].first);
+        pump(100);
+        check(panel->pick(last), "a track in the list can be picked");
+        pump(200);
+        check(session.selected_track() == last && main.composer().lanes_scroll() > 0,
+              "picking it selects it and scrolls the lanes to it (scroll " + juce::String(main.composer().lanes_scroll()) + ")");
+        shoot(window, dir, "97-track-list-go-to");
+        panel->set_filter("tuba");
+        bool only_tuba = true;
+        int found = 0;
+        for (const auto& [id, text] : panel->rows())
+            if (!id.empty()) {
+                ++found;
+                only_tuba = only_tuba && text.containsIgnoreCase("tuba");
+            }
+        check(found == 1 && only_tuba, "typing finds an instrument (" + juce::String(found) + ")");
+        panel->set_filter({});
+        panel->set_collapsed(true);
+        pump(100);
+        auto* w = find_dialog("Track List");
+        check(w != nullptr && w->getHeight() < 120, "it collapses to a slim bar (" + juce::String(w ? w->getHeight() : -1) + " px)");
+        panel->set_collapsed(false);
+        pump(100);
+        check(w != nullptr && w->getHeight() > 300, "and opens again");
+    }
+    main.toggle_track_list();
+    pump(200);
+    check(!main.track_list_shown(), "List again closes it");
+    main.set_work_view(false);
+    session.new_empty();
+}
+
 void updater_checks(MainWindow& window, const juce::File& dir)
 {
     auto& ctx = window.context();
@@ -9183,7 +9265,7 @@ void chord_symbol_checks(MainWindow& window, const juce::File& dir)
     check(shown, "the stored symbols show as solid pills in the Chords row");
 
     // On the printed score: over the top staff, in the Page view too.
-    if (auto* page_key = main.toolbar().key("Page")) page_key->triggerClick();
+    if (auto* page_key = main.toolbar().key("Score")) page_key->triggerClick();
     pump(200);
     auto& pv = main.page_view();
     pv.relayout();
@@ -9213,7 +9295,7 @@ void page_view_checks(MainWindow& window, const juce::File& dir)
     session.new_from_template("cinematic.horror.psychological");
     main.show_workspace(MainComponent::Workspace::Composer);
     pump(100);
-    auto* page_key = main.toolbar().key("Page");
+    auto* page_key = main.toolbar().key("Score");
     check(page_key && page_key->isEnabled(), "the Page key is enabled");
     if (!page_key) return;
     page_key->triggerClick();
@@ -9777,7 +9859,8 @@ int main(int argc, char** argv)
                 {"note_mouse_checks", note_mouse_checks},
                 {"project_file_checks", project_file_checks},
                 {"hardware_insert_checks", hardware_insert_checks},
-                {"ostinato_audition_checks", ostinato_audition_checks}};
+                {"ostinato_audition_checks", ostinato_audition_checks},
+                {"view_tools_checks", view_tools_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -10465,6 +10548,8 @@ int main(int argc, char** argv)
         hardware_insert_checks(window, dir);
         section("ostinato_audition_checks");
         ostinato_audition_checks(window, dir);
+        section("view_tools_checks");
+        view_tools_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

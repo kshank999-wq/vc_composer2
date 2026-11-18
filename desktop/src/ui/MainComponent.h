@@ -130,6 +130,10 @@ public:
     bool dock_hidden() const noexcept { return dock_hidden_; }
     /// Work view: the side panels hidden, the edit window as large as it gets.
     void set_work_view(bool on);
+    /// View > Track List: the floating list of tracks; picking one goes to it.
+    void toggle_track_list();
+    bool track_list_shown() const;
+    void go_to_track(const std::string& track_id);
     bool work_view() const noexcept { return work_view_; }
     /// View > Layouts: the arrangement now, and one applied in a step.
     layouts::ViewLayout capture_layout() const;

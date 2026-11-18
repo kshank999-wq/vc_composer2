@@ -24,6 +24,8 @@ public:
     void visibilityChanged() override;
     /// Scrolls so `tick` is in view (a jog or shuttle moved the playhead).
     void reveal(Ticks tick);
+    /// Scrolls the track lanes so a track is in view.
+    void reveal_track(const std::string& track_id);
 
     /// The range selected by dragging on the ruler (the punch range); empty
     /// when first == second.

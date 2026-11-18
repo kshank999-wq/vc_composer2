@@ -2204,3 +2204,27 @@ macOS, Linux and Windows. What it took:
     - **Checks**: `test_note_drag`; the desktop check's `note_mouse_checks`,
       `project_file_checks`, `hardware_insert_checks` (a simulated cable:
       the ping, the return in the strip, the messages; screenshots 89, 90).
+58. **Ostinato on the staff, note values, lanes that show everything, Score
+    view, Work key and a floating track list** (November 18, 2026).
+    - **Ostinato Creator, notation first**: Send to Track writes the figure on
+      the track's staff (spelled in the written key, chords for notes
+      together, split and tied at barlines, drums on the kit's lines with its
+      heads), written as the pattern reads (grid steps, not the short sounding
+      lengths); it plays from the staff. Only a MIDI-only track gets a region.
+      The cards show each variant as notation, exactly as it will be written
+      (Notation / MIDI switch). Audition is a lit toggle: press again to stop.
+    - **Note values**: a note placed with the mouse counts as just entered,
+      so a value key pressed next is for the next notes.
+    - **Lanes fit their markings**: each Composer lane grows to what is drawn
+      on it (ledger notes, dynamics, hairpins, articulations); a dynamic or
+      hairpin clicked offers Remove (one undo step).
+    - **Score view**: the Composer toolbar's *Score* key (was Page) and
+      *View > Score View* (Cmd/Ctrl+Alt+S) show the full score on pages as it
+      prints and exports.
+    - **Work key** on both toolbars (lit while the side panels are hidden).
+    - **Track List** (*List* key, *View > Track List*, Cmd/Ctrl+Alt+L): a
+      floating list of the tracks under their sections, with a search box;
+      picking one selects it and scrolls the lanes to it; it collapses to a
+      slim bar and is listed under Window.
+    - **Checks**: test_ostinato_send; ostinato_audition_checks,
+      note_mouse_checks, view_tools_checks (screenshots 91-97).

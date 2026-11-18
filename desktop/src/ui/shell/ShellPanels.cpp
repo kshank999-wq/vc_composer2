@@ -56,6 +56,10 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
         template_key.setComponentID("composer_add_template");
         template_key.setTooltip("Add a scoring template's tracks (horror, comedy, action...) to this project");
         template_key.onClick = invoke(cmd::addTemplate);
+        auto& list_key = add(tracks, "List", 52);
+        list_key.setComponentID("composer_track_list");
+        list_key.setTooltip("A floating list of the tracks: click one to go to it (Cmd/Ctrl+Alt+L)");
+        list_key.onClick = invoke(cmd::trackList);
         groups_.push_back(tracks);
         Group entry{"Entry"};
         auto& note = add(entry, "Note entry", 100, false);
@@ -79,8 +83,8 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
         track.setToggleState(true, juce::dontSendNotification);
         track.setTooltip("Track view: one staff per track, where notes are written");
         track.setComponentID("view_track");
-        auto& page = add(view, "Page", 52, true);
-        page.setTooltip("Page view: the full score on pages, as it prints");
+        auto& page = add(view, "Score", 58, true);
+        page.setTooltip("Score view: the full score on pages, laid out as it prints and exports (View > Score View)");
         page.setComponentID("view_page");
         track.onClick = [this] {
             if (on_page_view) on_page_view(false);
@@ -89,6 +93,13 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
             if (on_page_view) on_page_view(true);
         };
         add(view, "Mixer", 62).onClick = invoke(cmd::showMixer);
+        {
+            auto& work = add(view, "Work", 56, false);
+            work.set_led_dot(true);
+            work.setComponentID("composer_work_view");
+            work.setTooltip("Work view: hides the side panels for the most room (Cmd/Ctrl+Alt+W)");
+            work.onClick = invoke(cmd::toggleWorkView);
+        }
         groups_.push_back(view);
         Group tools{"Tools"};
         add(tools, "Chords", 66).onClick = invoke(cmd::chordExplorer);
@@ -156,6 +167,10 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
         tmpl.setComponentID("producer_add_template");
         tmpl.setTooltip("Add a scoring template's tracks (horror, comedy, action...) to this project");
         tmpl.onClick = invoke(cmd::addTemplate);
+        auto& plist = add(tracks, "List", 52);
+        plist.setComponentID("producer_track_list");
+        plist.setTooltip("A floating list of the tracks: click one to go to it (Cmd/Ctrl+Alt+L)");
+        plist.onClick = invoke(cmd::trackList);
         groups_.push_back(tracks);
         Group record{"Record"};
         record.producer = true;
@@ -206,6 +221,13 @@ Toolbar::Toolbar(AppContext& context) : context_(context)
         groups_.push_back(tools);
         Group view{"View"};
         view.producer = true;
+        {
+            auto& work = add(view, "Work", 56, false);
+            work.set_led_dot(true);
+            work.setComponentID("producer_work_view");
+            work.setTooltip("Work view: hides the side panels for the most room (Cmd/Ctrl+Alt+W)");
+            work.onClick = invoke(cmd::toggleWorkView);
+        }
         add(view, "Mixer", 62).onClick = invoke(cmd::showMixer);
         {
             auto& routing = add(view, "Routing", 66);
@@ -268,7 +290,7 @@ void Toolbar::set_entry_state(bool entry, const notation::Duration& value, bool 
 void Toolbar::set_page_view(bool page)
 {
     if (auto* t = key("Track")) t->setToggleState(!page, juce::dontSendNotification);
-    if (auto* p = key("Page")) p->setToggleState(page, juce::dontSendNotification);
+    if (auto* p = key("Score")) p->setToggleState(page, juce::dontSendNotification);
 }
 
 hw::Keycap* Toolbar::key(const juce::String& legend)
@@ -287,6 +309,14 @@ void Toolbar::set_producer(bool producer)
         for (auto* k : g.keys) k->setVisible(g.producer == producer);
     resized();
     repaint();
+}
+
+void Toolbar::set_work_view(bool on)
+{
+    for (const auto& g : groups_)
+        for (auto* k : g.keys)
+            if (k->getComponentID() == "composer_work_view" || k->getComponentID() == "producer_work_view")
+                k->setToggleState(on, juce::dontSendNotification);
 }
 
 void Toolbar::update(bool punch, bool pencil, int edit_mode, bool smart)
