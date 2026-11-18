@@ -530,7 +530,7 @@ MainComponent::MainComponent(AppContext& context)
         });
         juce::Timer::callAfterDelay(20000, [self] {
             if (self == nullptr) return;
-            if (Account::get().signed_in()) {
+            if (Account::get().signed_in() || Account::get().device_activated()) {
                 auto_update(self->context_, [self] { return self != nullptr && self->confirm_discard(); });
                 return;
             }

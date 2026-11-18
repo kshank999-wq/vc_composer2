@@ -2345,3 +2345,12 @@ macOS, Linux and Windows. What it took:
       Composer is in front again (they could stay behind it after switching
       to the browser or mail).
     - **Checks**: account_checks (password, code, automatic licence link).
+66. **Activated computers update without signing in** (November 18, 2026).
+    A computer that activated a licence downloads updates on its own: the
+    app sends its device fingerprint (`X-VCC-Device`, a salted SHA-256 only
+    that computer holds) with every download request, and the site lets an
+    activation still in force, on a live licence, download as that licence's
+    account - stable and preview alike. A lapsed sign-in never stops
+    automatic updates; deactivating the computer (or a revoked licence) does.
+    Checks: updater_checks (signed out but activated); web
+    `lib/__tests__/downloads.test.ts`.

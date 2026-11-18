@@ -332,6 +332,26 @@ Account::Reply Account::api(const juce::String& method, const juce::String& path
     return out;
 }
 
+bool Account::device_activated() const
+{
+    const juce::ScopedLock sl(lock_);
+    return !read_json(file("activation.json")).get_string("activatedAt").empty();
+}
+
+Account::Reply Account::device_get(const juce::String& path)
+{
+    Reply out;
+    juce::String headers = "X-VCC-Device: " + device_fingerprint() + "\r\n";
+    if (const auto token = access_token(); token.isNotEmpty()) headers << "Authorization: Bearer " << token << "\r\n";
+    const auto r = request(config().site_url + path, "GET", headers);
+    out.status = r.status;
+    out.body = r.body;
+    if (!out.ok())
+        out.error = out.status == 401 ? juce::String("Sign in (Help > Account and Licence...), or activate this computer with your licence")
+                                      : error_of(r, "The server refused");
+    return out;
+}
+
 Account::Reply Account::put_bytes(const juce::String& url, const juce::MemoryBlock& data)
 {
     Reply out;

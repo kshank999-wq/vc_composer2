@@ -15,6 +15,7 @@ type Row = Record<string, unknown>;
 interface Catalogue {
   licenses: Row[];
   release_builds: Row[];
+  device_activations?: Row[];
 }
 
 /** Just enough of the client: filtered selects, `maybeSingle`, and signing. */
@@ -23,7 +24,7 @@ const stubClient = (catalogue: Catalogue) => {
   const signed: string[] = [];
   const query = (table: keyof Catalogue) => {
     const filters: Array<[string, unknown]> = [];
-    const rows = () => catalogue[table].filter((row) => filters.every(([column, value]) => row[column] === value));
+    const rows = () => (catalogue[table] ?? []).filter((row) => filters.every(([column, value]) => row[column] === value));
     const builder = {
       select: () => builder,
       eq: (column: string, value: unknown) => {
@@ -188,5 +189,77 @@ describe('the stable channel', () => {
     const stub = stubClient({ licenses: [licence({ user_id: 'somebody-else' })], release_builds: builds });
     const answer = await issueDownload({ platform: 'windows', channel: 'stable', userId: USER }, deps(stub.client));
     expect(answer.status).toBe(403);
+  });
+});
+
+describe('an activated computer (automatic updates, no sign-in)', () => {
+  const DEVICE = 'ab'.repeat(32);
+  const activation = (over: Row = {}): Row => ({
+    license_id: '00000000-0000-4000-8000-000000000001',
+    device_fingerprint: DEVICE,
+    deactivated_at: null,
+    ...over,
+  });
+
+  it('downloads the stable build as its licence\'s account', async () => {
+    const stub = stubClient({ licenses: [licence()], release_builds: builds, device_activations: [activation()] });
+    const answer = await issueDownload(
+      { platform: 'windows', channel: 'stable', userId: null, deviceFingerprint: DEVICE },
+      deps(stub.client),
+    );
+    expect(answer.status).toBe(200);
+    expect(stub.signed).toEqual(['releases/windows/2.0.0/VC-Composer-Setup.exe']);
+  });
+
+  it('downloads the preview too', async () => {
+    const stub = stubClient({ licenses: [licence()], release_builds: builds, device_activations: [activation()] });
+    const answer = await issueDownload(
+      { platform: 'windows', channel: 'preview', userId: null, deviceFingerprint: DEVICE },
+      deps(stub.client),
+    );
+    expect(answer.status).toBe(200);
+  });
+
+  it('refuses a computer that was deactivated', async () => {
+    const stub = stubClient({
+      licenses: [licence()],
+      release_builds: builds,
+      device_activations: [activation({ deactivated_at: '2026-11-10T00:00:00.000Z' })],
+    });
+    const answer = await issueDownload(
+      { platform: 'windows', channel: 'stable', userId: null, deviceFingerprint: DEVICE },
+      deps(stub.client),
+    );
+    expect(answer.status).toBe(401);
+    expect(stub.signed).toEqual([]);
+  });
+
+  it('refuses one whose licence was revoked', async () => {
+    const stub = stubClient({
+      licenses: [licence({ status: 'revoked' })],
+      release_builds: builds,
+      device_activations: [activation()],
+    });
+    const answer = await issueDownload(
+      { platform: 'windows', channel: 'stable', userId: null, deviceFingerprint: DEVICE },
+      deps(stub.client),
+    );
+    expect(answer.status).toBe(401);
+  });
+
+  it('refuses an unknown or malformed fingerprint without looking it up', async () => {
+    const stub = stubClient({ licenses: [licence()], release_builds: builds, device_activations: [activation()] });
+    const unknown = await issueDownload(
+      { platform: 'windows', channel: 'stable', userId: null, deviceFingerprint: 'cd'.repeat(32) },
+      deps(stub.client),
+    );
+    expect(unknown.status).toBe(401);
+    const before = stub.reads.length;
+    const short = await issueDownload(
+      { platform: 'windows', channel: 'stable', userId: null, deviceFingerprint: 'abc' },
+      deps(stub.client),
+    );
+    expect(short.status).toBe(401);
+    expect(stub.reads.length).toBe(before);
   });
 });

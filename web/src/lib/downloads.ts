@@ -28,7 +28,40 @@ export interface DownloadRequest {
   channel: PublicChannel;
   /** The signed-in account, or null. */
   userId: string | null;
+  /**
+   * The desktop app's device fingerprint (`X-VCC-Device`), for a computer
+   * that activated a licence: it downloads updates as that licence's account
+   * without signing in again. A salted SHA-256 only that computer holds.
+   */
+  deviceFingerprint?: string | null;
 }
+
+/** Long enough that it cannot be guessed (the app sends 64 hex characters). */
+const FINGERPRINT = /^[0-9a-f]{64}$/;
+
+/**
+ * The account whose live licence this computer was activated with, or null.
+ * Only an activation still in force counts, and only on a live licence.
+ */
+const accountOfDevice = async (client: SupabaseClient, fingerprint: string): Promise<string | null> => {
+  if (!FINGERPRINT.test(fingerprint)) return null;
+  const { data: activations, error } = await client
+    .from('device_activations')
+    .select('license_id, deactivated_at')
+    .eq('device_fingerprint', fingerprint);
+  if (error || !activations) return null;
+  for (const activation of activations as Record<string, unknown>[]) {
+    if (activation['deactivated_at']) continue;
+    const { data: license } = await client
+      .from('licenses')
+      .select('user_id, status')
+      .eq('id', activation['license_id'] as string)
+      .maybeSingle();
+    if (license && (license as Record<string, unknown>)['status'] === 'active')
+      return (license as Record<string, unknown>)['user_id'] as string;
+  }
+  return null;
+};
 
 export interface DownloadDeps {
   client: SupabaseClient;
@@ -70,9 +103,16 @@ const licenseFromRow = (row: Record<string, unknown>): License | null => {
   return parsed.success ? parsed.data : null;
 };
 
-export const issueDownload = async (request: DownloadRequest, deps: DownloadDeps): Promise<DownloadAnswer> => {
+export const issueDownload = async (incoming: DownloadRequest, deps: DownloadDeps): Promise<DownloadAnswer> => {
   const { client } = deps;
-  const platformName = PLATFORM_LABEL[request.platform];
+  const platformName = PLATFORM_LABEL[incoming.platform];
+
+  // Not signed in, but an activated computer: it downloads as its licence's account.
+  let request = incoming;
+  if (!request.userId && request.deviceFingerprint) {
+    const owner = await accountOfDevice(client, request.deviceFingerprint);
+    if (owner) request = { ...request, userId: owner };
+  }
 
   if (!request.userId) {
     return {

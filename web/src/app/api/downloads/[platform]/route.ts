@@ -16,7 +16,9 @@ export const dynamic = 'force-dynamic';
  * a short-lived signed URL (`lib/downloads.ts`).
  *
  * Authenticated by session cookie or, from the desktop app, by
- * `Authorization: Bearer <Supabase access token>`.
+ * `Authorization: Bearer <Supabase access token>` - or, for a computer that
+ * activated a licence, by `X-VCC-Device: <its fingerprint>`, so automatic
+ * updates never ask a customer to sign in again.
  */
 export async function GET(request: Request, { params }: { params: { platform: string } }): Promise<Response> {
   const platform = platformSchema.safeParse(params.platform);
@@ -30,8 +32,15 @@ export async function GET(request: Request, { params }: { params: { platform: st
   }
 
   const user = await currentUser();
+  // An activated computer may download updates without signing in again.
+  const device = request.headers.get('x-vcc-device');
   const answer = await issueDownload(
-    { platform: platform.data, channel, userId: user?.id ?? null },
+    {
+      platform: platform.data,
+      channel,
+      userId: user?.id ?? null,
+      ...(device && !user ? { deviceFingerprint: device.trim().toLowerCase() } : {}),
+    },
     { client: adminClient(), bucket: env.releaseBucket, ttlSeconds: env.releaseDownloadTtlSeconds },
   );
   return NextResponse.json(answer.body, { status: answer.status });

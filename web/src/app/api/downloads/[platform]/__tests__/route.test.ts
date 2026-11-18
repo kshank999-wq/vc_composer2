@@ -53,4 +53,19 @@ describe('GET /api/downloads/[platform]', () => {
     expect((await ask('linux')).status).toBe(404);
     expect(issueDownload).not.toHaveBeenCalled();
   });
+
+  it('passes an activated computer\'s fingerprint when nobody is signed in', async () => {
+    currentUser.mockResolvedValue(null);
+    const device = 'AB'.repeat(32);
+    await GET(
+      new Request('https://vc-composer.com/api/downloads/windows', { headers: { 'X-VCC-Device': device } }),
+      { params: { platform: 'windows' } },
+    );
+    expect(issueDownload.mock.calls[0]?.[0]).toEqual({
+      platform: 'windows',
+      channel: 'stable',
+      userId: null,
+      deviceFingerprint: device.toLowerCase(),
+    });
+  });
 });

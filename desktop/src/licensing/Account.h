@@ -60,6 +60,13 @@ public:
     Result verify_code(const juce::String& email, const juce::String& code);
     /// Signs in with the account's password, as vc-composer.com does.
     Result sign_in_password(const juce::String& email, const juce::String& password);
+    /// Whether this computer activated a licence (it then updates without signing in).
+    bool device_activated() const;
+    /// A GET to the site as this computer: its device fingerprint always, the
+    /// account's token when signed in. An activated computer is let through
+    /// for its licence's downloads even when the sign-in has lapsed.
+    struct Reply;
+    Reply device_get(const juce::String& path);
     /// Optional serial; without one the account's own licences are tried.
     Result activate(const juce::String& serial = {});
     /// GET /api/licenses/standing and write it down. A failure changes nothing.

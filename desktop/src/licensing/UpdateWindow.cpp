@@ -62,7 +62,8 @@ void UpdatePanel::update_buttons()
 {
     check_.setEnabled(!busy_);
     install_.setEnabled(!busy_ && offer_.has_value());
-    install_.setButtonText(Account::get().signed_in() || !offer_ ? "Install and Restart" : "Sign In to Install...");
+    install_.setButtonText(Account::get().signed_in() || Account::get().device_activated() || !offer_ ? "Install and Restart"
+                                                                                                        : "Sign In to Install...");
 }
 
 void UpdatePanel::check(std::function<void()> done)
@@ -89,7 +90,7 @@ void UpdatePanel::check(std::function<void()> done)
 void UpdatePanel::download(bool then_install, std::function<void()> done)
 {
     if (!offer_) return;
-    if (!Account::get().signed_in()) {
+    if (!Account::get().signed_in() && !Account::get().device_activated()) {
         status_.setText("Updates download through your account: sign in, then press Install again.", juce::dontSendNotification);
         show_account_window(context_);
         if (done) done();
@@ -174,7 +175,11 @@ bool auto_update_busy() { return auto_busy().load(); }
 
 void auto_update(AppContext& context, std::function<bool()> before_quit)
 {
-    if (!Updater::available() || !Account::get().signed_in() || auto_busy().exchange(true)) return;
+    // Signed in, or activated with a licence: an activated computer updates
+    // without ever being asked to sign in again.
+    if (!Updater::available() || (!Account::get().signed_in() && !Account::get().device_activated()) ||
+        auto_busy().exchange(true))
+        return;
     AppContext* ctx = &context;
     juce::Thread::launch([ctx, before_quit = std::move(before_quit)] {
         const auto found = Updater::get().check();

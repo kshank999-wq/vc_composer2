@@ -80,12 +80,13 @@ Updater::Downloaded Updater::download(const licensing::UpdateOffer& offer, const
 {
     Downloaded d;
     auto& account = Account::get();
-    if (!account.signed_in()) {
+    if (!account.signed_in() && !account.device_activated()) {
         d.message = "Sign in first (Help > Account and Licence...): updates download through your account";
         return d;
     }
-    // A short-lived link for this account; the site checks who is asking.
-    const auto link = account.api("GET", "/api/downloads/" + Account::platform() + "?channel=" + channel());
+    // A short-lived link; the site checks who is asking - the account, or a
+    // computer activated with a licence (no new sign-in for updates).
+    const auto link = account.device_get("/api/downloads/" + Account::platform() + "?channel=" + channel());
     if (!link.ok()) {
         d.message = link.error;
         return d;

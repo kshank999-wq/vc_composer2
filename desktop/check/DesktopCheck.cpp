@@ -7022,6 +7022,7 @@ public:
     juce::String standing = R"({"standing":{"status":"active","expiresAt":"2027-11-16T00:00:00.000Z"}})";
     bool refuse = false;
     int codes_sent = 0;
+    juce::String last_device;
     juce::String last_activate, last_auth;
 
     // Collaboration (web/src/app/api/collab), in memory. The signed-in
@@ -7160,7 +7161,10 @@ private:
                 {"platform", Account::platform().toStdString()}, {"version", update_version}, {"releaseNotes", "Faster sync"},
                 {"sha256", sha}, {"minimumOsVersion", "11.0"}}}}}));
         } else if (path.startsWith("/api/downloads/")) {
-            status = auth == "Bearer tok" ? 200 : 401;
+            // The account, or a computer activated with a licence (its fingerprint).
+            const auto device = head.fromFirstOccurrenceOf("X-VCC-Device:", false, true).upToFirstOccurrenceOf("\r\n", false, false).trim();
+            last_device = device;
+            status = auth == "Bearer tok" || device.length() == 64 ? 200 : 401;
             uploads["update-file"] = update_bytes;
             reply = status == 200 ? juce::String(json::write(json::Object{{"url", (url() + "/storage/update-file").toStdString()},
                                                                            {"version", update_version}}))
@@ -8363,6 +8367,22 @@ void updater_checks(MainWindow& window, const juce::File& dir)
     check(d.ok && std::string(static_cast<const char*>(got.getData()), got.getSize()) == std::string(300000, 'u') + "installer" &&
               last > 0.99,
           "the update downloads through the account, byte for byte: " + d.message);
+
+    // An activated computer keeps updating with no sign-in at all.
+    account.sign_out();
+    account.folder().getChildFile("activation.json").replaceWithText(R"({"activatedAt":"2026-11-18T08:00:00Z"})");
+    downloads.deleteRecursively();
+    const auto as_device = updater.download(*c.offer);
+    juce::String device_sent;
+    {
+        const juce::ScopedLock sl(store.lock);
+        device_sent = store.last_device;
+    }
+    check(!account.signed_in() && as_device.ok && device_sent.length() == 64,
+          "signed out but activated: the update still downloads, the computer vouching for itself (" + as_device.message + ")");
+    account.folder().getChildFile("activation.json").deleteFile();
+    check(!updater.download(*c.offer).ok, "neither signed in nor activated: no download");
+    check(account.verify_code("ann@example.com", "123456").ok, "signed in again");
 
     // A file that does not match the catalogue's checksum never stays.
     {
