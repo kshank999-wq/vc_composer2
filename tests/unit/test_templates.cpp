@@ -348,6 +348,21 @@ TEST_CASE("user templates save, re-import with validation, and built-ins stay im
     TemplateRegistry reg(instruments);
     std::string err;
     REQUIRE(reg.add_user_template(mine, &err));
+    // Added to an empty project from the browser (merge), then saved: still valid.
+    for (const auto* t : content().templates->list()) {
+        if (!t->built_in || !t->instantiable()) continue;
+        project::Project q;
+        InstantiateOptions o;
+        o.mode = InstantiateMode::Merge;
+        if (!instantiate(q, *t, content().instruments, o).ok) continue;
+        Template copy = save_user_template(q, "user.copy", "Copy", "");
+        std::string e2;
+        TemplateRegistry r3(instruments);
+        const bool ok = r3.add_user_template(copy, &e2);
+        if (!ok) std::fprintf(stderr, "    %s: %s\n", t->template_id.c_str(), e2.c_str());
+        CHECK(ok);
+        break;
+    }
     json::Value pack = reg.export_pack({"user.my_mystery"}, "my_pack");
     TemplateRegistry other(instruments);
     std::vector<Diagnostic> d;

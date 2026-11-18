@@ -4974,6 +4974,14 @@ void range_checks(MainWindow& window, const juce::File& dir)
                                        last_status.upToFirstOccurrenceOf(".", false, false) + ")");
 
     // A chord partly outside: asked. Move into range brings the notes in by octaves.
+    // (A flute plays one line, so the chord goes on a vibraphone, Strict: F3-F6.)
+    const auto vib = session.add_track("Vibraphone", "percussion.vibraphone");
+    session.set_range_policy(vib, "strict");
+    session.select_track(vib);
+    pump(80);
+    composer.set_note_entry(true);
+    auto vib_count = [&] { return session.data().find_track(vib)->active_version()->score.total_note_count(); };
+    auto vib_issues = [&] { return session.range_issues(*session.data().find_track(vib)).size(); };
     composer.set_chord_mode(true);
     {
         // A plain C major triad, close: earlier sections leave the palette on
@@ -4982,8 +4990,7 @@ void range_checks(MainWindow& window, const juce::File& dir)
         composer.chord_state() = composer_ui::ChordModeState{};
         composer.chord_state().key = key;
     }
-    composer.chord_state().octave = 6;  // C6 E6 G6 ... G6 fine; take C7 E7 G7
-    composer.chord_state().octave = 7;
+    composer.chord_state().octave = 6;  // C6 E6 G6: the G6 above the vibraphone's F6
     composer.chord_palette().refresh();
     composer.chord_palette().insert_key().triggerClick();
     pump(50);
@@ -4992,7 +4999,7 @@ void range_checks(MainWindow& window, const juce::File& dir)
     shoot(main, dir, "41a-range-question");
     if (question) question->exitModalState(1);
     pump(60);
-    check(asked && issues() == 0 && count() == 4 && session.undo_label() == "Enter chord C",
+    check(asked && vib_issues() == 0 && vib_count() == 3 && session.undo_label() == "Enter chord C",
           "Strict: a chord outside the range asks, and Move into range enters it with every note inside");
     // Keep, flagged: entered as is, ringed.
     composer.chord_palette().insert_key().triggerClick();
@@ -5000,24 +5007,27 @@ void range_checks(MainWindow& window, const juce::File& dir)
     question = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0));
     if (question) question->exitModalState(2);
     pump(60);
-    const auto kept = issues();
+    const auto kept = vib_issues();
     // Cancel: nothing.
-    const auto before_cancel = count();
+    const auto before_cancel = vib_count();
     composer.chord_palette().insert_key().triggerClick();
     pump(50);
     question = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0));
     if (question) question->exitModalState(0);
     pump(60);
-    check(kept == 2 && count() == before_cancel, "Keep, flagged enters the chord with its two high notes flagged; Cancel enters nothing");
+    check(kept == 1 && vib_count() == before_cancel, "Keep, flagged enters the chord with its high note flagged; Cancel enters nothing");
     composer.set_chord_mode(false);
+    session.select_track(flute);
+    pump(80);
+    composer.set_note_entry(true);
 
     // Warn: allowed and ringed. Extended: the flute's extended range takes D7.
     session.set_range_policy(flute, "warn");
     click(8 * Q, notation::Step::D, 7);
-    check(count() == before_cancel + 1 && issues() == 3 && last_status.startsWith("Flagged"),
+    check(count() == 2 && issues() == 1 && last_status.startsWith("Flagged"),
           "Warn: D7 goes in and is flagged (" + last_status.upToFirstOccurrenceOf("(", false, false).trim() + ")");
     session.set_range_policy(flute, "extended");
-    check(issues() == 2, "Extended: the flute's extended range (to D7) takes the D7; the E7 and G7 stay flagged");
+    check(issues() == 0, "Extended: the flute's extended range (to D7) takes the D7");
     session.set_range_policy(flute, "");
     shoot(main, dir, "41-instrument-range");
 
@@ -5654,6 +5664,9 @@ void staff_tools_checks(MainWindow& window, const juce::File& dir)
         pump(40);
 
         // The accent dial: 1-100, the track's own, one undo step a turn.
+        session.select_track(piano);  // the dial sets the selected track's
+        pump(60);
+        composer.update_staff_tools();
         auto& dial = tools.accent_knob();
         check(dial.getMinimum() == 1.0 && dial.getMaximum() == 100.0 && juce::roundToInt(dial.getValue()) == 50,
               "the accent dial runs 1-100 and starts at 50 (accents as the map plays them)");
@@ -5665,7 +5678,8 @@ void staff_tools_checks(MainWindow& window, const juce::File& dir)
         pump(60);
         composer.update_staff_tools();
         check(session.data().find_track(piano)->accent_strength == 50 && juce::roundToInt(dial.getValue()) == 50,
-              "undo puts it back, and the dial follows");
+              "undo puts it back, and the dial follows (" + juce::String(session.data().find_track(piano)->accent_strength) + ", dial " +
+                  juce::String(dial.getValue()) + ")");
     }
 
     // Dragged out by its title strip: it floats where it is let go.

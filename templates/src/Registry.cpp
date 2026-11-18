@@ -31,7 +31,8 @@ const std::vector<std::string> kVariants = {"acoustic", "hybrid", "minimal", "la
                                             "traditional", "fusion", "cinematic", "period", "band",
                                             "electronic", "solo"};
 const std::vector<std::string> kRoles = {"melody", "countermelody", "harmony", "bass", "pad", "texture", "ostinato",
-                                         "rhythm", "percussion", "drone", "fx", "solo", "continuo", "vocal"};
+                                         "rhythm", "percussion", "drone", "fx", "solo", "continuo", "vocal",
+                                         "sketch"};  // the Piano every template opens with
 const std::vector<std::string> kClefs = {"treble", "bass", "alto", "tenor", "treble_8vb", "treble_8va", "bass_8vb",
                                          "percussion"};
 const std::vector<std::string> kModes = {"major", "minor", "harmonic_minor", "melodic_minor", "dorian", "phrygian",
