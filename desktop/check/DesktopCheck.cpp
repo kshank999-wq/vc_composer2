@@ -4559,6 +4559,13 @@ void range_checks(MainWindow& window, const juce::File& dir)
 
     // A chord partly outside: asked. Move into range brings the notes in by octaves.
     composer.set_chord_mode(true);
+    {
+        // A plain C major triad, close: earlier sections leave the palette on
+        // other types and voicings, which this check is not about.
+        const auto key = composer.chord_state().key;
+        composer.chord_state() = composer_ui::ChordModeState{};
+        composer.chord_state().key = key;
+    }
     composer.chord_state().octave = 6;  // C6 E6 G6 ... G6 fine; take C7 E7 G7
     composer.chord_state().octave = 7;
     composer.chord_palette().refresh();
@@ -10348,7 +10355,8 @@ int main(int argc, char** argv)
                 {"view_tools_checks", view_tools_checks},
                 {"chord_mode_checks", chord_mode_checks},
                 {"chord_palette_checks", chord_palette_checks},
-                {"sound_pack_checks", sound_pack_checks}};
+                {"sound_pack_checks", sound_pack_checks},
+                {"range_checks", range_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
