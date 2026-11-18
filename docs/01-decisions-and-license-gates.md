@@ -72,6 +72,10 @@ Approved by the product owner and done. See `02-original-vc-composer-reuse-audit
 | MusicXML | Notation interchange | W3C Community Group specification | Implement natively |
 | Loudness (BS.1770 / EBU R128) | Mastering meters | Public standards | Implement natively |
 | LAME (libmp3lame) | MP3 master export (D18) | LGPL 2.0+; MP3 patents expired 2017. Loaded dynamically, never linked; a shipped copy beside the app needs the LGPL notice and source offer | Before shipping a bundled copy |
+| TinySoundFont + stb_vorbis | Plays the built-in sounds (SF2/SF3) | MIT (Bernhard Schelling) and public domain (Sean Barrett); vendored in `desktop/third_party/tsf`, one local change (16-bit sample storage) | OK with notice (Help > Credits, THIRD-PARTY-NOTICES) |
+| Salamander Grand Piano | Built-in piano, downloaded on first launch | CC-BY 3.0 (Alexander Holm); our reduced edition is credited and marked as changed | OK with attribution (Help > Credits, the pack's CREDITS.txt) |
+| MuseScore General | Built-in General MIDI orchestra, downloaded on first launch | MIT (S. Christian Collins; FluidR3 by Frank Wen, FluidR3Mono by Michael Cowgill); its notices must travel with it | OK with notice (Help > Credits reproduces it in full) |
+| Third-party logos | - | Not used: Help > Credits gives trademark notices as text only (owner's decision, 2026-11-18: no Steinberg logo) | - |
 | AAF/OMF | DAW handoff | Conditional (Main Spec §16) | Later; BWF stems are the baseline |
 | Sample libraries / player APIs | Library integration | Per vendor; no universal introspection API exists | Adapter per provider, with capability flags (Main Spec §10) |
 

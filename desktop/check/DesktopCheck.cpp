@@ -36,6 +36,10 @@
 #include "ui/StudioSetup.h"
 #include "ui/RecentProjects.h"
 #include "ui/TrackListPalette.h"
+#include "ui/Credits.h"
+#include "ui/SoundsWindow.h"
+#include "audio/SoundPack.h"
+#include "audio/SoundFontInstrument.h"
 #include "ui/Import.h"
 #include "vcc/project/Mackie.h"
 #include "system/PluginWatch.h"
@@ -4131,6 +4135,295 @@ void chord_mode_checks(MainWindow& window, const juce::File& dir)
     composer.set_chord_mode(false);
     pump(30);
     check(!palette.isVisible() && !composer.chord_mode(), "turning Chord mode off hides the palette");
+}
+
+/// A tiny SoundFont 2 (one sine sample at A4) with the presets the sound pack
+/// is asked for: 0:0 (piano), 0:48 (strings) and 128:0 (a kit). The checks
+/// stand in for the real pack with it, so they need no download.
+juce::MemoryBlock tiny_soundfont()
+{
+    juce::MemoryOutputStream smpl;
+    const int rate = 48000, frames = rate / 2;
+    for (int i = 0; i < frames + 46; ++i) {
+        const double env = i < frames ? 1.0 - static_cast<double>(i) / frames : 0.0;
+        smpl.writeShort(static_cast<short>(i < frames ? std::sin(2.0 * juce::MathConstants<double>::pi * 440.0 * i / rate) * 20000.0 * env : 0.0));
+    }
+    auto chunk = [](juce::MemoryOutputStream& to, const char* id, const juce::MemoryBlock& data) {
+        to.write(id, 4);
+        to.writeInt(static_cast<int>(data.getSize()));
+        to.write(data.getData(), data.getSize());
+        if (data.getSize() % 2) to.writeByte(0);
+    };
+    auto name = [](juce::MemoryOutputStream& to, const char* n) {
+        char b[20] = {};
+        std::strncpy(b, n, 19);
+        to.write(b, 20);
+    };
+    auto list = [&](juce::MemoryOutputStream& to, const char* kind, const juce::MemoryBlock& body) {
+        juce::MemoryOutputStream l;
+        l.write(kind, 4);
+        l.write(body.getData(), body.getSize());
+        chunk(to, "LIST", l.getMemoryBlock());
+    };
+    juce::MemoryOutputStream info, sdta, pdta;
+    {
+        juce::MemoryOutputStream v;
+        v.writeShort(2);
+        v.writeShort(1);
+        chunk(info, "ifil", v.getMemoryBlock());
+        chunk(info, "isng", juce::MemoryBlock("EMU8000", 8));
+        chunk(info, "INAM", juce::MemoryBlock("Check\0", 6));
+    }
+    chunk(sdta, "smpl", smpl.getMemoryBlock());
+    {
+        juce::MemoryOutputStream phdr, pbag, pmod, pgen, inst, ibag, imod, igen, shdr;
+        const std::vector<std::tuple<const char*, int, int>> presets = {{"Test Piano", 0, 0}, {"Test Strings", 48, 0}, {"Test Kit", 0, 128}};
+        int bag = 0;
+        for (const auto& [n, prog, bank] : presets) {
+            name(phdr, n);
+            phdr.writeShort(static_cast<short>(prog));
+            phdr.writeShort(static_cast<short>(bank));
+            phdr.writeShort(static_cast<short>(bag));
+            phdr.writeInt(0); phdr.writeInt(0); phdr.writeInt(0);
+            pbag.writeShort(static_cast<short>(bag)); pbag.writeShort(0);
+            pgen.writeShort(41); pgen.writeShort(0);  // instrument 0
+            ++bag;
+        }
+        name(phdr, "EOP");
+        phdr.writeShort(0); phdr.writeShort(0); phdr.writeShort(static_cast<short>(bag));
+        phdr.writeInt(0); phdr.writeInt(0); phdr.writeInt(0);
+        pbag.writeShort(static_cast<short>(bag)); pbag.writeShort(0);
+        pgen.writeInt(0);
+        pmod.writeRepeatedByte(0, 10);
+        name(inst, "Sine");
+        inst.writeShort(0);
+        name(inst, "EOI");
+        inst.writeShort(1);
+        ibag.writeShort(0); ibag.writeShort(0);
+        ibag.writeShort(2); ibag.writeShort(0);
+        igen.writeShort(58); igen.writeShort(69);  // root key A4
+        igen.writeShort(53); igen.writeShort(0);   // sample 0
+        igen.writeInt(0);
+        imod.writeRepeatedByte(0, 10);
+        name(shdr, "Sine");
+        shdr.writeInt(0); shdr.writeInt(frames); shdr.writeInt(0); shdr.writeInt(0); shdr.writeInt(rate);
+        shdr.writeByte(69); shdr.writeByte(0); shdr.writeShort(0); shdr.writeShort(1);
+        name(shdr, "EOS");
+        shdr.writeRepeatedByte(0, 26);
+        chunk(pdta, "phdr", phdr.getMemoryBlock()); chunk(pdta, "pbag", pbag.getMemoryBlock());
+        chunk(pdta, "pmod", pmod.getMemoryBlock()); chunk(pdta, "pgen", pgen.getMemoryBlock());
+        chunk(pdta, "inst", inst.getMemoryBlock()); chunk(pdta, "ibag", ibag.getMemoryBlock());
+        chunk(pdta, "imod", imod.getMemoryBlock()); chunk(pdta, "igen", igen.getMemoryBlock());
+        chunk(pdta, "shdr", shdr.getMemoryBlock());
+    }
+    juce::MemoryOutputStream body;
+    body.write("sfbk", 4);
+    list(body, "INFO", info.getMemoryBlock());
+    list(body, "sdta", sdta.getMemoryBlock());
+    list(body, "pdta", pdta.getMemoryBlock());
+    juce::MemoryOutputStream riff;
+    chunk(riff, "RIFF", body.getMemoryBlock());
+    return riff.getMemoryBlock();
+}
+
+/// A sound pack folder (as the storage serves it): the files and a manifest.
+void write_test_pack(const juce::File& src, bool bad_checksum = false)
+{
+    src.deleteRecursively();
+    src.createDirectory();
+    const auto sf = tiny_soundfont();
+    json::Array files;
+    for (const auto& [file, role] : std::vector<std::pair<juce::String, juce::String>>{
+             {"Piano.sf2", "piano"}, {"General.sf2", "gm"}, {"CREDITS.txt", "text"}}) {
+        const auto f = src.getChildFile(file);
+        if (role == "text")
+            f.replaceWithText("Salamander Grand Piano by Alexander Holm, CC-BY 3.0\nMuseScore General, MIT\n");
+        else
+            f.replaceWithData(sf.getData(), sf.getSize());
+        auto sha = *hash::sha256_file(f.getFullPathName().toStdString());
+        if (bad_checksum && role == "gm") sha[0] = sha[0] == '0' ? '1' : '0';
+        json::Object o;
+        o["name"] = json::Value::make_string(file.toStdString());
+        o["role"] = json::Value::make_string(role.toStdString());
+        o["size"] = json::Value::make_number(static_cast<double>(f.getSize()));
+        o["sha256"] = json::Value::make_string(sha);
+        files.push_back(json::Value(o));
+    }
+    json::Object m;
+    m["version"] = json::Value::make_string("check");
+    m["files"] = json::Value(files);
+    src.getChildFile("manifest.json").replaceWithText(juce::String(json::write(json::Value(m))));
+}
+
+/// Studio > Built-in Sounds and Help > Credits: the pack downloads (here from
+/// a folder), is checked against its manifest, loads, and then plays the
+/// tracks that have no plug-in and every preview; the credits list the
+/// sounds, software, fonts and trademarks (as text: no logos).
+void sound_pack_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    auto& main = window.main();
+    const auto root = dir.getChildFile("sound-pack-check");
+    root.deleteRecursively();
+    const auto installed_dir = root.getChildFile("Sounds"), src = root.getChildFile("server");
+    setenv("VCC_SOUNDS_DIR", installed_dir.getFullPathName().toRawUTF8(), 1);
+    setenv("VCC_SOUNDS_URL", juce::URL(src).toString(false).toRawUTF8(), 1);
+    sounds::unload();
+    write_test_pack(src);
+
+    check(sounds::folder() == installed_dir && !sounds::installed() && sounds::source_url().startsWith("file:"),
+          "the pack lives in its own folder and is not installed yet (" + sounds::status() + ")");
+    check(sounds::parse_manifest(src.getChildFile("manifest.json").loadFileAsString()).size() == 3 &&
+              sounds::parse_manifest("{\"files\":[{\"name\":\"a.sf3\",\"size\":10}]}").empty(),
+          "the manifest lists each file with its size and SHA-256 (a file without a checksum is refused)");
+
+    // Before it is loaded, the placeholder plays.
+    check(!pack_voice_for(0, false).valid(), "until the pack is loaded, nothing is played from it");
+
+    auto wait_until = [](auto cond, int ms) {
+        for (int i = 0; i < ms / 20 && !cond(); ++i) pump(20);
+        return cond();
+    };
+
+    // First launch: it downloads, checks every file, and loads.
+    sounds::download_async(false);
+    const bool ready = wait_until([] { return sounds::state() == sounds::State::Ready; }, 15000);
+    check(ready && sounds::installed() && sounds::piano() && sounds::gm() &&
+              !installed_dir.getChildFile("download").exists() && installed_dir.getChildFile("CREDITS.txt").existsAsFile(),
+          "the pack downloads, every file matches its checksum, and both banks load (" + sounds::status() + ")");
+
+    // Pianos play the Salamander grand; the rest MuseScore General; drums its kit.
+    const auto piano_voice = pack_voice_for(0, false), strings_voice = pack_voice_for(48, false),
+               kit_voice = pack_voice_for(-1, true);
+    check(piano_voice.valid() && piano_voice.name == "Salamander Grand Piano" && strings_voice.bank == sounds::gm() &&
+              strings_voice.name == "MuseScore General: Test Strings" && kit_voice.bank_number == 128,
+          "pianos play the grand, strings the General MIDI strings, drums the kit (" + strings_voice.name + ", " +
+              kit_voice.name + ")");
+
+    // The instrument itself: a note sounds, at the right pitch, and stops.
+    {
+        SoundFontInstrument inst(strings_voice);
+        inst.prepare(48000.0, 512);
+        juce::AudioBuffer<float> out(2, 512);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 69, 0.8f), 0);
+        std::vector<float> mono;
+        for (int b = 0; b < 44; ++b) {
+            out.clear();
+            inst.process(out, midi, 512);
+            midi.clear();
+            for (int i = 0; i < 512; ++i) mono.push_back(out.getSample(0, i));
+        }
+        int crossings = 0;
+        for (std::size_t i = 4800; i + 1 < mono.size(); ++i)
+            if (mono[i] <= 0.0f && mono[i + 1] > 0.0f) ++crossings;
+        const double hz = crossings * 48000.0 / static_cast<double>(mono.size() - 4800);
+        float peak = 0.0f;
+        for (float v : mono) peak = std::max(peak, std::abs(v));
+        inst.all_notes_off();
+        float after = 0.0f;
+        for (int b = 0; b < 8; ++b) {
+            out.clear();
+            inst.process(out, midi, 512);
+        }
+        after = out.getMagnitude(0, 512);
+        check(peak > 0.05f && std::abs(hz - 440.0) < 3.0 && after < 1e-4f,
+              "a note sounds at its pitch (A4: " + juce::String(hz, 1) + " Hz, peak " + juce::String(peak, 2) +
+                  ") and stops when the notes are cut");
+    }
+
+    // Tracks without a plug-in swap to the pack; previews use it too.
+    auto& session = ctx.session;
+    session.new_empty();
+    const auto piano = session.add_track("Piano", "keys.piano");
+    const auto violins = session.add_track("Violins", "strings.violins_1");
+    pump(300);
+    juce::AudioBuffer<float> block(2, 512);
+    ctx.engine.render_offline(block, 512);
+    pump(100);
+    check(ctx.engine.instrument_status(piano) == "Salamander Grand Piano" &&
+              ctx.engine.instrument_status(violins).startsWith("MuseScore General:"),
+          "the piano track plays the grand, the violins MuseScore General (" + ctx.engine.instrument_status(violins) + ")");
+    {
+        PlaybackEngine e(session, ctx.plugins);
+        e.prepare_offline(48000.0, 512);
+        e.preview({NoteEvent{0, 960, 60, 100}, NoteEvent{0, 960, 64, 100}, NoteEvent{0, 960, 67, 100}}, "keys", 0, 100.0,
+                  false, 960);
+        float peak = 0.0f;
+        juce::AudioBuffer<float> out(2, 512);
+        for (int b = 0; b < 40; ++b) {
+            out.clear();
+            e.render_offline(out, 512);
+            peak = std::max(peak, out.getMagnitude(0, 512));
+        }
+        check(peak > 0.01f, "a chord's audition plays on the built-in piano (peak " + juce::String(peak, 3) + ")");
+    }
+
+    // The window: what is installed, and keys to fetch it again.
+    show_sounds_window();
+    pump(150);
+    auto* panel = sounds_panel();
+    check(panel != nullptr && panel->status_text().startsWith("Ready") && panel->status_text().contains("Salamander"),
+          "Studio > Built-in Sounds says what is installed (" + (panel ? panel->status_text() : juce::String()) + ")");
+    if (auto* w = find_dialog("Built-in Sounds")) shoot(*w, dir, "103-built-in-sounds", true);
+
+    // A file that does not match its checksum is never used: the installed pack stays.
+    write_test_pack(src, true);
+    sounds::download_async(true);
+    wait_until([] { return sounds::state() != sounds::State::Downloading && sounds::state() != sounds::State::Loading; }, 15000);
+    pump(100);
+    check(sounds::status().contains("checksum") && sounds::installed() && sounds::piano() != nullptr,
+          "a download that does not match its checksum is thrown away; the pack already installed keeps playing (" +
+              sounds::status() + ")");
+
+    // Help > Credits: by category, with the notices the licences ask for.
+    const auto all = credits();
+    juce::StringArray names;
+    for (const auto& c : all) names.add(c.name);
+    const auto text_of = [&](const juce::String& n) {
+        for (const auto& c : all)
+            if (c.name == n) return credits_text(c);
+        return juce::String();
+    };
+    check(names.joinIntoString(",") == "Sounds,Software,Fonts,Trademarks" &&
+              text_of("Sounds").contains("Alexander Holm") && text_of("Sounds").contains("Creative Commons Attribution 3.0") &&
+              text_of("Sounds").contains("Frank Wen") && text_of("Sounds").contains("Permission is hereby granted") &&
+              text_of("Software").contains("TinySoundFont") && text_of("Software").contains("stb_vorbis") &&
+              text_of("Fonts").contains("Bravura") &&
+              text_of("Trademarks").contains("ASIO is a trademark and software of Steinberg Media Technologies GmbH"),
+          "Help > Credits lists sounds, software, fonts and trademarks with their licences and notices");
+    show_credits_window();
+    pump(150);
+    auto* tabs = credits_tabs();
+    check(tabs != nullptr && tabs->getNumTabs() == 4 && tabs->getTabNames()[3] == "Trademarks",
+          "the Credits window has a tab for each category");
+    if (auto* w = find_dialog("Credits")) shoot(*w, dir, "104-credits", true);
+    if (tabs) {
+        tabs->setCurrentTabIndex(3);
+        pump(80);
+        if (auto* w = find_dialog("Credits")) shoot(*w, dir, "105-credits-trademarks", true);
+    }
+
+    // The menus: Help > Credits..., Studio > Built-in Sounds...
+    auto has = [&](const juce::String& menu, const juce::String& item) {
+        auto m = main.getMenuForIndex(0, menu);
+        for (juce::PopupMenu::MenuItemIterator it(m, true); it.next();)
+            if (it.getItem().text == item) return true;
+        return false;
+    };
+    check(has("Help", "Credits...") && has("Studio", "Built-in Sounds..."),
+          "Help has Credits... and Studio has Built-in Sounds...");
+
+    for (const auto& t : {"Credits", "Built-in Sounds"})
+        if (auto* w = dynamic_cast<juce::DocumentWindow*>(find_dialog(t))) w->closeButtonPressed();
+    sounds::unload();
+    pump(300);
+    ctx.engine.render_offline(block, 512);
+    pump(100);
+    check(ctx.engine.instrument_status(piano).contains("laceholder") || !ctx.engine.instrument_status(piano).startsWith("Salamander"),
+          "without the pack the placeholder plays again (" + ctx.engine.instrument_status(piano) + ")");
+    unsetenv("VCC_SOUNDS_URL");
+    root.deleteRecursively();
 }
 
 void chord_palette_checks(MainWindow& window, const juce::File& dir)
@@ -10012,10 +10305,12 @@ int main(int argc, char** argv)
 #if JUCE_WINDOWS
     _putenv_s("VCC_SETTINGS_DIR", settings.getFullPathName().toRawUTF8());
     _putenv_s("VCC_NO_PLUGIN_CHECK", "1");
+    _putenv_s("VCC_NO_SOUNDS", "1");
     _putenv_s("VCC_PLUGIN_HOST_LOG", host_log.getFullPathName().toRawUTF8());
 #else
     setenv("VCC_SETTINGS_DIR", settings.getFullPathName().toRawUTF8(), 1);
     setenv("VCC_NO_PLUGIN_CHECK", "1", 1);  // plugin_watch_checks drives it
+    setenv("VCC_NO_SOUNDS", "1", 1);  // sound_pack_checks drives it
     setenv("VCC_PLUGIN_HOST_LOG", host_log.getFullPathName().toRawUTF8(), 1);
 #endif
 
@@ -10052,7 +10347,8 @@ int main(int argc, char** argv)
                 {"ostinato_audition_checks", ostinato_audition_checks},
                 {"view_tools_checks", view_tools_checks},
                 {"chord_mode_checks", chord_mode_checks},
-                {"chord_palette_checks", chord_palette_checks}};
+                {"chord_palette_checks", chord_palette_checks},
+                {"sound_pack_checks", sound_pack_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
             for (const auto& [name, fn] : sections)
@@ -10682,6 +10978,8 @@ int main(int argc, char** argv)
         chord_mode_checks(window, dir);
         section("chord_palette_checks");
         chord_palette_checks(window, dir);
+        section("sound_pack_checks");
+        sound_pack_checks(window, dir);
         section("range_checks");
         range_checks(window, dir);
         section("circle_checks");

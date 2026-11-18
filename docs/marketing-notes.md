@@ -26,6 +26,10 @@ or touching the mix's solo buttons.
   appears, in your key, spelled correctly: triad, seventh, maj7, add9, sus2,
   sus4, diminished, augmented; root position or any inversion; close or open,
   over one octave or two. On piano it is written for two hands.
+- **A real piano from the first note.** The built-in sounds download on first
+  launch: a concert grand (the Salamander, a Yamaha C5) for every chord you
+  try, and a full General MIDI orchestra so templates and ostinatos sound like
+  strings, brass and winds before any library is installed.
 - **Hear notes as you place them** (one key to turn it off).
 - **Templates by scene**: horror, comedy, action and 200 more - every track laid
   out, one per instrument or one per articulation.

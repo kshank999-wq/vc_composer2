@@ -24,6 +24,18 @@ N="$OUT/THIRD-PARTY-NOTICES.txt"
   echo "settings are in FFmpeg-SOURCE.txt where present; on request we provide"
   echo "the corresponding source for three years: https://vc-software.com/support"
   echo
+  echo "TinySoundFont - Copyright (C) 2017-2025 Bernhard Schelling, based on SFZero,"
+  echo "Copyright (C) 2012 Steve Folta. MIT licence (desktop/third_party/tsf/tsf.h)."
+  echo "Changed: samples are stored 16-bit."
+  echo
+  echo "stb_vorbis - Sean Barrett. Public domain (or MIT)."
+  echo
+  echo "Built-in sounds (downloaded on first launch, with their own CREDITS.txt):"
+  echo "Salamander Grand Piano by Alexander Holm, CC-BY 3.0 (reduced edition);"
+  echo "MuseScore General by S. Christian Collins, MIT."
+  echo
+  echo "ASIO is a trademark and software of Steinberg Media Technologies GmbH."
+  echo
   for font in Bravura BarlowCondensed Inter ShareTechMono; do
     f="$ROOT/resources/fonts/$font/OFL.txt"
     [ -f "$f" ] || continue

@@ -103,6 +103,16 @@ target_include_directories(vcc_ui_notation PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/n
 target_link_libraries(vcc_ui_notation PUBLIC vcc_juce vcc_engraving vcc_editing vcc_composer vcc_music
                                       PRIVATE vcc_music_font_data)
 
+# --- Built-in sounds: TinySoundFont + stb_vorbis (third_party/tsf) ----------------
+add_library(vcc_tsf STATIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tsf/TsfImpl.c")
+target_include_directories(vcc_tsf SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tsf")
+set_target_properties(vcc_tsf PROPERTIES POSITION_INDEPENDENT_CODE ON C_STANDARD 99)
+# Third-party code, kept as published: its warnings are not ours to fix.
+target_compile_options(vcc_tsf PRIVATE $<IF:$<C_COMPILER_ID:MSVC>,/w,-w>)
+if(NOT WIN32)
+    target_link_libraries(vcc_tsf PRIVATE m)
+endif()
+
 # --- Application ------------------------------------------------------------------
 file(GLOB_RECURSE vcc_desktop_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 add_library(vcc_desktop STATIC ${vcc_desktop_sources})
@@ -139,7 +149,7 @@ endif()
 target_link_libraries(vcc_desktop
     PUBLIC vcc_ui_notation vcc_session vcc_licensing vcc_library vcc_media vcc_picture vcc_cues vcc_templates vcc_project vcc_theory vcc_ostinato vcc_engine vcc_audio vcc_juce
     PRIVATE vcc_content_root_data vcc_content_instruments_data vcc_content_templates_data vcc_content_library_data vcc_ui_font_data
-            vcc_brand_data)
+            vcc_brand_data vcc_tsf)
 
 juce_add_gui_app(VCComposer2
     PRODUCT_NAME "VC Composer"

@@ -1,0 +1,76 @@
+# The built-in sounds VC Composer downloads on first launch (Studio >
+# Built-in Sounds): builds the reduced Salamander piano, takes MuseScore
+# General as published, and uploads both with CREDITS.txt and manifest.json
+# to the public "sounds" bucket (folder v1) of the site's Supabase project.
+# Run it by hand (Actions > Sound pack > Run workflow); the app picks the new
+# pack up when it next downloads.
+name: Sound pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: "Upload to vc-composer.com's storage (otherwise build only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      SALAMANDER_URL: https://freepats.zenvoid.org/Piano/SalamanderGrandPiano/SalamanderGrandPiano-SFZ+FLAC-V3+20200602.tar.gz
+      SALAMANDER_SHA256: b7760e168494cf095344e217b0af013fc449ad033abbbdf1c65211cf11dc038b
+      MSG_URL: https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General
+      MSG_SHA256: 5b85b6c2c61d10b2b91cddd41efcce7b25cd31c8271d511c73afafbef20b6fa3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y libsndfile1
+          python -m pip install numpy soundfile
+          python -c "import soundfile; assert 'OGG' in soundfile.available_formats(), 'libsndfile has no Ogg Vorbis'"
+      - name: Sources (checked against the published files)
+        run: |
+          mkdir -p src
+          curl -fsSL -o src/salamander.tar.gz "$SALAMANDER_URL"
+          echo "$SALAMANDER_SHA256  src/salamander.tar.gz" | sha256sum -c -
+          curl -fsSL -o src/MuseScore_General.sf3 "$MSG_URL/MuseScore_General.sf3"
+          echo "$MSG_SHA256  src/MuseScore_General.sf3" | sha256sum -c -
+          curl -fsSL -o src/MuseScore_General_License.md "$MSG_URL/MuseScore_General_License.md"
+          mkdir -p src/salamander && tar -xzf src/salamander.tar.gz -C src/salamander && rm src/salamander.tar.gz
+      - name: Build the piano
+        run: python -I tools/soundpack/build_piano.py "$(ls -d src/salamander/*/ | head -1)" src/piano.sf3
+      - name: Assemble the pack
+        run: python -I tools/soundpack/make_pack.py src/piano.sf3 src/MuseScore_General.sf3 src/MuseScore_General_License.md pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sound-pack
+          path: pack/
+      - name: Upload to storage
+        if: inputs.upload
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || { echo "error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY secrets are needed"; exit 1; }
+          up() {
+            curl -fsS -X POST "$SUPABASE_URL/storage/v1/object/sounds/v1/$1" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "x-upsert: true" -H "cache-control: max-age=300" -H "Content-Type: $2" \
+              --data-binary "@pack/$1" > /dev/null
+            echo "uploaded $1"
+          }
+          # The sounds first, the manifest last: an app never sees a manifest
+          # whose files are not there yet.
+          up Salamander-Grand-Piano-VCC.sf3 application/octet-stream
+          up MuseScore_General.sf3 application/octet-stream
+          up CREDITS.txt "text/plain; charset=utf-8"
+          up manifest.json application/json
+          # And it reads back from the public address the app uses.
+          curl -fsS "$SUPABASE_URL/storage/v1/object/public/sounds/v1/manifest.json" | python -m json.tool

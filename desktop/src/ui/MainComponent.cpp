@@ -1,3 +1,5 @@
+#include "ui/Credits.h"
+#include "ui/SoundsWindow.h"
 #include "ui/MainComponent.h"
 
 #include "ui/composer/CircleOfFifths.h"
@@ -2084,8 +2086,9 @@ public:
                           (preview::is_preview() ? " (" + preview::status() + ")" : juce::String()) +
                           "\n\nA notation-first scoring workstation by VC Software.\n\n"
                           "Built with JUCE (commercial JUCE 8 licence).\n"
-                          "Music font: Bravura, SIL Open Font License 1.1.\n"
-                          "Sounds marked \"Placeholder\" are the built-in stand-in until a library is assigned.",
+                          "Piano: Salamander Grand Piano by Alexander Holm (CC-BY 3.0).\n"
+                          "Orchestra: MuseScore General by S. Christian Collins (MIT).\n"
+                          "Everyone else who made VC Composer possible: Help > Credits.",
                       juce::dontSendNotification);
         text_.setJustificationType(juce::Justification::centredTop);
         text_.setColour(juce::Label::textColourId, colours::text);
@@ -2153,7 +2156,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unrollRepeats, cmd::editShortcuts, cmd::printPreview, cmd::exportPicture, cmd::tempoFinder, cmd::account, cmd::freezeTrack, cmd::freezeUnload,
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
-                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController, cmd::scoreView, cmd::trackList, cmd::hearEntry});
+                cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController, cmd::scoreView, cmd::trackList, cmd::hearEntry,
+                cmd::builtinSounds, cmd::credits});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2376,6 +2380,12 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.addDefaultKeypress(',', cmdKey);
             break;
         case cmd::midiSetup: info.setInfo("MIDI Setup...", "MIDI keyboards and controllers (USB, USB-C), on or off", "Studio", 0); break;
+        case cmd::builtinSounds:
+            info.setInfo("Built-in Sounds...", "The piano and General MIDI orchestra: download, status, credits", "Studio", 0);
+            break;
+        case cmd::credits:
+            info.setInfo("Credits...", "The open-source sounds, software and fonts in VC Composer, and trademark notices", "Help", 0);
+            break;
         case cmd::mixerController:
             info.setInfo("Mixer Controller (Mackie Control)...",
                          "A hardware mixer controller: SSL UF8, Avid S1, Icon, X-Touch, FaderPort, MCU", "Studio", 0);
@@ -2702,6 +2712,8 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::audioSettings: show_studio_setup(context_, 0); break;
         case cmd::midiSetup: show_studio_setup(context_, 1); break;
         case cmd::mixerController: show_mixer_controller_window(context_, *mixer_controller_); break;
+        case cmd::builtinSounds: show_sounds_window(); break;
+        case cmd::credits: show_credits_window(); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;
         case cmd::reloadCrashedPlugins: {
             const int n = context_.engine.reload_crashed_plugins();
@@ -2846,6 +2858,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
         case 6:
             m.addCommandItem(c, cmd::account);
             m.addCommandItem(c, cmd::checkUpdates);
+            m.addSeparator();
+            m.addCommandItem(c, cmd::credits);
             m.addCommandItem(c, cmd::about);
             break;
         case 7:  // Templates: whole scoring palettes (horror, comedy, action...) as ready-made tracks
@@ -2889,6 +2903,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             m.addSeparator();
             m.addCommandItem(c, cmd::scanPlugins);
             m.addCommandItem(c, cmd::reloadCrashedPlugins);
+            m.addCommandItem(c, cmd::builtinSounds);
             m.addSeparator();
             m.addCommandItem(c, cmd::mixerController);
             m.addCommandItem(c, cmd::showControlSurfaces);

@@ -2249,3 +2249,23 @@ macOS, Linux and Windows. What it took:
     - Marketing: docs/marketing-notes.md (quick playback the headline).
     - **Checks**: chord_mode_checks, chord_palette_checks, note_mouse_checks,
       view_tools_checks (screenshots 98-102).
+60. **Built-in sounds and Help > Credits** (November 18, 2026).
+    - **Sounds**: a real grand piano (Salamander, reduced to four velocity
+      layers by `tools/soundpack/build_piano.py`: 16 MB to download, 150 MB
+      loaded) and MuseScore General (40 MB, all 128 GM programs and the kits),
+      as SoundFont 3 files. The `Sound pack` workflow builds them and uploads
+      them with `manifest.json` (sizes, SHA-256) to the public `sounds` bucket.
+      The app downloads them on first launch (Studio > Built-in Sounds shows
+      the progress), uses a file only if its checksum matches, then loads them
+      in the background. From then on every track without a plug-in, every
+      chord, ostinato and template audition and every note heard as it is
+      placed plays on them (pianos on the Salamander, the rest on MuseScore
+      General); until then, or offline, the placeholder synth plays.
+    - **Player**: TinySoundFont with stb_vorbis (vendored, 16-bit samples);
+      voices and the MIDI channel are allocated before playing, so the audio
+      thread never allocates.
+    - **Help > Credits**: Sounds, Software, Fonts and Trademarks tabs with
+      each licence and the notices the licences require; the ASIO and VST
+      trademark lines are text only (no logos).
+    - **Checks**: sound_pack_checks (screenshots 103-105) with a tiny
+      SoundFont written by the check itself.

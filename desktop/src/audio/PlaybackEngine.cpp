@@ -11,6 +11,8 @@
 #include "audio/AutomationRt.h"
 #include "audio/ChannelDsp.h"
 #include "audio/PlaceholderSynth.h"
+#include "audio/SoundFontInstrument.h"
+#include "audio/SoundPack.h"
 #include "audio/Recorder.h"
 #include "vcc/project/Automation.h"
 #include "vcc/project/Render.h"
@@ -983,6 +985,12 @@ PlaybackEngine::PlaybackEngine(session::Session& session, PluginHost& plugins)
         request_rebuild();
         if (writing_pass_ && !committing_) refresh_writes();
     });
+    // When the sound pack finishes loading, the placeholder tracks swap to it.
+    sounds_listener_ = sounds::add_listener([this] {
+        if (sounds::generation() == sounds_generation_) return;
+        sounds_generation_ = sounds::generation();
+        request_rebuild();
+    });
     midi_router_ = std::make_unique<MidiOutRouter>();
     for (auto& h : live_held_) h.store(0);
     live_block_.ensureSize(8192);
@@ -997,6 +1005,7 @@ PlaybackEngine::~PlaybackEngine()
 {
     stopTimer();
     session_.remove_listener(listener_);
+    sounds::remove_listener(sounds_listener_);
     devices_.removeAudioCallback(this);
     devices_.removeMidiInputDeviceCallback({}, midi_callback_.get());
     if (device_listener_) devices_.removeChangeListener(device_listener_.get());
@@ -1285,11 +1294,16 @@ std::shared_ptr<Instrument> PlaybackEngine::instrument_for(const project::Track&
         return slot.instrument;
     }
     const auto* def = session_.instrument_for(t);
-    const PlaceholderVoice voice = placeholder_voice_for(def ? def->family : t.family,
-                                                         def ? def->gm_program : t.assignment.placeholder_program,
-                                                         (def && def->unpitched) || t.midi_channel == 9);
-    std::string key = t.instrument_plugin.empty() ? std::string("placeholder:") + to_string(voice)
-                                                  : "plugin:" + t.instrument_plugin.identifier;
+    const int gm_program = def ? def->gm_program : t.assignment.placeholder_program;
+    const bool unpitched = (def && def->unpitched) || t.midi_channel == 9;
+    const PlaceholderVoice voice = placeholder_voice_for(def ? def->family : t.family, gm_program, unpitched);
+    // The built-in sound pack, once loaded, plays what has no plug-in.
+    const PackVoice pack = pack_voice_for(gm_program, unpitched);
+    const std::string builtin_key =
+        pack.valid() ? "pack:" + std::to_string(sounds::generation()) + ":" + std::to_string(pack.bank_number) + ":" +
+                           std::to_string(pack.program) + ":" + pack.name.toStdString()
+                     : std::string("placeholder:") + to_string(voice);
+    std::string key = t.instrument_plugin.empty() ? builtin_key : "plugin:" + t.instrument_plugin.identifier;
     if (slot.instrument && slot.key == key) return slot.instrument;
 
     slot.key = key;
@@ -1306,7 +1320,11 @@ std::shared_ptr<Instrument> PlaybackEngine::instrument_for(const project::Track&
         // Keep the track playing on the placeholder and say why (Main Spec §15).
         slot.status = "Missing: " + juce::String(t.instrument_plugin.name) + " (" + error + ") - placeholder playing";
     }
-    auto synth = std::make_shared<PlaceholderSynth>(voice);
+    std::shared_ptr<Instrument> synth;
+    if (pack.valid())
+        synth = std::make_shared<SoundFontInstrument>(pack);
+    else
+        synth = std::make_shared<PlaceholderSynth>(voice);
     synth->prepare(sample_rate_, block_size_);
     if (t.instrument_plugin.empty()) slot.status = synth->display_name();
     slot.instrument = synth;
@@ -1943,7 +1961,11 @@ void PlaybackEngine::preview(const std::vector<NoteEvent>& notes, const std::str
                              bool loop, Ticks loop_length)
 {
     auto clip = std::make_unique<PreviewClip>();
-    clip->synth = std::make_unique<PlaceholderSynth>(placeholder_voice_for(family, gm_program, false));
+    // The sound pack when it is loaded (a real piano for a chord), else the placeholder.
+    if (auto pack = pack_voice_for(gm_program, false); pack.valid())
+        clip->synth = std::make_unique<SoundFontInstrument>(std::move(pack));
+    else
+        clip->synth = std::make_unique<PlaceholderSynth>(placeholder_voice_for(family, gm_program, false));
     clip->synth->prepare(sample_rate_, block_size_);
     TempoMap tempo(bpm > 0 ? bpm : 100.0);
     clip->events = to_events(notes, {}, tempo, sample_rate_, 0);

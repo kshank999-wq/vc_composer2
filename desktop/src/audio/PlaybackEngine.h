@@ -577,6 +577,7 @@ private:
     PluginHost& plugins_;
     juce::AudioDeviceManager devices_;
     int listener_ = 0;
+    int sounds_listener_ = 0, sounds_generation_ = 0;
 
     double sample_rate_ = 48000.0;
     int block_size_ = 512;

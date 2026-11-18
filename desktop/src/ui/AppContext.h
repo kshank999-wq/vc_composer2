@@ -179,6 +179,8 @@ enum : juce::CommandID {
     scoreView,
     trackList,
     hearEntry,
+    builtinSounds,
+    credits,
 };
 }  // namespace cmd
 

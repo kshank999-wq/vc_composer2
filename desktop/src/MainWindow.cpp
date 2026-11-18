@@ -2,6 +2,8 @@
 #include "Preview.h"
 #include "system/ResourceMonitor.h"
 
+#include "audio/SoundPack.h"
+#include "ui/SoundsWindow.h"
 #include "ui/Dialogs.h"
 #include "ui/hw/HwTheme.h"
 #include "ui/shell/Layouts.h"
@@ -76,6 +78,14 @@ MainWindow::MainWindow(const juce::String& file, bool show_welcome)
     if (hw::ui_settings().getBoolValue("console_at_startup", false))
         main_->show_console_window(hw::ui_settings().getValue("console_display", ""));
     if (main_->workspace() == MainComponent::Workspace::Composer) main_->composer().grabKeyboardFocus();
+
+    // The built-in sounds: loaded if installed, downloaded on first launch
+    // (Studio > Built-in Sounds shows the progress).
+    if (juce::SystemStats::getEnvironmentVariable("VCC_NO_SOUNDS", {}).isEmpty()) {
+        const bool first = !sounds::installed() && sounds::source_url().isNotEmpty();
+        sounds::start();
+        if (first) juce::MessageManager::callAsync([] { show_sounds_window(); });
+    }
 
     // A little after start-up, the plug-in folders are looked through in the
     // background: new, updated, removed, and any that will not load.
