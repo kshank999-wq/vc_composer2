@@ -487,7 +487,8 @@ MainComponent::MainComponent(AppContext& context)
     keyboard_.on_command = run;
     keyboard_.cursor = [this] { return composer_.cursor(); };
     keyboard_.on_step = [this](int midi, bool chord) {
-        if (workspace_ != Workspace::Composer || !composer_.note_entry()) return false;
+        // Step input writes in either mode, as typing does (Select governs clicks).
+        if (workspace_ != Workspace::Composer) return false;
         const bool ok = composer_.enter_midi(midi, chord);
         composer_.grabKeyboardFocus();
         return ok;

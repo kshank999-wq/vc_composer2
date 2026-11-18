@@ -1901,11 +1901,12 @@ void composer_lane_checks(MainWindow& window, const juce::File& dir)
     composer.grabKeyboardFocus();
     const Ticks q = kTicksPerQuarter, bar = 4 * kTicksPerQuarter;
 
-    // Geometry: 220 px headers, a 108 px single-staff row and a 120 px bar at 100%.
+    // Geometry: 220 px headers, a single-staff row as tall as its header (with
+    // the instrument and MIDI rows) and a 120 px bar at 100%.
     check(composer.strip_count() > 1 && composer.header(0).getWidth() == composer_ui::TrackHeader::kWidth,
           "each track row starts with its 220 px header");
     const int row = composer.header(0).getHeight();
-    check(row >= 104 && row <= 112, "a single-staff row is 108 px at 100% (" + juce::String(row) + ")");
+    check(row == composer_ui::TrackHeader::kMinHeight, "a single-staff row fits its header at 100% (" + juce::String(row) + ")");
     auto& lane0 = composer.lane(0);
     const float bar_px = lane0.x_of_tick(2 * bar) - lane0.x_of_tick(bar);
     check(std::abs(bar_px - 120.0f) < 1.5f, "a bar of 4/4 is 120 px at 100% (" + juce::String(bar_px, 1) + ")");
@@ -3994,6 +3995,7 @@ void sidechain_checks(MainWindow& window, const juce::File& dir)
 /// refused, a transposing staff, Replace Selected, and one undo step.
 void chord_mode_checks(MainWindow& window, const juce::File& dir)
 {
+    window.main().composer().set_note_entry(true);  // clicks on the staff write (the quill)
     auto& main = window.main();
     auto& ctx = window.context();
     auto& session = ctx.session;
@@ -4833,6 +4835,7 @@ void chord_palette_checks(MainWindow& window, const juce::File& dir)
 /// new instrument re-checks without deleting, the report and Move into range.
 void range_checks(MainWindow& window, const juce::File& dir)
 {
+    window.main().composer().set_note_entry(true);  // clicks on the staff write (the quill)
     auto& main = window.main();
     auto& ctx = window.context();
     auto& session = ctx.session;
@@ -5265,6 +5268,7 @@ void circle_checks(MainWindow& window, const juce::File& dir)
 /// changes under a held note.
 void trans_checks(MainWindow& window, const juce::File& dir)
 {
+    window.main().composer().set_note_entry(true);  // clicks on the staff write (the quill)
     auto& main = window.main();
     auto& ctx = window.context();
     auto& session = ctx.session;
@@ -5518,10 +5522,15 @@ void staff_tools_checks(MainWindow& window, const juce::File& dir)
             for (const auto& x : session.data().find_track(piano)->active_version()->score.notes(0)) n += x.is_rest ? 0 : 1;
             return n;
         };
-        check(tools.write_key().getToggleState() && !tools.select_key().getToggleState() && composer.note_entry() &&
+        // Select is the default (a fresh edit window); earlier sections may have chosen Write.
+        check(!composer_ui::StaffToolsState{}.writing, "the staff tools' default is Select");
+        composer.set_note_entry(false);
+        composer.update_staff_tools();
+        pump(40);
+        check(!tools.write_key().getToggleState() && tools.select_key().getToggleState() && !composer.note_entry() &&
                   tools.select_key().getX() < tools.key_for(Command::SelectDurationWhole)->getX() &&
                   tools.accent_knob().getRight() > tools.detach_key().getRight(),
-              "the tools start in Write (the quill lit); Select and Write sit at the left, the accent dial at the right end");
+              "in Select the arrow is lit; Select and Write sit at the left, the accent dial at the right end");
         tools.select_key().triggerClick();
         pump(60);
         engraving::InsertionPoint p;
@@ -7599,7 +7608,8 @@ void layout_checks(MainWindow& window, const juce::File& dir)
     check(!main.new_track_panel().isVisible() && !main.track_panel().isVisible(), "Work View holds in Producer");
     main.set_work_view(false);
     pump(150);
-    check(main.new_track_panel().isVisible() && main.track_panel().isVisible(), "leaving Work View brings the panels back");
+    check(main.new_track_panel().isVisible() && !main.track_panel().isVisible(),
+          "leaving Work View brings the panels back (the tracks are the edit window's lanes)");
 
     // Layouts: saved by name, recalled, and the one the app opens with.
     main.set_dock_hidden(true);

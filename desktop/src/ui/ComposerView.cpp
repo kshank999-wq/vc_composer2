@@ -490,7 +490,7 @@ void ComposerView::reload_working_copy(bool new_editor)
     editing_track_ = t->id;
     editing_version_ = v->id;
     hint_.setText("Writing on " + juce::String(t->name) + " (" + juce::String(v->name) + ")" +
-                      (note_entry_ ? "  -  type A-G to enter notes, 5 quarter / 4 eighth / 6 half for durations, Space to play" : ""),
+                      juce::String("  -  type A-G to enter notes, 5 quarter / 4 eighth / 6 half for durations, Space to play"),
                   juce::dontSendNotification);
 }
 
@@ -984,7 +984,7 @@ void ComposerView::perform(Command command)
                           command == Command::SelectDurationThirtySecond || command == Command::SelectDurationSixtyFourth ||
                           command == Command::ToggleDot || command == Command::ToggleDoubleDot ||
                           command == Command::ToggleTuplet || command == Command::ToggleRest;
-    if (for_next && just_entered_ && note_entry_) {
+    if (for_next && just_entered_) {
         editor_->clear_selection();
         handle(editor_->apply(command));
         return;  // still "just entered": 4 then . chooses a dotted eighth
@@ -1548,12 +1548,13 @@ bool ComposerView::keyPressed(const juce::KeyPress& key)
     composer::KeyStroke stroke;
     if (!ui::key_stroke_from(key, stroke)) return false;
     notation::Step step = notation::Step::C;
-    if (editor_ && note_entry_ && stroke.modifiers == 0 && ui::step_from_key(stroke, step)) {
+    // Typing writes in either mode (Select governs only what a click does).
+    if (editor_ && stroke.modifiers == 0 && ui::step_from_key(stroke, step)) {
         handle(editor_->insert_step(step));
         just_entered_ = true;
         return true;
     }
-    if (editor_ && note_entry_ && stroke.modifiers == composer::to_mask(composer::Modifier::Shift) &&
+    if (editor_ && stroke.modifiers == composer::to_mask(composer::Modifier::Shift) &&
         ui::step_from_key(stroke, step)) {
         handle(editor_->add_step_to_chord(step));
         just_entered_ = true;
