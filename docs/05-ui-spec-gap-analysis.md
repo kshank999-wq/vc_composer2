@@ -2354,3 +2354,34 @@ macOS, Linux and Windows. What it took:
     automatic updates; deactivating the computer (or a revoked licence) does.
     Checks: updater_checks (signed out but activated); web
     `lib/__tests__/downloads.test.ts`.
+67. **Staff tools and Chord Mode leave the edit window; previews and
+    licensed copies update themselves** (November 18, 2026). The staff
+    tools pull out by their title strip (Detach shows its window); Chord
+    Mode's header drags its whole window, to any screen. Previews download
+    updates with no account (the site accepts an installed preview's
+    fingerprint for the preview channel only). "Install updates
+    automatically" (on by default): a downloaded update installs at once
+    when nothing is unsaved or playing, else at the next start.
+    Checks: staff_tools_checks, chord_palette_checks, updater_checks; web
+    `lib/__tests__/downloads.test.ts`.
+68. **A track per articulation, Pro Tools-style track headers**
+    (November 18, 2026).
+    - **Articulation tracks own their notes.** Expanding a part moves each
+      note to the track for its sound; each is its own lane in the edit
+      window, named with its articulation ("Violins I - Pizzicato"), and
+      plays every note with that sound. The part is the printed part: its
+      tracks' notes combined, each marked with its articulation. An edit
+      to the part (score view, import, Send to Track) is shared out by
+      sound; Consolidate merges the tracks back. (`ProjectData::sync_scores`,
+      `Session::composer_tracks`.)
+    - **Track header**: an Instrument insert under Treble and Trans, as
+      wide as both - "Instrument", then the assigned plug-in's name; click
+      for the built-in sound, virtual instruments by maker, the instrument
+      window, the library. MIDI In (the selected track hears only that
+      device) and MIDI Out (an instrument track can drive external MIDI).
+    - **No left Tracks/Library panel**: the tracks are the edit window's
+      lanes; Window > Library floats the library (any screen).
+    - **Select by default**: a click on another track's staff selects it,
+      in Select mode, without writing a note; Write shows the quill pointer.
+    - **Checks**: track_header_checks, articulation_template_checks;
+      `test_session` (writing on an articulation track).
