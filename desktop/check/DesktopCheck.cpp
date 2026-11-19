@@ -4666,6 +4666,27 @@ void track_header_checks(MainWindow& window, const juce::File& dir)
     pump(40);
     shoot(composer, dir, "track-header");
 
+    // Versions, on the header: a new one (a copy, or empty), switch back, up to ten.
+    {
+        auto& v = composer.header(0).versions();
+        check(v.isShowing() && v.getText() == "Version 1", "the header shows the track's version (Version 1)");
+        notation::Score sc = session.data().find_track(vln)->active_version()->score;
+        sc.insert_chord(0, 0, notation::half(), {notation::spell_midi_note(72, {})});
+        session.commit_score(vln, sc, "Idea");
+        pump(60);
+        composer.header(0).versions().setSelectedId(1002, juce::sendNotificationSync);  // New Empty Version
+        pump(100);
+        const auto empty_notes = session.data().find_track(vln)->active_version()->score.total_note_count();
+        check(composer.header(0).versions().getText() == "Version 2" && empty_notes == 0,
+              "New Empty Version: Version 2, no notes - the idea stays in Version 1");
+        shoot(composer.header(0), dir, "track-versions");
+        composer.header(0).versions().setSelectedId(1, juce::sendNotificationSync);
+        pump(100);
+        check(session.data().find_track(vln)->active_version()->score.total_note_count() == 1 &&
+                  composer.header(0).versions().getText() == "Version 1",
+              "back to Version 1: its notes are on the track again");
+    }
+
     // Selecting another track by clicking its staff, while writing: no note.
     session.select_track(vln);
     pump(60);

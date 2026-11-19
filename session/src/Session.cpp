@@ -666,8 +666,55 @@ bool Session::set_active_version(const std::string& id, const std::string& versi
     return true;
 }
 
+std::optional<std::string> Session::new_version(const std::string& id, bool copy_current)
+{
+    const auto* t = data().find_track(id);
+    if (!t || static_cast<int>(t->versions.size()) >= kMaxVersions) return std::nullopt;
+    const auto before = project_.history_size();
+    auto v = project_.duplicate_version(id);
+    if (!v) return std::nullopt;
+    if (!copy_current) {
+        project_.modify_unrecorded([&](project::ProjectData& d) {
+            auto* tr = d.find_track(id);
+            auto* ver = tr ? tr->active_version() : nullptr;
+            if (!ver) return;
+            // The same staves, clefs, key and meter; no music.
+            auto staves = ver->score.staves();
+            notation::Score fresh = ver->score;
+            fresh.clear();
+            fresh.reset_staves(staves);
+            for (const auto& c : ver->score.time_signature_changes()) fresh.set_time_signature(c.tick, c.time_signature);
+            for (const auto& c : ver->score.key_signature_changes()) fresh.set_key_signature(c.tick, c.key);
+            ver->score = std::move(fresh);
+            ver->regions.clear();
+            ver->performance.clear();
+            ver->phrases.clear();
+            ver->audio_clips.clear();
+        });
+    }
+    project_.squash_undo(project_.history_size() - before, copy_current ? "New version (copy)" : "New empty version");
+    document_changed();
+    return v;
+}
+
+bool Session::delete_version(const std::string& id, const std::string& version_id)
+{
+    const auto* t = data().find_track(id);
+    if (!t || t->versions.size() < 2) return false;
+    return edit("Delete version", on_track(id, [&](project::Track& tr) {
+        auto it = std::find_if(tr.versions.begin(), tr.versions.end(), [&](const project::TrackVersion& v) { return v.id == version_id; });
+        if (it == tr.versions.end() || it->approved) return false;
+        const auto index = static_cast<std::size_t>(it - tr.versions.begin());
+        const bool was_current = tr.active_version_id == version_id;
+        tr.versions.erase(it);
+        if (was_current) tr.active_version_id = tr.versions[index == 0 ? 0 : index - 1].id;
+        return true;
+    }));
+}
+
 std::optional<std::string> Session::duplicate_version(const std::string& id)
 {
+    if (const auto* t = data().find_track(id); t && static_cast<int>(t->versions.size()) >= kMaxVersions) return std::nullopt;
     auto v = project_.duplicate_version(id);
     if (v) document_changed();
     return v;

@@ -1086,3 +1086,35 @@ TEST_CASE("every template opens with a Piano track at the top")
     for (const auto* t : tracks) pianos += t->instrument_standard_id == "keys.piano";
     CHECK_EQ(pianos, 1);
 }
+
+TEST_CASE("versions: up to ten per track to try ideas - a copy or an empty one, switch, delete")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Piano", "keys.piano");
+    notation::Score sc = s.data().find_track(t)->active_version()->score;
+    sc.insert_chord(0, 0, notation::half(), {notation::spell_midi_note(60, {})});
+    REQUIRE(s.commit_score(t, sc, "Idea 1"));
+    auto notes = [&] { return s.data().find_track(t)->active_version()->score.total_note_count(); };
+    const auto v1 = s.data().find_track(t)->active_version_id;
+    const auto copy = s.new_version(t, true);
+    REQUIRE(copy.has_value());
+    CHECK_EQ(notes(), 1u);
+    CHECK_EQ(s.undo_label(), std::string("New version (copy)"));
+    const auto empty = s.new_version(t, false);
+    REQUIRE(empty.has_value());
+    CHECK_EQ(notes(), 0u);
+    CHECK_EQ(s.data().find_track(t)->active_version()->score.staff_count(), 2u);  // the same staves
+    CHECK_EQ(s.data().find_track(t)->active_version()->name, std::string("Version 3"));
+    REQUIRE(s.set_active_version(t, v1));
+    CHECK_EQ(notes(), 1u);
+    while (s.new_version(t, true)) {}
+    CHECK_EQ(s.data().find_track(t)->versions.size(), static_cast<std::size_t>(session::Session::kMaxVersions));
+    CHECK(!s.duplicate_version(t).has_value());
+    const auto current = s.data().find_track(t)->active_version_id;
+    REQUIRE(s.delete_version(t, current));
+    CHECK_EQ(s.data().find_track(t)->versions.size(), 9u);
+    CHECK(s.data().find_track(t)->active_version() != nullptr);
+    s.undo();
+    CHECK_EQ(s.data().find_track(t)->versions.size(), 10u);
+}

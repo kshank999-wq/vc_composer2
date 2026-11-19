@@ -34,6 +34,7 @@ public:
     hw::Keycap& instrument_key() { return instrument_; }
     hw::Keycap& midi_in_key() { return midi_in_; }
     hw::Keycap& midi_out_key() { return midi_out_; }
+    juce::ComboBox& versions() { return versions_; }
     /// The header's height with every row showing.
     static constexpr int kMinHeight = 144;
     hw::SmallKnob& volume() { return vol_; }
@@ -42,11 +43,13 @@ public:
 private:
     void show_menu();
     void show_midi_menu(bool input);
+    void version_chosen();
     AppContext& context_;
     std::string track_;
     hw::Lcd number_{{}, 11.0f}, scribble_{{}, 12.0f}, vol_lcd_{{}, 9.5f}, pan_lcd_{{}, 9.5f};
     hw::Keycap rec_{"R", true}, solo_{"S", true}, mute_{"M", true}, tag_{"Treble"}, trans_{"Trans"};
     hw::Keycap instrument_{"Instrument"}, midi_in_{"In: All"}, midi_out_{"Out: None"};
+    juce::ComboBox versions_;
     hw::SmallKnob vol_, pan_;
     hw::Meter meter_{hw::Meter::Orientation::Vertical, 12};
 };

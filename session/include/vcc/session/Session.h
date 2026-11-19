@@ -239,6 +239,15 @@ public:
     bool set_playback(const std::string& track_id, const std::string& playback);
     bool set_active_version(const std::string& track_id, const std::string& version_id);
     std::optional<std::string> duplicate_version(const std::string& track_id);
+    /// A track keeps up to this many versions of its music to try ideas in.
+    static constexpr int kMaxVersions = 10;
+    /// A new version, made current: a copy of the current one to change, or
+    /// empty (the same staves, no notes) to start afresh. None past
+    /// kMaxVersions. One undo step.
+    std::optional<std::string> new_version(const std::string& track_id, bool copy_current);
+    /// Deletes a version (never the last one); the one before it becomes
+    /// current if it was. One undo step.
+    bool delete_version(const std::string& track_id, const std::string& version_id);
     bool set_instrument_plugin(const std::string& track_id, const project::PluginRef& plugin);
     /// Assigns a sound from the library browser (Main Spec §10.6): the
     /// plug-in (with its state), how the track's request was met (shown in

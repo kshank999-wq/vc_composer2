@@ -11,6 +11,10 @@
 
 namespace vcc::desktop::composer_ui {
 
+namespace {
+constexpr int kNewCopy = 1001, kNewEmpty = 1002, kDelete = 1003;
+}  // namespace
+
 // --- Track header ---------------------------------------------------------------------------
 
 TrackHeader::TrackHeader(AppContext& context, std::string track_id) : context_(context), track_(std::move(track_id))
@@ -34,6 +38,13 @@ TrackHeader::TrackHeader(AppContext& context, std::string track_id) : context_(c
     }
     midi_in_.setComponentID("track_midi_in");
     midi_out_.setComponentID("track_midi_out");
+    // Versions: up to ten takes on the music, to try ideas; switching changes the notes.
+    versions_.setComponentID("track_versions");
+    versions_.setTitle("Track version");
+    versions_.setTooltip("Versions of this track's music (up to 10): switch to compare ideas, or start a new one");
+    versions_.setWantsKeyboardFocus(false);
+    versions_.onChange = [this] { version_chosen(); };
+    addAndMakeVisible(versions_);
     midi_in_.onClick = [this] { show_midi_menu(true); };
     midi_out_.onClick = [this] { show_midi_menu(false); };
     // Trans (Add-On spec §10): the track's transpose, at hand.
@@ -130,6 +141,24 @@ void TrackHeader::refresh()
         instrument_.setTooltip(t->instrument_plugin.empty() ? juce::String("Instrument: the built-in sound. Click to assign a virtual instrument")
                                                             : "Instrument: " + juce::String(t->instrument_plugin.vendor) + " " +
                                                                   juce::String(t->instrument_plugin.name) + ". Click to change");
+        // The versions list: each version, then what can be done.
+        versions_.clear(juce::dontSendNotification);
+        int active = 0;
+        for (std::size_t i = 0; i < t->versions.size(); ++i) {
+            const auto& v = t->versions[i];
+            versions_.addItem(juce::String(v.name) + (v.approved ? juce::String::fromUTF8(" \xe2\x9c\x93") : juce::String()),
+                              static_cast<int>(i) + 1);
+            if (v.id == t->active_version_id) active = static_cast<int>(i) + 1;
+        }
+        versions_.addSeparator();
+        const bool room = static_cast<int>(t->versions.size()) < session::Session::kMaxVersions;
+        versions_.addItem("New Version (copy of this)", kNewCopy);
+        versions_.addItem("New Empty Version", kNewEmpty);
+        versions_.setItemEnabled(kNewCopy, room);
+        versions_.setItemEnabled(kNewEmpty, room);
+        versions_.addItem("Delete This Version", kDelete);
+        versions_.setItemEnabled(kDelete, t->versions.size() > 1);
+        versions_.setSelectedId(active, juce::dontSendNotification);
         midi_in_.setButtonText(t->midi_input.empty() ? juce::String("In: All") : "In: " + juce::String(t->midi_input));
         midi_in_.setTooltip("MIDI In: " + (t->midi_input.empty() ? juce::String("every input") : juce::String(t->midi_input)));
         midi_out_.setButtonText(t->midi_output.empty() ? juce::String("Out: None") : "Out: " + juce::String(t->midi_output));
@@ -206,6 +235,7 @@ void TrackHeader::resized()
     trans_.setBounds(63, 70, 42, 20);
     // Under Treble and Trans, as wide as both: the instrument; then MIDI in and out.
     instrument_.setBounds(11, 94, 94, 20);
+    versions_.setBounds(108, 96, 88, 18);
     midi_in_.setBounds(11, 118, 84, 18);
     midi_out_.setBounds(98, 118, 84, 18);
     vol_.setBounds(112, 52, 28, 28);
@@ -219,6 +249,39 @@ void TrackHeader::mouseDown(const juce::MouseEvent& e)
 {
     context_.session.select_track(track_);
     if (e.mods.isPopupMenu()) show_menu();
+}
+
+void TrackHeader::version_chosen()
+{
+    const int id = versions_.getSelectedId();
+    const auto* t = context_.session.data().find_track(track_);
+    if (!t || id == 0) return;
+    context_.session.select_track(track_);
+    if (id == kNewCopy || id == kNewEmpty) {
+        const auto made = context_.session.new_version(track_, id == kNewCopy);
+        context_.status(made ? (id == kNewCopy ? juce::String("A new version, a copy to try the idea on")
+                                               : juce::String("A new, empty version: the others keep their notes"))
+                             : "This track has " + juce::String(session::Session::kMaxVersions) +
+                                   " versions already: delete one to make room");
+    } else if (id == kDelete) {
+        const std::string current = t->active_version_id;
+        const juce::String name(t->active_version() ? t->active_version()->name : std::string());
+        juce::Component::SafePointer<TrackHeader> self(this);
+        juce::AlertWindow::showOkCancelBox(juce::MessageBoxIconType::QuestionIcon, "Delete " + name + "?",
+                                           "Its notes go with it (Undo brings them back).", "Delete", "Cancel", this,
+                                           juce::ModalCallbackFunction::create([self, current](int r) {
+                                               if (self == nullptr) return;
+                                               if (r == 1) self->context_.session.delete_version(self->track_, current);
+                                               self->refresh();
+                                           }));
+    } else if (id > 0 && id <= static_cast<int>(t->versions.size())) {
+        const auto& v = t->versions[static_cast<std::size_t>(id - 1)];
+        if (v.id != t->active_version_id) {
+            context_.session.set_active_version(track_, v.id);
+            context_.status(juce::String(t->name) + ": " + juce::String(v.name));
+        }
+    }
+    refresh();
 }
 
 void TrackHeader::show_midi_menu(bool input)
