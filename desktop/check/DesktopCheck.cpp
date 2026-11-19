@@ -4688,6 +4688,41 @@ void track_header_checks(MainWindow& window, const juce::File& dir)
               "back to Version 1: its notes are on the track again");
     }
 
+    // Clear Track (CLR): the whole staff and its MIDI, undoable.
+    {
+        notation::Score sc = session.data().find_track(vln)->active_version()->score;
+        sc.insert_chord(0, kTicksPerQuarter, notation::quarter(), {notation::spell_midi_note(76, {})});
+        session.commit_score(vln, sc, "Idea");
+        pump(60);
+        auto& h0 = composer.header(0);
+        check(h0.clear_key().isShowing(), "each track header has Clear Track (CLR)");
+        h0.clear_track(false);
+        pump(60);
+        const auto cleared = session.data().find_track(vln)->active_version()->score.total_note_count();
+        check(cleared == 0 && session.undo_label() == "Clear Violins I", "Clear Track empties the staff, one undo step");
+        session.undo();
+        pump(60);
+        check(session.data().find_track(vln)->active_version()->score.total_note_count() > 0, "Undo brings it back");
+    }
+    // Producer: W and H sliders bottom right, as in the Composer.
+    {
+        main.show_workspace(MainComponent::Workspace::Sequencer);
+        pump(150);
+        auto& seq = main.sequencer();
+        auto* w = dynamic_cast<juce::Slider*>(seq.findChildWithID("producer_zoom_width"));
+        auto* hz = dynamic_cast<juce::Slider*>(seq.findChildWithID("producer_zoom_height"));
+        const int before = seq.row_height(vla);
+        if (hz) hz->setValue(2.0, juce::sendNotificationSync);
+        pump(60);
+        const int taller = seq.row_height(vla);
+        if (hz) hz->setValue(1.0, juce::sendNotificationSync);
+        check(w && hz && w->isShowing() && hz->isShowing() && w->getRight() > seq.getWidth() - 300 && taller > before,
+              "Producer has W and H sliders bottom right; H makes the tracks taller (" + juce::String(before) + " -> " +
+                  juce::String(taller) + ")");
+        main.show_workspace(MainComponent::Workspace::Composer);
+        pump(150);
+    }
+
     // Selecting another track by clicking its staff, while writing: no note.
     session.select_track(vln);
     pump(60);

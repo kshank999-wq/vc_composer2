@@ -751,6 +751,29 @@ std::optional<std::string> Session::new_version(const std::string& id, bool copy
     return v;
 }
 
+bool Session::clear_track(const std::string& id)
+{
+    const auto* t = data().find_track(id);
+    if (!t || !t->active_version()) return false;
+    return edit("Clear " + t->name, on_track(id, [&](project::Track& tr) {
+        auto* ver = tr.active_version();
+        if (!ver) return false;
+        const bool had = ver->score.total_note_count() > 0 || !ver->regions.empty() || !ver->performance.empty() ||
+                         !ver->score.dynamics().empty() || !ver->score.hairpins().empty() || !ver->score.texts().empty();
+        if (!had) return false;
+        auto staves = ver->score.staves();
+        notation::Score fresh = ver->score;
+        fresh.clear();
+        fresh.reset_staves(staves);
+        for (const auto& c : ver->score.time_signature_changes()) fresh.set_time_signature(c.tick, c.time_signature);
+        for (const auto& c : ver->score.key_signature_changes()) fresh.set_key_signature(c.tick, c.key);
+        ver->score = std::move(fresh);
+        ver->regions.clear();
+        ver->performance.clear();
+        return true;
+    }));
+}
+
 bool Session::delete_version(const std::string& id, const std::string& version_id)
 {
     const auto* t = data().find_track(id);
@@ -1083,9 +1106,48 @@ bool Session::commit_score_with_chord(const std::string& id, const notation::Sco
     });
 }
 
+std::map<std::string, std::set<std::string>> Session::region_ids() const
+{
+    std::map<std::string, std::set<std::string>> out;
+    for (const auto& t : data().tracks)
+        if (const auto* v = t.active_version())
+            for (const auto& r : v->regions) out[t.id].insert(r.id);
+    return out;
+}
+
+int Session::lock_new_regions_to_notation(const std::map<std::string, std::set<std::string>>& before, const std::string& label)
+{
+    std::vector<std::pair<std::string, std::string>> fresh;  // track, region
+    for (const auto& t : data().tracks) {
+        const auto* v = t.active_version();
+        if (!v || t.kind != project::TrackKind::Instrument || v->score.staff_count() == 0) continue;
+        const auto it = before.find(t.id);
+        for (const auto& r : v->regions)
+            if (r.lane == 0 && !r.notes.empty() && (it == before.end() || !it->second.count(r.id))) fresh.emplace_back(t.id, r.id);
+    }
+    if (fresh.empty()) return 0;
+    const auto steps_before = project_.history_size();
+    int n = 0;
+    for (const auto& [track, region] : fresh) {
+        const auto plan = plan_notate_region(track, region);
+        if (!plan.error.empty() || plan.options.empty()) continue;
+        if (apply_notate(track, plan, 0, label)) ++n;
+    }
+    // One undo step with what brought the MIDI in.
+    if (project_.history_size() > steps_before) project_.squash_undo(project_.history_size() - steps_before + 1, label);
+    return n;
+}
+
 project::InsertResult Session::insert_notes(const std::string& id, Ticks start, Ticks end, std::vector<NoteEvent> notes,
                                             project::CollisionPolicy policy, const std::string& source)
 {
+    // On a track with a staff the notes are written there, as every send is:
+    // the MIDI always matches the notation. MIDI-only tracks get a region.
+    if (const project::Track* t = data().find_track(id);
+        t && t->kind == project::TrackKind::Instrument && t->active_version() && t->active_version()->score.staff_count() > 0) {
+        const auto events = written_events(*t, notes, end);
+        if (!events.empty()) return write_events(id, events, {}, policy, "Insert " + source + " on " + t->name);
+    }
     auto r = project_.insert_notes(id, start, end, std::move(notes), policy, source);
     if (r.ok) document_changed();
     return r;
@@ -1095,12 +1157,21 @@ project::InsertResult Session::send_progression(const std::string& id, const the
                                                 const std::string& progression_id, project::CollisionPolicy policy)
 {
     const std::string source = "chord_explorer:" + progression_id;
-    auto r = insert_notes(id, render.start, render.end, render.notes, policy, source);
-    if (!r.ok) return r;
-    // The progression's symbols over those bars, in the same undo step.
+    // The progression's symbols over those bars.
     std::vector<project::ChordMark> marks;
     for (const auto& rc : render.chords)
         if (marks.empty() || marks.back().tick < rc.start) marks.push_back({rc.start, rc.chord.name()});
+    // Notation first, as the ostinatos are: the chords written on the track's
+    // staff (a piano's left hand on the bass staff), the symbols over them, one
+    // undo step. Only a track with no staff - MIDI-only - gets a MIDI region.
+    if (const project::Track* track = data().find_track(id);
+        track && track->kind != project::TrackKind::MidiOnly && track->active_version() &&
+        track->active_version()->score.staff_count() > 0) {
+        const auto events = written_events(*track, render.notes, render.end);
+        if (!events.empty()) return write_events(id, events, marks, policy, "Insert " + source + " on " + track->name);
+    }
+    auto r = insert_notes(id, render.start, render.end, render.notes, policy, source);
+    if (!r.ok) return r;
     const auto* t = data().find_track(id);
     const std::string label = "Insert " + source + " on " + (t ? t->name : std::string());
     if (project_.edit_coalescing(label, [&](project::ProjectData& d) {
@@ -1185,26 +1256,22 @@ const project::ChordMark* Session::chord_symbol_at(Ticks tick) const
     return best;
 }
 
-project::InsertResult Session::send_ostinato(const std::string& id, const ostinato::Variant& v,
-                                             const std::string& preset_id, project::CollisionPolicy policy)
+std::vector<Session::WrittenEvent> Session::written_events(const project::Track& track, const std::vector<NoteEvent>& notes,
+                                                         Ticks end) const
 {
-    // Notation first: the figure is written on the track's staff (it plays
-    // from there, as everything written does). Only a track with no staff -
-    // MIDI-only - gets it as a MIDI region.
-    const project::Track* t = data().find_track(id);
-    const project::TrackVersion* ver = t ? t->active_version() : nullptr;
-    if (!t || !ver || ver->score.staff_count() == 0 || t->kind == project::TrackKind::MidiOnly)
-        return insert_notes(id, v.start, v.end, v.notes, policy, "ostinato:" + preset_id + "/" + v.id);
-
+    std::vector<WrittenEvent> events;
+    const project::TrackVersion* ver = track.active_version();
+    if (!ver || ver->score.staff_count() == 0) return events;
+    const auto& v_notes = notes;
     const auto& score = ver->score;
     const auto& staff = score.staff(0);
-    const project::PercussionMap* drums = t->percussion_map.empty() ? nullptr : project::percussion_map_named(t->percussion_map);
+    const project::PercussionMap* drums = track.percussion_map.empty() ? nullptr : project::percussion_map_named(track.percussion_map);
     const bool percussion = drums != nullptr || staff.clef == notation::Clef::Percussion;
     // Written as the pattern reads, not as briefly as it sounds: each note
     // takes its grid step (the smallest distance between onsets), or up to
     // the next note when that comes sooner - sixteenths, not 32nds and rests.
     std::vector<Ticks> onsets;
-    for (const auto& n : v.notes) onsets.push_back(n.start);
+    for (const auto& n : v_notes) onsets.push_back(n.start);
     std::sort(onsets.begin(), onsets.end());
     onsets.erase(std::unique(onsets.begin(), onsets.end()), onsets.end());
     Ticks step = 0;
@@ -1216,12 +1283,12 @@ project::InsertResult Session::send_ostinato(const std::string& id, const ostina
         const auto next = std::upper_bound(onsets.begin(), onsets.end(), n.start);
         Ticks len = std::max(n.duration, step);
         if (next != onsets.end()) len = std::min(len, *next - n.start);
-        len = std::min(len, v.end - n.start);
-        return std::max<Ticks>(len, n.duration > 0 ? std::min(n.duration, v.end - n.start) : 0);
+        len = std::min(len, end - n.start);
+        return std::max<Ticks>(len, n.duration > 0 ? std::min(n.duration, end - n.start) : 0);
     };
     // Notes sounding together for the same time are one chord on the page.
     std::map<std::pair<Ticks, Ticks>, std::vector<int>> groups;
-    for (const auto& n : v.notes) {
+    for (const auto& n : v_notes) {
         int written = n.pitch;
         if (percussion) {
             // On a drum staff each sound has its line (and head) in the kit's map.
@@ -1233,7 +1300,6 @@ project::InsertResult Session::send_ostinato(const std::string& id, const ostina
         if (written < 0 || written > 127 || n.duration <= 0) continue;
         groups[{n.start, written_length(n)}].push_back(written);
     }
-    std::vector<WrittenEvent> events;
     for (auto& [span, pitches] : groups) {
         std::sort(pitches.begin(), pitches.end());
         pitches.erase(std::unique(pitches.begin(), pitches.end()), pitches.end());
@@ -1245,6 +1311,21 @@ project::InsertResult Session::send_ostinato(const std::string& id, const ostina
         for (const int midi : pitches) e.pitches.push_back(notation::spell_midi_note(midi, key));
         events.push_back(std::move(e));
     }
+    return events;
+}
+
+project::InsertResult Session::send_ostinato(const std::string& id, const ostinato::Variant& v,
+                                             const std::string& preset_id, project::CollisionPolicy policy)
+{
+    // Notation first: the figure is written on the track's staff (it plays
+    // from there, as everything written does). Only a track with no staff -
+    // MIDI-only - gets it as a MIDI region.
+    const project::Track* t = data().find_track(id);
+    const project::TrackVersion* ver = t ? t->active_version() : nullptr;
+    if (!t || !ver || ver->score.staff_count() == 0 || t->kind == project::TrackKind::MidiOnly)
+        return insert_notes(id, v.start, v.end, v.notes, policy, "ostinato:" + preset_id + "/" + v.id);
+
+    const auto events = written_events(*t, v.notes, v.end);
     if (events.empty()) return insert_notes(id, v.start, v.end, v.notes, policy, "ostinato:" + preset_id + "/" + v.id);
     return write_events(id, events, {}, policy, "Ostinato " + v.id + " on " + t->name);
 }

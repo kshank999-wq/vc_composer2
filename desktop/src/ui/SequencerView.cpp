@@ -344,13 +344,18 @@ struct Model final : AutomationTimeline {
 
     bool has_audio_lane(const LaneView& l) const { return !l.audio && !l.bus && !l.reference; }
     bool is_expanded(const LaneView& l) const { return has_audio_lane(l) && expanded == l.id; }
+    /// The height slider (bottom right): every row taller or shorter.
+    double height_zoom = 1.0;
     int base_height(const LaneView& l) const
     {
         if (l.bus) return kBusHeight;
         const std::string key = is_expanded(l) ? l.id + "#x" : l.id;
-        if (auto it = heights.find(key); it != heights.end()) return it->second;
-        return is_expanded(l) ? kExpandedRow : l.audio ? kAudioRow : kLaneHeight;
+        int h = is_expanded(l) ? kExpandedRow : l.audio ? kAudioRow : kLaneHeight;
+        if (auto it = heights.find(key); it != heights.end()) h = it->second;
+        return std::max(min_height(l), static_cast<int>(std::lround(h * height_zoom)));
     }
+    /// A row's height as stored (before the height slider).
+    int stored_height(int shown) const { return static_cast<int>(std::lround(shown / std::max(0.1, height_zoom))); }
     /// The smallest a row can be dragged to.
     int min_height(const LaneView& l) const
     {
@@ -1445,7 +1450,7 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override
     {
         if (!resize_track_.empty()) {
-            m_.heights[resize_key_] = juce::jlimit(resize_min_, 600, resize_start_ + e.getDistanceFromDragStartY());
+            m_.heights[resize_key_] = m_.stored_height(juce::jlimit(resize_min_, 600, resize_start_ + e.getDistanceFromDragStartY()));
             update_scroll();
             repaint();
             return;
@@ -5060,6 +5065,46 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
     {
         for (juce::Component* comp : std::initializer_list<juce::Component*>{&toolbar, &ruler, &lanes, &hscroll})
             owner.addAndMakeVisible(comp);
+        // Width and height, bottom right - as in the Composer.
+        for (auto* z : {&zoom_w, &zoom_h}) {
+            z->setSliderStyle(juce::Slider::LinearHorizontal);
+            z->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+            owner.addAndMakeVisible(*z);
+        }
+        zoom_w.setComponentID("producer_zoom_width");
+        zoom_h.setComponentID("producer_zoom_height");
+        zoom_w.setTitle("Zoom width");
+        zoom_h.setTitle("Zoom height");
+        zoom_w.setTooltip("Width: more or less time across the window (double-click: 100%)");
+        zoom_h.setTooltip("Height: taller or shorter tracks (double-click: 100%)");
+        zoom_w.setRange(3.0, 480.0);
+        zoom_w.setSkewFactorFromMidPoint(24.0);
+        zoom_w.setDoubleClickReturnValue(true, 24.0);
+        zoom_h.setRange(0.5, 3.0);
+        zoom_h.setSkewFactorFromMidPoint(1.0);
+        zoom_h.setDoubleClickReturnValue(true, 1.0);
+        zoom_w.setValue(model.px_per_quarter, juce::dontSendNotification);
+        zoom_h.setValue(model.height_zoom, juce::dontSendNotification);
+        zoom_w.onValueChange = [this] {
+            const double anchor = model.view_start + model.visible_ticks() / 2.0;
+            model.px_per_quarter = zoom_w.getValue();
+            model.view_start = std::max(0.0, anchor - model.visible_ticks() / 2.0);
+            view_changed();
+        };
+        zoom_h.onValueChange = [this] {
+            model.height_zoom = zoom_h.getValue();
+            lanes.update_scroll();
+            lanes.layout_roll();
+            lanes.repaint();
+        };
+        for (auto* l : {&zoom_w_label, &zoom_h_label}) {
+            l->setColour(juce::Label::textColourId, colours::text_dim);
+            l->setFont(hw::fonts::ui(10.5f));
+            l->setJustificationType(juce::Justification::centredRight);
+            owner.addAndMakeVisible(*l);
+        }
+        zoom_w_label.setText("W", juce::dontSendNotification);
+        zoom_h_label.setText("H", juce::dontSendNotification);
         // The piano roll opens inline, in the expanded track's row (docs/spec/ui).
         lanes.set_roll(&roll, [this](int inset) { roll.set_inset(inset); });
         model.quantize_action = [this](const project::QuantizeSettings& q) { return roll.quantize(q); };
@@ -5135,7 +5180,14 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
         model.timeline_width = std::max(10, r.getWidth() - kHeader - kScroll);
         toolbar.setBounds(r.removeFromTop(kToolbar));
         ruler.setBounds(r.removeFromTop(kRuler));
-        hscroll.setBounds(r.removeFromBottom(kHScroll).withTrimmedLeft(kHeader).withTrimmedRight(kScroll));
+        // The bottom row: the scroll bar, then the W and H sliders at the right.
+        auto bottom = r.removeFromBottom(std::max(kHScroll, 18));
+        auto sliders = bottom.removeFromRight(260);
+        zoom_h.setBounds(sliders.removeFromRight(110).reduced(2, 1));
+        zoom_h_label.setBounds(sliders.removeFromRight(16));
+        zoom_w.setBounds(sliders.removeFromRight(110).reduced(2, 1));
+        zoom_w_label.setBounds(sliders.removeFromRight(16));
+        hscroll.setBounds(bottom.withTrimmedLeft(kHeader).withSizeKeepingCentre(bottom.getWidth() - kHeader, kHScroll));
         lanes.setBounds(r);
         lanes.layout_roll();
         update_hscroll();
@@ -5151,6 +5203,7 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
 
     void view_changed()
     {
+        zoom_w.setValue(model.px_per_quarter, juce::dontSendNotification);
         update_hscroll();
         toolbar.repaint();
         ruler.repaint();
@@ -5209,6 +5262,8 @@ struct SequencerView::Impl : private juce::ScrollBar::Listener {
     LaneArea lanes;
     PianoRoll roll;
     juce::ScrollBar hscroll{false};
+    juce::Slider zoom_w, zoom_h;
+    juce::Label zoom_w_label, zoom_h_label;
     int listener = 0;
     /// A document change taken in.
     void document_refresh()
@@ -5513,7 +5568,7 @@ void SequencerView::set_row_height(const std::string& track_id, int height)
     auto& m = impl_->model;
     const auto* l = m.lane(track_id);
     if (!l) return;
-    m.heights[m.is_expanded(*l) ? track_id + "#x" : track_id] = juce::jlimit(m.min_height(*l), 600, height);
+    m.heights[m.is_expanded(*l) ? track_id + "#x" : track_id] = m.stored_height(juce::jlimit(m.min_height(*l), 600, height));
     impl_->lanes.update_scroll();
     impl_->lanes.repaint();
 }

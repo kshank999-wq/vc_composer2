@@ -125,6 +125,16 @@ TEST_CASE("score commits, generators and plugin refs go through one undo step ea
     REQUIRE(render);
     auto r = s.send_progression(t, *render, prog->id, project::CollisionPolicy::Ask);
     CHECK(r.ok);
+    // Written on the staff (the main point), as the ostinatos are - not a MIDI region.
+    {
+        const auto* v = s.data().find_track(t)->active_version();
+        std::size_t in_range = 0;
+        for (std::size_t st = 0; st < v->score.staff_count(); ++st)
+            for (const auto& n : v->score.notes(st))
+                if (!n.is_rest && n.start_tick >= render->start && n.start_tick < render->end) ++in_range;
+        CHECK(in_range >= render->notes.size() / 2);
+        CHECK(v->regions.empty());
+    }
     CHECK_EQ(s.undo_label().find("chord_explorer"), 7u);  // "Insert chord_explorer:..."
     // The progression's chord symbols land over its bars, in the same undo step.
     REQUIRE(s.data().chords.size() == render->chords.size());
@@ -1170,4 +1180,36 @@ TEST_CASE("sound assignments: the chosen sound for an instrument's articulation 
     for (const auto* t : s.music_tracks())
         if (t->instrument_standard_id == "strings.violins_1") mine += t->instrument_plugin.name == "My Violins";
     CHECK(mine >= 1);
+}
+
+TEST_CASE("Clear Track: the staff and its MIDI go, the staves stay, one undo step")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto t = s.add_track("Piano", "keys.piano");
+    notation::Score sc = s.data().find_track(t)->active_version()->score;
+    sc.insert_chord(0, 0, notation::half(), {notation::spell_midi_note(64, {}), notation::spell_midi_note(67, {})});
+    sc.insert_chord(1, 0, notation::half(), {notation::spell_midi_note(48, {})});
+    REQUIRE(s.commit_score(t, sc, "Write"));
+    project::MidiRegion played;
+    played.start = 4 * kTicksPerQuarter;
+    played.end = 8 * kTicksPerQuarter;
+    NoteEvent midi;
+    midi.start = 4 * kTicksPerQuarter;
+    midi.duration = kTicksPerQuarter;
+    midi.pitch = 60;
+    played.notes.push_back(midi);
+    REQUIRE(!s.add_recorded_regions({{t, played}}, "Record MIDI", false).empty());
+    const auto* v = s.data().find_track(t)->active_version();
+    REQUIRE(v->score.total_note_count() == 3u);
+    REQUIRE(!v->regions.empty());
+    REQUIRE(s.clear_track(t));
+    CHECK_EQ(s.undo_label(), std::string("Clear Piano"));
+    v = s.data().find_track(t)->active_version();
+    CHECK_EQ(v->score.total_note_count(), 0u);
+    CHECK(v->regions.empty());
+    CHECK_EQ(v->score.staff_count(), 2u);
+    CHECK(!s.clear_track(t));  // nothing left to clear
+    s.undo();
+    CHECK_EQ(s.data().find_track(t)->active_version()->score.total_note_count(), 3u);
 }

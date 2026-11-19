@@ -38,6 +38,13 @@ TrackHeader::TrackHeader(AppContext& context, std::string track_id) : context_(c
     }
     midi_in_.setComponentID("track_midi_in");
     midi_out_.setComponentID("track_midi_out");
+    // Clear Track: the whole staff and its MIDI, after asking.
+    clear_.set_legend_size(8.5f);
+    clear_.setComponentID("track_clear");
+    clear_.setWantsKeyboardFocus(false);
+    clear_.setTooltip("Clear Track: every note on this staff and its MIDI in Producer (asks first; Undo brings it back)");
+    clear_.onClick = [this] { clear_track(true); };
+    addAndMakeVisible(clear_);
     // Versions: up to ten takes on the music, to try ideas; switching changes the notes.
     versions_.setComponentID("track_versions");
     versions_.setTitle("Track version");
@@ -231,6 +238,7 @@ void TrackHeader::resized()
     rec_.setBounds(11, 44, 24, 22);
     solo_.setBounds(38, 44, 24, 22);
     mute_.setBounds(65, 44, 24, 22);
+    clear_.setBounds(92, 44, 26, 22);
     tag_.setBounds(11, 70, 50, 20);
     trans_.setBounds(63, 70, 42, 20);
     // Under Treble and Trans, as wide as both: the instrument; then MIDI in and out.
@@ -238,10 +246,10 @@ void TrackHeader::resized()
     versions_.setBounds(108, 96, 88, 18);
     midi_in_.setBounds(11, 118, 84, 18);
     midi_out_.setBounds(98, 118, 84, 18);
-    vol_.setBounds(112, 52, 28, 28);
-    pan_.setBounds(150, 52, 28, 28);
-    vol_lcd_.setBounds(106, 82, 40, 15);
-    pan_lcd_.setBounds(146, 82, 36, 15);
+    vol_.setBounds(128, 52, 28, 28);
+    pan_.setBounds(164, 52, 28, 28);
+    vol_lcd_.setBounds(122, 82, 40, 15);
+    pan_lcd_.setBounds(162, 82, 34, 15);
     meter_.setBounds(kWidth - 14, 8, 6, std::max(20, h - 16));
 }
 
@@ -249,6 +257,29 @@ void TrackHeader::mouseDown(const juce::MouseEvent& e)
 {
     context_.session.select_track(track_);
     if (e.mods.isPopupMenu()) show_menu();
+}
+
+void TrackHeader::clear_track(bool ask)
+{
+    const auto* t = context_.session.data().find_track(track_);
+    if (!t) return;
+    context_.session.select_track(track_);
+    const juce::String name(t->name);
+    auto clear = [this, name] {
+        if (context_.session.clear_track(track_)) context_.status(name + " cleared (Undo brings it back)");
+        else context_.status(name + " has nothing to clear");
+    };
+    if (!ask) {
+        clear();
+        return;
+    }
+    juce::Component::SafePointer<TrackHeader> self(this);
+    juce::AlertWindow::showOkCancelBox(juce::MessageBoxIconType::QuestionIcon, "Clear " + name + "?",
+                                       "Are you sure you want to clear the track? Every note on its staff and its MIDI in "
+                                       "Producer go (Undo brings them back).",
+                                       "Clear Track", "Cancel", this, juce::ModalCallbackFunction::create([self, clear](int r) {
+                                           if (self != nullptr && r == 1) clear();
+                                       }));
 }
 
 void TrackHeader::version_chosen()

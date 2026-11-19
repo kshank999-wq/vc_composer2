@@ -467,6 +467,20 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
     if (!t || t->kind == project::TrackKind::Folder) return;
     juce::PopupMenu m;
     m.addSectionHeader(t->name);
+    m.addItem("Clear Track...", [&c, id] {
+        const auto* tr = c.session.data().find_track(id);
+        if (!tr) return;
+        const juce::String name(tr->name);
+        juce::AlertWindow::showOkCancelBox(juce::MessageBoxIconType::QuestionIcon, "Clear " + name + "?",
+                                           "Are you sure you want to clear the track? Every note on its staff and its MIDI in "
+                                           "Producer go (Undo brings them back).",
+                                           "Clear Track", "Cancel", nullptr, juce::ModalCallbackFunction::create([&c, id, name](int r) {
+                                               if (r == 1)
+                                                   c.status(c.session.clear_track(id) ? name + " cleared (Undo brings it back)"
+                                                                                      : name + " has nothing to clear");
+                                           }));
+    });
+    m.addSeparator();
     m.addItem("Duplicate as new version", [&c, id] { c.session.duplicate_version(id); });
     if (const auto* v = t->active_version()) {
         const std::string vid = v->id;

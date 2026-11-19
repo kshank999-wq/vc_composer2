@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -272,6 +273,10 @@ public:
     /// empty (the same staves, no notes) to start afresh. None past
     /// kMaxVersions. One undo step.
     std::optional<std::string> new_version(const std::string& track_id, bool copy_current);
+    /// Clear Track: the current version's music goes - every staff's notes and
+    /// markings (clefs, key and meter stay) and its MIDI regions in Producer.
+    /// Audio stays. One undo step "Clear <track>".
+    bool clear_track(const std::string& track_id);
     /// Deletes a version (never the last one); the one before it becomes
     /// current if it was. One undo step.
     bool delete_version(const std::string& track_id, const std::string& version_id);
@@ -347,6 +352,9 @@ public:
     /// `symbols` over them: one undo step. Ask: needs a decision when voice
     /// 1 has notes in the span; Replace: they go; Merge or NewLane: the
     /// events go in voice 2 instead.
+    /// Notes (as heard) as they read on a track's staff: chords grouped, each
+    /// note its written length, transposition and percussion map applied.
+    std::vector<WrittenEvent> written_events(const project::Track& track, const std::vector<NoteEvent>& notes, Ticks end) const;
     project::InsertResult write_events(const std::string& track_id, const std::vector<WrittenEvent>& events,
                                        const std::vector<project::ChordMark>& symbols, project::CollisionPolicy policy,
                                        const std::string& label);
@@ -702,6 +710,14 @@ public:
                   const project::HumanizeSettings& settings);
 
     // --- MIDI -> notation (Main Spec §8) ---------------------------------------------------
+    /// The MIDI regions each track has now (to find the ones an operation adds).
+    std::map<std::string, std::set<std::string>> region_ids() const;
+    /// MIDI that landed on a track with a staff since `before` becomes its
+    /// notation - quantized, the played feel kept as performance - so a
+    /// track's MIDI always matches its staff. MIDI-only tracks and take lanes
+    /// keep their regions. Folded into the last undo step (`label`). Returns
+    /// how many regions were written.
+    int lock_new_regions_to_notation(const std::map<std::string, std::set<std::string>>& before, const std::string& label);
     /// Plans a piano-roll edit of a score note (see Notate.h). Changes nothing.
     NotatePlan plan_note_edit(const std::string& track_id, notation::EventId note, const NoteTarget& target) const;
     /// Plans notating a MIDI region into the track's score. Changes nothing.
