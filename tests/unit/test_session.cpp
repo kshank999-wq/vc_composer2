@@ -1072,19 +1072,35 @@ TEST_CASE("the piano sketch: send its top, middle or bass notes to a track; spre
     CHECK(sounding(bas, 2 * bar) == std::vector<int>{48});
 }
 
-TEST_CASE("every template opens with a Piano track at the top")
+TEST_CASE("every template opens with its Sketch area: two pianos at the top, outside the orchestra's groups")
 {
     session::Session s(catalogs());
     s.new_empty();
     const auto r = s.new_from_template("cinematic.orchestra.consolidated");
     REQUIRE(r.ok);
     const auto tracks = s.music_tracks();
-    REQUIRE(!tracks.empty());
-    CHECK_EQ(tracks.front()->name, std::string("Piano"));
-    CHECK_EQ(tracks.front()->instrument_standard_id, std::string("keys.piano"));
-    int pianos = 0;
-    for (const auto* t : tracks) pianos += t->instrument_standard_id == "keys.piano";
-    CHECK_EQ(pianos, 1);
+    REQUIRE(tracks.size() >= 3u);
+    CHECK_EQ(tracks[0]->name, std::string("Sketch Piano 1"));
+    CHECK_EQ(tracks[1]->name, std::string("Sketch Piano 2"));
+    for (int k = 0; k < 2; ++k) {
+        CHECK(s.is_sketch(*tracks[static_cast<std::size_t>(k)]));
+        CHECK_EQ(tracks[static_cast<std::size_t>(k)]->output_bus_id, std::string("bus-master"));  // straight to the master
+    }
+    CHECK(!s.is_sketch(*tracks[2]));
+    // Another instrument into the Sketch area: after the pianos, before the orchestra.
+    const auto extra = s.add_sketch_track("Sketch Harp", "keys.harp");
+    const auto after = s.music_tracks();
+    REQUIRE(after.size() == tracks.size() + 1);
+    CHECK_EQ(after[2]->id, extra);
+    CHECK(s.is_sketch(*after[2]) && after[2]->output_bus_id == "bus-master");
+    CHECK_EQ(s.undo_label(), std::string("Add sketch track Sketch Harp"));
+    s.undo();
+    CHECK_EQ(s.music_tracks().size(), tracks.size());
+    // A project with no Sketch area gets one at the top.
+    s.new_empty();
+    s.add_track("Flute", "woodwinds.flute");
+    const auto sk = s.add_sketch_track("Sketch Piano", "keys.piano");
+    CHECK_EQ(s.music_tracks().front()->id, sk);
 }
 
 TEST_CASE("versions: up to ten per track to try ideas - a copy or an empty one, switch, delete")

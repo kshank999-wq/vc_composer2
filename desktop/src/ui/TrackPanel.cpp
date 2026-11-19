@@ -619,9 +619,34 @@ juce::String TrackPanel::show_range_report(AppContext& c, const std::string& tra
     return text;
 }
 
+juce::PopupMenu TrackPanel::sketch_area_menu(AppContext& c)
+{
+    // A piano first (the usual second sketch), then any instrument by family.
+    juce::PopupMenu m;
+    auto next_name = [&c](const std::string& base) {
+        int n = 1;
+        for (const auto* t : c.session.music_tracks())
+            if (c.session.is_sketch(*t)) ++n;
+        return base + " " + std::to_string(n);
+    };
+    m.addItem("Sketch Piano", [&c, next_name] { c.session.add_sketch_track(next_name("Sketch Piano"), "keys.piano"); });
+    m.addSeparator();
+    std::map<std::string, juce::PopupMenu> by_family;
+    for (const auto& i : c.session.catalogs().instruments.all()) {
+        const std::string id = i.id, name = i.name;
+        by_family[i.family].addItem(name, [&c, id, name] { c.session.add_sketch_track("Sketch " + name, id); });
+    }
+    for (const auto& f : templates::family_order())
+        if (by_family.count(f)) m.addSubMenu(templates::family_display(f), by_family[f]);
+    return m;
+}
+
 void TrackPanel::show_add_track_menu(AppContext& c, juce::Component* target)
 {
     juce::PopupMenu m;
+    // The Sketch area: where ideas are worked out, outside the orchestra's groups.
+    m.addSubMenu("Into the Sketch Area", sketch_area_menu(c));
+    m.addSeparator();
     m.addItem("Audio track (mono)", [&c] { c.session.add_audio_track("Audio", false); });
     m.addItem("Audio track (stereo)", [&c] { c.session.add_audio_track("Audio", true); });
     m.addItem("Temp / reference track", [&c] { c.session.add_reference_track("Temp Score"); });

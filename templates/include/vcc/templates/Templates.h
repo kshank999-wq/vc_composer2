@@ -278,9 +278,10 @@ struct InstantiateOptions {
     bool replace_confirmed = false;
     bool include_optional = true;
     bool apply_project_defaults = true;  ///< Create only: tempo, meter, key from the template.
-    /// Every template opens with a Piano track at the top - the sketch track
-    /// the music is worked out on, then sent to the orchestra - unless it
-    /// has a piano already (or, adding to a project, the project has one).
+    /// Every template opens with its Sketch area at the top: two pianos (one
+    /// for the chords, one for melodies and ostinatos), worked out there and
+    /// sent to the orchestra, playing straight to the master - unless the
+    /// template has sketch tracks, or (adding) the project has the area.
     bool sketch_piano = true;
     std::vector<InstalledPatch> installed;
 };

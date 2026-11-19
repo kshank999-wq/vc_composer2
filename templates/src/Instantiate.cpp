@@ -1,3 +1,4 @@
+#include <array>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -206,23 +207,30 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
         std::string folder_key;
     };
     std::vector<Planned> planned;
-    // The piano sketch track, first.
-    static const TemplateTrack sketch = [] {
-        TemplateTrack t;
-        t.id = "sketch_piano";
-        t.name = "Piano";
-        t.instrument_standard_id = "keys.piano";
-        t.role = "sketch";
-        t.group_id = "sketch";
-        return t;
+    // The Sketch area, first: two pianos - one for the chords, one for
+    // melodies and ostinatos - worked out there and sent to the orchestra.
+    static const std::array<TemplateTrack, 2> sketch = [] {
+        std::array<TemplateTrack, 2> out;
+        const char* names[] = {"Sketch Piano 1", "Sketch Piano 2"};
+        for (std::size_t k = 0; k < out.size(); ++k) {
+            out[k].id = "sketch_piano_" + std::to_string(k + 1);
+            out[k].name = names[k];
+            out[k].instrument_standard_id = "keys.piano";
+            out[k].role = "sketch";
+            out[k].group_id = "sketch";
+        }
+        return out;
     }();
-    auto is_piano = [](const std::string& instrument) { return instrument == "keys.piano"; };
-    const bool has_piano =
-        std::any_of(tpl.tracks.begin(), tpl.tracks.end(), [&](const TemplateTrack& t) { return is_piano(t.instrument_standard_id); }) ||
-        (opt.mode == InstantiateMode::Merge &&
-         std::any_of(data.tracks.begin(), data.tracks.end(), [&](const project::Track& t) { return is_piano(t.instrument_standard_id); }));
-    if (opt.sketch_piano && !has_piano)
-        if (const InstrumentDef* def = instruments.find(sketch.instrument_standard_id)) planned.push_back({&sketch, def, "sketch"});
+    // Added to a project that has its Sketch area already: not again.
+    const bool has_sketch = opt.mode == InstantiateMode::Merge &&
+                            std::any_of(data.tracks.begin(), data.tracks.end(), [](const project::Track& t) {
+                                return t.kind == project::TrackKind::Folder && t.family == "sketch";
+                            });
+    const bool tpl_sketch =
+        std::any_of(tpl.tracks.begin(), tpl.tracks.end(), [](const TemplateTrack& t) { return t.role == "sketch"; });
+    if (opt.sketch_piano && !has_sketch && !tpl_sketch)
+        for (const auto& s : sketch)
+            if (const InstrumentDef* def = instruments.find(s.instrument_standard_id)) planned.push_back({&s, def, "sketch"});
     for (const auto& tt : tpl.tracks) {
         if (tt.optional && !opt.include_optional) continue;
         const InstrumentDef* def = instruments.find(tt.instrument_standard_id);
@@ -247,7 +255,8 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
     if (default_buses) {
         buses.push_back({"fx_reverb", "Reverb", "fx", "master", {}, {"reverb"}});
         for (const auto& k : folder_keys)
-            buses.push_back({"bus_" + k, family_display(k), "group", "master", {{"fx_reverb", -12.0}}, {"eq", "compressor"}});
+            if (k != "sketch")  // the Sketch area plays straight to the master, outside the orchestra's groups
+                buses.push_back({"bus_" + k, family_display(k), "group", "master", {{"fx_reverb", -12.0}}, {"eq", "compressor"}});
     }
 
     // IDs are allocated before the edit so they are never reused after undo.
@@ -358,7 +367,7 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
             t.gain_db = tt.gain_db;
             t.pan = tt.pan;
             t.output_bus_id = tt.output_bus_id.empty()
-                                  ? (default_buses ? map_bus("bus_" + planned[i].folder_key) : master)
+                                  ? (default_buses && planned[i].folder_key != "sketch" ? map_bus("bus_" + planned[i].folder_key) : master)
                                   : map_bus(tt.output_bus_id);
             t.template_origin = tpl.template_id + "/" + tt.id;
 

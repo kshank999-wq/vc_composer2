@@ -225,6 +225,13 @@ public:
     std::string add_track(const std::string& name, const std::string& instrument_standard_id);
     /// A temp-score / reference track: never in deliverables unless opted in.
     std::string add_reference_track(const std::string& name);
+    /// A track in the Sketch area (a second sketch piano, or any instrument
+    /// to work ideas out on): after the area's last track, playing straight
+    /// to the master, outside the orchestra's groups. The area is made at the
+    /// top if the project has none. One undo step; the new id.
+    std::string add_sketch_track(const std::string& name, const std::string& instrument);
+    /// Whether a track is in the Sketch area.
+    bool is_sketch(const project::Track& track) const;
     bool remove_track(const std::string& track_id);
     bool rename_track(const std::string& track_id, const std::string& name);
     bool set_gain(const std::string& track_id, double gain_db);

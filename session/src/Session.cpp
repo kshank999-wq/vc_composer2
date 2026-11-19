@@ -414,6 +414,54 @@ std::string Session::add_track(const std::string& name, const std::string& instr
     return id;
 }
 
+bool Session::is_sketch(const project::Track& track) const
+{
+    if (track.role == "sketch") return true;
+    const auto* f = track.folder_id.empty() ? nullptr : data().find_track(track.folder_id);
+    return f && f->kind == project::TrackKind::Folder && f->family == "sketch";
+}
+
+std::string Session::add_sketch_track(const std::string& name, const std::string& instrument)
+{
+    const auto before = project_.history_size();
+    const std::string folder_id = project_.ids().next("fld");
+    const std::string id = add_track(name, instrument);
+    project_.edit("Add sketch track " + name, [&](project::ProjectData& d) {
+        // The Sketch area's folder, made at the top if there is none.
+        std::string folder;
+        for (const auto& t : d.tracks)
+            if (t.kind == project::TrackKind::Folder && t.family == "sketch") folder = t.id;
+        if (folder.empty()) {
+            project::Track f;
+            f.id = folder_id;
+            f.kind = project::TrackKind::Folder;
+            f.name = d.unique_track_name("Sketch");
+            f.family = "sketch";
+            f.color = templates::family_color("sketch");
+            f.include_in_export = false;
+            d.tracks.insert(d.tracks.begin(), f);
+            folder = folder_id;
+        }
+        auto it = std::find_if(d.tracks.begin(), d.tracks.end(), [&](const project::Track& t) { return t.id == id; });
+        if (it == d.tracks.end()) return false;
+        project::Track moved = *it;
+        d.tracks.erase(it);
+        moved.folder_id = folder;
+        moved.role = "sketch";
+        moved.output_bus_id = "bus-master";
+        // After the area's last track.
+        std::size_t at = 0;
+        for (std::size_t i = 0; i < d.tracks.size(); ++i)
+            if (d.tracks[i].id == folder || d.tracks[i].folder_id == folder) at = i + 1;
+        d.tracks.insert(d.tracks.begin() + static_cast<std::ptrdiff_t>(at), moved);
+        return true;
+    });
+    project_.squash_undo(project_.history_size() - before, "Add sketch track " + name);
+    document_changed();
+    select_track(id);
+    return id;
+}
+
 std::string Session::add_reference_track(const std::string& name)
 {
     std::string id = project_.add_track(name, project::TrackKind::Reference);

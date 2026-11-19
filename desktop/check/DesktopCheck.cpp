@@ -1906,8 +1906,8 @@ void composer_lane_checks(MainWindow& window, const juce::File& dir)
     // the instrument and MIDI rows) and a 120 px bar at 100%.
     check(composer.strip_count() > 1 && composer.header(0).getWidth() == composer_ui::TrackHeader::kWidth,
           "each track row starts with its 220 px header");
-    // The template's Piano (two staves) heads the list; the next is one staff.
-    const int row = composer.header(composer.strip_count() > 1 ? 1 : 0).getHeight();
+    // The template's two sketch pianos (two staves each) head the list; the next is one staff.
+    const int row = composer.header(composer.strip_count() > 2 ? 2 : 0).getHeight();
     check(row == composer_ui::TrackHeader::kMinHeight, "a single-staff row fits its header at 100% (" + juce::String(row) + ")");
     auto& lane0 = composer.lane(0);
     const float bar_px = lane0.x_of_tick(2 * bar) - lane0.x_of_tick(bar);
@@ -4760,8 +4760,28 @@ void piano_sketch_checks(MainWindow& window, const juce::File& dir)
     pump(300);
     auto& composer = main.composer();
     const auto tracks = session.composer_tracks();
-    check(!tracks.empty() && tracks.front()->name == "Piano" && composer.header(0).scribble().text().startsWith("PIANO"),
-          "the template opens with the Piano on top, the sketch track");
+    check(tracks.size() > 2 && tracks[0]->name == "Sketch Piano 1" && tracks[1]->name == "Sketch Piano 2" &&
+              composer.header(0).scribble().text().startsWith("SKETCH PIANO 1") && session.is_sketch(*tracks[1]) &&
+              tracks[0]->output_bus_id == "bus-master",
+          "the template opens with its Sketch area on top: two sketch pianos, straight to the master");
+    // Another instrument into the Sketch area, from the + Track menu: after the pianos.
+    {
+        auto menu = TrackPanel::sketch_area_menu(window.context());
+        juce::PopupMenu::MenuItemIterator it(menu);
+        bool ran = false;
+        while (it.next())
+            if (it.getItem().text == "Sketch Piano" && it.getItem().action) {
+                it.getItem().action();
+                ran = true;
+                break;
+            }
+        pump(150);
+        const auto now = session.composer_tracks();
+        check(ran && now.size() == tracks.size() + 1 && now[2]->name == "Sketch Piano 3" && session.is_sketch(*now[2]),
+              "Into the Sketch Area adds a third sketch piano after the other two, outside the orchestra");
+        session.undo();
+        pump(100);
+    }
     const std::string piano = tracks.front()->id;
     notation::Score sc = session.data().find_track(piano)->active_version()->score;
     sc.insert_chord(0, 0, notation::whole(), {notation::spell_midi_note(64, {}), notation::spell_midi_note(67, {}), notation::spell_midi_note(72, {})});
@@ -9571,9 +9591,9 @@ void articulation_template_checks(MainWindow& window, const juce::File& dir)
     pump(300);
     const auto staves = session.staff_tracks().size();
     const auto tracks = session.music_tracks().size();
-    // The Piano sketch and the 15 parts, either way.
-    check(consolidated_staves == 16 && consolidated_tracks == 16 && staves == 16 && tracks == 16 + 39,
-          "the orchestra opens with 16 staves either way (the Piano and 15 parts): " + juce::String(static_cast<int>(consolidated_tracks)) +
+    // The two sketch pianos and the 15 parts, either way.
+    check(consolidated_staves == 17 && consolidated_tracks == 17 && staves == 17 && tracks == 17 + 39,
+          "the orchestra opens with 17 staves either way (two sketch pianos and 15 parts): " + juce::String(static_cast<int>(consolidated_tracks)) +
               " tracks consolidated, " + juce::String(static_cast<int>(tracks)) + " expanded");
 
     std::string violins;
@@ -9600,7 +9620,7 @@ void articulation_template_checks(MainWindow& window, const juce::File& dir)
     shoot(main, dir, "75-folded-part");
     seq.set_part_folded(violins, false);
     pump(100);
-    check(shown == 55 && folded == 51 && seq.shown_track_rows() == 55 && !seq.part_folded(violins),
+    check(shown == 56 && folded == 52 && seq.shown_track_rows() == 56 && !seq.part_folded(violins),
           "Producer shows each part with its sound tracks (" + juce::String(shown) +
               " rows); folding Violins I hides its four, and they come back (" + juce::String(folded) + " folded)");
 
@@ -9608,7 +9628,7 @@ void articulation_template_checks(MainWindow& window, const juce::File& dir)
     session.select_track(violins);
     ctx.commands.invokeDirectly(cmd::consolidateArticulations, false);
     pump(100);
-    check(session.music_tracks().size() == 51 && rows_in_composer("Violins I").isNotEmpty() &&
+    check(session.music_tracks().size() == 52 && rows_in_composer("Violins I").isNotEmpty() &&
               !session.data().find_track(violins)->articulations_expanded,
           "consolidating one part of the expanded template leaves the rest expanded");
     session.new_empty();

@@ -30,6 +30,9 @@ public:
     static juce::String range_report(AppContext& context, const std::string& track_id);
     /// Popup menu to add a track from the instrument registry.
     static void show_add_track_menu(AppContext& context, juce::Component* target);
+    /// Instruments to add to the Sketch area (a piano first), playing straight
+    /// to the master, outside the orchestra's groups.
+    static juce::PopupMenu sketch_area_menu(AppContext& context);
 
     /// The sound library (Main Spec §10); it shows in its own window (Window > Library).
     LibraryBrowser& library() noexcept { return *library_; }

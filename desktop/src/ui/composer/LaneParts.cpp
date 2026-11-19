@@ -344,6 +344,7 @@ void TrackHeader::show_menu()
     m.addSeparator();
     // The sketch (the Piano, normally): its notes to other tracks, its chords over the strings.
     m.addSubMenu("Send / Spread (selected range, or all)", sketch_menu(context_, track_));
+    m.addSubMenu("Add to the Sketch Area", TrackPanel::sketch_area_menu(context_));
     m.addSeparator();
     m.addItem("Track...", [this] { TrackPanel::show_track_menu(context_, track_); });
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition());

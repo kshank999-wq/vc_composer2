@@ -91,10 +91,8 @@ TEST_CASE("P1 every available template instantiates with correct trees, then und
         auto r = instantiate(p, t, content().instruments, o);
         CHECK(r.ok);
         if (!r.ok) { std::fprintf(stderr, "    %s: %s\n", t.template_id.c_str(), r.error.c_str()); continue; }
-        // The template's tracks, and the Piano sketch track unless it has a piano.
-        const bool has_piano = std::any_of(t.tracks.begin(), t.tracks.end(),
-                                           [](const TemplateTrack& x) { return x.instrument_standard_id == "keys.piano"; });
-        CHECK_EQ(r.track_ids.size(), t.tracks.size() + (has_piano ? 0u : 1u));
+        // The template's tracks, and the Sketch area's two pianos.
+        CHECK_EQ(r.track_ids.size(), t.tracks.size() + 2u);
         // Every instrument track sits in a folder and routes to an existing bus.
         for (const auto& tr : p.data().tracks) {
             if (tr.kind != project::TrackKind::Instrument) continue;
@@ -370,7 +368,7 @@ TEST_CASE("user templates save, re-import with validation, and built-ins stay im
     const Template* back = other.get("user.my_mystery");
     REQUIRE(back);
     CHECK(!back->built_in);
-    CHECK_EQ(back->tracks.size(), tpl("cinematic.mystery.investigation").tracks.size());
+    CHECK_EQ(back->tracks.size(), tpl("cinematic.mystery.investigation").tracks.size() + 2u);  // with its sketch pianos
     project::Project q;
     CHECK(instantiate(q, *back, content().instruments, {}).ok);
     // A built-in cannot be overwritten by a user template of the same id.
@@ -448,8 +446,8 @@ TEST_CASE("orchestral templates: consolidated and expanded open with the same pa
             if (t.kind == project::TrackKind::Instrument && t.articulation_parent.empty()) names.push_back(t.name);
         return names;
     };
-    // The same staves either way: the Piano sketch and the 15 parts.
-    CHECK_EQ(parts(consolidated).size(), 16u);
+    // The same staves either way: the two sketch pianos and the 15 parts.
+    CHECK_EQ(parts(consolidated).size(), 17u);
     CHECK(parts(consolidated) == parts(expanded));
     int children = 0;
     for (const auto& t : consolidated.data().tracks) CHECK(!t.articulations_expanded && t.articulation_parent.empty());
@@ -506,7 +504,7 @@ TEST_CASE("orchestral templates: consolidated and expanded open with the same pa
 
     // Saved as a user template, the expanded parts stay expanded.
     const Template saved = save_user_template(expanded, "user.orchestra", "My Orchestra", "");
-    CHECK_EQ(saved.tracks.size(), 16u);  // the Piano sketch is kept with the rest
+    CHECK_EQ(saved.tracks.size(), 17u);  // the sketch pianos are kept with the rest
     const std::vector<std::string> strings_sounds = {"natural", "staccato", "pizzicato", "tremolo"};
     for (const auto& t : saved.tracks)
         if (t.name == "Violins I") CHECK(t.articulation_tracks == strings_sounds);
