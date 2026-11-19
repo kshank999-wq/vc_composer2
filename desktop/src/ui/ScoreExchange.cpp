@@ -151,7 +151,7 @@ int export_parts_pdf(AppContext& context, const juce::File& target, juce::String
     std::vector<std::pair<std::string, engraving::PrintResult>> parts;
     for (const auto* t : context.session.staff_tracks()) {
         const auto* v = t->active_version();
-        if (!v || t->kind != project::TrackKind::Instrument || !t->include_in_export) continue;
+        if (!v || t->kind != project::TrackKind::Instrument || !context.session.in_score(*t)) continue;
         engraving::PrintOptions po;
         po.subtitle = t->name;
         apply_score_info(context, po);
@@ -296,7 +296,7 @@ std::unique_ptr<FullScoreLayout> lay_out_full_score(AppContext& context, const F
     std::vector<const project::Track*> tracks;
     for (const auto* t : context.session.staff_tracks()) {
         const auto* v = t->active_version();
-        if (!v || t->kind != project::TrackKind::Instrument || !t->include_in_export) continue;
+        if (!v || t->kind != project::TrackKind::Instrument || !context.session.in_score(*t)) continue;
         tracks.push_back(t);
     }
     if (tracks.empty()) {
@@ -471,6 +471,11 @@ public:
         field(tempo_text_, "Tempo text", si.tempo_text, "Allegro / Slowly, with tension");
         show_tempo_.setButtonText("Metronome mark from the music");
         show_tempo_.setToggleState(si.show_tempo, juce::dontSendNotification);
+        muted_.setButtonText("Muted instruments leave the score");
+        muted_.setComponentID("score_info_muted");
+        muted_.setToggleState(si.muted_leave_score, juce::dontSendNotification);
+        addAndMakeVisible(muted_);
+        muted_.setColour(juce::ToggleButton::textColourId, colours::text);
         bold_.setButtonText("Bold");
         italic_.setButtonText("Italic");
         caps_.setButtonText("ALL CAPS");
@@ -493,12 +498,12 @@ public:
         const auto& d = c.session.data();
         auto_info_ = "From the music: tempo " + juce::String(d.tempo.bpm_at(0), 0) + " BPM  -  key " + juce::String(d.key) +
                      "  -  meter " + juce::String(d.meter.at_bar(1).to_string());
-        setSize(560, 560);
+        setSize(560, 590);
     }
 
     void apply()
     {
-        project::ScoreInfo si;
+        auto si = context_.session.score_info();
         si.title = title_.getText().toStdString();
         si.subtitle = subtitle_.getText().toStdString();
         si.composer = composer_.getText().toStdString();
@@ -513,6 +518,7 @@ public:
         si.title_italic = italic_.getToggleState();
         si.title_caps = caps_.getToggleState();
         si.title_scale = size_.getValue();
+        si.muted_leave_score = muted_.getToggleState();
         context_.session.set_score_info(si);
         context_.status("Score info set: " + title_.getText());
         close();
@@ -562,6 +568,7 @@ public:
         caps_.setBounds(style.removeFromLeft(96));
         size_.setBounds(style);
         show_tempo_.setBounds(r.removeFromTop(26).withTrimmedLeft(96));
+        muted_.setBounds(r.removeFromTop(26).withTrimmedLeft(96));
         auto_area_ = r.removeFromTop(22).withTrimmedLeft(96);
         auto buttons = r.removeFromBottom(30);
         cancel_.setBounds(buttons.removeFromRight(100));
@@ -579,7 +586,7 @@ private:
     AppContext& context_;
     std::vector<std::unique_ptr<juce::Label>> labels_;
     std::vector<juce::TextEditor*> fields_;
-    juce::ToggleButton show_tempo_, bold_, italic_, caps_;
+    juce::ToggleButton show_tempo_, bold_, italic_, caps_, muted_;
     juce::Slider size_;
     juce::TextButton ok_{"Set"}, cancel_{"Cancel"};
     juce::Rectangle<int> preview_area_, auto_area_;

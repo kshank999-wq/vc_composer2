@@ -69,7 +69,7 @@ void PrintPreview::refresh()
 {
     part_ids_.clear();
     for (const auto* t : context_.session.staff_tracks())
-        if (t->kind == project::TrackKind::Instrument && t->include_in_export && t->active_version()) part_ids_.push_back(t->id);
+        if (t->kind == project::TrackKind::Instrument && context_.session.in_score(*t) && t->active_version()) part_ids_.push_back(t->id);
     source_box_.clear(juce::dontSendNotification);
     for (int i = 0; i < source_count(); ++i) source_box_.addItem(source_name(i), i + 1);
     show_source(std::min(source_, source_count() - 1));

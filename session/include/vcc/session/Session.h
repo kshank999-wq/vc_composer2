@@ -262,6 +262,14 @@ public:
     bool set_output_bus(const std::string& track_id, const std::string& bus_id);
     bool set_bus_gain(const std::string& bus_id, double gain_db);
     bool set_include_in_export(const std::string& track_id, bool include);
+    /// Whether a track is in the score and its parts: its In Score switch
+    /// (an articulation track follows its part's), and, when the score's
+    /// "muted instruments leave the score" option is on, not muted.
+    bool in_score(const project::Track& track) const;
+    /// Puts a track in or out of the score (an articulation track: its part). One undo step.
+    bool set_in_score(const std::string& track_id, bool in);
+    /// The score's "muted instruments leave the score" option. One undo step.
+    bool set_muted_leave_score(bool on);
     /// What an instrument or MIDI track plays: "midi", "audio" (its audio
     /// lane) or "both". One undo step; false when unchanged or not one of those.
     bool set_playback(const std::string& track_id, const std::string& playback);

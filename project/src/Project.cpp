@@ -1279,6 +1279,7 @@ json::Value Project::to_json() const
         o.set("title_bold", si.title_bold);
         o.set("title_italic", si.title_italic);
         o.set("title_caps", si.title_caps);
+        o.set("muted_leave_score", si.muted_leave_score);
         root.set("score_info", std::move(o));
     }
     json::Array reels, scenes;
@@ -1650,6 +1651,7 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         si.title_bold = sj->get_bool("title_bold", true);
         si.title_italic = sj->get_bool("title_italic", false);
         si.title_caps = sj->get_bool("title_caps", false);
+        si.muted_leave_score = sj->get_bool("muted_leave_score", false);
     }
     for (const auto& j : doc.get("reels") ? doc.get("reels")->as_array() : json::Array{}) {
         Reel r{j.get_string("id"), j.get_string("name")};

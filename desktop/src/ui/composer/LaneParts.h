@@ -36,6 +36,7 @@ public:
     hw::Keycap& midi_out_key() { return midi_out_; }
     juce::ComboBox& versions() { return versions_; }
     hw::Keycap& clear_key() { return clear_; }
+    hw::Keycap& score_key() { return score_; }
     /// Clear Track, after asking (`ask` false: at once, for the checks).
     void clear_track(bool ask = true);
     /// The header's height with every row showing.
@@ -54,6 +55,7 @@ private:
     hw::Keycap instrument_{"Instrument"}, midi_in_{"In: All"}, midi_out_{"Out: None"};
     juce::ComboBox versions_;
     hw::Keycap clear_{"CLR"};
+    hw::Keycap score_{"SCORE", true};  ///< In the score (lit) or left out of it.
     hw::SmallKnob vol_, pan_;
     hw::Meter meter_{hw::Meter::Orientation::Vertical, 12};
 };

@@ -45,6 +45,18 @@ TrackHeader::TrackHeader(AppContext& context, std::string track_id) : context_(c
     clear_.setTooltip("Clear Track: every note on this staff and its MIDI in Producer (asks first; Undo brings it back)");
     clear_.onClick = [this] { clear_track(true); };
     addAndMakeVisible(clear_);
+    // In Score: lit while the instrument is in the score and its parts.
+    score_.set_legend_size(8.5f);
+    score_.setComponentID("track_in_score");
+    score_.setWantsKeyboardFocus(false);
+    score_.setTooltip("In the score: lit while this instrument is in the score and its parts; off leaves it out (it still plays)");
+    score_.onClick = [this] {
+        const bool in = score_.getToggleState();
+        if (context_.session.set_in_score(track_, in))
+            if (const auto* t = context_.session.data().find_track(track_))
+                context_.status(juce::String(t->name) + (in ? " is in the score" : " is left out of the score"));
+    };
+    addAndMakeVisible(score_);
     // Versions: up to ten takes on the music, to try ideas; switching changes the notes.
     versions_.setComponentID("track_versions");
     versions_.setTitle("Track version");
@@ -121,6 +133,12 @@ void TrackHeader::refresh()
     rec_.setToggleState(t->record_armed, juce::dontSendNotification);
     solo_.setToggleState(t->solo, juce::dontSendNotification);
     mute_.setToggleState(t->mute, juce::dontSendNotification);
+    {
+        const auto* part = t->articulation_parent.empty() ? t : context_.session.data().find_track(t->articulation_parent);
+        score_.setToggleState(part ? part->include_in_export : t->include_in_export, juce::dontSendNotification);
+        // Switched on but out, because it is muted: dimmed, and says why.
+        score_.setAlpha(context_.session.in_score(*t) || !score_.getToggleState() ? 1.0f : 0.5f);
+    }
     vol_.setValue(juce::jlimit(-60.0, 6.0, t->gain_db), juce::dontSendNotification);
     pan_.setValue(t->pan, juce::dontSendNotification);
     vol_lcd_.set_text(juce::String(t->gain_db, 1));
@@ -244,8 +262,9 @@ void TrackHeader::resized()
     // Under Treble and Trans, as wide as both: the instrument; then MIDI in and out.
     instrument_.setBounds(11, 94, 94, 20);
     versions_.setBounds(108, 96, 88, 18);
-    midi_in_.setBounds(11, 118, 84, 18);
-    midi_out_.setBounds(98, 118, 84, 18);
+    midi_in_.setBounds(11, 118, 70, 18);
+    midi_out_.setBounds(84, 118, 70, 18);
+    score_.setBounds(157, 118, 40, 18);
     vol_.setBounds(128, 52, 28, 28);
     pan_.setBounds(164, 52, 28, 28);
     vol_lcd_.setBounds(122, 82, 40, 15);

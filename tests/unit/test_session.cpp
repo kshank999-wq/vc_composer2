@@ -1261,3 +1261,46 @@ TEST_CASE("a template's choir comes in as its voices: Soprano, Alto, Tenor, Bass
     const auto choir = s.section_tracks(session::Session::Section::Choir);
     CHECK(std::none_of(choir.begin(), choir.end(), [](const std::string& id) { return id.empty(); }));
 }
+
+TEST_CASE("In the Score: a switch per instrument; muted instruments can leave the score; saved, one undo step each")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto vln = s.add_track("Violins I", "strings.violins");
+    const auto vla = s.add_track("Violas", "strings.violas");
+    const auto* t = s.data().find_track(vln);
+    REQUIRE(t);
+    CHECK(s.in_score(*t));
+    // Off: out of the score, still playing.
+    REQUIRE(s.set_in_score(vln, false));
+    CHECK(!s.in_score(*s.data().find_track(vln)));
+    CHECK(s.audible(*s.data().find_track(vln)));
+    s.undo();
+    CHECK(s.in_score(*s.data().find_track(vln)));
+    // Muting leaves it in, until the option is on.
+    REQUIRE(s.set_mute(vla, true));
+    CHECK(s.in_score(*s.data().find_track(vla)));
+    REQUIRE(s.set_muted_leave_score(true));
+    CHECK_EQ(s.undo_label(), std::string("Muted instruments leave the score"));
+    CHECK(!s.in_score(*s.data().find_track(vla)));
+    CHECK(s.in_score(*s.data().find_track(vln)));
+    REQUIRE(s.set_mute(vla, false));
+    CHECK(s.in_score(*s.data().find_track(vla)));
+    // An articulation track follows its part, and switching it switches the part.
+    const auto kids = s.expand_articulations(vln);
+    if (!kids.empty()) {
+        REQUIRE(s.set_in_score(kids.front(), false));
+        CHECK(!s.data().find_track(vln)->include_in_export);
+        CHECK(!s.in_score(*s.data().find_track(kids.back())));
+        REQUIRE(s.set_in_score(kids.front(), true));
+    }
+    REQUIRE(s.set_in_score(vla, false));
+    const auto path = (std::filesystem::temp_directory_path() / "vcc_in_score.vcc2").string();
+    std::string error;
+    REQUIRE(s.save_as(path, &error));
+    session::Session back(catalogs());
+    REQUIRE(back.open(path, &error));
+    CHECK(back.data().score_info.muted_leave_score);
+    CHECK(!back.in_score(*back.data().find_track(vla)));
+    std::filesystem::remove(path);
+}

@@ -4709,6 +4709,35 @@ void track_header_checks(MainWindow& window, const juce::File& dir)
         pump(60);
         check(session.data().find_track(vln)->active_version()->score.total_note_count() > 0, "Undo brings it back");
     }
+    // SCORE: in or out of the score; muted instruments can leave it too.
+    {
+        auto parts = [&] {
+            juce::String why;
+            const auto laid = lay_out_full_score(window.context(), FullScoreSettings{}, why);
+            return laid ? laid->parts : 0;
+        };
+        const int all = parts();
+        auto& h0 = composer.header(0);
+        check(h0.score_key().isShowing() && h0.score_key().getToggleState(), "each track header has SCORE, lit while in the score");
+        h0.score_key().setToggleState(false, juce::sendNotificationSync);
+        pump(60);
+        const int without = parts();
+        check(!session.in_score(*session.data().find_track(vln)) && without == all - 1 &&
+                  session.audible(*session.data().find_track(vln)),
+              "SCORE off leaves the instrument out of the score; it still plays (" + juce::String(all) + " -> " +
+                  juce::String(without) + " parts)");
+        session.undo();
+        pump(60);
+        check(composer.header(0).score_key().getToggleState() && parts() == all, "Undo puts it back in the score");
+        session.set_muted_leave_score(true);
+        session.set_mute(vla, true);
+        pump(60);
+        const int muted = parts();
+        session.set_mute(vla, false);
+        session.set_muted_leave_score(false);
+        pump(60);
+        check(muted == all - 1, "with the option on, a muted instrument leaves the score (" + juce::String(muted) + " parts)");
+    }
     // Producer: W and H sliders bottom right, as in the Composer.
     {
         main.show_workspace(MainComponent::Workspace::Sequencer);

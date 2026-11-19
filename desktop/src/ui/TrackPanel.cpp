@@ -554,8 +554,8 @@ void TrackPanel::show_track_menu(AppContext& c, const std::string& id)
                      range);
     }
     m.addSeparator();
-    m.addItem("Include in deliverable export", true, t->include_in_export,
-              [&c, id, inc = t->include_in_export] { c.session.set_include_in_export(id, !inc); });
+    m.addItem("In the Score (and its parts)", true, t->include_in_export,
+              [&c, id, inc = t->include_in_export] { c.session.set_in_score(id, !inc); });
     m.addItem(juce::String("Status: ") + t->assignment.message, false, false, [] {});
     m.addSeparator();
     if (recordable(*t)) {

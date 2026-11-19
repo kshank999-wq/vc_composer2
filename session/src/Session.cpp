@@ -693,6 +693,32 @@ bool Session::set_bus_gain(const std::string& bus_id, double gain_db)
     return true;
 }
 
+bool Session::in_score(const project::Track& track) const
+{
+    const project::Track* part = &track;
+    if (!track.articulation_parent.empty())
+        if (const auto* p = data().find_track(track.articulation_parent)) part = p;
+    if (!part->include_in_export) return false;
+    return !(data().score_info.muted_leave_score && part->mute);
+}
+
+bool Session::set_in_score(const std::string& id, bool in)
+{
+    const auto* t = data().find_track(id);
+    if (!t) return false;
+    const std::string part = t->articulation_parent.empty() ? id : t->articulation_parent;
+    return set_include_in_export(part, in);
+}
+
+bool Session::set_muted_leave_score(bool on)
+{
+    if (data().score_info.muted_leave_score == on) return false;
+    return edit(on ? "Muted instruments leave the score" : "Muted instruments stay in the score", [&](project::ProjectData& d) {
+        d.score_info.muted_leave_score = on;
+        return true;
+    });
+}
+
 bool Session::set_include_in_export(const std::string& id, bool include)
 {
     return edit(include ? "Include in export" : "Exclude from export", on_track(id, [&](project::Track& t) {

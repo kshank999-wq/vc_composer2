@@ -481,6 +481,8 @@ struct ScoreInfo {
     bool title_bold = true;
     bool title_italic = false;
     bool title_caps = false;
+    /// Muting an instrument takes it out of the score (and its part) until unmuted.
+    bool muted_leave_score = false;
 };
 
 /// Spec §14 hierarchy: Production -> Reel/Episode -> Scene -> Cue.
