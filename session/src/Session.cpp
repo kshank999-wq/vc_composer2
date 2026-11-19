@@ -751,6 +751,23 @@ std::optional<std::string> Session::new_version(const std::string& id, bool copy
     return v;
 }
 
+bool Session::set_score_info(const project::ScoreInfo& info)
+{
+    return edit("Score info", [&](project::ProjectData& d) {
+        d.score_info = info;
+        d.score_info.title_scale = std::clamp(info.title_scale, 0.5, 3.0);
+        return true;
+    });
+}
+
+project::ScoreInfo Session::score_info() const
+{
+    auto si = data().score_info;
+    if (si.title.empty()) si.title = data().production.title.empty() ? data().name : data().production.title;
+    if (si.composer.empty()) si.composer = data().production.composer;
+    return si;
+}
+
 bool Session::clear_track(const std::string& id)
 {
     const auto* t = data().find_track(id);
@@ -1129,9 +1146,25 @@ int Session::lock_new_regions_to_notation(const std::map<std::string, std::set<s
     const auto steps_before = project_.history_size();
     int n = 0;
     for (const auto& [track, region] : fresh) {
+        // Its controllers (sustain pedal, modulation, pitch bend) stay as a
+        // region of their own: the notes go to the staff, the gestures keep playing.
+        project::MidiRegion gestures;
+        if (const auto* t = data().find_track(track))
+            if (const auto* v = t->active_version())
+                for (const auto& r : v->regions)
+                    if (r.id == region) {
+                        gestures = r;
+                        gestures.notes.clear();
+                    }
         const auto plan = plan_notate_region(track, region);
         if (!plan.error.empty() || plan.options.empty()) continue;
-        if (apply_notate(track, plan, 0, label)) ++n;
+        if (!apply_notate(track, plan, 0, label)) continue;
+        ++n;
+        if (!gestures.controllers.empty())
+            edit(label, on_track(track, [&](project::Track& t) {
+                if (auto* v = t.active_version()) v->regions.push_back(gestures);
+                return true;
+            }));
     }
     // One undo step with what brought the MIDI in.
     if (project_.history_size() > steps_before) project_.squash_undo(project_.history_size() - steps_before + 1, label);
@@ -2215,6 +2248,7 @@ void place_clip(project::TrackVersion& v, project::AudioClip c, bool as_takes)
 std::vector<std::string> Session::add_recorded_regions(const std::vector<std::pair<std::string, project::MidiRegion>>& regions,
                                                       const std::string& label, bool as_takes)
 {
+    const auto before = region_ids();
     std::vector<std::string> ids;
     for (std::size_t i = 0; i < regions.size(); ++i) ids.push_back(project_.ids().next("rgn"));
     const bool ok = !regions.empty() && edit(label, [&](project::ProjectData& d) {
@@ -2237,6 +2271,9 @@ std::vector<std::string> Session::add_recorded_regions(const std::vector<std::pa
         return true;
     });
     if (!ok) ids.clear();
+    // Played on a track with a staff: written there (the played feel kept) - the
+    // MIDI always matches the notation. MIDI-only tracks keep the region (takes, comping).
+    else lock_new_regions_to_notation(before, label);
     return ids;
 }
 

@@ -461,6 +461,28 @@ struct StemDef {
     bool include_effects = true;
 };
 
+/// What a finished score carries at its head (Score > Score Info): typed by
+/// the composer; empty fields fall back (the title to the project's name,
+/// the composer to the production's). Tempo, key and meter come from the
+/// music itself.
+struct ScoreInfo {
+    std::string title;
+    std::string subtitle;
+    std::string composer;
+    std::string arranger;   ///< "Arr. ..." / "Orch. ..."
+    std::string lyricist;   ///< "Words by ..."
+    std::string date;       ///< As typed: "November 2026".
+    std::string revision;   ///< "Version 3", "Rev. 2".
+    std::string copyright;  ///< At the foot of the first page.
+    std::string tempo_text; ///< "Allegro", printed before the metronome mark.
+    bool show_tempo = true; ///< The metronome mark from the project's tempo.
+    /// The title's style.
+    double title_scale = 1.0;
+    bool title_bold = true;
+    bool title_italic = false;
+    bool title_caps = false;
+};
+
 /// Spec §14 hierarchy: Production -> Reel/Episode -> Scene -> Cue.
 struct Production {
     std::string title;     ///< The film or series.
@@ -616,6 +638,7 @@ struct ProjectData {
     std::vector<Track> tracks;
     std::vector<Bus> buses;
     Production production;
+    ScoreInfo score_info;
     std::vector<Reel> reels;
     std::vector<Scene> scenes;
     std::vector<Cue> cues;

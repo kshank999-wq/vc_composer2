@@ -160,25 +160,9 @@ PrintResult lay_out_score(const std::vector<ScorePart>& all_parts, const LayoutE
 
     PrintedPage page;
     page.layout.extent = Rect{0.0, 0.0, options.page_width, options.page_height};
-    double y = options.margin;
-    // Title block.
-    if (!options.title.empty()) {
-        add_text(page.layout, options.title, options.page_width * 0.5 - text_width(options.title, options.title_size) * 0.5,
-                 y + options.title_size, options.title_size, true);
-        y += options.title_size * 1.6;
-    }
-    if (!options.subtitle.empty()) {
-        const double s = options.title_size * 0.5;
-        add_text(page.layout, options.subtitle, options.page_width * 0.5 - text_width(options.subtitle, s) * 0.5, y + s, s,
-                 false, true);
-        y += s * 1.8;
-    }
-    if (!options.composer.empty()) {
-        const double s = options.title_size * 0.45;
-        add_text(page.layout, options.composer, options.page_width - options.margin - text_width(options.composer, s),
-                 y + s, s);
-        y += s * 1.8;
-    }
+    double y = lay_out_head(page.layout.display_list, options.head, options.title, options.subtitle, options.composer,
+                            options.title_size, options.page_width, options.margin, options.margin,
+                            page_bottom - (options.number_pages ? 3.2 : 0.4));
     if (!options.title.empty() || !options.subtitle.empty() || !options.composer.empty()) y += options.system_gap;
 
     double previous_scale = 0.0;

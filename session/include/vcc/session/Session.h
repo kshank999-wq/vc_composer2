@@ -273,6 +273,11 @@ public:
     /// empty (the same staves, no notes) to start afresh. None past
     /// kMaxVersions. One undo step.
     std::optional<std::string> new_version(const std::string& track_id, bool copy_current);
+    /// Score > Score Info: what the score's head carries. One undo step.
+    bool set_score_info(const project::ScoreInfo& info);
+    /// The score info with its fall-backs filled: the title (the project's
+    /// name), the composer (the production's).
+    project::ScoreInfo score_info() const;
     /// Clear Track: the current version's music goes - every staff's notes and
     /// markings (clefs, key and meter stay) and its MIDI regions in Producer.
     /// Audio stays. One undo step "Clear <track>".

@@ -580,7 +580,7 @@ TEST_CASE("clip groups move together across tracks; regions follow by time")
     s.new_empty();
     const auto a = s.add_audio_track("Dialogue", false);
     const auto b = s.add_audio_track("FX", false);
-    const auto m = s.add_track("Piano", "keys.piano");
+    const auto m = s.add_midi_track("Synth");  // regions are a MIDI track's
     project::AudioClip c;
     c.file = "Audio Files/x.wav";
     c.length = 2.0;
@@ -1090,8 +1090,8 @@ TEST_CASE("every template opens with its Sketch area: two pianos at the top, out
     REQUIRE(r.ok);
     const auto tracks = s.music_tracks();
     REQUIRE(tracks.size() >= 3u);
-    CHECK_EQ(tracks[0]->name, std::string("Sketch Piano 1"));
-    CHECK_EQ(tracks[1]->name, std::string("Sketch Piano 2"));
+    CHECK_EQ(tracks[0]->name, std::string("Sketch Piano Melody"));
+    CHECK_EQ(tracks[1]->name, std::string("Sketch Piano Chords"));
     for (int k = 0; k < 2; ++k) {
         CHECK(s.is_sketch(*tracks[static_cast<std::size_t>(k)]));
         CHECK_EQ(tracks[static_cast<std::size_t>(k)]->output_bus_id, std::string("bus-master"));  // straight to the master
@@ -1201,8 +1201,7 @@ TEST_CASE("Clear Track: the staff and its MIDI go, the staves stay, one undo ste
     played.notes.push_back(midi);
     REQUIRE(!s.add_recorded_regions({{t, played}}, "Record MIDI", false).empty());
     const auto* v = s.data().find_track(t)->active_version();
-    REQUIRE(v->score.total_note_count() == 3u);
-    REQUIRE(!v->regions.empty());
+    REQUIRE(v->score.total_note_count() == 4u);  // the played note is written on the staff too
     REQUIRE(s.clear_track(t));
     CHECK_EQ(s.undo_label(), std::string("Clear Piano"));
     v = s.data().find_track(t)->active_version();
@@ -1211,5 +1210,32 @@ TEST_CASE("Clear Track: the staff and its MIDI go, the staves stay, one undo ste
     CHECK_EQ(v->score.staff_count(), 2u);
     CHECK(!s.clear_track(t));  // nothing left to clear
     s.undo();
-    CHECK_EQ(s.data().find_track(t)->active_version()->score.total_note_count(), 3u);
+    CHECK_EQ(s.data().find_track(t)->active_version()->score.total_note_count(), 4u);
+}
+
+TEST_CASE("Score Info: typed, with fall-backs, saved with the project, one undo step")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    auto si = s.score_info();
+    CHECK(!si.title.empty());  // the project's name until a title is typed
+    si.title = "Night Train";
+    si.composer = "A. Composer";
+    si.date = "November 2026";
+    si.revision = "Version 3";
+    si.title_italic = true;
+    si.title_scale = 9.0;  // kept sensible
+    REQUIRE(s.set_score_info(si));
+    CHECK_EQ(s.undo_label(), std::string("Score info"));
+    CHECK_EQ(s.score_info().title, std::string("Night Train"));
+    CHECK_EQ(s.data().score_info.title_scale, 3.0);
+    const auto path = (std::filesystem::temp_directory_path() / "vcc_score_info.vcc2").string();
+    std::string error;
+    REQUIRE(s.save_as(path, &error));
+    session::Session back(catalogs());
+    REQUIRE(back.open(path, &error));
+    CHECK_EQ(back.score_info().composer, std::string("A. Composer"));
+    CHECK_EQ(back.score_info().revision, std::string("Version 3"));
+    CHECK(back.score_info().title_italic);
+    std::filesystem::remove(path);
 }

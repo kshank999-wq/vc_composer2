@@ -5,6 +5,8 @@
 #include <algorithm>
 
 #include "AppResources.h"
+#include "ui/Dialogs.h"
+#include "ui/Theme.h"
 #include "ui/hw/HwTheme.h"
 #include "vcc/core/Files.h"
 #include "vcc/engraving/PdfRenderer.h"
@@ -151,8 +153,8 @@ int export_parts_pdf(AppContext& context, const juce::File& target, juce::String
         const auto* v = t->active_version();
         if (!v || t->kind != project::TrackKind::Instrument || !t->include_in_export) continue;
         engraving::PrintOptions po;
-        po.title = d.production.title.empty() ? d.name : d.production.title;
         po.subtitle = t->name;
+        apply_score_info(context, po);
         po.multirests = true;  // empty runs as multi-bar rests
         // A part reads at written pitch under its written key.
         const notation::Score written = interchange::display_score(v->score, false);
@@ -342,9 +344,8 @@ std::unique_ptr<FullScoreLayout> lay_out_full_score(AppContext& context, const F
     const double needed = static_cast<double>(staves) * 11.0 + 30.0;  // spaces per staff plus title room
     if (needed * space > h - 24.0) space = std::max(0.7, (h - 24.0) / needed);
     engraving::page_size_for(w, h, space, opts);
-    opts.title = d.production.title.empty() ? d.name : d.production.title;
-    opts.subtitle = settings.concert_pitch ? "Score in C" : "Transposed score";
-    opts.composer = d.production.composer;
+    apply_score_info(context, opts);
+    if (opts.subtitle.empty()) opts.subtitle = settings.concert_pitch ? "Score in C" : "Transposed score";
     opts.hide_empty_staves = settings.hide_empty_staves;
     // "As many as fit": the layout takes fewer bars only where notes would crowd.
     opts.bars_per_system = settings.bars_per_system <= 0 ? 16 : settings.bars_per_system;
@@ -390,6 +391,212 @@ int export_full_score_pdf(AppContext& context, const juce::File& file, const Ful
         message << " - " << juce::String(static_cast<int>(laid.crowded_system_count))
                 << " system(s) are crowded; try fewer bars per system";
     return pages;
+}
+
+}  // namespace vcc::desktop
+
+// --- Score Info ---------------------------------------------------------------------------
+
+namespace vcc::desktop {
+
+namespace {
+
+std::string upper(std::string s)
+{
+    for (auto& ch : s) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    return s;
+}
+
+template <typename Options>
+void fill_head(const AppContext& c, Options& o)
+{
+    const auto si = c.session.score_info();
+    o.title = si.title_caps ? upper(si.title) : si.title;
+    if (!si.subtitle.empty() && o.subtitle.empty()) o.subtitle = si.subtitle;
+    o.composer = si.composer;
+    o.title_size *= std::clamp(si.title_scale, 0.5, 3.0);
+    o.head.title_bold = si.title_bold;
+    o.head.title_italic = si.title_italic;
+    o.head.lyricist = si.lyricist;
+    o.head.arranger = si.arranger;
+    std::string info = si.date;
+    if (!si.revision.empty()) info += (info.empty() ? "" : "  -  ") + si.revision;
+    o.head.info_line = info;
+    o.head.copyright = si.copyright;
+    o.head.tempo_text = si.tempo_text;
+    o.head.tempo_bpm = si.show_tempo ? c.session.data().tempo.bpm_at(0) : 0.0;
+}
+
+}  // namespace
+
+void apply_score_info(const AppContext& context, engraving::PrintOptions& options) { fill_head(context, options); }
+void apply_score_info(const AppContext& context, engraving::ScoreOptions& options)
+{
+    fill_head(context, options);
+    // The full score's own subtitle is the score info's when there is one.
+    if (const auto si = context.session.score_info(); !si.subtitle.empty()) options.subtitle = si.subtitle;
+}
+
+namespace {
+
+class ScoreInfoPanel final : public juce::Component {
+public:
+    explicit ScoreInfoPanel(AppContext& c) : context_(c)
+    {
+        setComponentID("score_info");
+        const auto si = c.session.score_info();
+        auto field = [this](juce::TextEditor& e, const juce::String& label, const std::string& value, const juce::String& hint) {
+            auto l = std::make_unique<juce::Label>(juce::String(), label);
+            l->setColour(juce::Label::textColourId, colours::text_dim);
+            l->setJustificationType(juce::Justification::centredRight);
+            addAndMakeVisible(*l);
+            labels_.push_back(std::move(l));
+            e.setTitle(label);
+            e.setText(juce::String::fromUTF8(value.c_str()), false);
+            e.setTextToShowWhenEmpty(hint, colours::text_dim);
+            e.onTextChange = [this] { repaint(); };
+            addAndMakeVisible(e);
+            fields_.push_back(&e);
+        };
+        // A date to start from: today, as a score would carry it.
+        const std::string date = si.date.empty() ? juce::Time::getCurrentTime().formatted("%d %B %Y").toStdString() : si.date;
+        field(title_, "Title", si.title, "The score's title");
+        field(subtitle_, "Subtitle", si.subtitle, "for orchestra / from the film ...");
+        field(composer_, "Composer", si.composer, "Music by ...");
+        field(arranger_, "Arranger", si.arranger, "Orch. / Arr. ...");
+        field(lyricist_, "Words", si.lyricist, "Words by ...");
+        field(date_, "Date", date, "19 November 2026");
+        field(revision_, "Version", si.revision, "Version 3 / Rev. 2");
+        field(copyright_, "Copyright", si.copyright, "(c) 2026 ...");
+        field(tempo_text_, "Tempo text", si.tempo_text, "Allegro / Slowly, with tension");
+        show_tempo_.setButtonText("Metronome mark from the music");
+        show_tempo_.setToggleState(si.show_tempo, juce::dontSendNotification);
+        bold_.setButtonText("Bold");
+        italic_.setButtonText("Italic");
+        caps_.setButtonText("ALL CAPS");
+        bold_.setToggleState(si.title_bold, juce::dontSendNotification);
+        italic_.setToggleState(si.title_italic, juce::dontSendNotification);
+        caps_.setToggleState(si.title_caps, juce::dontSendNotification);
+        size_.setRange(0.5, 3.0, 0.05);
+        size_.setValue(si.title_scale, juce::dontSendNotification);
+        size_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+        size_.setTitle("Title size");
+        for (juce::Component* comp : std::initializer_list<juce::Component*>{&show_tempo_, &bold_, &italic_, &caps_, &size_, &ok_, &cancel_})
+            addAndMakeVisible(comp);
+        for (auto* b : {&bold_, &italic_, &caps_}) b->onClick = [this] { repaint(); };
+        size_.onValueChange = [this] { repaint(); };
+        for (auto* b : {&show_tempo_, &bold_, &italic_, &caps_})
+            b->setColour(juce::ToggleButton::textColourId, colours::text);
+        ok_.onClick = [this] { apply(); };
+        cancel_.onClick = [this] { close(); };
+        // What the music says, put on the score by itself.
+        const auto& d = c.session.data();
+        auto_info_ = "From the music: tempo " + juce::String(d.tempo.bpm_at(0), 0) + " BPM  -  key " + juce::String(d.key) +
+                     "  -  meter " + juce::String(d.meter.at_bar(1).to_string());
+        setSize(560, 560);
+    }
+
+    void apply()
+    {
+        project::ScoreInfo si;
+        si.title = title_.getText().toStdString();
+        si.subtitle = subtitle_.getText().toStdString();
+        si.composer = composer_.getText().toStdString();
+        si.arranger = arranger_.getText().toStdString();
+        si.lyricist = lyricist_.getText().toStdString();
+        si.date = date_.getText().toStdString();
+        si.revision = revision_.getText().toStdString();
+        si.copyright = copyright_.getText().toStdString();
+        si.tempo_text = tempo_text_.getText().toStdString();
+        si.show_tempo = show_tempo_.getToggleState();
+        si.title_bold = bold_.getToggleState();
+        si.title_italic = italic_.getToggleState();
+        si.title_caps = caps_.getToggleState();
+        si.title_scale = size_.getValue();
+        context_.session.set_score_info(si);
+        context_.status("Score info set: " + title_.getText());
+        close();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(colours::background);
+        // The title as it will print.
+        auto r = preview_area_.toFloat();
+        g.setColour(juce::Colours::white);
+        g.fillRoundedRectangle(r, 4.0f);
+        g.setColour(juce::Colours::black);
+        int style = juce::Font::plain;
+        if (bold_.getToggleState()) style |= juce::Font::bold;
+        if (italic_.getToggleState()) style |= juce::Font::italic;
+        auto text = title_.getText();
+        if (caps_.getToggleState()) text = text.toUpperCase();
+        g.setFont(juce::FontOptions(static_cast<float>(16.0 * size_.getValue()), style));
+        g.drawFittedText(text, preview_area_.reduced(8, 4).removeFromTop(preview_area_.getHeight() * 2 / 3),
+                         juce::Justification::centred, 1);
+        g.setFont(juce::FontOptions(11.0f));
+        g.drawText(composer_.getText(), preview_area_.reduced(8, 4), juce::Justification::bottomRight);
+        g.drawText(date_.getText() + (revision_.getText().isEmpty() ? "" : "  -  " + revision_.getText()),
+                   preview_area_.reduced(8, 4), juce::Justification::topLeft);
+        g.setColour(colours::text_dim);
+        g.setFont(juce::FontOptions(11.0f));
+        g.drawText(auto_info_, auto_area_, juce::Justification::centredLeft);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(14);
+        preview_area_ = r.removeFromTop(80);
+        r.removeFromTop(8);
+        for (std::size_t i = 0; i < fields_.size(); ++i) {
+            auto row = r.removeFromTop(28);
+            labels_[i]->setBounds(row.removeFromLeft(90));
+            row.removeFromLeft(6);
+            fields_[i]->setBounds(row.reduced(0, 2));
+            r.removeFromTop(2);
+        }
+        auto style = r.removeFromTop(28);
+        style.removeFromLeft(96);
+        bold_.setBounds(style.removeFromLeft(70));
+        italic_.setBounds(style.removeFromLeft(70));
+        caps_.setBounds(style.removeFromLeft(96));
+        size_.setBounds(style);
+        show_tempo_.setBounds(r.removeFromTop(26).withTrimmedLeft(96));
+        auto_area_ = r.removeFromTop(22).withTrimmedLeft(96);
+        auto buttons = r.removeFromBottom(30);
+        cancel_.setBounds(buttons.removeFromRight(100));
+        buttons.removeFromRight(8);
+        ok_.setBounds(buttons.removeFromRight(100));
+    }
+
+    juce::TextEditor title_, subtitle_, composer_, arranger_, lyricist_, date_, revision_, copyright_, tempo_text_;
+
+private:
+    void close()
+    {
+        if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed();
+    }
+    AppContext& context_;
+    std::vector<std::unique_ptr<juce::Label>> labels_;
+    std::vector<juce::TextEditor*> fields_;
+    juce::ToggleButton show_tempo_, bold_, italic_, caps_;
+    juce::Slider size_;
+    juce::TextButton ok_{"Set"}, cancel_{"Cancel"};
+    juce::Rectangle<int> preview_area_, auto_area_;
+    juce::String auto_info_;
+};
+
+juce::Component::SafePointer<dialogs::ToolWindow>& score_info_window()
+{
+    static juce::Component::SafePointer<dialogs::ToolWindow> w;
+    return w;
+}
+
+}  // namespace
+
+void show_score_info(AppContext& context)
+{
+    dialogs::show_tool(score_info_window(), "Score Info", 560, 560, [&context] { return new ScoreInfoPanel(context); });
 }
 
 }  // namespace vcc::desktop

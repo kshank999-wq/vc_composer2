@@ -90,7 +90,7 @@ TEST_CASE("session: quantize, velocity, CC and input quantize on regions, undoab
 {
     session::Session s(catalogs());
     s.new_empty();
-    const auto t = s.add_track("Keys", "keys.piano");
+    const auto t = s.add_midi_track("Keys");  // regions are a MIDI track's; a staff track's MIDI is written as notation
     project::MidiRegion r;
     r.start = 0;
     r.end = 4 * Q;
@@ -212,11 +212,17 @@ TEST_CASE("importing a MIDI file: parts become tracks with regions, tempo and me
     const auto* pt = s.data().find_track(r.track_ids[0]);
     REQUIRE(pt != nullptr);
     CHECK(pt->name == "Piano");
+    // Written on its staff (the MIDI always matches the notation); the pedal
+    // stays as a controller region over the same bar.
+    const auto& sc = pt->active_version()->score;
+    std::vector<Ticks> starts;
+    for (std::size_t st = 0; st < sc.staff_count(); ++st)
+        for (const auto& n : sc.notes(st))
+            if (!n.is_rest) starts.push_back(n.start_tick);
+    std::sort(starts.begin(), starts.end());
+    CHECK(starts == (std::vector<Ticks>{0, 2 * Q}));
     const auto& reg = pt->active_version()->regions.at(0);
-    REQUIRE(reg.notes.size() == 2);
-    CHECK(reg.notes[0].start == 0);
-    CHECK(reg.notes[0].duration == Q);  // 480 file ticks = a quarter
-    CHECK(reg.notes[1].start == 2 * Q);
+    CHECK(reg.notes.empty());
     CHECK(reg.end == 3 * Q);  // one bar of 3/4
     REQUIRE(reg.controllers.size() == 1);
     CHECK(reg.controllers[0].controller == 64);
@@ -234,7 +240,7 @@ TEST_CASE("importing a MIDI file: parts become tracks with regions, tempo and me
     line.events.push_back(note(960, false, 0, 67, 0));
     one.tracks = {line};
     REQUIRE(music::write_smf_file(one, path).ok);
-    const auto keys = s.add_track("Keys", "keys.piano");
+    const auto keys = s.add_midi_track("Keys");  // a MIDI track keeps regions (take lanes)
     const auto r2 = s.import_midi_file(path, keys, s.data().meter.bar_start(3) + 100);
     REQUIRE(r2.parts == 1);
     CHECK(!r2.new_tracks);
@@ -260,7 +266,7 @@ TEST_CASE("MIDI comping: a range of a take replaces the main lane's notes there;
 {
     session::Session s(catalogs());
     s.new_empty();
-    const auto t = s.add_track("Keys", "keys.piano");
+    const auto t = s.add_midi_track("Keys");  // takes are a MIDI track's
     const Ticks bar = s.data().meter.bar_start(2);
     project::MidiRegion take1, take2;
     take1.start = take2.start = 0;
@@ -313,7 +319,7 @@ TEST_CASE("splitting a MIDI region: notes stay where they start, controllers by 
 {
     session::Session s(catalogs());
     s.new_empty();
-    const auto t = s.add_track("Keys", "keys.piano");
+    const auto t = s.add_midi_track("Keys");
     project::MidiRegion r;
     r.start = 0;
     r.end = 8 * Q;
@@ -344,7 +350,7 @@ TEST_CASE("pitch bend and channel aftertouch: kept in regions, saved, exported a
 {
     session::Session s(catalogs());
     s.new_empty();
-    const auto t = s.add_track("Synth", "keys.piano");
+    const auto t = s.add_midi_track("Synth");
     project::MidiRegion r;
     r.start = 0;
     r.end = 4 * Q;

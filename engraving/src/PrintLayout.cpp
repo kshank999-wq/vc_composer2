@@ -245,30 +245,9 @@ PrintResult lay_out(const notation::Score& score, const LayoutEngine& engine, co
     // The title block, on the first page only.
     PrintedPage page;
     page.layout.extent = Rect{0.0, 0.0, options.page_width, options.page_height};
-    double y = options.margin;
-    if (!options.title.empty()) {
-        TextItem title;
-        title.text = options.title;
-        title.size = options.title_size;
-        title.bold = true;
-        title.origin = Point{options.page_width * 0.5 - text_width(options.title, title.size) * 0.5,
-                             y + title.size};
-        title.role = ItemRole::Text;
-        page.layout.display_list.add(title);
-        y += title.size * 1.6;
-    }
-    if (!options.subtitle.empty()) {
-        TextItem subtitle;
-        subtitle.text = options.subtitle;
-        subtitle.size = options.title_size * 0.55;
-        subtitle.italic = true;
-        subtitle.origin =
-            Point{options.page_width * 0.5 - text_width(options.subtitle, subtitle.size) * 0.5,
-                  y + subtitle.size};
-        subtitle.role = ItemRole::Text;
-        page.layout.display_list.add(subtitle);
-        y += subtitle.size * 1.8;
-    }
+    double y = lay_out_head(page.layout.display_list, options.head, options.title, options.subtitle, options.composer,
+                            options.title_size, options.page_width, options.margin, options.margin,
+                            page_bottom - (options.number_pages ? 2.8 : 0.4));
     if (!options.title.empty() || !options.subtitle.empty())
         y += options.system_gap;
 

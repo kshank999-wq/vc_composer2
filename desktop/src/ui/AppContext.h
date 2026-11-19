@@ -185,6 +185,7 @@ enum : juce::CommandID {
     libraryWindow,
     spreadChords,
     soundAssignments,
+    scoreInfo,
 };
 }  // namespace cmd
 

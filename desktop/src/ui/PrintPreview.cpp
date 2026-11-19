@@ -4,6 +4,7 @@
 
 #include "AppResources.h"
 #include "ui/Dialogs.h"
+#include "ui/ScoreExchange.h"
 #include "ui/Theme.h"
 #include "vcc/interchange/Transposition.h"
 #include "vcc/ui/NotationRenderer.h"
@@ -90,8 +91,9 @@ void PrintPreview::show_source(int index)
         if (music_font().loaded) engine.set_glyph_table(music_font().glyphs);
         engraving::PrintOptions po;
         const auto& d = context_.session.data();
-        po.title = d.production.title.empty() ? d.name : d.production.title;
+        juce::ignoreUnused(d);
         po.subtitle = t->name;
+        apply_score_info(context_, po);
         po.multirests = true;
         part_score_.push_back(interchange::display_score(t->active_version()->score, false));
         part_ = engraving::lay_out_pages(part_score_.back(), engine, po);

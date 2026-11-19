@@ -1599,8 +1599,8 @@ void export_parts_svg(AppContext& c, const juce::File& folder)
         const auto* v = t->active_version();
         if (!v || t->kind != project::TrackKind::Instrument) continue;
         engraving::PrintOptions po;
-        po.title = c.session.data().name;
         po.subtitle = t->name;
+        apply_score_info(c, po);
         po.multirests = true;  // a part: empty runs as multi-bar rests
         const auto laid = engraving::lay_out_pages(v->score, engine, po);
         const auto svgs = engraving::render_pages_svg(laid, {}, music_font().loaded ? &music_font().glyphs : nullptr);
@@ -2324,7 +2324,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
                 cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController, cmd::scoreView, cmd::trackList, cmd::hearEntry,
-                cmd::builtinSounds, cmd::credits, cmd::toggleInspector, cmd::libraryWindow, cmd::soundAssignments});
+                cmd::builtinSounds, cmd::credits, cmd::toggleInspector, cmd::libraryWindow, cmd::soundAssignments, cmd::scoreInfo});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2554,6 +2554,9 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::midiSetup: info.setInfo("MIDI Setup...", "MIDI keyboards and controllers (USB, USB-C), on or off", "Studio", 0); break;
         case cmd::builtinSounds:
             info.setInfo("Built-in Sounds...", "The piano and General MIDI orchestra: download, status, credits", "Studio", 0);
+            break;
+        case cmd::scoreInfo:
+            info.setInfo("Score Info...", "The score's title (styled), composer, date, version and the rest of its head", "File", 0);
             break;
         case cmd::soundAssignments:
             info.setInfo("Sound Assignments...", "Your sound for each instrument and articulation, used in every template and new track",
@@ -2904,6 +2907,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::toggleInspector: set_inspector_shown(!inspector_shown()); break;
         case cmd::libraryWindow: set_library_shown(!library_shown()); break;
         case cmd::soundAssignments: show_sound_assignments(context_); break;
+        case cmd::scoreInfo: show_score_info(context_); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;
         case cmd::reloadCrashedPlugins: {
             const int n = context_.engine.reload_crashed_plugins();
@@ -2957,7 +2961,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             m.addCommandItem(c, cmd::importAudio);
             m.addCommandItem(c, cmd::importMusicXml);
             m.addSeparator();
-            for (auto id : {cmd::save, cmd::saveAs, cmd::saveOnStop, cmd::saveAsTemplate, cmd::printPreview, cmd::collectPackage,
+            for (auto id : {cmd::save, cmd::saveAs, cmd::saveOnStop, cmd::saveAsTemplate, cmd::scoreInfo, cmd::printPreview, cmd::collectPackage,
                             cmd::relinkMedia})
                 m.addCommandItem(c, id);
             m.addSeparator();

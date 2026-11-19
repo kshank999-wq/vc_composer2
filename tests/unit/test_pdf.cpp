@@ -182,3 +182,46 @@ TEST_CASE("a part prints to a valid PDF with the music font embedded")
     CHECK(render_pages_pdf(empty, opts, nullptr, &error).empty());
     CHECK(!error.empty());
 }
+
+TEST_CASE("a score's head: styled title, composer right, words left, arranger, date and revision, tempo, copyright")
+{
+    LayoutEngine engine;
+    PrintOptions po;
+    po.title = "Night Train";
+    po.subtitle = "for orchestra";
+    po.composer = "A. Composer";
+    po.head.title_italic = true;
+    po.head.lyricist = "Words by B. Writer";
+    po.head.arranger = "Orch. C. Arranger";
+    po.head.info_line = "19 November 2026 - Version 3";
+    po.head.copyright = "(c) 2026 A. Composer";
+    po.head.tempo_text = "Allegro";
+    po.head.tempo_bpm = 132.0;
+    const auto laid = lay_out_pages(sample_score(8), engine, po);
+    REQUIRE(!laid.pages.empty());
+    const auto& list = laid.pages.front().layout.display_list;
+    auto find = [&](const std::string& t) -> const TextItem* {
+        for (const auto& x : list.texts)
+            if (x.text == t) return &x;
+        return nullptr;
+    };
+    const auto* title = find("Night Train");
+    const auto* composer = find("A. Composer");
+    const auto* words = find("Words by B. Writer");
+    REQUIRE(title != nullptr);
+    CHECK(title->italic);
+    REQUIRE(composer != nullptr);
+    REQUIRE(words != nullptr);
+    CHECK(composer->origin.x > po.page_width * 0.5);  // right
+    CHECK(words->origin.x < po.page_width * 0.5);     // left
+    CHECK(find("Orch. C. Arranger") != nullptr);
+    CHECK(find("19 November 2026 - Version 3") != nullptr);
+    CHECK(find("Allegro") != nullptr);
+    CHECK(find("= 132") != nullptr);
+    const auto* copyright = find("(c) 2026 A. Composer");
+    REQUIRE(copyright != nullptr);
+    CHECK(copyright->origin.y > po.page_height * 0.8);  // at the foot
+    bool metronome = false;
+    for (const auto& g : list.glyphs) metronome = metronome || g.glyph == Glyph::MetNoteQuarterUp;
+    CHECK(metronome);
+}

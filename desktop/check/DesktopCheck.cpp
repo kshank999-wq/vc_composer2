@@ -4723,6 +4723,29 @@ void track_header_checks(MainWindow& window, const juce::File& dir)
         pump(150);
     }
 
+    // File > Score Info: the window, and what it puts on the printed head.
+    {
+        show_score_info(window.context());
+        pump(120);
+        auto* info_window = find_dialog("Score Info");
+        check(info_window != nullptr && info_window->isOnDesktop(), "File > Score Info opens its window");
+        if (info_window) shoot(*info_window, dir, "score-info");
+        auto si = session.score_info();
+        si.title = "Night Train";
+        si.composer = "A. Composer";
+        si.revision = "Version 3";
+        si.date = "19 November 2026";
+        si.title_italic = true;
+        session.set_score_info(si);
+        engraving::PrintOptions po;
+        apply_score_info(window.context(), po);
+        check(po.title == "Night Train" && po.composer == "A. Composer" && po.head.title_italic &&
+                  po.head.info_line == "19 November 2026  -  Version 3" && po.head.tempo_bpm > 0.0,
+              "the score's head takes the title (styled), composer, date and version, and the tempo from the music");
+        if (auto* w = dynamic_cast<juce::DocumentWindow*>(info_window)) w->closeButtonPressed();
+        pump(60);
+    }
+
     // Selecting another track by clicking its staff, while writing: no note.
     session.select_track(vln);
     pump(60);
@@ -4796,8 +4819,8 @@ void piano_sketch_checks(MainWindow& window, const juce::File& dir)
     pump(300);
     auto& composer = main.composer();
     const auto tracks = session.composer_tracks();
-    check(tracks.size() > 2 && tracks[0]->name == "Sketch Piano 1" && tracks[1]->name == "Sketch Piano 2" &&
-              composer.header(0).scribble().text().startsWith("SKETCH PIANO 1") && session.is_sketch(*tracks[1]) &&
+    check(tracks.size() > 2 && tracks[0]->name == "Sketch Piano Melody" && tracks[1]->name == "Sketch Piano Chords" &&
+              composer.header(0).scribble().text().startsWith("SKETCH PIANO MELODY") && session.is_sketch(*tracks[1]) &&
               tracks[0]->output_bus_id == "bus-master",
           "the template opens with its Sketch area on top: two sketch pianos, straight to the master");
     // Ids, not pointers: adding and undoing below replaces the track list.
@@ -5344,13 +5367,16 @@ void circle_checks(MainWindow& window, const juce::File& dir)
     juce::String symbols;
     for (const auto& m : session.data().chords)
         if (m.tick >= bar3) symbols << session.data().meter.bar_at(m.tick) << ":" << m.text << " ";
+    // On a track with a staff the MIDI is written there (it always matches the notation).
     std::size_t notes = 0;
     Ticks first = -1;
-    for (const auto& r : session.data().find_track(piano)->active_version()->regions)
-        for (const auto& n : r.notes) {
-            ++notes;
-            if (first < 0 || n.start < first) first = n.start;
-        }
+    const auto& written_score = session.data().find_track(piano)->active_version()->score;
+    for (std::size_t st = 0; st < written_score.staff_count(); ++st)
+        for (const auto& n : written_score.notes(st))
+            if (!n.is_rest && n.start_tick >= bar3) {
+                ++notes;
+                if (first < 0 || n.start_tick < first) first = n.start_tick;
+            }
     check(put && session.project().history_size() == steps_before + 1 && first == bar3 && notes == expected_notes &&
               symbols.trim() == "3:G 4:Eb 5:D 6:G",
           "Put on track writes it on the selected track from bar 3 (the playhead's beat), a bar each, with its chord "

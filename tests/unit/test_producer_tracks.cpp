@@ -175,7 +175,19 @@ TEST_CASE("recorded MIDI lands as a region, earlier takes moving to take lanes; 
 {
     session::Session s(catalogs());
     s.new_empty();
-    const auto t = s.add_track("Flute", "woodwinds.flute");
+    // On a track with a staff, played notes are written there (the feel kept).
+    {
+        const auto fl = s.add_track("Flute", "woodwinds.flute");
+        project::MidiRegion played;
+        played.start = 0;
+        played.end = 4 * kTicksPerQuarter;
+        played.notes.push_back(NoteEvent{0, kTicksPerQuarter, 72, 90, 0, {}});
+        REQUIRE(s.add_recorded_regions({{fl, played}}, "Record MIDI").size() == 1);
+        CHECK_EQ(s.data().find_track(fl)->active_version()->score.total_note_count(), 1u);
+        CHECK(s.data().find_track(fl)->active_version()->regions.empty());
+        CHECK_EQ(s.undo_label(), std::string("Record MIDI"));
+    }
+    const auto t = s.add_midi_track("Synth");  // a MIDI track keeps regions and takes
     project::MidiRegion r;
     r.start = 0;
     r.end = 4 * kTicksPerQuarter;

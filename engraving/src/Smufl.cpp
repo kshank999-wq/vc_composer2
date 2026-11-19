@@ -103,6 +103,8 @@ const GlyphEntry kDefaults[] = {
     {Glyph::NoteheadCircleX,         "noteheadCircleX",         0xE0B3, 1.18},
     {Glyph::NoteheadTriangleUpBlack, "noteheadTriangleUpBlack", 0xE0BE, 1.18},
     {Glyph::NoteheadDiamondBlack,    "noteheadDiamondBlack",    0xE0DB, 1.18},
+
+    {Glyph::MetNoteQuarterUp,        "metNoteQuarterUp",        0xECA5, 1.18},
 };
 
 }  // namespace

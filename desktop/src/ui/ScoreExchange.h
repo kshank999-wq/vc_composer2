@@ -8,6 +8,7 @@
 
 #include "ui/AppContext.h"
 #include "vcc/engraving/PrintLayout.h"
+#include "vcc/engraving/ScoreLayout.h"
 #include "vcc/notation/Score.h"
 
 namespace vcc::desktop {
@@ -49,6 +50,14 @@ struct FullScoreSettings {
 /// share them; kept with the app's settings).
 FullScoreSettings saved_full_score_settings();
 void save_full_score_settings(const FullScoreSettings& settings);
+
+/// The printed head from Score > Score Info: the title (styled), composer,
+/// words, arranger, date and revision, the tempo from the music, copyright.
+/// A part keeps its instrument name as the subtitle.
+void apply_score_info(const AppContext& context, engraving::PrintOptions& options);
+void apply_score_info(const AppContext& context, engraving::ScoreOptions& options);
+/// Score > Score Info...: the window to type it in.
+void show_score_info(AppContext& context);
 
 /// The full score on pages, as it prints: the Page view draws these, the
 /// PDF export writes them.

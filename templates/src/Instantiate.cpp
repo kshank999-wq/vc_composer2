@@ -211,7 +211,7 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
     // melodies and ostinatos - worked out there and sent to the orchestra.
     static const std::array<TemplateTrack, 2> sketch = [] {
         std::array<TemplateTrack, 2> out;
-        const char* names[] = {"Sketch Piano 1", "Sketch Piano 2"};
+        const char* names[] = {"Sketch Piano Melody", "Sketch Piano Chords"};
         for (std::size_t k = 0; k < out.size(); ++k) {
             out[k].id = "sketch_piano_" + std::to_string(k + 1);
             out[k].name = names[k];

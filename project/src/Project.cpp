@@ -1262,6 +1262,25 @@ json::Value Project::to_json() const
 
     root.set("production", json::Object{{"title", d.production.title}, {"client", d.production.client},
                                         {"director", d.production.director}, {"composer", d.production.composer}});
+    {
+        const auto& si = d.score_info;
+        json::Value o = json::Value::make_object();
+        o.set("title", si.title);
+        o.set("subtitle", si.subtitle);
+        o.set("composer", si.composer);
+        o.set("arranger", si.arranger);
+        o.set("lyricist", si.lyricist);
+        o.set("date", si.date);
+        o.set("revision", si.revision);
+        o.set("copyright", si.copyright);
+        o.set("tempo_text", si.tempo_text);
+        o.set("show_tempo", si.show_tempo);
+        o.set("title_scale", si.title_scale);
+        o.set("title_bold", si.title_bold);
+        o.set("title_italic", si.title_italic);
+        o.set("title_caps", si.title_caps);
+        root.set("score_info", std::move(o));
+    }
     json::Array reels, scenes;
     for (const auto& r : d.reels) reels.emplace_back(json::Object{{"id", r.id}, {"name", r.name}});
     for (const auto& sc : d.scenes)
@@ -1614,6 +1633,23 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         d.production.client = pj->get_string("client");
         d.production.director = pj->get_string("director");
         d.production.composer = pj->get_string("composer");
+    }
+    if (const auto* sj = doc.get("score_info")) {
+        auto& si = d.score_info;
+        si.title = sj->get_string("title");
+        si.subtitle = sj->get_string("subtitle");
+        si.composer = sj->get_string("composer");
+        si.arranger = sj->get_string("arranger");
+        si.lyricist = sj->get_string("lyricist");
+        si.date = sj->get_string("date");
+        si.revision = sj->get_string("revision");
+        si.copyright = sj->get_string("copyright");
+        si.tempo_text = sj->get_string("tempo_text");
+        si.show_tempo = sj->get_bool("show_tempo", true);
+        si.title_scale = sj->get_double("title_scale", 1.0);
+        si.title_bold = sj->get_bool("title_bold", true);
+        si.title_italic = sj->get_bool("title_italic", false);
+        si.title_caps = sj->get_bool("title_caps", false);
     }
     for (const auto& j : doc.get("reels") ? doc.get("reels")->as_array() : json::Array{}) {
         Reel r{j.get_string("id"), j.get_string("name")};

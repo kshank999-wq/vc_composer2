@@ -10,6 +10,7 @@ GlyphSubstitute substitute_for(Glyph glyph) noexcept
         case Glyph::NoteheadBlack:
         case Glyph::NoteheadTriangleUpBlack:
         case Glyph::NoteheadDiamondBlack:
+        case Glyph::MetNoteQuarterUp:  // a quarter note's head, without the music font
             return GlyphSubstitute{SubstituteKind::FilledEllipse, "", 0.0};
         case Glyph::NoteheadXBlack:
         case Glyph::NoteheadCircleX:

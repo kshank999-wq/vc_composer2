@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "vcc/engraving/ScoreHead.h"
 #include "vcc/engraving/LayoutEngine.h"
 #include "vcc/engraving/SvgRenderer.h"
 
@@ -51,6 +52,9 @@ struct PrintOptions {
     std::string title;
     std::string subtitle;
     double title_size = 3.0;
+    /// The composer at the right, and the rest of the head (Score Info).
+    std::string composer;
+    ScoreHead head;
 
     /// A number at the foot of every page, when there is more than one.
     bool number_pages = true;

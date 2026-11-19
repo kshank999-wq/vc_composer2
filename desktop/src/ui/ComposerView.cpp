@@ -1215,8 +1215,11 @@ void ComposerView::update_staff_tools()
                a.dot == b.dot && a.triplet == b.triplet && a.rest == b.rest && a.voice == b.voice &&
                a.chord_mode == b.chord_mode && a.track == b.track && a.writing == b.writing && a.accent == b.accent && a.hairpin == b.hairpin;
     };
-    if (!same(s, tools.state())) tools.set_state(s);
-    if (tools_floating_ && !same(s, tools_floating_->state())) tools_floating_->set_state(s);
+    // The dial is turned by hand without the state knowing: compare what it shows too
+    // (undo puts the strength back; the dial must follow).
+    auto dial_off = [&](composer_ui::StaffTools& t) { return juce::roundToInt(t.accent_knob().getValue()) != s.accent; };
+    if (!same(s, tools.state()) || dial_off(tools)) tools.set_state(s);
+    if (tools_floating_ && (!same(s, tools_floating_->state()) || dial_off(*tools_floating_))) tools_floating_->set_state(s);
 
     // Docked: beside the selected staff, above it when the view has room,
     // otherwise below; hidden when the staff is scrolled away.

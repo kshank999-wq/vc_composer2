@@ -114,6 +114,9 @@ enum class Glyph : std::uint16_t {
     NoteheadCircleX,
     NoteheadTriangleUpBlack,
     NoteheadDiamondBlack,
+
+    // --- Tempo --------------------------------------------------------------
+    MetNoteQuarterUp,
 };
 
 /// Canonical SMuFL name, as the specification and every font's metadata use

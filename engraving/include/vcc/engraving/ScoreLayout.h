@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "vcc/engraving/ScoreHead.h"
 #include "vcc/engraving/PrintLayout.h"
 
 namespace vcc::engraving {
@@ -45,6 +46,8 @@ struct ScoreOptions {
     std::string subtitle;  ///< "Full score in C" / "Transposed score".
     std::string composer;  ///< Right-aligned under the title.
     double title_size = 4.0;
+    /// The rest of the head (Score Info).
+    ScoreHead head;
     bool number_pages = true;
     /// Leave out a part's staves on a system where it has no notes (never on
     /// the first system). A system where every part rests keeps them all.

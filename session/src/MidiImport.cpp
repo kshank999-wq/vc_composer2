@@ -41,6 +41,7 @@ std::string part_instrument(const templates::InstrumentRegistry& catalog, const 
 
 Session::MidiImport Session::import_midi_file(const std::string& path, const std::string& target_track, Ticks at)
 {
+    const auto regions_before = region_ids();
     MidiImport result;
     music::SmfFile file;
     const auto read = music::read_smf_file(path, file);
@@ -227,6 +228,8 @@ Session::MidiImport Session::import_midi_file(const std::string& path, const std
         result.error = "the MIDI file could not be placed";
         return result;
     }
+    // On tracks with a staff the MIDI is written there: it always matches the notation.
+    lock_new_regions_to_notation(regions_before, project_.undo_label());
     if (!result.track_ids.empty()) select_track(result.track_ids.front());
     return result;
 }
