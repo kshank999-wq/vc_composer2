@@ -29,7 +29,7 @@ void show_template_browser(AppContext& context, bool for_new_project)
 void show_chord_explorer(AppContext& context)
 {
     dialogs::show_tool(
-        chord_window, "Chord Explorer", 1060, 680, [&context] { return new ChordExplorer(context); },
+        chord_window, "Chord Explorer", 1280, 900, [&context] { return new ChordExplorer(context); },
         [&context] { context.engine.stop_preview(); });
 }
 

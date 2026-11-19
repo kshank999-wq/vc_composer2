@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "ui/Theme.h"
+#include "vcc/theory/KeyReference.h"
 
 namespace vcc::desktop {
 
@@ -12,6 +13,24 @@ namespace {
 constexpr int kLeftWidth = 300;
 constexpr int kTopBar = 52;
 constexpr int kBottomBar = 54;
+constexpr int kStripHeight = 118;  ///< The build strip, above the bottom bar.
+
+/// What a dragged chord carries: "chord:<numeral>|<symbol>".
+juce::var chord_drag(const theory::Chord& chord, const std::string& numeral)
+{
+    return juce::String("chord:") + juce::String::fromUTF8(numeral.c_str()) + "|" + juce::String::fromUTF8(chord.name().c_str());
+}
+
+std::optional<std::pair<theory::Chord, std::string>> parse_chord_drag(const juce::var& v)
+{
+    const auto s = v.toString();
+    if (!s.startsWith("chord:")) return std::nullopt;
+    const auto body = s.fromFirstOccurrenceOf("chord:", false, false);
+    const auto numeral = body.upToFirstOccurrenceOf("|", false, false).toStdString();
+    const auto chord = theory::parse_chord_symbol(body.fromFirstOccurrenceOf("|", false, false).toStdString());
+    if (!chord) return std::nullopt;
+    return std::make_pair(*chord, numeral);
+}
 
 juce::String utf8(const std::string& s) { return juce::String::fromUTF8(s.c_str()); }
 
@@ -51,19 +70,44 @@ public:
         repaint();
     }
     const theory::Chord& chord() const noexcept { return chord_; }
+    std::string numeral() const { return numeral_.toStdString(); }
+    std::function<void()> on_double_click;
+    bool borrowed = false;
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        // Dragged into the build strip: the chord goes into that bar.
+        if (e.getDistanceFromDragStart() > 6)
+            if (auto* c = juce::DragAndDropContainer::findParentDragContainerFor(this); c && !c->isDragAndDropActive()) {
+                dragged_ = true;
+                c->startDragging(chord_drag(chord_, numeral()), this);
+            }
+        juce::Button::mouseDrag(e);
+    }
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        dragged_ = false;
+        juce::Button::mouseDown(e);
+    }
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    {
+        if (on_double_click) on_double_click();
+    }
+    /// The press ended a drag, not a click (no audition then).
+    bool was_dragged() const noexcept { return dragged_; }
 
     void paintButton(juce::Graphics& g, bool highlighted, bool down) override
     {
         auto r = getLocalBounds().toFloat().reduced(1.0f);
         g.setColour(down ? colours::accent.withAlpha(0.45f) : highlighted ? colours::panel_raised.brighter(0.08f) : colours::panel_raised);
         g.fillRoundedRectangle(r, 5.0f);
-        g.setColour(highlighted ? colours::accent : colours::outline);
+        g.setColour(highlighted ? colours::accent : borrowed ? colours::accent_warm.withAlpha(0.7f) : colours::outline);
         g.drawRoundedRectangle(r.reduced(0.5f), 5.0f, 1.0f);
         auto area = getLocalBounds().reduced(4, 5);
         g.setColour(colours::text);
         g.setFont(juce::FontOptions(16.0f, juce::Font::bold));
         g.drawText(numeral_, area.removeFromTop(area.getHeight() / 2 + 2), juce::Justification::centredBottom, true);
-        g.setColour(colours::accent);
+        g.setColour(borrowed ? colours::accent_warm : colours::accent);
         g.setFont(juce::FontOptions(13.0f));
         g.drawText(utf8(chord_.display_name()), area, juce::Justification::centredTop, true);
     }
@@ -71,6 +115,7 @@ public:
 private:
     theory::Chord chord_;
     juce::String numeral_;
+    bool dragged_ = false;
 };
 
 // --- Chord cards ------------------------------------------------------------------------------
@@ -151,19 +196,23 @@ public:
             g.drawFittedText(voicing_text(rc.voicing.notes, rc.chord), inner, juce::Justification::centred, 2, 0.85f);
         }
 
-        // What Send to Track will write: the rendered notes, rhythm included.
-        if (!rects_.empty()) {
+        // What Send to Track will write: the rendered notes, rhythm included
+        // (the preset's, or your build's while My Build is chosen).
+        const auto* sending = owner_.active_render();
+        if (!rects_.empty() && sending) {
             auto rest = r.withTop(rects_.back().getBottom() + 14);
             if (rest.getHeight() >= 70) {
                 g.setColour(colours::text_dim);
                 g.setFont(juce::FontOptions(11.5f, juce::Font::bold));
-                g.drawText("NOTES TO SEND  -  " + juce::String(static_cast<int>(owner_.render_->notes.size())) + " notes, bars " +
-                               juce::String(meter.bar_at(owner_.render_->start)) + juce::String::fromUTF8("–") +
-                               juce::String(meter.bar_at(owner_.render_->end - 1)),
+                g.drawText(juce::String(owner_.use_build_ ? "YOUR BUILD - NOTES TO SEND  -  " : "NOTES TO SEND  -  ") +
+                               juce::String(static_cast<int>(sending->notes.size())) + " notes, bars " +
+                               juce::String(meter.bar_at(sending->start)) + juce::String::fromUTF8("–") +
+                               juce::String(meter.bar_at(sending->end - 1)),
                            rest.removeFromTop(18), juce::Justification::centredLeft);
                 rest.removeFromTop(4);
-                dialogs::draw_mini_roll(g, rest.withHeight(std::min(rest.getHeight(), 170)).toFloat(), owner_.render_->notes,
-                                        owner_.render_->start, owner_.render_->end, meter, colours::accent);
+                dialogs::draw_mini_roll(g, rest.withHeight(std::min(rest.getHeight(), 170)).toFloat(), sending->notes,
+                                        sending->start, sending->end, meter,
+                                        owner_.use_build_ ? colours::accent_warm : colours::accent);
             }
         }
     }
@@ -177,6 +226,16 @@ public:
                 repaint();
                 return;
             }
+    }
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        // A progression's chord, dragged into the build strip.
+        if (e.getDistanceFromDragStart() < 6 || !owner_.render_ || selected < 0 ||
+            selected >= static_cast<int>(owner_.render_->chords.size()))
+            return;
+        if (owner_.isDragAndDropActive()) return;
+        const auto& rc = owner_.render_->chords[static_cast<std::size_t>(selected)];
+        owner_.startDragging(chord_drag(rc.chord, rc.numeral), this);
     }
 
 private:
@@ -196,6 +255,107 @@ private:
     AppContext& context_;
     ChordExplorer& owner_;
     std::vector<juce::Rectangle<int>> rects_;
+};
+
+// --- Build strip ------------------------------------------------------------------------------
+
+class ChordExplorer::BuildStrip final : public juce::Component, public juce::DragAndDropTarget, public juce::SettableTooltipClient {
+public:
+    explicit BuildStrip(ChordExplorer& owner) : owner_(owner)
+    {
+        setComponentID("chord_build_strip");
+        setTitle("Your progression: twelve bars");
+        setTooltip("Drag chords here from the key, the borrowed row or a progression. Click a bar to hear it; "
+                   "right-click to empty it. An empty bar holds the chord before it.");
+    }
+
+    juce::Rectangle<int> slot_rect(int i) const
+    {
+        constexpr int gap = 6;
+        const int w = (getWidth() - gap * (kBuildBars - 1)) / kBuildBars;
+        return {i * (w + gap), 0, w, getHeight()};
+    }
+    int slot_at(juce::Point<int> p) const
+    {
+        for (int i = 0; i < kBuildBars; ++i)
+            if (slot_rect(i).expanded(3, 0).contains(p)) return i;
+        return -1;
+    }
+
+    bool isInterestedInDragSource(const SourceDetails& d) override { return d.description.toString().startsWith("chord:"); }
+    void itemDragEnter(const SourceDetails& d) override { itemDragMove(d); }
+    void itemDragMove(const SourceDetails& d) override
+    {
+        const int h = slot_at(d.localPosition);
+        if (h != hover_) {
+            hover_ = h;
+            repaint();
+        }
+    }
+    void itemDragExit(const SourceDetails&) override
+    {
+        hover_ = -1;
+        repaint();
+    }
+    void itemDropped(const SourceDetails& d) override
+    {
+        hover_ = -1;
+        const int slot = slot_at(d.localPosition);
+        if (const auto c = parse_chord_drag(d.description); c && slot >= 0) owner_.set_build_chord(slot, c->first, c->second);
+        repaint();
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const int slot = slot_at(e.getPosition());
+        if (slot < 0) return;
+        const auto& c = owner_.build_[static_cast<std::size_t>(slot)];
+        if (e.mods.isPopupMenu()) {
+            owner_.clear_build_chord(slot);
+            return;
+        }
+        if (c) owner_.audition_chord(c->chord);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        const int start = static_cast<int>(owner_.start_.getValue());
+        bool held = false;
+        int last = -1;  // empty bars hold the chord before them only up to the last chord
+        for (int i = 0; i < kBuildBars; ++i)
+            if (owner_.build_[static_cast<std::size_t>(i)]) last = i;
+        for (int i = 0; i < kBuildBars; ++i) {
+            const auto r = slot_rect(i).toFloat();
+            const auto& c = owner_.build_[static_cast<std::size_t>(i)];
+            const bool hover = i == hover_;
+            g.setColour(hover ? colours::accent.withAlpha(0.25f) : c ? colours::panel_raised : colours::panel);
+            g.fillRoundedRectangle(r, 6.0f);
+            g.setColour(hover ? colours::accent : c ? colours::accent_warm.withAlpha(0.8f) : colours::outline);
+            g.drawRoundedRectangle(r.reduced(0.5f), 6.0f, hover || c ? 1.5f : 1.0f);
+            auto inner = slot_rect(i).reduced(4, 5);
+            g.setColour(colours::text_dim);
+            g.setFont(juce::FontOptions(10.5f));
+            g.drawText("Bar " + juce::String(start + i), inner.removeFromTop(13), juce::Justification::centred);
+            if (c) {
+                held = true;
+                g.setColour(colours::text);
+                g.setFont(juce::FontOptions(17.0f, juce::Font::bold));
+                g.drawText(utf8(c->numeral), inner.removeFromTop(inner.getHeight() / 2 + 2), juce::Justification::centredBottom, true);
+                g.setColour(colours::accent_warm);
+                g.setFont(juce::FontOptions(13.0f));
+                g.drawText(utf8(c->chord.display_name()), inner, juce::Justification::centredTop, true);
+            } else {
+                g.setColour(colours::text_dim.withAlpha(0.7f));
+                g.setFont(juce::FontOptions(11.0f));
+                g.drawFittedText(held && i < last ? juce::String::fromUTF8("\xe2\x86\x90 hold") : juce::String("drop a chord"), inner,
+                                 juce::Justification::centred, 2);
+            }
+        }
+    }
+
+private:
+    ChordExplorer& owner_;
+    int hover_ = -1;
 };
 
 // --- Explorer ---------------------------------------------------------------------------------
@@ -298,8 +458,37 @@ ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmo
         matrix_.push_back(std::make_unique<MatrixButton>());
         auto* b = matrix_.back().get();
         addAndMakeVisible(*b);
-        b->onClick = [this, b] { audition_chord(b->chord()); };
+        b->onClick = [this, b] {
+            if (!b->was_dragged()) audition_chord(b->chord());
+        };
+        b->on_double_click = [this, b] { add_to_build(b->chord(), b->numeral()); };
     }
+    borrowed_caption_.setFont(juce::FontOptions(11.5f, juce::Font::bold));
+    borrowed_caption_.setColour(juce::Label::textColourId, colours::text_dim);
+    addAndMakeVisible(borrowed_caption_);
+
+    // The build strip and its keys.
+    strip_ = std::make_unique<BuildStrip>(*this);
+    addAndMakeVisible(*strip_);
+    for (auto* b : {&use_preset_, &use_build_key_}) {
+        addAndMakeVisible(*b);
+        b->setClickingTogglesState(true);
+        b->setRadioGroupId(4712);
+    }
+    use_preset_.setConnectedEdges(juce::Button::ConnectedOnRight);
+    use_build_key_.setConnectedEdges(juce::Button::ConnectedOnLeft);
+    use_preset_.setToggleState(true, juce::dontSendNotification);
+    use_preset_.setComponentID("chord_use_preset");
+    use_build_key_.setComponentID("chord_use_build");
+    use_preset_.setTooltip("Audition and Send the progression chosen on the left");
+    use_build_key_.setTooltip("Audition and Send your progression from the build strip");
+    use_preset_.onClick = [this] { use_build(false); };
+    use_build_key_.onClick = [this] { use_build(true); };
+    for (auto* b : {&fill_, &clear_}) addAndMakeVisible(*b);
+    fill_.setTooltip("Copy the chosen progression's chords into the build, a bar each, to change them");
+    clear_.setTooltip("Empty the build");
+    fill_.onClick = [this] { fill_build_from_progression(); };
+    clear_.onClick = [this] { clear_build(); };
 
     cards_ = std::make_unique<Cards>(c, *this);
     addAndMakeVisible(*cards_);
@@ -332,7 +521,7 @@ ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmo
 
     rebuild_matrix();
     filter();
-    setSize(1060, 680);
+    setSize(1280, 900);
 }
 
 ChordExplorer::~ChordExplorer() { list_.setModel(nullptr); }
@@ -346,7 +535,17 @@ void ChordExplorer::paint(juce::Graphics& g)
     g.setColour(colours::outline);
     g.drawHorizontalLine(kTopBar - 1, 0.0f, static_cast<float>(getWidth()));
     g.drawHorizontalLine(getHeight() - kBottomBar, 0.0f, static_cast<float>(getWidth()));
-    g.drawVerticalLine(kLeftWidth, static_cast<float>(kTopBar), static_cast<float>(getHeight() - kBottomBar));
+    g.drawVerticalLine(kLeftWidth, static_cast<float>(kTopBar), static_cast<float>(getHeight() - kBottomBar - kStripHeight));
+    // The build strip's band, above the bottom bar.
+    const int strip_top = getHeight() - kBottomBar - kStripHeight;
+    g.setColour(colours::panel.darker(0.15f));
+    g.fillRect(0, strip_top, getWidth(), kStripHeight);
+    g.setColour(colours::outline);
+    g.drawHorizontalLine(strip_top, 0.0f, static_cast<float>(getWidth()));
+    g.setColour(colours::text_dim);
+    g.setFont(juce::FontOptions(11.5f, juce::Font::bold));
+    g.drawText("YOUR PROGRESSION  -  drag chords into the bars (or double-click one), then Send", 16, strip_top + 6, 640, 20,
+               juce::Justification::centredLeft);
 }
 
 void ChordExplorer::resized()
@@ -375,12 +574,24 @@ void ChordExplorer::resized()
     audition_.setBounds(bottom.removeFromLeft(100));
     bottom.removeFromLeft(6);
     stop_.setBounds(bottom.removeFromLeft(70));
+    bottom.removeFromLeft(18);
+    use_preset_.setBounds(bottom.removeFromLeft(80));
+    use_build_key_.setBounds(bottom.removeFromLeft(90));
     send_.setBounds(bottom.removeFromRight(130));
     bottom.removeFromRight(8);
     target_.setBounds(bottom.removeFromRight(240));
     bottom.removeFromRight(6);
     target_caption_.setBounds(bottom.removeFromRight(50));
 
+    {
+        auto band = r.removeFromBottom(kStripHeight).reduced(16, 6);
+        auto head = band.removeFromTop(22);
+        clear_.setBounds(head.removeFromRight(70));
+        head.removeFromRight(6);
+        fill_.setBounds(head.removeFromRight(130));
+        band.removeFromTop(6);
+        strip_->setBounds(band);
+    }
     auto left = r.removeFromLeft(kLeftWidth).reduced(12);
     search_.setBounds(left.removeFromTop(28));
     left.removeFromTop(8);
@@ -400,7 +611,17 @@ void ChordExplorer::resized()
         b->setBounds(row.removeFromLeft(bw));
         row.removeFromLeft(gap);
     }
-    right.removeFromTop(14);
+    right.removeFromTop(8);
+    // Borrowed chords (modal mixture), under the key's.
+    borrowed_caption_.setBounds(right.removeFromTop(20));
+    auto brow = right.removeFromTop(50);
+    const int bn = std::max(1, static_cast<int>(borrowed_.size()));
+    const int bbw = std::min(bw, (brow.getWidth() - gap * (bn - 1)) / bn);
+    for (auto& b : borrowed_) {
+        b->setBounds(brow.removeFromLeft(bbw));
+        brow.removeFromLeft(gap);
+    }
+    right.removeFromTop(12);
     auto kb = right.removeFromBottom(84);
     chord_info_.setBounds(right.removeFromBottom(26));
     keyboard_.setKeyWidth(static_cast<float>(kb.getWidth()) / 36.0f);
@@ -512,6 +733,29 @@ void ChordExplorer::rebuild_matrix()
         matrix_[i]->setVisible(has);
         if (has) matrix_[i]->set(chords[i], utf8(theory::roman_label(static_cast<int>(i) + 1, chords[i].quality)));
     }
+    // Borrowed from the parallel key (and the Neapolitan): triads, or sevenths
+    // for 7ths and 9ths.
+    const auto ref = theory::key_reference(k);
+    const auto& borrowed = chord_size_ == 3 ? ref.borrowed_triads : ref.borrowed_sevenths;
+    for (auto& b : borrowed_) removeChildComponent(b.get());
+    borrowed_.clear();
+    for (const auto& bc : borrowed) {
+        auto b = std::make_unique<MatrixButton>();
+        b->borrowed = true;
+        b->set(bc.chord, utf8(bc.roman));
+        b->setTooltip("Borrowed from " + utf8(bc.source) + (bc.name.empty() ? juce::String() : " (" + utf8(bc.name) + ")") +
+                      ": click to hear, drag into the build");
+        auto* raw = b.get();
+        raw->onClick = [this, raw] {
+            if (!raw->was_dragged()) audition_chord(raw->chord());
+        };
+        raw->on_double_click = [this, raw] { add_to_build(raw->chord(), raw->numeral()); };
+        addAndMakeVisible(*raw);
+        borrowed_.push_back(std::move(b));
+    }
+    borrowed_caption_.setText("BORROWED CHORDS  -  from " + utf8(ref.parallel.name()) + " and the Neapolitan (drag into the build)",
+                              juce::dontSendNotification);
+    resized();
 }
 
 void ChordExplorer::rerender()
@@ -521,15 +765,7 @@ void ChordExplorer::rerender()
     cards_->selected = -1;
     const auto* p = chosen();
     if (p) {
-        theory::ProgressionRenderOptions o;
-        o.key = key();
-        o.start_bar = static_cast<int>(start_.getValue());
-        o.length_bars = std::max(1, length_.getSelectedId());
-        o.expand = theory::ExpandMode::Stretch;
-        o.voicing = voicing_options();
-        static const theory::ChordRhythm rhythms[] = {theory::ChordRhythm::Block, theory::ChordRhythm::BeatPulse,
-                                                      theory::ChordRhythm::Arpeggio, theory::ChordRhythm::Strum};
-        o.rhythm = rhythms[juce::jlimit(1, 4, rhythm_.getSelectedId()) - 1];
+        const auto o = render_options();
         std::string error;
         render_ = theory::render_progression(*p, context_.session.data().meter, o, &error);
         if (!render_) {
@@ -538,8 +774,10 @@ void ChordExplorer::rerender()
                                         << " bars to play whole choruses.";
         }
     }
-    audition_.setEnabled(render_.has_value());
-    send_.setEnabled(render_.has_value());
+    build_render_ = render_build();
+    audition_.setEnabled(active_render() != nullptr);
+    send_.setEnabled(active_render() != nullptr);
+    if (strip_) strip_->repaint();
     if (render_ && !render_->chords.empty()) {
         const auto& first = render_->chords.front();
         show_on_keyboard(first.voicing.notes, describe(first.numeral, first.chord, first.voicing.notes));
@@ -594,15 +832,35 @@ void ChordExplorer::audition_card(int index)
 
 void ChordExplorer::audition()
 {
-    if (!render_) return;
+    const auto* r = active_render();
+    if (!r) return;
     const auto [family, program] = dialogs::preview_voice(context_, target_.track_id());
-    context_.engine.preview(dialogs::shifted(render_->notes, render_->start), family, program, dialogs::project_bpm(context_),
-                            true, render_->end - render_->start);
-    if (const auto* p = chosen()) context_.status("Looping " + utf8(p->name) + " - press Stop to end the audition");
+    context_.engine.preview(dialogs::shifted(r->notes, r->start), family, program, dialogs::project_bpm(context_), true,
+                            r->end - r->start);
+    if (use_build_) context_.status("Looping your progression - press Stop to end the audition");
+    else if (const auto* p = chosen()) context_.status("Looping " + utf8(p->name) + " - press Stop to end the audition");
 }
 
 void ChordExplorer::send()
 {
+    if (use_build_) {
+        std::string track = target_.track_id();
+        if (track.empty()) {
+            track = context_.session.add_track("Harmony", "keys.piano");
+            if (track.empty()) return;
+            target_.refresh();
+            target_.select(track);
+            rerender();
+        }
+        if (!build_render_) return;
+        int bars = 0;
+        for (int i = 0; i < kBuildBars; ++i)
+            if (build_[static_cast<std::size_t>(i)]) bars = i + 1;
+        const juce::String what = "Your progression (" + juce::String(bars) + " bars from bar " +
+                                  juce::String(static_cast<int>(start_.getValue())) + ")";
+        send_with(track, *build_render_, "built", what, project::CollisionPolicy::Ask);
+        return;
+    }
     const auto* p = chosen();
     if (!p) return;
     std::string track = target_.track_id();
@@ -635,5 +893,122 @@ void ChordExplorer::send_with(const std::string& track_id, const theory::Progres
     }
     dialogs::report_send(context_, result, what);
 }
+
+// --- The build ---------------------------------------------------------------------------------
+
+theory::ProgressionRenderOptions ChordExplorer::render_options() const
+{
+    theory::ProgressionRenderOptions o;
+    o.key = key();
+    o.start_bar = static_cast<int>(start_.getValue());
+    o.length_bars = std::max(1, length_.getSelectedId());
+    o.expand = theory::ExpandMode::Stretch;
+    o.voicing = voicing_options();
+    static const theory::ChordRhythm rhythms[] = {theory::ChordRhythm::Block, theory::ChordRhythm::BeatPulse,
+                                                  theory::ChordRhythm::Arpeggio, theory::ChordRhythm::Strum};
+    o.rhythm = rhythms[juce::jlimit(1, 4, rhythm_.getSelectedId()) - 1];
+    return o;
+}
+
+const theory::ProgressionRender* ChordExplorer::active_render() const
+{
+    if (use_build_) return build_render_ ? &*build_render_ : nullptr;
+    return render_ ? &*render_ : nullptr;
+}
+
+std::optional<theory::ProgressionRender> ChordExplorer::render_build() const
+{
+    const auto& meter = context_.session.data().meter;
+    const int start = static_cast<int>(start_.getValue());
+    int last = -1;
+    for (int i = 0; i < kBuildBars; ++i)
+        if (build_[static_cast<std::size_t>(i)]) last = i;
+    if (last < 0) return std::nullopt;
+    std::vector<theory::Chord> chords;
+    std::vector<Ticks> starts, durations;
+    std::vector<std::string> numerals;
+    for (int i = 0; i <= last; ++i) {
+        const Ticks from = meter.bar_start(start + i), to = meter.bar_start(start + i + 1);
+        const auto& c = build_[static_cast<std::size_t>(i)];
+        if (!c) {
+            if (!durations.empty()) durations.back() += to - from;  // an empty bar holds the chord before it
+            continue;
+        }
+        chords.push_back(c->chord);
+        starts.push_back(from);
+        durations.push_back(to - from);
+        numerals.push_back(c->numeral);
+    }
+    return theory::realize_chords(chords, starts, durations, numerals, meter, render_options());
+}
+
+void ChordExplorer::build_changed()
+{
+    rerender();
+    if (strip_) strip_->repaint();
+}
+
+void ChordExplorer::set_build_chord(int slot, const theory::Chord& chord, const std::string& numeral)
+{
+    if (slot < 0 || slot >= kBuildBars) return;
+    build_[static_cast<std::size_t>(slot)] = BuildChord{chord, numeral};
+    use_build(true);  // building: Audition and Send use the build
+    audition_chord(chord);
+    context_.status("Bar " + juce::String(static_cast<int>(start_.getValue()) + slot) + ": " + utf8(chord.display_name()));
+}
+
+bool ChordExplorer::add_to_build(const theory::Chord& chord, const std::string& numeral)
+{
+    for (int i = 0; i < kBuildBars; ++i)
+        if (!build_[static_cast<std::size_t>(i)]) {
+            set_build_chord(i, chord, numeral);
+            return true;
+        }
+    context_.status("The build is full (twelve bars): right-click a bar to empty it");
+    return false;
+}
+
+void ChordExplorer::clear_build_chord(int slot)
+{
+    if (slot < 0 || slot >= kBuildBars) return;
+    build_[static_cast<std::size_t>(slot)].reset();
+    build_changed();
+}
+
+void ChordExplorer::clear_build()
+{
+    for (auto& c : build_) c.reset();
+    build_changed();
+}
+
+void ChordExplorer::fill_build_from_progression()
+{
+    if (!render_) return;
+    for (auto& c : build_) c.reset();
+    // One chord per bar, in order, up to twelve.
+    const auto& meter = context_.session.data().meter;
+    int slot = 0;
+    int last_bar = -1;
+    for (const auto& rc : render_->chords) {
+        const int bar = meter.bar_at(rc.start);
+        if (bar == last_bar) continue;
+        last_bar = bar;
+        if (slot >= kBuildBars) break;
+        build_[static_cast<std::size_t>(slot++)] = BuildChord{rc.chord, rc.numeral};
+    }
+    use_build(true);
+    context_.status("The progression is in the build: drag chords onto its bars to change them");
+}
+
+void ChordExplorer::use_build(bool build)
+{
+    use_build_ = build;
+    use_preset_.setToggleState(!build, juce::dontSendNotification);
+    use_build_key_.setToggleState(build, juce::dontSendNotification);
+    build_changed();
+}
+
+const theory::Chord& ChordExplorer::borrowed_chord(int i) const { return borrowed_[static_cast<std::size_t>(i)]->chord(); }
+const theory::Chord& ChordExplorer::key_chord(int i) const { return matrix_[static_cast<std::size_t>(i)]->chord(); }
 
 }  // namespace vcc::desktop

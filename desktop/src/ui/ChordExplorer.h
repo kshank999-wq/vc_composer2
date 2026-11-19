@@ -4,6 +4,7 @@
 // step. The preview key is local: it never changes the project key.
 #pragma once
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -15,7 +16,7 @@
 
 namespace vcc::desktop {
 
-class ChordExplorer final : public juce::Component, private juce::ListBoxModel {
+class ChordExplorer final : public juce::Component, public juce::DragAndDropContainer, private juce::ListBoxModel {
 public:
     explicit ChordExplorer(AppContext& context);
     ~ChordExplorer() override;
@@ -23,15 +24,49 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
 
+    // --- The build strip: up to twelve bars, a chord each, dragged in from
+    // the key's chords, the borrowed chords or a progression's cards. An
+    // empty bar after a chord holds it. Audition and Send use the build
+    // while "My Build" is chosen (dropping a chord chooses it).
+    static constexpr int kBuildBars = 12;
+    struct BuildChord {
+        theory::Chord chord;
+        std::string numeral;
+    };
+    /// Puts a chord in bar `slot` (0-based) of the build.
+    void set_build_chord(int slot, const theory::Chord& chord, const std::string& numeral);
+    /// Puts a chord in the build's first empty bar; false when all twelve are full.
+    bool add_to_build(const theory::Chord& chord, const std::string& numeral);
+    void clear_build_chord(int slot);
+    void clear_build();
+    /// Copies the chosen progression's chords into the build, a bar each.
+    void fill_build_from_progression();
+    const std::optional<BuildChord>& build_chord(int slot) const { return build_[static_cast<std::size_t>(slot)]; }
+    /// Audition and Send use the build (true) or the chosen progression.
+    void use_build(bool build);
+    bool using_build() const noexcept { return use_build_; }
+    /// The build voiced and laid out from the start bar, as Send writes it.
+    std::optional<theory::ProgressionRender> render_build() const;
+    /// The key's chords and the borrowed ones, as shown (for the checks).
+    int borrowed_count() const noexcept { return static_cast<int>(borrowed_.size()); }
+    const theory::Chord& borrowed_chord(int i) const;
+    const theory::Chord& key_chord(int i) const;
+    void press_send() { send(); }
+
 private:
     class MatrixButton;
     class Cards;
+    class BuildStrip;
 
     int getNumRows() override;
     void paintListBoxItem(int row, juce::Graphics&, int width, int height, bool selected) override;
     void selectedRowsChanged(int last_row) override;
 
     void filter();
+    /// What Audition and Send use: the build's render or the progression's.
+    const theory::ProgressionRender* active_render() const;
+    theory::ProgressionRenderOptions render_options() const;
+    void build_changed();
     const theory::Progression* chosen() const;
     theory::Key key() const;
     theory::VoicingOptions voicing_options() const;
@@ -57,6 +92,12 @@ private:
     juce::Label matrix_caption_;
     juce::TextButton triads_{"Triads"}, sevenths_{"7ths"}, ninths_{"9ths"};
     std::vector<std::unique_ptr<MatrixButton>> matrix_;
+    juce::Label borrowed_caption_;
+    std::vector<std::unique_ptr<MatrixButton>> borrowed_;
+    std::array<std::optional<BuildChord>, kBuildBars> build_;
+    std::unique_ptr<BuildStrip> strip_;
+    juce::TextButton use_preset_{"Preset"}, use_build_key_{"My Build"}, fill_{"Fill from Preset"}, clear_{"Clear"};
+    bool use_build_ = false;
     std::unique_ptr<Cards> cards_;
     juce::Label chord_info_;
     juce::MidiKeyboardState keyboard_state_;
@@ -66,6 +107,7 @@ private:
 
     std::vector<const theory::Progression*> shown_;
     std::optional<theory::ProgressionRender> render_;
+    std::optional<theory::ProgressionRender> build_render_;
     juce::String error_;
     int chord_size_ = 3;
 };

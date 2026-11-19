@@ -33,6 +33,7 @@
 #include "vcc/project/Stems.h"
 #include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
+#include "ui/ChordExplorer.h"
 #include "ui/StudioSetup.h"
 #include "ui/RecentProjects.h"
 #include "ui/TrackListPalette.h"
@@ -3876,6 +3877,66 @@ void articulation_bar_checks(MainWindow& window, const juce::File& dir)
     shoot(main, dir, "articulation-new-part");
     main.show_workspace(MainComponent::Workspace::Composer);
     pump(100);
+}
+
+/// The Chord Explorer's builder: borrowed chords under the key's, twelve
+/// bars to drag chords into, auditioned and sent as notation.
+void chord_builder_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    pump(100);
+    show_chord_explorer(ctx);
+    pump(300);
+    auto* w = dynamic_cast<juce::DocumentWindow*>(find_dialog("Chord Explorer"));
+    auto* ex = w ? dynamic_cast<ChordExplorer*>(w->getContentComponent()) : nullptr;
+    check(ex != nullptr, "Window > Chord Explorer opens");
+    if (!ex) return;
+    check(ex->getWidth() >= 1200 && ex->getHeight() >= 840, "the Chord Explorer is bigger (" + juce::String(ex->getWidth()) + " x " +
+                                                                 juce::String(ex->getHeight()) + ")");
+    check(ex->borrowed_count() >= 4, "borrowed chords sit under the key's (" + juce::String(ex->borrowed_count()) + ")");
+    auto* strip = find_by_id(*ex, "chord_build_strip");
+    auto* target = dynamic_cast<juce::DragAndDropTarget*>(strip);
+    check(strip && strip->isShowing() && target, "the twelve-bar build strip is there, above Audition, Stop and Send");
+    if (!strip || !target) return;
+    // A chord dragged from the key's row onto bar 1, another onto bar 3: dropped where it lands.
+    auto drop = [&](const theory::Chord& chord, const std::string& numeral, int slot) {
+        const int w12 = strip->getWidth() / ChordExplorer::kBuildBars;
+        const juce::Point<int> at(slot * w12 + w12 / 2, strip->getHeight() / 2);
+        const juce::var what = juce::String("chord:") + juce::String(numeral) + "|" + juce::String(chord.name());
+        juce::DragAndDropTarget::SourceDetails details(what, nullptr, at);
+        if (target->isInterestedInDragSource(details)) target->itemDropped(details);
+    };
+    drop(ex->key_chord(0), "I", 0);
+    drop(ex->key_chord(5), "vi", 1);
+    drop(ex->borrowed_chord(0), "borrowed", 2);
+    ex->add_to_build(ex->key_chord(4), "V");  // a double-click: the next empty bar
+    pump(100);
+    check(ex->build_chord(0) && ex->build_chord(1) && ex->build_chord(2) && ex->build_chord(3) && !ex->build_chord(4) &&
+              ex->using_build(),
+          "chords dragged in land in their bars; a double-click fills the next; building switches Send to My Build");
+    const auto built = ex->render_build();
+    check(built && built->chords.size() == 4 && built->end == session.data().meter.bar_start(5),
+          "the build renders bar by bar (4 chords, bars 1-4)");
+    shoot(*w, dir, "chord-builder");
+    // Send: a new Harmony track gets the notation, with the chord symbols.
+    const auto before = session.data().tracks.size();
+    ex->press_send();
+    pump(200);
+    const project::Track* harmony = nullptr;
+    for (const auto& t : session.data().tracks)
+        if (t.name == "Harmony") harmony = &t;
+    const auto notes = harmony ? harmony->active_version()->score.total_note_count() : 0u;
+    check(session.data().tracks.size() == before + 1 && harmony && notes >= 12 && session.data().chords.size() >= 4,
+          "Send writes your progression on the target track as notation, with its chord symbols (" + juce::String(static_cast<int>(notes)) +
+              " notes, " + juce::String(static_cast<int>(session.data().chords.size())) + " symbols)");
+    ex->clear_build();
+    pump(60);
+    check(!ex->build_chord(0) && ex->render_build() == std::nullopt, "Clear empties the build");
+    w->closeButtonPressed();
+    pump(60);
 }
 
 void midi_comp_checks(MainWindow& window, const juce::File& dir)
@@ -11411,6 +11472,7 @@ int main(int argc, char** argv)
                 {"drag_drop_checks", drag_drop_checks},
                 {"midi_comp_checks", midi_comp_checks},
                 {"articulation_bar_checks", articulation_bar_checks},
+                {"chord_builder_checks", chord_builder_checks},
                 {"account_checks", account_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
@@ -12033,6 +12095,8 @@ int main(int argc, char** argv)
         midi_comp_checks(window, dir);
         section("articulation_bar_checks");
         articulation_bar_checks(window, dir);
+        section("chord_builder_checks");
+        chord_builder_checks(window, dir);
         section("sidechain_checks");
         sidechain_checks(window, dir);
         section("page_view_checks");
