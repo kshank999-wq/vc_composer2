@@ -5937,6 +5937,23 @@ void staff_tools_checks(MainWindow& window, const juce::File& dir)
                   count() == before,
               "Select (the arrow): a click on the staff writes nothing");
         shoot(main, dir, "44a-staff-tools-select");
+        // Centred over the music, at any window width.
+        {
+            auto centred = [&] {
+                composer.update_staff_tools();
+                const auto& t = composer.staff_tools();
+                const auto sb = composer.getLocalArea(&composer.lane(0), composer.lane(0).getLocalBounds());
+                return t.isVisible() && std::abs(t.getBounds().getCentreX() - sb.getCentreX()) <= 12;
+            };
+            const bool wide = centred();
+            const auto was = main.getTopLevelComponent()->getBounds();
+            main.getTopLevelComponent()->setSize(was.getWidth() - 300, was.getHeight());
+            pump(120);
+            const bool narrow = centred();
+            main.getTopLevelComponent()->setBounds(was);
+            pump(120);
+            check(wide && narrow, "the staff tools sit centred over the music, whatever the window's width");
+        }
         tools.write_key().triggerClick();
         pump(60);
         if (composer.lane(0).on_staff_clicked) composer.lane(0).on_staff_clicked(p);

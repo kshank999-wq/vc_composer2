@@ -1253,14 +1253,15 @@ void ComposerView::update_staff_tools()
         int y = sb.getY() - h - 3;  // in the gap above the staff
         if (sb.getBottom() < vb.getY() || y > vb.getBottom()) y = -10000;  // scrolled away
         y = std::max(y, y == -10000 ? y : vb.getY() - h + 18);
-        area = {sb.getRight() - width - 12, y, width, h};
+        // Centred over the music, whatever the window's width (no reaching to the right edge).
+        area = {lane_x + (sb.getRight() - lane_x - width) / 2, y, width, h};
     }
     const bool show_bar = docked && !tools_collapsed_ && area.getY() > -10000;
     const bool show_tab = docked && tools_collapsed_ && area.getY() > -10000;
     if (show_bar && tools.getBounds() != area) tools.setBounds(area);
     if (tools.isVisible() != show_bar) tools.setVisible(show_bar);
     if (show_bar) tools.toFront(false);
-    const auto tab = juce::Rectangle<int>(area.getRight() - 58, area.getBottom() - 21, 58, 20);
+    const auto tab = juce::Rectangle<int>(area.getCentreX() - 29, area.getBottom() - 21, 58, 20);
     if (show_tab && tools_tab_.getBounds() != tab) tools_tab_.setBounds(tab);
     if (tools_tab_.isVisible() != show_tab) tools_tab_.setVisible(show_tab);
 }
