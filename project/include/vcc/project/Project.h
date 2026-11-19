@@ -374,7 +374,10 @@ struct Track {
     /// device's name); empty: every input.
     std::string midi_input;
     /// What an armed instrument or MIDI track records: "midi" (the MIDI
-    /// keyboard, as a region) or "audio" (its input, onto its audio lane).
+    /// keyboard, as a region), "audio" (its input, onto its audio lane) or,
+    /// on an instrument track, "print": Record prints the instrument's own
+    /// sound (with its effects) onto its locked audio lane as a WAV, plays
+    /// that, and unloads the instrument to give its CPU and memory back.
     std::string record_source = "midi";
     /// The strip's compressor and gate keyed from another track or bus (its
     /// id; empty: the track's own signal). Ducking, de-essing from a feed...

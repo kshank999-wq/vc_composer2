@@ -383,6 +383,21 @@ void TrackHeader::show_menu()
     const auto* t = d.find_track(track_);
     const auto* part = t && !t->articulation_parent.empty() ? d.find_track(t->articulation_parent) : t;
     const bool expanded = part && part->articulations_expanded;
+    if (t && t->kind == project::TrackKind::Instrument) {
+        // The locked audio lane: Record prints the instrument onto it, then unloads it.
+        const bool printing = t->record_source == "print";
+        m.addItem("Record Prints to the Audio Lane (then unloads the instrument)", true, printing, [this, printing] {
+            context_.session.set_record_source(track_, printing ? "midi" : "print");
+            if (!printing) {
+                context_.session.set_record_armed(track_, true);
+                context_.status("Armed to print: press Record and this instrument goes onto its audio lane as a WAV, then unloads");
+            }
+        });
+        if (t->instrument_unloaded)
+            m.addItem("Bring the Instrument Back (Unfreeze)", [this] {
+                if (context_.session.unfreeze(track_)) context_.status("The instrument is back: its MIDI plays again");
+            });
+    }
     m.addItem("Show in Producer", [this] {
         context_.session.select_track(track_);
         context_.commands.invokeDirectly(cmd::showSequencer, true);

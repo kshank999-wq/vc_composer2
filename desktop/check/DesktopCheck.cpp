@@ -9718,6 +9718,42 @@ void freeze_checks(MainWindow& window, const juce::File& dir)
     check(ctx.track_state(t) == "LIVE" && own_process() == 1 && ctx.engine.instrument_status(t) == "VCC Test Instrument" &&
               !session.data().find_track(t)->active_version()->audio_clips.empty(),
           "Unfreeze reloads the instrument; the print stays on the audio lane");
+
+    // Record set to Print: arm two tracks, press Record - each instrument goes
+    // onto its locked audio lane as a WAV, plays that, and unloads.
+    {
+        const auto t2 = session.add_track("Violas", "strings.violas");
+        session.set_instrument_plugin(t2, *instrument);
+        notation::Score vs = session.data().find_track(t2)->active_version()->score;
+        notation::ScoreNote n;
+        n.start_tick = 0;
+        n.duration = notation::whole();
+        n.pitch = notation::spell_midi_note(60, {});
+        vs.insert_note(0, n);
+        session.commit_score(t2, vs, "Write");
+        pump(300);
+        const auto clips_before = session.data().find_track(t)->active_version()->audio_clips.size();
+        bool set = true;
+        for (const auto& id : {t, t2}) {
+            set = session.set_record_source(id, "print") && set;
+            session.set_record_armed(id, true);
+        }
+        check(set && !session.set_record_source(session.add_midi_track("Synth"), "print"),
+              "an instrument track can be set to record by printing (a MIDI track, with no instrument of its own, cannot)");
+        ctx.commands.invokeDirectly(cmd::toggleRecord, false);
+        wait_for([&] { return ctx.track_state(t).startsWith("FROZEN") && ctx.track_state(t2).startsWith("FROZEN"); }, 60000);
+        pump(500);
+        const auto* a = session.data().find_track(t);
+        const auto* b = session.data().find_track(t2);
+        check(a && b && a->active_version()->audio_clips.size() > clips_before && !b->active_version()->audio_clips.empty() &&
+                  a->playback == "audio" && b->playback == "audio" && a->instrument_unloaded && b->instrument_unloaded &&
+                  !a->record_armed && !b->record_armed && !ctx.engine.record_enabled(),
+              "Record with Print armed puts each instrument on its audio lane as a WAV, plays it and unloads it (" +
+                  ctx.track_state(t) + ", " + ctx.track_state(t2) + ")");
+        main.show_workspace(MainComponent::Workspace::Sequencer);
+        pump(300);
+        shoot(main, dir, "record-print");
+    }
     host.set_hosting_mode(original);
     session.new_empty();
 }

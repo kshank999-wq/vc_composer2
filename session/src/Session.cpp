@@ -2392,9 +2392,12 @@ bool Session::comp_take(const std::string& track_id, const std::string& take_cli
 
 bool Session::set_record_source(const std::string& id, const std::string& source)
 {
-    if (source != "midi" && source != "audio") return false;
-    return edit(source == "midi" ? "Record MIDI" : "Record audio", on_track(id, [&](project::Track& t) {
+    if (source != "midi" && source != "audio" && source != "print") return false;
+    const char* label = source == "midi" ? "Record MIDI" : source == "audio" ? "Record audio" : "Record: print to the audio lane";
+    return edit(label, on_track(id, [&](project::Track& t) {
         if (t.kind == project::TrackKind::Audio || t.kind == project::TrackKind::Aux || t.record_source == source) return false;
+        // Print: the instrument's own sound - a MIDI track with no instrument has none.
+        if (source == "print" && t.kind != project::TrackKind::Instrument) return false;
         t.record_source = source;
         return true;
     }));

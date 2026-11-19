@@ -229,8 +229,10 @@ void show_input_menu(AppContext& context, const std::string& track_id, juce::Com
     const bool plays_midi = t->kind == project::TrackKind::Instrument || t->kind == project::TrackKind::MidiOnly;
     if (plays_midi) {
         m.addSectionHeader("Records");
-        m.addItem(2, "MIDI from the keyboard", true, t->record_source != "audio");
+        m.addItem(2, "MIDI from the keyboard", true, t->record_source == "midi");
         m.addItem(3, "Audio from the input", true, t->record_source == "audio");
+        if (t->kind == project::TrackKind::Instrument)
+            m.addItem(4, "Print the instrument to its audio lane (then unload it)", true, t->record_source == "print");
         m.addSeparator();
     }
     m.addItem(1, "No input", true, t->input < 0);
@@ -251,8 +253,8 @@ void show_input_menu(AppContext& context, const std::string& track_id, juce::Com
     const std::string name = t->name;
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&target), guarded(target, [&ctx, id, name](int r) {
         if (r <= 0) return;
-        if (r == 2 || r == 3) {
-            ctx.session.set_record_source(id, r == 2 ? "midi" : "audio");
+        if (r == 2 || r == 3 || r == 4) {
+            ctx.session.set_record_source(id, r == 2 ? "midi" : r == 3 ? "audio" : "print");
             return;
         }
         begin_gesture();

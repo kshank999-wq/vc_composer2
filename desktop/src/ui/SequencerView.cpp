@@ -102,6 +102,7 @@ struct LaneView {
     bool mute = false, solo = false, monitor_input = false;
     double gain_db = 0.0;
     std::string playback = "both";
+    std::string record_source = "midi";
     bool printed_fx = false;
     juce::String articulation;  ///< An articulation track: its sound ("Staccato").
     bool expanded = false;      ///< A part expanded to articulation tracks: they play it.
@@ -540,6 +541,7 @@ struct Model final : AutomationTimeline {
             l.audio = t->kind == project::TrackKind::Audio;
             l.stereo = t->input_stereo;
             l.armed = t->record_armed;
+            l.record_source = t->record_source;
             l.mode = t->automation_mode;
             l.automation = t->automation;
             if (l.audio) l.colour = audio_track_colour(*t);
@@ -2797,8 +2799,11 @@ private:
             g.setColour(hw::tok::type_audio.withAlpha(0.22f));
             g.drawHorizontalLine(audio_lane.getY(), static_cast<float>(audio_lane.getX()), static_cast<float>(audio_lane.getRight()));
             if (!has_main_clips && !(l.armed && m_.recording)) {
-                hw::paint::silk(g, l.playback == "midi" ? "Audio lane (off: this track plays its MIDI)"
-                                                        : "Audio lane - print the score to audio, or record here",
+                hw::paint::silk(g, l.record_source == "print"
+                                       ? (l.armed ? "PRINT ARMED - press Record: the instrument goes onto this lane as a WAV, then unloads"
+                                                  : "Records by printing: arm, then Record puts the instrument here as a WAV")
+                                   : l.playback == "midi" ? "Audio lane (off: this track plays its MIDI)"
+                                                          : "Audio lane - print the instrument here as a WAV (arm with Print, then Record)",
                                 audio_lane.reduced(10, 0).toFloat(), 9.0f, juce::Justification::centredLeft,
                                 hw::tok::silk.withAlpha(0.6f));
             }

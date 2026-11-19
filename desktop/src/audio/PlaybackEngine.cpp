@@ -2372,6 +2372,7 @@ std::unique_ptr<RecordPass> PlaybackEngine::make_pass(juce::String& error)
     for (const project::Track* t : session_.music_tracks()) {
         if (!t->record_armed) continue;
         const bool plays_midi = t->kind == project::TrackKind::Instrument || t->kind == project::TrackKind::MidiOnly;
+        if (plays_midi && t->record_source == "print") continue;  // printed, not recorded (MainComponent::toggle_record)
         if (plays_midi && t->record_source != "audio") {
             if (t->id == live_track_) midi_track = t->id;
         } else if (t->input >= 0) {

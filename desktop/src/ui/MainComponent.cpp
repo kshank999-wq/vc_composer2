@@ -2050,6 +2050,28 @@ void MainComponent::toggle_record()
 {
     auto& engine = context_.engine;
     const bool on = !engine.record_enabled();
+    // Armed instrument tracks set to Print: their sound goes onto their locked
+    // audio lanes as WAVs (with their effects), they play that, and their
+    // instruments unload - the CPU and memory back. Unfreeze undoes it.
+    if (on) {
+        std::vector<std::string> printing;
+        for (const auto& t : context_.session.data().tracks)
+            if (t.record_armed && t.kind == project::TrackKind::Instrument && t.record_source == "print" && !t.instrument_unloaded)
+                printing.push_back(t.id);
+        if (!printing.empty() && context_.freeze_tracks) {
+            context_.freeze_tracks(printing, true);
+            for (const auto& id : printing) context_.session.set_record_armed(id, false);
+            context_.status("Printing " + juce::String(static_cast<int>(printing.size())) +
+                            (printing.size() == 1 ? " track" : " tracks") +
+                            " to its audio lane: the instrument unloads when it is done (Unfreeze brings it back)");
+            bool others = false;
+            for (const auto& t : context_.session.data().tracks) others = others || t.record_armed;
+            if (!others) {
+                deck_.update_position();
+                return;
+            }
+        }
+    }
     engine.set_record_enabled(on);
     if (on) {
         int armed = 0;
