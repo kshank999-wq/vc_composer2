@@ -250,7 +250,6 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
                 v.id = tt.id + "_" + voice;
                 v.name = tt.name + " " + voice;
                 v.instrument_standard_id = instrument;
-                v.articulation_tracks.clear();
                 voices.push_back(std::move(v));
                 const InstrumentDef* def = instruments.find(instrument);
                 if (!def) {

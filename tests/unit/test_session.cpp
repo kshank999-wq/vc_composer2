@@ -1370,3 +1370,48 @@ TEST_CASE("One articulation per bar: a part's articulation tracks cannot share a
     CHECK(write(div, kTicksPerQuarter, 71));  // the overlap, on its own part
     CHECK(s.refused_part().empty());
 }
+
+TEST_CASE("Full Orchestra - Every Articulation: every part on a track per articulation, each with its assigned sound")
+{
+    session::Session s(catalogs());
+    auto patch = [](const std::string& id, const std::string& name) {
+        templates::InstalledPatch p;
+        p.patch_id = id;
+        p.display = name;
+        p.plugin.format = "VST3";
+        p.plugin.identifier = "VST3-" + name;
+        p.plugin.name = name;
+        return p;
+    };
+    s.set_sound_assignments({{"strings.violins_1", "pizzicato", patch("p1", "Vln Pizz")},
+                             {"strings.violins_1", "harmonic", patch("p2", "Vln Harmonics")},
+                             {"brass.horn_section", "", patch("p3", "Horns")}});
+    s.new_empty();
+    REQUIRE(s.new_from_template("cinematic.orchestra.every_articulation").ok);
+    const auto& d = s.data();
+    std::map<std::string, std::string> vln;  // articulation -> sound
+    int artic = 0, parts = 0, horn_tracks = 0, horns_assigned = 0, voices_with_artic = 0;
+    for (const auto& t : d.tracks) {
+        if (t.articulations_expanded) ++parts;
+        if (t.articulation_parent.empty()) continue;
+        ++artic;
+        const auto* part = d.find_track(t.articulation_parent);
+        REQUIRE(part);
+        if (part->name == "Violins I") vln[t.articulation_group] = t.instrument_plugin.name;
+        if (part->instrument_standard_id == "brass.horn_section") {
+            ++horn_tracks;
+            horns_assigned += t.instrument_plugin.name == "Horns";
+        }
+        if (part->instrument_standard_id == "vocals.soprano") ++voices_with_artic;
+    }
+    CHECK(parts >= 30);   // every part, the choir as four voices
+    CHECK(artic >= 250);  // a massive template
+    CHECK_EQ(vln.size(), 14u);
+    CHECK_EQ(vln["pizzicato"], std::string("Vln Pizz"));
+    CHECK_EQ(vln["harmonic"], std::string("Vln Harmonics"));
+    CHECK(horn_tracks >= 10);
+    CHECK_EQ(horns_assigned, horn_tracks);  // the whole-instrument sound on every horn track
+    CHECK(voices_with_artic >= 5);          // the sopranos have their articulations too
+    // One staff per part in Composer, not one per articulation track.
+    CHECK(s.staff_tracks().size() < 40u);
+}

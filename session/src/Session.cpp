@@ -975,8 +975,9 @@ const templates::InstalledPatch* Session::assigned_sound(const project::Track& t
     };
     if (!track.articulation_group.empty() && !track.articulation_parent.empty()) {
         if (const auto* p = find(track.articulation_group)) return p;
-        // The natural track: the instrument's everyday sound.
-        if (track.articulation_group != "natural") return nullptr;
+        // Another articulation with no sound of its own: the whole
+        // instrument's sound (not another articulation's).
+        if (track.articulation_group != "natural") return find("");
     }
     for (const char* art : {"", "natural", "legato", "sustain"})
         if (const auto* p = find(art)) return p;
