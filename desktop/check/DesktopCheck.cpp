@@ -4764,6 +4764,9 @@ void piano_sketch_checks(MainWindow& window, const juce::File& dir)
               composer.header(0).scribble().text().startsWith("SKETCH PIANO 1") && session.is_sketch(*tracks[1]) &&
               tracks[0]->output_bus_id == "bus-master",
           "the template opens with its Sketch area on top: two sketch pianos, straight to the master");
+    // Ids, not pointers: adding and undoing below replaces the track list.
+    const std::string piano = tracks.empty() ? std::string() : tracks.front()->id;
+    const std::size_t track_count = tracks.size();
     // Another instrument into the Sketch area, from the + Track menu: after the pianos.
     {
         auto menu = TrackPanel::sketch_area_menu(window.context());
@@ -4777,12 +4780,11 @@ void piano_sketch_checks(MainWindow& window, const juce::File& dir)
             }
         pump(150);
         const auto now = session.composer_tracks();
-        check(ran && now.size() == tracks.size() + 1 && now[2]->name == "Sketch Piano 3" && session.is_sketch(*now[2]),
+        check(ran && now.size() == track_count + 1 && now[2]->name == "Sketch Piano 3" && session.is_sketch(*now[2]),
               "Into the Sketch Area adds a third sketch piano after the other two, outside the orchestra");
         session.undo();
         pump(100);
     }
-    const std::string piano = tracks.front()->id;
     notation::Score sc = session.data().find_track(piano)->active_version()->score;
     sc.insert_chord(0, 0, notation::whole(), {notation::spell_midi_note(64, {}), notation::spell_midi_note(67, {}), notation::spell_midi_note(72, {})});
     sc.insert_chord(1, 0, notation::whole(), {notation::spell_midi_note(48, {})});
