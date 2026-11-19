@@ -1,4 +1,5 @@
 #include <array>
+#include <deque>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -231,8 +232,35 @@ InstantiateResult instantiate(project::Project& proj, const Template& tpl, const
     if (opt.sketch_piano && !has_sketch && !tpl_sketch)
         for (const auto& s : sketch)
             if (const InstrumentDef* def = instruments.find(s.instrument_standard_id)) planned.push_back({&s, def, "sketch"});
+    // A choir is its voices, a track each (Soprano, Alto, Tenor, Bass): a
+    // part per line, as a choral score has them.
+    std::deque<TemplateTrack> voices;
+    auto choir_parts = [](const std::string& id) -> std::vector<std::pair<const char*, const char*>> {
+        if (id == "vocals.choir_satb")
+            return {{"Soprano", "vocals.soprano"}, {"Alto", "vocals.alto"}, {"Tenor", "vocals.tenor"}, {"Bass", "vocals.bass"}};
+        if (id == "vocals.choir_womens") return {{"Soprano", "vocals.soprano"}, {"Alto", "vocals.alto"}};
+        if (id == "vocals.choir_mens") return {{"Tenor", "vocals.tenor"}, {"Bass", "vocals.bass"}};
+        return {};
+    };
     for (const auto& tt : tpl.tracks) {
         if (tt.optional && !opt.include_optional) continue;
+        if (const auto parts = choir_parts(tt.instrument_standard_id); !parts.empty() && opt.split_choirs) {
+            for (const auto& [voice, instrument] : parts) {
+                TemplateTrack v = tt;
+                v.id = tt.id + "_" + voice;
+                v.name = tt.name + " " + voice;
+                v.instrument_standard_id = instrument;
+                v.articulation_tracks.clear();
+                voices.push_back(std::move(v));
+                const InstrumentDef* def = instruments.find(instrument);
+                if (!def) {
+                    res.error = "unknown instrument " + std::string(instrument);
+                    return res;
+                }
+                planned.push_back({&voices.back(), def, tt.group_id.empty() ? def->family : tt.group_id});
+            }
+            continue;
+        }
         const InstrumentDef* def = instruments.find(tt.instrument_standard_id);
         if (!def) {
             res.error = "unknown instrument " + tt.instrument_standard_id;  // registry validation prevents this

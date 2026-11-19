@@ -283,6 +283,9 @@ struct InstantiateOptions {
     /// sent to the orchestra, playing straight to the master - unless the
     /// template has sketch tracks, or (adding) the project has the area.
     bool sketch_piano = true;
+    /// A choir comes in as its voices, a track each (Soprano, Alto, Tenor,
+    /// Bass; a women's or men's choir its two).
+    bool split_choirs = true;
     std::vector<InstalledPatch> installed;
 };
 

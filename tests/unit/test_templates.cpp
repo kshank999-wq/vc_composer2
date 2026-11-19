@@ -91,8 +91,14 @@ TEST_CASE("P1 every available template instantiates with correct trees, then und
         auto r = instantiate(p, t, content().instruments, o);
         CHECK(r.ok);
         if (!r.ok) { std::fprintf(stderr, "    %s: %s\n", t.template_id.c_str(), r.error.c_str()); continue; }
-        // The template's tracks, and the Sketch area's two pianos.
-        CHECK_EQ(r.track_ids.size(), t.tracks.size() + 2u);
+        // The template's tracks, a choir as its voices, and the Sketch area's two pianos.
+        std::size_t expected = 2;
+        for (const auto& x : t.tracks) {
+            if (x.optional && !o.include_optional) continue;
+            const auto& id = x.instrument_standard_id;
+            expected += id == "vocals.choir_satb" ? 4u : (id == "vocals.choir_womens" || id == "vocals.choir_mens") ? 2u : 1u;
+        }
+        CHECK_EQ(r.track_ids.size(), expected);
         // Every instrument track sits in a folder and routes to an existing bus.
         for (const auto& tr : p.data().tracks) {
             if (tr.kind != project::TrackKind::Instrument) continue;

@@ -1239,3 +1239,25 @@ TEST_CASE("Score Info: typed, with fall-backs, saved with the project, one undo 
     CHECK(back.score_info().title_italic);
     std::filesystem::remove(path);
 }
+
+TEST_CASE("a template's choir comes in as its voices: Soprano, Alto, Tenor, Bass, a track each")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    REQUIRE(s.new_from_template("cinematic.horror.supernatural_gothic").ok);
+    std::vector<std::string> voices;
+    for (const auto* t : s.music_tracks()) {
+        CHECK(t->instrument_standard_id != "vocals.choir_satb");  // never one track for the choir
+        if (t->instrument_standard_id == "vocals.soprano" || t->instrument_standard_id == "vocals.alto" ||
+            t->instrument_standard_id == "vocals.tenor" || t->instrument_standard_id == "vocals.bass")
+            voices.push_back(t->instrument_standard_id);
+    }
+    REQUIRE(voices.size() >= 4u);
+    CHECK_EQ(voices[0], std::string("vocals.soprano"));
+    CHECK_EQ(voices[1], std::string("vocals.alto"));
+    CHECK_EQ(voices[2], std::string("vocals.tenor"));
+    CHECK_EQ(voices[3], std::string("vocals.bass"));
+    // And Spread Chords to Choir finds them.
+    const auto choir = s.section_tracks(session::Session::Section::Choir);
+    CHECK(std::none_of(choir.begin(), choir.end(), [](const std::string& id) { return id.empty(); }));
+}
