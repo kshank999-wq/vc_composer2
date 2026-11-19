@@ -467,7 +467,12 @@ void LibraryBrowser::selectedRowsChanged(int row)
     star_.setButtonText(e->favorite ? "Unfavorite" : "Favorite");
 }
 
-void LibraryBrowser::listBoxItemDoubleClicked(int, const juce::MouseEvent&) { assign_selected(); }
+void LibraryBrowser::listBoxItemDoubleClicked(int, const juce::MouseEvent&)
+{
+    // A double-click puts the sound straight on the selected track.
+    if (view_ == View::Instruments) assign_selected();
+    else put_on_track_selected();
+}
 
 void LibraryBrowser::audition_selected()
 {
@@ -500,6 +505,14 @@ void LibraryBrowser::assign_selected()
         show_sound_assignments(context_, *e);
         return;
     }
+    put_on_track_selected();
+}
+
+void LibraryBrowser::put_on_track_selected()
+{
+    const int row = list_.getSelectedRow();
+    const auto* e = entry_at(row);
+    if (!e || !context_.library) return;
     std::string track = context_.session.selected_track();
     if (track.empty() && !e->instrument_id.empty()) {
         // Nothing selected: a new track for the sound's instrument.
@@ -539,6 +552,10 @@ void LibraryBrowser::save_track_sound()
 void LibraryBrowser::show_more_menu()
 {
     juce::PopupMenu m;
+    m.addItem("Put on Selected Track (double-click)", entry_at(list_.getSelectedRow()) != nullptr, false,
+              [this] { put_on_track_selected(); });
+    m.addItem("Sound Assignments...", [this] { show_sound_assignments(context_); });
+    m.addSeparator();
     m.addItem("Library folders...", [this] {
         const juce::Component::SafePointer<LibraryBrowser> safe(this);
         chooser_ = std::make_unique<juce::FileChooser>("Add a folder where sample libraries are installed");

@@ -76,7 +76,10 @@ public:
 
     // The keys, for checks.
     void audition_selected();
+    /// Assign: in Sounds, opens Sound Assignments with the sound; else Put on Track.
     void assign_selected();
+    /// Puts the selected sound on the selected track (one undo step).
+    void put_on_track_selected();
     void toggle_favorite_selected();
     void save_track_sound();
 

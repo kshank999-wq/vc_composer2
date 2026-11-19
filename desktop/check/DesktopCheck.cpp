@@ -6642,7 +6642,7 @@ void library_checks(MainWindow& window, const juce::File& dir)
     pump(50);
     for (int i = 0; i < static_cast<int>(keys.size()); ++i)
         if (keys[static_cast<std::size_t>(i)] == plugin_key) browser.select(i);
-    browser.assign_selected();
+    browser.put_on_track_selected();
     pump(100);
     const auto* t = session.data().find_track(horn);
     check(t && t->instrument_plugin.identifier == instrument->identifier &&
@@ -11172,6 +11172,7 @@ int main(int argc, char** argv)
                 {"track_header_checks", track_header_checks},
                 {"piano_sketch_checks", piano_sketch_checks},
                 {"sound_assignment_checks", sound_assignment_checks},
+                {"library_checks", library_checks},
                 {"articulation_checks", articulation_checks},
                 {"articulation_template_checks", articulation_template_checks},
                 {"usage_checks", usage_checks},
