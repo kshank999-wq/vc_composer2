@@ -2948,8 +2948,10 @@ void recording_workflow_checks(MainWindow& window, const juce::File& dir)
     session.set_record_armed(loop, false);
 
     // MIDI: what is played on the keyboard into an armed instrument track.
-    const std::string keys = session.add_track("Keys", "woodwinds.flute");
-    check(d.find_track(keys)->record_source == "midi", "an instrument track records MIDI unless set to audio");
+    const std::string flute_rec = session.add_track("Flute", "woodwinds.flute");
+    check(d.find_track(flute_rec)->record_source == "midi", "an instrument track records MIDI unless set to audio");
+    // Regions are a MIDI track's: a staff track's recording goes onto its staff.
+    const std::string keys = session.add_midi_track("Keys");
     session.select_track(keys);
     engine.set_live_track(keys);
     session.set_record_armed(keys, true);
@@ -3413,7 +3415,7 @@ void midi_tools_checks(MainWindow& window, const juce::File& dir)
     Rig rig(engine);
     const auto& d = session.data();
     const Ticks Q = kTicksPerQuarter, S = Q / 4;
-    const std::string keys = session.add_track("Keys", "keys.piano");
+    const std::string keys = session.add_midi_track("Keys");
     auto regions = [&] {
         std::vector<project::MidiRegion> out;
         if (const auto* t = d.find_track(keys); t && t->active_version()) out = t->active_version()->regions;
@@ -3692,8 +3694,14 @@ void drag_drop_checks(MainWindow& window, const juce::File& dir)
     for (const auto* t : made)
         if (t->name == "Bass") bass_id = t->id;
     const auto* bass = d.find_track(bass_id);
-    check(bass && bass->active_version()->regions.size() == 1 && bass->active_version()->regions[0].notes.size() == 4,
-          "the dropped part's notes are in a region on its track");
+    // Imported MIDI on a staff track is notated: the notes are on its staff.
+    auto staff_notes = [&](const project::Track* t, Ticks from) {
+        int n = 0;
+        if (t && t->active_version())
+            for (const auto& x : t->active_version()->score.notes(0)) n += !x.is_rest && x.start_tick >= from ? 1 : 0;
+        return n;
+    };
+    check(staff_notes(bass, 0) == 4, "the dropped part's notes are on its track's staff (" + juce::String(staff_notes(bass, 0)) + ")");
 
     // The WAV dropped on the Bass track's row, to the right: onto its own
     // audio lane, at a grid time, copied into the project.
@@ -3731,11 +3739,8 @@ void drag_drop_checks(MainWindow& window, const juce::File& dir)
     target->filesDropped({riff.getFullPathName()}, 600, bass_row);
     pump(100);
     bass = d.find_track(bass_id);
-    const project::MidiRegion* riff_region = nullptr;
-    if (bass)
-        for (const auto& r : bass->active_version()->regions)
-            if (r.source == "midi_file:Riff") riff_region = &r;
-    check(riff_region && riff_region->start == d.meter.bar_start(d.meter.bar_at(dropped_tick)) && riff_region->notes.size() == 1,
+    const Ticks riff_bar = d.meter.bar_start(d.meter.bar_at(dropped_tick));
+    check(staff_notes(bass, 0) == 5 && staff_notes(bass, riff_bar) >= 1 && staff_notes(bass, riff_bar + 1) == staff_notes(bass, riff_bar) - 1,
           "a one-part MIDI file dropped on a track joins it, from the bar under the pointer");
 
     // Nothing for files that are neither.
@@ -3806,7 +3811,7 @@ void midi_comp_checks(MainWindow& window, const juce::File& dir)
     session.new_empty();
     const auto& d = session.data();
     const Ticks Q = kTicksPerQuarter;
-    const auto keys = session.add_track("Keys", "keys.piano");
+    const auto keys = session.add_midi_track("Keys");
     project::MidiRegion take1, take2;
     take1.start = take2.start = 0;
     take1.end = take2.end = d.meter.bar_start(3);
@@ -11258,6 +11263,10 @@ int main(int argc, char** argv)
                 {"staff_tools_checks", staff_tools_checks},
                 {"page_view_checks", page_view_checks},
                 {"swell_checks", swell_checks},
+                {"recording_workflow_checks", recording_workflow_checks},
+                {"midi_tools_checks", midi_tools_checks},
+                {"drag_drop_checks", drag_drop_checks},
+                {"midi_comp_checks", midi_comp_checks},
                 {"account_checks", account_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
