@@ -445,6 +445,71 @@ bool Project::breaks_approval(const ProjectData& working)
     return false;
 }
 
+namespace {
+
+/// For each expanded part: bar -> the articulation tracks with notes in it,
+/// keeping only the bars two or more share.
+std::map<std::string, std::map<int, std::vector<const Track*>>> shared_bars(const ProjectData& d)
+{
+    std::map<std::string, std::map<int, std::vector<const Track*>>> out;
+    for (const auto& t : d.tracks) {
+        if (t.articulation_parent.empty()) continue;
+        const auto* v = t.active_version();
+        if (!v) continue;
+        std::set<int> bars;
+        for (std::size_t s = 0; s < v->score.staff_count(); ++s)
+            for (const auto& n : v->score.notes(s))
+                if (!n.is_rest) bars.insert(d.meter.bar_at(n.start_tick));
+        for (const int b : bars) out[t.articulation_parent][b].push_back(&t);
+    }
+    for (auto& [part, bars] : out)
+        for (auto it = bars.begin(); it != bars.end();) it = it->second.size() < 2 ? bars.erase(it) : std::next(it);
+    return out;
+}
+
+}  // namespace
+
+bool Project::breaks_articulation_bars(const ProjectData& working)
+{
+    refused_part_.clear();
+    const auto after = shared_bars(working);
+    if (after.empty()) return false;
+    const auto before = shared_bars(data_);
+    for (const auto& [part, bars] : after) {
+        // Expanding a part is not writing: music it already had stays as written.
+        const Track* was = data_.find_track(part);
+        if (!was || !was->articulations_expanded) continue;
+        for (const auto& [bar, tracks] : bars) {
+            const auto p = before.find(part);
+            if (p != before.end() && p->second.count(bar) && p->second.at(bar).size() >= tracks.size()) continue;
+            const Track* owner = working.find_track(part);
+            const std::string part_name = owner ? owner->name : std::string("this part");
+            // Name the articulation already there (the first that was in the bar before).
+            std::string there;
+            for (const auto* t : tracks) {
+                const Track* old = data_.find_track(t->id);
+                const auto* ov = old ? old->active_version() : nullptr;
+                bool had = false;
+                if (ov)
+                    for (std::size_t s = 0; s < ov->score.staff_count() && !had; ++s)
+                        for (const auto& n : ov->score.notes(s))
+                            if (!n.is_rest && data_.meter.bar_at(n.start_tick) == bar) had = true;
+                if (had) {
+                    there = t->name;
+                    break;
+                }
+            }
+            refusal_ = "bar " + std::to_string(bar) + " of " + part_name + " is already written" +
+                       (there.empty() ? std::string() : " in " + there) +
+                       ": one articulation per bar. Overlapping music goes in a new part (div. / solo)";
+            refused_part_ = part;
+            ++refusals_;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool Project::breaks_lock(const ProjectData& working)
 {
     for (const auto& lock : locks_) {
@@ -485,6 +550,7 @@ bool Project::edit(const std::string& label, const std::function<bool(ProjectDat
     ProjectData working = data_;
     bool ok = false;
     refusal_.clear();
+    refused_part_.clear();
     try {
         ok = change(working);
     } catch (...) {
@@ -492,7 +558,7 @@ bool Project::edit(const std::string& label, const std::function<bool(ProjectDat
     }
     if (!ok) return false;
     working.sync_scores();
-    if (breaks_approval(working) || breaks_lock(working)) return false;
+    if (breaks_approval(working) || breaks_lock(working) || breaks_articulation_bars(working)) return false;
     undo_.push_back({label, compact(std::move(data_)), {}});
     trim_undo();
     data_ = std::move(working);
@@ -506,6 +572,7 @@ bool Project::edit_coalescing(const std::string& label, const std::function<bool
     ProjectData working = data_;
     bool ok = false;
     refusal_.clear();
+    refused_part_.clear();
     try {
         ok = change(working);
     } catch (...) {
@@ -513,7 +580,7 @@ bool Project::edit_coalescing(const std::string& label, const std::function<bool
     }
     if (!ok) return false;
     working.sync_scores();
-    if (breaks_approval(working) || breaks_lock(working)) return false;
+    if (breaks_approval(working) || breaks_lock(working) || breaks_articulation_bars(working)) return false;
     data_ = std::move(working);  // the existing step's "before" stays as it was
     return true;
 }

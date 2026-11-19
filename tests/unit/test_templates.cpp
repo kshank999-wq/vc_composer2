@@ -482,14 +482,15 @@ TEST_CASE("orchestral templates: consolidated and expanded open with the same pa
         if (t.name == "Timpani" || t.name == "Harp") CHECK(!t.articulations_expanded);
 
     // Placeholder sounds select nothing by keyswitch: a part's tracks split on
-    // what is written, and a sound with no track plays on Natural.
+    // what is written, and a sound with no track plays on Natural. One
+    // articulation per bar: each in a bar of its own.
     auto* part = expanded.data().find_track(vln->articulation_parent);
     notation::Score sc = part->active_version()->score;
-    int beat = 0;
+    int bar = 1;
     for (auto art : {notation::Articulation::Staccato, notation::Articulation::Pizzicato, notation::Articulation::Accent,
                      notation::Articulation::Spiccato}) {
         notation::ScoreNote n;
-        n.start_tick = beat++ * kTicksPerQuarter;
+        n.start_tick = expanded.data().meter.bar_start(bar++);
         n.duration = notation::quarter();
         n.pitch = notation::spell_midi_note(67, {});
         n.articulations = notation::to_mask(art);

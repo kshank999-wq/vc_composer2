@@ -427,6 +427,37 @@ bool Session::is_sketch(const project::Track& track) const
     return f && f->kind == project::TrackKind::Folder && f->family == "sketch";
 }
 
+std::string Session::add_part_from(const std::string& part_id, const std::string& suffix)
+{
+    const auto* part = data().find_track(part_id);
+    if (!part) return {};
+    const std::string base = part->name + " " + suffix;
+    const std::string instrument = part->instrument_standard_id;
+    const auto before = project_.history_size();
+    const std::string id = add_track(data().unique_track_name(base), instrument);
+    if (id.empty()) return {};
+    project_.edit("New part " + base, [&](project::ProjectData& d) {
+        const project::Track* p = d.find_track(part_id);
+        auto it = std::find_if(d.tracks.begin(), d.tracks.end(), [&](const project::Track& t) { return t.id == id; });
+        if (!p || it == d.tracks.end()) return false;
+        project::Track moved = *it;
+        moved.color = p->color;
+        moved.folder_id = p->folder_id;
+        moved.output_bus_id = p->output_bus_id;
+        d.tracks.erase(it);
+        // After the part and its articulation tracks.
+        std::size_t at = 0;
+        for (std::size_t i = 0; i < d.tracks.size(); ++i)
+            if (d.tracks[i].id == part_id || d.tracks[i].articulation_parent == part_id) at = i + 1;
+        d.tracks.insert(d.tracks.begin() + static_cast<std::ptrdiff_t>(at), moved);
+        return true;
+    });
+    project_.squash_undo(project_.history_size() - before, "New part " + base);
+    document_changed();
+    select_track(id);
+    return id;
+}
+
 std::string Session::add_sketch_track(const std::string& name, const std::string& instrument)
 {
     const auto before = project_.history_size();

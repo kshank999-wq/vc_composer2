@@ -1304,3 +1304,69 @@ TEST_CASE("In the Score: a switch per instrument; muted instruments can leave th
     CHECK(!back.in_score(*back.data().find_track(vla)));
     std::filesystem::remove(path);
 }
+
+TEST_CASE("One articulation per bar: a part's articulation tracks cannot share a bar; the overlap goes to a new part")
+{
+    session::Session s(catalogs());
+    s.new_empty();
+    const auto vln = s.add_track("Violins I", "strings.violins_1");
+    const auto& d = s.data();
+    {
+        notation::ExpressionMap map = notation::make_default_expression_map();
+        map.articulations.clear();
+        notation::ArticulationRule r;
+        r.articulation = notation::Articulation::Staccato;
+        r.action = notation::ArticulationAction::Keyswitch;
+        r.keyswitch_note = 24;
+        map.articulations.push_back(r);
+        map.has_natural = true;
+        map.natural.action = notation::ArticulationAction::Keyswitch;
+        map.natural.keyswitch_note = 23;
+        REQUIRE(s.set_articulation_map(vln, map));
+    }
+    {
+        // Bar 1 plain, bar 2 staccato: two articulation tracks once expanded.
+        notation::Score sc = d.find_track(vln)->active_version()->score;
+        notation::ScoreNote a, b;
+        a.start_tick = 0;
+        b.start_tick = d.meter.bar_start(2);
+        a.duration = b.duration = notation::quarter();
+        a.pitch = notation::spell_midi_note(67, {});
+        b.pitch = notation::spell_midi_note(69, {});
+        b.articulations = notation::to_mask(notation::Articulation::Staccato);
+        sc.insert_note(0, a);
+        sc.insert_note(0, b);
+        REQUIRE(s.commit_score(vln, sc, "Write"));
+    }
+    const auto kids = s.expand_articulations(vln);
+    REQUIRE(kids.size() >= 2);
+    auto write = [&](const std::string& id, Ticks at, int midi) {
+        notation::Score sc = d.find_track(id)->active_version()->score;
+        sc.insert_chord(0, at, notation::quarter(), {notation::spell_midi_note(midi, {})});
+        return s.commit_score(id, sc, "Write");
+    };
+    const Ticks bar2 = d.meter.bar_start(2);
+    REQUIRE(write(kids[0], 2 * kTicksPerQuarter, 64));  // bar 1, the first articulation: fine
+    REQUIRE(write(kids[1], bar2 + kTicksPerQuarter, 65)); // bar 2, the second: fine
+    (void)bar2;
+    const auto refusals = s.project().refusal_count();
+    CHECK(!write(kids[1], kTicksPerQuarter, 71));  // bar 1 again, in the second: refused
+    CHECK_EQ(s.project().refusal_count(), refusals + 1);
+    CHECK(s.last_refusal().find("bar 1") != std::string::npos);
+    CHECK_EQ(s.refused_part(), vln);
+    CHECK(write(kids[0], kTicksPerQuarter, 72));   // more in bar 1, same articulation: fine
+    // The offer: a new part of the same instrument, after the part's tracks.
+    const auto div = s.add_part_from(vln);
+    REQUIRE(!div.empty());
+    CHECK_EQ(d.find_track(div)->name, std::string("Violins I div."));
+    CHECK_EQ(d.find_track(div)->instrument_standard_id, d.find_track(vln)->instrument_standard_id);
+    CHECK(d.find_track(div)->articulation_parent.empty());
+    std::size_t div_at = 0, last_kid = 0;
+    for (std::size_t i = 0; i < d.tracks.size(); ++i) {
+        if (d.tracks[i].id == div) div_at = i;
+        if (d.tracks[i].articulation_parent == vln) last_kid = i;
+    }
+    CHECK_EQ(div_at, last_kid + 1);
+    CHECK(write(div, kTicksPerQuarter, 71));  // the overlap, on its own part
+    CHECK(s.refused_part().empty());
+}

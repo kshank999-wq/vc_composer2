@@ -249,6 +249,14 @@ private:
     std::unique_ptr<surface_ui::ControlSurface> surface_;
     std::unique_ptr<MixerController> mixer_controller_;
     std::uint64_t refusals_seen_ = 0;
+    /// One articulation per bar: asks whether to make a new part ("div.") of
+    /// `part_id` for the music that overlapped, and makes it on OK.
+    void offer_new_part(const std::string& part_id);
+    bool offering_part_ = false;
+public:
+    /// For the checks: what the last offer would make, answered at once.
+    std::function<bool()> answer_new_part;
+private:
     /// The autosave being written (serializing a large project off the message thread).
     std::thread autosave_thread_;
     std::atomic<bool> autosave_running_{false};

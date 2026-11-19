@@ -745,6 +745,9 @@ public:
     const std::string& last_refusal() const noexcept { return refusal_; }
     /// How many edits have been refused that way (a UI polls it to say why).
     std::uint64_t refusal_count() const noexcept { return refusals_; }
+    /// When the last refusal was the one-articulation-per-bar rule: the part
+    /// (the expanded track) it was about, so a new part can be offered.
+    const std::string& refused_part() const noexcept { return refused_part_; }
 
     bool can_undo() const noexcept { return !undo_.empty(); }
     bool can_redo() const noexcept { return !redo_.empty(); }
@@ -796,10 +799,15 @@ private:
     bool breaks_approval(const ProjectData& working);
     /// Whether `working` changes a part somebody else has locked; sets refusal_.
     bool breaks_lock(const ProjectData& working);
+    /// One articulation per bar: whether `working` makes two articulation
+    /// tracks of one part play in the same bar where they did not before;
+    /// sets refusal_ and refused_part_.
+    bool breaks_articulation_bars(const ProjectData& working);
 
     ProjectData data_;
     IdAllocator ids_;
     std::string refusal_;
+    std::string refused_part_;
     std::uint64_t refusals_ = 0;
     std::map<std::string, std::string> locks_;
     /// A document kept for undo: its scores held apart and shared, so a

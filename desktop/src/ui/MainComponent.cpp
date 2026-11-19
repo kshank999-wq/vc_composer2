@@ -1260,6 +1260,8 @@ void MainComponent::timerCallback()
         if (refused > refusals_seen_ && !context_.session.last_refusal().empty()) {
             context_.status("Not changed: " + juce::String(context_.session.last_refusal()));
             composer_.discard_uncommitted();
+            // One articulation per bar: offer a new part for the overlap.
+            if (const std::string part = context_.session.refused_part(); !part.empty()) offer_new_part(part);
         }
         refusals_seen_ = refused;
     }
@@ -3116,6 +3118,35 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
         default: break;
     }
     return m;
+}
+
+
+void MainComponent::offer_new_part(const std::string& part_id)
+{
+    const auto* part = context_.session.data().find_track(part_id);
+    if (!part || offering_part_) return;
+    const juce::String name(part->name);
+    auto make = [this, part_id, name] {
+        const auto id = context_.session.add_part_from(part_id);
+        if (!id.empty())
+            context_.status("Made " + juce::String(context_.session.data().find_track(id)->name) +
+                            ": write the overlapping music there - it prints as its own part");
+    };
+    if (answer_new_part) {
+        if (answer_new_part()) make();
+        return;
+    }
+    offering_part_ = true;
+    juce::Component::SafePointer<MainComponent> self(this);
+    juce::AlertWindow::showOkCancelBox(
+        juce::MessageBoxIconType::QuestionIcon, "One articulation per bar",
+        juce::String(context_.session.last_refusal()) + ".\n\nMake a new part of " + name + " (" + name +
+            " div.) for the overlapping music? It gets its own staff and prints as its own part.",
+        "New Part", "Cancel", nullptr, juce::ModalCallbackFunction::create([self, make](int r) {
+            if (!self) return;
+            self->offering_part_ = false;
+            if (r == 1) make();
+        }));
 }
 
 }  // namespace vcc::desktop

@@ -542,6 +542,13 @@ public:
     bool consolidate_articulations(const std::string& track_id);
     /// A part's articulation tracks, in order.
     std::vector<const project::Track*> articulation_tracks(const std::string& track_id) const;
+    /// A new part of the same instrument after `part_id` (and its
+    /// articulation tracks): "Violins I div.", its own staff and printed
+    /// part - where music that overlaps a bar already written goes
+    /// (one articulation per bar per part). One undo step; the new id.
+    std::string add_part_from(const std::string& part_id, const std::string& suffix = "div.");
+    /// The part the last refusal's one-articulation-per-bar rule was about (empty otherwise).
+    const std::string& refused_part() const noexcept { return project_.refused_part(); }
     /// MIDI played in (a recording pass), as one undo step: each region on
     /// its track's main lane; with `as_takes` the main-lane regions it
     /// overlaps move to the next free take lane. Ids are returned in order.

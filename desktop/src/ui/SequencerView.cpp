@@ -523,6 +523,9 @@ struct Model final : AutomationTimeline {
                 l.folded = folded_parts.count(t->id) > 0;
             }
             l.colour = colour_from_hex(t->color);
+            // An articulation track wears its part's colour: violins purple, every violin articulation purple.
+            if (!t->articulation_parent.empty())
+                if (const auto* part = session.data().find_track(t->articulation_parent)) l.colour = colour_from_hex(part->color);
             l.reference = t->kind == project::TrackKind::Reference;
             l.channel = t->midi_channel;
             const auto range = session.range_for(*t);
@@ -2473,6 +2476,9 @@ private:
         return p;
     }
 
+    /// The lettering and box of an articulation track: its part's colour, lighter.
+    static juce::Colour articulation_ink(juce::Colour part) { return part.interpolatedWith(juce::Colours::white, 0.55f); }
+
     static juce::Colour type_colour(const LaneView& l)
     {
         if (l.bus) return hw::tok::type_aux;
@@ -2544,6 +2550,11 @@ private:
                                                                : l.name;
         hw::paint::lcd_text(g, shown.toUpperCase(), p.name.toFloat().reduced(5.0f, 0.0f), 11.0f, juce::Justification::centredLeft,
                             l.reference ? 0.7f : 1.0f);
+        if (l.articulation.isNotEmpty()) {
+            // An articulation: boxed in its part's colour, so it reads as a branch of that part.
+            g.setColour(articulation_ink(l.colour));
+            g.drawRoundedRectangle(p.name.toFloat().reduced(0.5f), 3.0f, 1.5f);
+        }
         if (!p.fold.isEmpty()) {
             // The part's articulation tracks: how many, and a key to fold them.
             hw::paint::keycap(g, p.fold.toFloat(), !l.folded, {});
@@ -2862,6 +2873,28 @@ private:
             g.drawText(short_source(r.source), label.reduced(4.0f, 0.0f), juce::Justification::centredLeft, true);
         }
 
+        // An articulation track: each bar it plays boxed in the part's
+        // colour and lettered with its articulation, in a lighter ink.
+        if (l.articulation.isNotEmpty()) {
+            std::set<int> bars;
+            for (const auto& n : l.score_notes) bars.insert(m_.meter.bar_at(n.start));
+            const auto ink = articulation_ink(l.colour);
+            for (const int bar : bars) {
+                const float x0 = static_cast<float>(m_.x_of(static_cast<double>(m_.meter.bar_start(bar))));
+                const float x1 = static_cast<float>(m_.x_of(static_cast<double>(m_.meter.bar_start(bar + 1))));
+                if (x1 < body.getX() || x0 > body.getRight()) continue;
+                auto box = juce::Rectangle<float>(x0 + 1.0f, static_cast<float>(body.getY()) + 2.0f, x1 - x0 - 2.0f,
+                                                  static_cast<float>(body.getHeight()) - 4.0f);
+                g.setColour(l.colour.withAlpha(0.12f));
+                g.fillRoundedRectangle(box, 3.0f);
+                g.setColour(ink.withAlpha(0.85f));
+                g.drawRoundedRectangle(box, 3.0f, 1.2f);
+                g.setColour(ink);
+                g.setFont(hw::fonts::silk(9.0f, 0.06f));
+                g.drawText(l.articulation.toUpperCase(), box.withHeight(12.0f).reduced(4.0f, 0.0f), juce::Justification::centredLeft,
+                           true);
+            }
+        }
         // Score-linked notes: solid track colour.
         g.setColour(l.colour.withAlpha(0.9f));
         for (const auto& n : l.score_notes) {
@@ -5560,6 +5593,13 @@ int SequencerView::row_height(const std::string& track_id) const
     impl_->deferred.flush();
     const auto* l = impl_->model.lane(track_id);
     return l ? impl_->model.base_height(*l) : 0;
+}
+
+juce::Colour SequencerView::lane_colour(const std::string& track_id) const
+{
+    impl_->deferred.flush();
+    const auto* l = impl_->model.lane(track_id);
+    return l ? l->colour : juce::Colour();
 }
 
 void SequencerView::set_row_height(const std::string& track_id, int height)

@@ -3802,6 +3802,82 @@ void drag_drop_checks(MainWindow& window, const juce::File& dir)
 /// MIDI take comping in the sequencer: the TAKES key in an instrument
 /// track's header opens its take lanes; a drag across part of a MIDI take
 /// comps those notes onto the main lane; a double-click promotes the take.
+/// Articulation tracks: their part's colour in Producer, boxed; one
+/// articulation per bar, and the new part offered for an overlap.
+void articulation_bar_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& session = window.context().session;
+    window.context().engine.stop();
+    session.new_empty();
+    const auto vln = session.add_track("Violins I", "strings.violins_1");
+    const auto& d = session.data();
+    {
+        notation::ExpressionMap map = notation::make_default_expression_map();
+        map.articulations.clear();
+        notation::ArticulationRule r;
+        r.articulation = notation::Articulation::Pizzicato;
+        r.action = notation::ArticulationAction::Keyswitch;
+        r.keyswitch_note = 24;
+        map.articulations.push_back(r);
+        map.has_natural = true;
+        map.natural.action = notation::ArticulationAction::Keyswitch;
+        map.natural.keyswitch_note = 23;
+        session.set_articulation_map(vln, map);
+        notation::Score sc = d.find_track(vln)->active_version()->score;
+        notation::ScoreNote a, b;
+        a.start_tick = 0;
+        b.start_tick = d.meter.bar_start(2);
+        a.duration = b.duration = notation::quarter();
+        a.pitch = notation::spell_midi_note(67, {});
+        b.pitch = notation::spell_midi_note(69, {});
+        b.articulations = notation::to_mask(notation::Articulation::Pizzicato);
+        sc.insert_note(0, a);
+        sc.insert_note(0, b);
+        session.commit_score(vln, sc, "Write");
+    }
+    const auto kids = session.expand_articulations(vln);
+    check(kids.size() >= 2, "the part expands to articulation tracks (" + juce::String(static_cast<int>(kids.size())) + ")");
+    if (kids.size() < 2) return;
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(200);
+    auto& seq = main.sequencer();
+    const auto part_colour = seq.lane_colour(vln);
+    bool same = true;
+    for (const auto& k : kids) same = same && seq.lane_colour(k) == part_colour;
+    check(same, "in Producer, each articulation track wears its part's colour");
+    shoot(main, dir, "articulation-tracks");
+
+    // Bar 1 is the first articulation's: writing it in the second is refused,
+    // and a new part is offered; taking it makes "Violins I div." after the tracks.
+    std::string pizz;
+    for (const auto& k : kids)
+        if (d.find_track(k)->articulation_group == "pizzicato") pizz = k;
+    check(!pizz.empty(), "there is a pizzicato track");
+    if (pizz.empty()) return;
+    int asked = 0;
+    main.answer_new_part = [&] {
+        ++asked;
+        return true;
+    };
+    const auto tracks_before = d.tracks.size();
+    notation::Score sc = d.find_track(pizz)->active_version()->score;
+    sc.insert_chord(0, kTicksPerQuarter, notation::quarter(), {notation::spell_midi_note(72, {})});
+    const bool written = session.commit_score(pizz, sc, "Write");
+    pump(300);  // the refusal is noticed on the main timer
+    main.answer_new_part = nullptr;
+    const project::Track* div = nullptr;
+    for (const auto& t : d.tracks)
+        if (t.name == "Violins I div.") div = &t;
+    check(!written && asked == 1 && d.tracks.size() == tracks_before + 1 && div != nullptr && div->articulation_parent.empty(),
+          "a bar already written in another articulation is refused, and New Part makes Violins I div. (asked " +
+              juce::String(asked) + ", +" + juce::String(static_cast<int>(d.tracks.size() - tracks_before)) + " tracks; " +
+              juce::String(session.last_refusal()) + ")");
+    shoot(main, dir, "articulation-new-part");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(100);
+}
+
 void midi_comp_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -4816,6 +4892,8 @@ void track_header_checks(MainWindow& window, const juce::File& dir)
         pump(80);
         composer.set_note_entry(true);
         pump(40);
+        // In a bar of its own: one articulation per bar (bar 1 holds the natural notes).
+        p.tick = session.data().meter.bar_start(8);
         if (composer.lane(pizz_lane).on_staff_clicked) composer.lane(pizz_lane).on_staff_clicked(p);
         pump(80);
         const auto& own = session.data().find_track(kids[1])->active_version()->score;
@@ -11296,6 +11374,7 @@ int main(int argc, char** argv)
                 {"midi_tools_checks", midi_tools_checks},
                 {"drag_drop_checks", drag_drop_checks},
                 {"midi_comp_checks", midi_comp_checks},
+                {"articulation_bar_checks", articulation_bar_checks},
                 {"account_checks", account_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
@@ -11916,6 +11995,8 @@ int main(int argc, char** argv)
         drag_drop_checks(window, dir);
         section("midi_comp_checks");
         midi_comp_checks(window, dir);
+        section("articulation_bar_checks");
+        articulation_bar_checks(window, dir);
         section("sidechain_checks");
         sidechain_checks(window, dir);
         section("page_view_checks");

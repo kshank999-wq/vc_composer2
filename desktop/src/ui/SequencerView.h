@@ -72,6 +72,8 @@ public:
     void set_expanded_track(const std::string& track_id);
     /// A track's row height in the lanes (0 when it has none).
     int row_height(const std::string& track_id) const;
+    /// The colour a track's lane is drawn in (an articulation track: its part's).
+    juce::Colour lane_colour(const std::string& track_id) const;
     void set_row_height(const std::string& track_id, int height);
 
     /// Swaps a take (a clip on a lane > 0) onto the main lane as one undo step;
