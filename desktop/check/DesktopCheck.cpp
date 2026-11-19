@@ -3886,6 +3886,12 @@ void chord_builder_checks(MainWindow& window, const juce::File& dir)
     auto& ctx = window.context();
     auto& session = ctx.session;
     ctx.engine.stop();
+    // Opened while another project's track is the target, as when the window
+    // stays open across projects: that target is gone in the new one.
+    session.new_empty();
+    session.select_track(session.add_track("Old Piano", "keys.piano"));
+    show_chord_explorer(ctx);
+    pump(200);
     session.new_empty();
     pump(100);
     show_chord_explorer(ctx);

@@ -843,6 +843,13 @@ void ChordExplorer::audition()
 
 void ChordExplorer::send()
 {
+    // The window can outlive a project: re-read the tracks so a target from
+    // another project is not used (it falls back to the selected track, or a new one).
+    if (const auto id = target_.track_id(); !id.empty() && !context_.session.data().find_track(id)) {
+        target_.setSelectedId(1, juce::dontSendNotification);
+        target_.refresh();
+        rerender();
+    }
     if (use_build_) {
         std::string track = target_.track_id();
         if (track.empty()) {
