@@ -194,6 +194,7 @@ templates::InstantiateResult Session::new_from_template(const std::string& id, c
     r = templates::instantiate(fresh, *t, catalogs_.instruments, opt);
     if (!r.ok) return r;
     reset(std::move(fresh), {});
+    apply_assigned_sounds(all_track_ids());  // the composer's chosen sounds, wherever they apply
     dirty_ = true;
     notify(Change::File);
     return r;
@@ -263,6 +264,7 @@ SetupResult Session::create_project(const ProjectSetup& setup)
         d.sample_rate = setup.sample_rate;
     });
     reset(std::move(fresh), {});
+    apply_assigned_sounds(all_track_ids());
     dirty_ = true;
     if (!file.empty()) {
         std::string error;
@@ -289,7 +291,10 @@ templates::InstantiateResult Session::add_template(const std::string& id, const 
     if (opt.mode == templates::InstantiateMode::Create) opt.mode = templates::InstantiateMode::Merge;
     if (opt.installed.empty()) opt.installed = installed_patches_;
     r = templates::instantiate(project_, *t, catalogs_.instruments, opt);
-    if (r.ok) document_changed();
+    if (r.ok) {
+        document_changed();
+        apply_assigned_sounds(all_track_ids());  // only tracks with no plug-in of their own
+    }
     return r;
 }
 
@@ -409,6 +414,7 @@ std::string Session::add_track(const std::string& name, const std::string& instr
             return true;
         });
     }
+    apply_assigned_sounds({id});  // "Violins I" comes with the composer's violin sound
     document_changed();
     select_track(id);
     return id;
@@ -854,6 +860,53 @@ bool Session::set_articulation_map(const std::string& id, const std::optional<no
         t.expression_map = map ? map->name : builtin;
         return true;
     }));
+}
+
+std::vector<std::string> Session::all_track_ids() const
+{
+    std::vector<std::string> out;
+    for (const auto& t : data().tracks) out.push_back(t.id);
+    return out;
+}
+
+const templates::InstalledPatch* Session::assigned_sound(const project::Track& track) const
+{
+    auto find = [&](const std::string& art) -> const templates::InstalledPatch* {
+        for (const auto& a : sound_assignments_)
+            if (a.instrument_id == track.instrument_standard_id && a.articulation == art && !a.patch.plugin.empty()) return &a.patch;
+        return nullptr;
+    };
+    if (!track.articulation_group.empty() && !track.articulation_parent.empty()) {
+        if (const auto* p = find(track.articulation_group)) return p;
+        // The natural track: the instrument's everyday sound.
+        if (track.articulation_group != "natural") return nullptr;
+    }
+    for (const char* art : {"", "natural", "legato", "sustain"})
+        if (const auto* p = find(art)) return p;
+    return nullptr;
+}
+
+int Session::apply_assigned_sounds(const std::vector<std::string>& track_ids)
+{
+    if (sound_assignments_.empty()) return 0;
+    int n = 0;
+    project_.modify_unrecorded([&](project::ProjectData& d) {
+        for (const auto& id : track_ids) {
+            project::Track* t = d.find_track(id);
+            if (!t || t->kind != project::TrackKind::Instrument || !t->instrument_plugin.empty()) continue;
+            const auto* p = assigned_sound(*t);
+            if (!p) continue;
+            t->instrument_plugin = p->plugin;
+            t->assignment.status = project::ResolutionStatus::Exact;
+            t->assignment.patch_display = p->display;
+            t->assignment.message = "Your assigned sound for this instrument and articulation: " + p->display;
+            if (!p->expression_map.empty() && p->expression_map != "default") t->expression_map = p->expression_map;
+            if (p->articulation_map) t->articulation_map = *p->articulation_map;
+            ++n;
+        }
+    });
+    if (n > 0) document_changed();
+    return n;
 }
 
 bool Session::assign_sound(const std::string& id, const project::PluginRef& plugin, const project::InstrumentAssignment& how,
@@ -2262,6 +2315,21 @@ std::vector<std::string> Session::expand_articulations(const std::string& track_
         return true;
     });
     if (!ok) ids.clear();
+    // Each articulation track with the composer's sound for it (legato, spiccato...).
+    if (ok) {
+        project_.modify_unrecorded([&](project::ProjectData& d) {
+            for (const auto& cid : ids)
+                if (auto* c = d.find_track(cid)) c->instrument_plugin = {};  // copied from the part: the assigned one goes in
+        });
+        apply_assigned_sounds(ids);
+        // Those with none assigned keep the part's own sound, as before.
+        const auto* part = data().find_track(track_id);
+        const auto plugin = part ? part->instrument_plugin : project::PluginRef{};
+        project_.modify_unrecorded([&](project::ProjectData& d) {
+            for (const auto& cid : ids)
+                if (auto* c = d.find_track(cid); c && c->instrument_plugin.empty()) c->instrument_plugin = plugin;
+        });
+    }
     return ids;
 }
 

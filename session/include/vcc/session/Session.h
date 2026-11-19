@@ -179,6 +179,26 @@ public:
     /// resolve their tracks to these, and load their sounds, unless the
     /// options name others.
     void set_installed_patches(std::vector<templates::InstalledPatch> patches) { installed_patches_ = std::move(patches); }
+    /// The composer's sound assignments (the library's): the saved sound for
+    /// an instrument playing an articulation (empty articulation: the whole
+    /// instrument on one track). Applied by themselves wherever that
+    /// instrument and articulation come up - a template, a new track, an
+    /// articulation track - so a sound is chosen once, not per project.
+    struct SoundAssignment {
+        std::string instrument_id, articulation;
+        templates::InstalledPatch patch;
+    };
+    void set_sound_assignments(std::vector<SoundAssignment> assignments) { sound_assignments_ = std::move(assignments); }
+    const std::vector<SoundAssignment>& sound_assignments() const noexcept { return sound_assignments_; }
+    /// The assigned sound for a track: its instrument and articulation (an
+    /// articulation track's own; else the whole instrument, then natural /
+    /// legato / sustain), or null.
+    const templates::InstalledPatch* assigned_sound(const project::Track& track) const;
+    /// Gives these tracks their assigned sounds (tracks with a plug-in of
+    /// their own already are left alone). Not an undo step of its own: the
+    /// caller's. Returns how many were given one.
+    int apply_assigned_sounds(const std::vector<std::string>& track_ids);
+    std::vector<std::string> all_track_ids() const;
     const std::vector<templates::InstalledPatch>& installed_patches() const noexcept { return installed_patches_; }
     /// Adds a template to the open project (merge, never overwriting).
     templates::InstantiateResult add_template(const std::string& template_id,
@@ -901,6 +921,7 @@ private:
     project::Project project_;
     std::string path_;
     std::vector<templates::InstalledPatch> installed_patches_;
+    std::vector<SoundAssignment> sound_assignments_;
     bool dirty_ = false;
     Selection selection_;
     std::map<int, Listener> listeners_;

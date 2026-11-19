@@ -75,6 +75,7 @@
 #include "ui/console/MixTools.h"
 #include "ui/library/ArticulationMapWindow.h"
 #include "ui/library/LibraryBrowser.h"
+#include "ui/library/SoundAssignments.h"
 #include "vcc/project/ArticulationMap.h"
 #include "vcc/library/Library.h"
 #include "ui/composer/TransposePopover.h"
@@ -6486,6 +6487,105 @@ void package_checks(MainWindow& window, const juce::File& dir)
 /// listed, a track's sound is saved as a patch, the patch ranks first for its
 /// instrument, auditions through its plug-in, travels in a mapping pack, and a
 /// template builds with it.
+/// Sound Assignments: the Library's Assign opens the window with the sound;
+/// it is assigned to an instrument's articulations once and goes in by itself
+/// on new tracks, articulation tracks and templates; exported and imported.
+void sound_assignment_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    auto* service = ctx.library;
+    if (!service) {
+        check(false, "the main window owns a library");
+        return;
+    }
+    const auto folder = dir.getChildFile("assignments-check");
+    folder.deleteRecursively();
+    folder.createDirectory();
+    const auto old_file = service->file();
+    service->set_file(folder.getChildFile("Library.json"));  // never the user's own
+    const auto instrument = scan(ctx, VCC_TEST_PLUGIN);
+    service->refresh();
+    if (!instrument) {
+        check(false, "the test instrument plug-in scans");
+        service->set_file(old_file);
+        return;
+    }
+    const auto entry = service->lib().find("plugin:" + instrument->identifier);
+    check(entry.has_value(), "the scanned plug-in is in the library");
+    if (!entry) {
+        service->set_file(old_file);
+        return;
+    }
+    // Assign from the Library: the window opens with the sound to assign.
+    window.main().set_library_shown(true);
+    pump(100);
+    auto& browser = window.main().track_panel().library();
+    browser.set_view(LibraryBrowser::View::Sounds);
+    browser.search().setText(juce::String(entry->display), juce::sendNotificationSync);
+    browser.refilter();
+    pump(60);
+    const auto keys = browser.listed();
+    for (std::size_t i = 0; i < keys.size(); ++i)
+        if (keys[i] == entry->key) browser.select(static_cast<int>(i));
+    browser.assign_selected();
+    pump(150);
+    auto* panel = sound_assignments_panel();
+    auto* win = find_dialog("Sound Assignments");
+    check(panel != nullptr && win != nullptr && win->isOnDesktop(), "Assign in the Library opens the Sound Assignments window");
+    if (!panel) {
+        service->set_file(old_file);
+        return;
+    }
+    panel->show_instrument("strings.violins_1");
+    pump(60);
+    const auto rows = panel->rows();
+    check(rows.size() >= 3 && rows.front().empty() && std::find(rows.begin(), rows.end(), "pizzicato") != rows.end(),
+          "Violins I lists the whole instrument and each articulation the templates use (" + juce::String(static_cast<int>(rows.size())) +
+              " rows)");
+    panel->use_carried("");
+    panel->use_carried("pizzicato");
+    pump(60);
+    check(panel->assigned_text("").isNotEmpty() && panel->assigned_text("pizzicato").isNotEmpty() &&
+              service->lib().assignments().size() == 2 && session.sound_assignments().size() == 2,
+          "Use assigns the sound to the whole instrument and to pizzicato, remembered and told to the session");
+    if (win) shoot(*win, dir, "sound-assignments");
+
+    // It goes in by itself: a new Violins I, its pizzicato track, a template.
+    session.new_empty();
+    const auto v = session.add_track("Violins I", "strings.violins_1");
+    const auto* t = session.data().find_track(v);
+    check(t && t->instrument_plugin.identifier == instrument->identifier && t->assignment.status == project::ResolutionStatus::Exact,
+          "a new Violins I track comes with the assigned sound");
+    const auto kids = session.expand_articulations(v, {"natural", "pizzicato"});
+    check(kids.size() == 2 && session.data().find_track(kids[1])->instrument_plugin.identifier == instrument->identifier,
+          "its pizzicato articulation track gets the sound assigned to pizzicato");
+    session.new_from_template("cinematic.orchestra.consolidated");
+    int with = 0;
+    for (const auto* tr : session.music_tracks())
+        if (tr->instrument_standard_id == "strings.violins_1") with += tr->instrument_plugin.identifier == instrument->identifier;
+    check(with >= 1, "a template's Violins I come with it too");
+
+    // Export, clear, import: back as they were (another computer).
+    const auto file = folder.getChildFile("My Sounds.vccsounds");
+    const auto exported = panel->export_to(file);
+    panel->clear("");
+    panel->clear("pizzicato");
+    check(service->lib().assignments().empty() && session.sound_assignments().empty(), "Clear takes them away");
+    const auto imported = panel->import_from(file);
+    panel->show_instrument("strings.violins_1");
+    check(file.existsAsFile() && service->lib().assignments().size() == 2 && panel->assigned_text("pizzicato").isNotEmpty(),
+          "exported and imported back: " + exported + "; " + imported);
+
+    // Tidy: the user's own library again.
+    if (auto* w = dynamic_cast<juce::DocumentWindow*>(find_dialog("Sound Assignments"))) w->closeButtonPressed();
+    window.main().set_library_shown(false);
+    pump(80);
+    service->set_file(old_file);
+    session.new_empty();
+}
+
 void library_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -11071,6 +11171,7 @@ int main(int argc, char** argv)
                 {"freeze_checks", freeze_checks},
                 {"track_header_checks", track_header_checks},
                 {"piano_sketch_checks", piano_sketch_checks},
+                {"sound_assignment_checks", sound_assignment_checks},
                 {"articulation_checks", articulation_checks},
                 {"articulation_template_checks", articulation_template_checks},
                 {"usage_checks", usage_checks},
@@ -11729,6 +11830,8 @@ int main(int argc, char** argv)
         track_header_checks(window, dir);
         section("piano_sketch_checks");
         piano_sketch_checks(window, dir);
+        section("sound_assignment_checks");
+        sound_assignment_checks(window, dir);
         section("sound_pack_checks");
         sound_pack_checks(window, dir);
         section("swell_checks");

@@ -298,3 +298,41 @@ TEST_CASE("template packages: custom templates travel with the patches that play
     const auto br = library::import_template_package(bad, *receiver->templates, nullptr);
     CHECK(!br.ok && !br.error.empty());
 }
+
+TEST_CASE("library: sound assignments - an instrument's articulation to a saved sound; kept, exported, imported")
+{
+    auto lib = make();
+    library::UserPatch legato;
+    legato.display = "Violins I - Legato (mine)";
+    legato.plugin = {"VST3", "VST3-Opus-id", "Opus", "EastWest", "c3RhdGU="};
+    legato.instrument_id = "strings.violins_1";
+    legato.articulations = {"legato"};
+    const auto lid = lib.add_patch(legato);
+    library::UserPatch pizz = legato;
+    pizz.display = "Violins I - Pizz (mine)";
+    pizz.articulations = {"pizzicato"};
+    const auto pid = lib.add_patch(pizz);
+    lib.set_assignment("strings.violins_1", "legato", lid);
+    lib.set_assignment("strings.violins_1", "pizzicato", pid);
+    lib.set_assignment("strings.violins_1", "staccato", "nope");  // no such sound: not kept
+    REQUIRE(lib.assigned("strings.violins_1", "legato") != nullptr);
+    CHECK_EQ(lib.assigned("strings.violins_1", "legato")->display, legato.display);
+    CHECK(lib.assigned("strings.violins_1", "staccato") == nullptr);
+    CHECK_EQ(lib.assignments().size(), 2u);
+    // Kept with the user's library.
+    library::Library back(catalogs().instruments);
+    back.load_user(lib.user_json());
+    REQUIRE(back.assigned("strings.violins_1", "pizzicato") != nullptr);
+    CHECK_EQ(back.assigned("strings.violins_1", "pizzicato")->display, pizz.display);
+    // Exported (with the sounds' settings) and imported on another computer.
+    const auto pack = lib.export_pack("My sounds", {}, true);
+    library::Library other(catalogs().instruments);
+    other.import_pack(*json::parse(json::write(pack)));
+    REQUIRE(other.assigned("strings.violins_1", "legato") != nullptr);
+    CHECK_EQ(other.assigned("strings.violins_1", "legato")->plugin.state_base64, std::string("c3RhdGU="));
+    // Clearing one, and removing a sound, take their assignments away.
+    lib.set_assignment("strings.violins_1", "legato", "");
+    CHECK(lib.assigned("strings.violins_1", "legato") == nullptr);
+    lib.remove_patch(pid);
+    CHECK(lib.assignments().empty());
+}

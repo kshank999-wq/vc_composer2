@@ -1134,3 +1134,40 @@ TEST_CASE("versions: up to ten per track to try ideas - a copy or an empty one, 
     s.undo();
     CHECK_EQ(s.data().find_track(t)->versions.size(), 10u);
 }
+
+TEST_CASE("sound assignments: the chosen sound for an instrument's articulation goes in by itself")
+{
+    session::Session s(catalogs());
+    auto patch = [](const std::string& id, const std::string& name) {
+        templates::InstalledPatch p;
+        p.patch_id = id;
+        p.display = name;
+        p.plugin.format = "VST3";
+        p.plugin.identifier = "VST3-" + name;
+        p.plugin.name = name;
+        return p;
+    };
+    s.set_sound_assignments({{"strings.violins_1", "", patch("p1", "My Violins")},
+                             {"strings.violins_1", "pizzicato", patch("p2", "My Violins Pizz")},
+                             {"strings.violins_1", "legato", patch("p3", "My Violins Legato")}});
+    s.new_empty();
+    // A new track: the whole-instrument sound.
+    const auto v = s.add_track("Violins I", "strings.violins_1");
+    CHECK_EQ(s.data().find_track(v)->instrument_plugin.name, std::string("My Violins"));
+    CHECK(s.data().find_track(v)->assignment.status == project::ResolutionStatus::Exact);
+    // A different instrument: nothing assigned, untouched.
+    const auto fl = s.add_track("Flute", "woodwinds.flute");
+    CHECK(s.data().find_track(fl)->instrument_plugin.empty());
+    // Articulation tracks: each its own assigned sound; one with none keeps the part's.
+    const auto kids = s.expand_articulations(v, {"natural", "pizzicato", "staccato"});
+    REQUIRE(kids.size() == 3u);
+    CHECK_EQ(s.data().find_track(kids[0])->instrument_plugin.name, std::string("My Violins"));       // natural: the instrument's
+    CHECK_EQ(s.data().find_track(kids[1])->instrument_plugin.name, std::string("My Violins Pizz"));  // its own
+    CHECK_EQ(s.data().find_track(kids[2])->instrument_plugin.name, std::string("My Violins"));       // none: the part's
+    // A template: wherever the instrument comes up.
+    REQUIRE(s.new_from_template("cinematic.orchestra.consolidated").ok);
+    int mine = 0;
+    for (const auto* t : s.music_tracks())
+        if (t->instrument_standard_id == "strings.violins_1") mine += t->instrument_plugin.name == "My Violins";
+    CHECK(mine >= 1);
+}

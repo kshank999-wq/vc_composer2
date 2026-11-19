@@ -19,6 +19,7 @@
 #include "ui/PrintPreview.h"
 #include "ui/InstrumentUsage.h"
 #include "ui/ScoreTools.h"
+#include "ui/library/SoundAssignments.h"
 #include "ui/ShortcutEditor.h"
 #include "ui/console/MixTools.h"
 #include "ui/library/ArticulationMapWindow.h"
@@ -2323,7 +2324,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
                 cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController, cmd::scoreView, cmd::trackList, cmd::hearEntry,
-                cmd::builtinSounds, cmd::credits, cmd::toggleInspector, cmd::libraryWindow});
+                cmd::builtinSounds, cmd::credits, cmd::toggleInspector, cmd::libraryWindow, cmd::soundAssignments});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2553,6 +2554,10 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         case cmd::midiSetup: info.setInfo("MIDI Setup...", "MIDI keyboards and controllers (USB, USB-C), on or off", "Studio", 0); break;
         case cmd::builtinSounds:
             info.setInfo("Built-in Sounds...", "The piano and General MIDI orchestra: download, status, credits", "Studio", 0);
+            break;
+        case cmd::soundAssignments:
+            info.setInfo("Sound Assignments...", "Your sound for each instrument and articulation, used in every template and new track",
+                         "Window", 0);
             break;
         case cmd::libraryWindow:
             info.setInfo("Library", "Sounds, libraries and players: search, audition, assign - in a floating window", "Window", 0);
@@ -2898,6 +2903,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::credits: show_credits_window(); break;
         case cmd::toggleInspector: set_inspector_shown(!inspector_shown()); break;
         case cmd::libraryWindow: set_library_shown(!library_shown()); break;
+        case cmd::soundAssignments: show_sound_assignments(context_); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;
         case cmd::reloadCrashedPlugins: {
             const int n = context_.engine.reload_crashed_plugins();
@@ -3070,6 +3076,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             m.addSeparator();
             m.addCommandItem(c, cmd::toggleInspector);
             m.addCommandItem(c, cmd::libraryWindow);
+            m.addCommandItem(c, cmd::soundAssignments);
             m.addCommandItem(c, cmd::trackList);
             m.addSeparator();
             m.addCommandItem(c, cmd::account);

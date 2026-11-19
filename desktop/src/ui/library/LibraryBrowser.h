@@ -39,6 +39,12 @@ public:
     /// Puts the entry's sound on a track, saying how the track's request was
     /// met. Returns what happened.
     juce::String assign(const library::Entry& e, const std::string& track_id);
+    /// A saved sound for an entry, made if it is not one (a catalog patch or a
+    /// plug-in: its plug-in, for this instrument and articulation). Returns
+    /// its id, or empty when nothing here can play it.
+    std::string saved_sound_for(const library::Entry& e, const std::string& instrument_id, const std::string& articulation);
+    /// Gives the session the sound assignments (after any change).
+    void push_assignments();
     /// Saves a track's current sound (plug-in and state) as a verified patch.
     /// Returns the patch id, or empty with `message` set.
     std::string save_track_sound(const std::string& track_id, const std::string& display, juce::String& message);

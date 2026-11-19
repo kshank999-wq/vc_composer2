@@ -142,6 +142,20 @@ public:
     bool favorite(const std::string& key) const { return favorites_.count(key) > 0; }
     void set_tags(const std::string& key, std::vector<std::string> tags);
 
+    // --- Sound assignments: the sound to use for an instrument's articulation ---------------
+    /// The composer's chosen saved sound for an instrument playing an
+    /// articulation ("legato", "staccato"...; empty: the whole instrument on
+    /// one track). Used wherever that instrument and articulation come up -
+    /// templates, new tracks, articulation tracks - so nothing is assigned twice.
+    struct Assignment {
+        std::string instrument_id, articulation, patch_id;
+    };
+    /// Sets (or, with an empty patch id, clears) an assignment.
+    void set_assignment(const std::string& instrument_id, const std::string& articulation, const std::string& patch_id);
+    /// The saved sound assigned, or null.
+    const UserPatch* assigned(const std::string& instrument_id, const std::string& articulation) const;
+    const std::vector<Assignment>& assignments() const noexcept { return assignments_; }
+
     json::Value user_json() const;
     void load_user(const json::Value& doc);
 
@@ -161,13 +175,14 @@ public:
     std::vector<templates::InstalledPatch> installed_patches() const;
 
     // --- Mapping packs (§10.8): saved patches to share and reload -----------------------------
-    /// The patches (all when `ids` is empty) as a pack. Plug-in states are
-    /// left out unless `with_states` (they can be large, and are the
-    /// composer's settings).
+    /// The patches (all when `ids` is empty) as a pack, with the sound
+    /// assignments that use them. Plug-in states are left out unless
+    /// `with_states` (they can be large, and are the composer's settings).
     json::Value export_pack(const std::string& name, const std::vector<std::string>& ids = {},
                             bool with_states = false) const;
     /// Adds a pack's patches (new ids; a patch already here with the same
-    /// plug-in, instrument and name is updated). Returns how many.
+    /// plug-in, instrument and name is updated) and its sound assignments.
+    /// Returns how many patches.
     int import_pack(const json::Value& doc, std::vector<std::string>* warnings = nullptr);
 
 private:
@@ -183,6 +198,7 @@ private:
     std::set<std::string> detected_;
     std::vector<UserPatch> patches_;
     std::set<std::string> favorites_;
+    std::vector<Assignment> assignments_;
     std::vector<std::pair<std::string, std::vector<std::string>>> tags_;
     int next_id_ = 1;
 };

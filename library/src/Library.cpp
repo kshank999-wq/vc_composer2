@@ -258,6 +258,8 @@ bool Library::remove_patch(const std::string& id)
     if (it == patches_.end()) return false;
     favorites_.erase("patch:" + id);
     patches_.erase(it);
+    assignments_.erase(std::remove_if(assignments_.begin(), assignments_.end(), [&](const Assignment& a) { return a.patch_id == id; }),
+                       assignments_.end());
     return true;
 }
 
@@ -297,7 +299,31 @@ json::Value Library::user_json() const
     o.set("tags", std::move(tags));
     o.set("folders", strings(folders_));
     o.set("next_id", next_id_);
+    json::Value as = json::Value::make_array();
+    for (const auto& a : assignments_) {
+        json::Value j = json::Value::make_object();
+        j.set("instrument", a.instrument_id);
+        j.set("articulation", a.articulation);
+        j.set("patch", a.patch_id);
+        as.push_back(std::move(j));
+    }
+    o.set("assignments", std::move(as));
     return o;
+}
+
+void Library::set_assignment(const std::string& instrument_id, const std::string& articulation, const std::string& patch_id)
+{
+    assignments_.erase(std::remove_if(assignments_.begin(), assignments_.end(),
+                                      [&](const Assignment& a) { return a.instrument_id == instrument_id && a.articulation == articulation; }),
+                       assignments_.end());
+    if (!patch_id.empty() && find_patch(patch_id)) assignments_.push_back({instrument_id, articulation, patch_id});
+}
+
+const UserPatch* Library::assigned(const std::string& instrument_id, const std::string& articulation) const
+{
+    for (const auto& a : assignments_)
+        if (a.instrument_id == instrument_id && a.articulation == articulation) return find_patch(a.patch_id);
+    return nullptr;
 }
 
 void Library::load_user(const json::Value& doc)
@@ -311,6 +337,10 @@ void Library::load_user(const json::Value& doc)
         for (const auto& k : t->keys()) tags_.emplace_back(k, (*t).get_string_array(k));
     folders_ = doc.get_string_array("folders");
     next_id_ = static_cast<int>(doc.get_int("next_id", 1));
+    assignments_.clear();
+    if (const auto* as = doc.get("assignments"))
+        for (const auto& j : as->as_array())
+            assignments_.push_back({j.get_string("instrument"), j.get_string("articulation"), j.get_string("patch")});
     for (const auto& p : patches_)
         if (p.id.size() > 1 && p.id[0] == 'p') next_id_ = std::max(next_id_, std::atoi(p.id.c_str() + 1) + 1);
 }
@@ -573,6 +603,16 @@ json::Value Library::export_pack(const std::string& name, const std::vector<std:
     for (const auto& p : patches_)
         if (ids.empty() || std::find(ids.begin(), ids.end(), p.id) != ids.end()) ps.push_back(patch_json(p, with_states));
     o.set("patches", std::move(ps));
+    json::Value as = json::Value::make_array();
+    for (const auto& a : assignments_)
+        if (ids.empty() || std::find(ids.begin(), ids.end(), a.patch_id) != ids.end()) {
+            json::Value j = json::Value::make_object();
+            j.set("instrument", a.instrument_id);
+            j.set("articulation", a.articulation);
+            j.set("patch", a.patch_id);
+            as.push_back(std::move(j));
+        }
+    o.set("assignments", std::move(as));
     return o;
 }
 
@@ -583,8 +623,10 @@ int Library::import_pack(const json::Value& doc, std::vector<std::string>* warni
         return 0;
     }
     int n = 0;
+    std::map<std::string, std::string> ids;  // the pack's patch id -> the id here
     for (const auto& j : doc["patches"].as_array()) {
         UserPatch p = patch_from(j);
+        const std::string pack_id = p.id;
         if (!p.instrument_id.empty() && instruments_->find(p.instrument_id) == nullptr) {
             if (warnings) warnings->push_back(p.display + ": unknown instrument " + p.instrument_id + " (skipped)");
             continue;
@@ -594,14 +636,21 @@ int Library::import_pack(const json::Value& doc, std::vector<std::string>* warni
         });
         if (same != patches_.end()) {
             p.id = same->id;
+            ids[pack_id] = same->id;
             if (p.plugin.state_base64.empty()) p.plugin.state_base64 = same->plugin.state_base64;
             *same = std::move(p);
         } else {
             p.id.clear();
-            add_patch(std::move(p));
+            ids[pack_id] = add_patch(std::move(p));
         }
         ++n;
     }
+    // The assignments, onto the patches as they are here.
+    if (const auto* as = doc.get("assignments"))
+        for (const auto& j : as->as_array()) {
+            const auto it = ids.find(j.get_string("patch"));
+            if (it != ids.end()) set_assignment(j.get_string("instrument"), j.get_string("articulation"), it->second);
+        }
     return n;
 }
 

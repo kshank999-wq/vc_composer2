@@ -1,4 +1,5 @@
 #include "ui/library/LibraryBrowser.h"
+#include "ui/library/SoundAssignments.h"
 
 #include <algorithm>
 
@@ -67,7 +68,60 @@ void LibraryService::refresh()
     lib_.set_installed(std::move(installed));
     lib_.detect();
     context_.session.set_installed_patches(lib_.installed_patches());
+    push_assignments();
     sendChangeMessage();
+}
+
+void LibraryService::push_assignments()
+{
+    const auto installed = lib_.installed_patches();
+    std::vector<session::Session::SoundAssignment> out;
+    for (const auto& a : lib_.assignments()) {
+        session::Session::SoundAssignment s;
+        s.instrument_id = a.instrument_id;
+        s.articulation = a.articulation;
+        bool found = false;
+        for (const auto& p : installed)
+            if (p.patch_id == a.patch_id) {
+                s.patch = p;
+                found = true;
+            }
+        if (!found) {
+            // Saved, but its player is not seen here yet: still the sound to load.
+            const auto* up = lib_.find_patch(a.patch_id);
+            if (!up) continue;
+            s.patch.patch_id = up->id;
+            s.patch.display = up->display;
+            s.patch.instrument_standard_id = up->instrument_id;
+            s.patch.articulations = up->articulations;
+            s.patch.plugin = up->plugin;
+            s.patch.expression_map = up->expression_map;
+            s.patch.articulation_map = up->articulation_map;
+        }
+        out.push_back(std::move(s));
+    }
+    context_.session.set_sound_assignments(std::move(out));
+}
+
+std::string LibraryService::saved_sound_for(const library::Entry& e, const std::string& instrument_id, const std::string& articulation)
+{
+    if (e.kind == library::EntryKind::UserPatch) return e.key.substr(6);
+    if (e.plugin_identifier.empty()) return {};
+    library::UserPatch p;
+    p.plugin = plugin_ref(e.plugin_identifier);
+    if (p.plugin.empty()) return {};
+    p.instrument_id = instrument_id;
+    if (!articulation.empty()) p.articulations = {articulation};
+    const auto* def = context_.catalogs.instruments.find(instrument_id);
+    juce::String art(articulation);
+    if (art.isNotEmpty()) art = art.substring(0, 1).toUpperCase() + art.substring(1).replace("_", " ");
+    p.display = (def ? def->name : std::string("Sound")) + (art.isEmpty() ? std::string() : " - " + art.toStdString()) + " (" +
+                e.display + ")";
+    p.provider = e.provider;
+    p.library = e.library;
+    p.player = e.player;
+    p.validation = "user";
+    return lib_.add_patch(std::move(p));
 }
 
 void LibraryService::changed()
@@ -75,6 +129,7 @@ void LibraryService::changed()
     file_.getParentDirectory().createDirectory();
     file_.replaceWithText(juce::String(lib_.user_json().to_text(2)));
     context_.session.set_installed_patches(lib_.installed_patches());
+    push_assignments();
     sendChangeMessage();
 }
 
@@ -439,6 +494,12 @@ void LibraryBrowser::assign_selected()
     }
     const auto* e = entry_at(row);
     if (!e || !context_.library) return;
+    // Assign: the sound goes to the Sound Assignments window, to be chosen for
+    // an instrument's articulations once and used everywhere they come up.
+    if (view_ == View::Sounds) {
+        show_sound_assignments(context_, *e);
+        return;
+    }
     std::string track = context_.session.selected_track();
     if (track.empty() && !e->instrument_id.empty()) {
         // Nothing selected: a new track for the sound's instrument.
