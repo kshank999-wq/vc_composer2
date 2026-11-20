@@ -3996,7 +3996,9 @@ void chord_builder_checks(MainWindow& window, const juce::File& dir)
     }
     ex->edit_cell(0, 0);
     pump(200);
-    auto* editor = find_by_id(*juce::TopLevelWindow::getActiveTopLevelWindow(), "chord_cell_editor");
+    // No window is active on some headless displays (the macOS runners).
+    auto* active = juce::TopLevelWindow::getActiveTopLevelWindow();
+    juce::Component* editor = active ? find_by_id(*active, "chord_cell_editor") : nullptr;
     if (!editor)
         for (int i = 0; i < juce::Desktop::getInstance().getNumComponents() && !editor; ++i)
             editor = find_by_id(*juce::Desktop::getInstance().getComponent(i), "chord_cell_editor");
