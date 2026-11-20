@@ -20,6 +20,7 @@
 //   "delay"       time_ms 375 (1..2000), feedback 0.35 (0..0.95), mix 1
 //   "limiter"     ceiling_db -0.3, release_ms 80
 //   "saturation"  drive_db 6 (0..36), mix 1, output_db 0
+//   "dyneq"       VC Dynamic EQ: four parallel dynamic bands, HP/LP, dry mix (DynamicEq.h)
 //   "hardware"    outboard gear through the interface: send_db 0, return_db 0, mix 1,
 //                 out_pair 2 (outputs 3-4), in_pair 2 (inputs 3-4), latency 0 (samples,
 //                 the measured round trip; delay compensation aligns the rest to it)
@@ -78,6 +79,15 @@ public:
     void set_peak(double sr, double f, double q, double gain_db) noexcept;
     void set_low_shelf(double sr, double f, double q, double gain_db) noexcept;
     void set_high_shelf(double sr, double f, double q, double gain_db) noexcept;
+    /// Coefficients already divided by a0 (the dynamic EQ computes its own).
+    void set_normalized(double b0, double b1, double b2, double a1, double a2) noexcept
+    {
+        b0_ = b0;
+        b1_ = b1;
+        b2_ = b2;
+        a1_ = a1;
+        a2_ = a2;
+    }
     void reset() noexcept { z1_[0] = z1_[1] = z2_[0] = z2_[1] = 0.0; }
     void process(float* data, int ch, int n) noexcept
     {
@@ -165,7 +175,7 @@ class ParameterWatch;
 /// An insert slot's processor.
 class InsertProcessor {
 public:
-    static constexpr int kMaxAutomated = 16;
+    static constexpr int kMaxAutomated = 64;
 
     virtual ~InsertProcessor() = default;
     /// Message thread. Must keep processing state when nothing changed.
@@ -194,7 +204,7 @@ public:
     {
         if (index < 0 || index >= kMaxAutomated) return;
         automated_[static_cast<std::size_t>(index)] = value;
-        automated_mask_ |= 1u << index;
+        automated_mask_ |= std::uint64_t{1} << index;
     }
     void clear_automation() noexcept { automated_mask_ = 0; }
     /// Audio thread, before process(): this block's sidechain key (null:
@@ -212,10 +222,10 @@ protected:
     const float* key_r_ = nullptr;
     float automated(int index, float fallback) const noexcept
     {
-        return (automated_mask_ & (1u << index)) ? automated_[static_cast<std::size_t>(index)] : fallback;
+        return (automated_mask_ & (std::uint64_t{1} << index)) ? automated_[static_cast<std::size_t>(index)] : fallback;
     }
     std::array<float, kMaxAutomated> automated_{};
-    std::uint32_t automated_mask_ = 0;
+    std::uint64_t automated_mask_ = 0;
 };
 
 /// The audio interface as the hardware inserts see it during one chunk of

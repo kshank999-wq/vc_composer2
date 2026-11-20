@@ -408,6 +408,9 @@ public:
     juce::String insert_status(const std::string& strip_id, int slot) const;
     /// The hosted effect in an insert slot (to open its editor or store its state).
     juce::AudioPluginInstance* insert_plugin(const std::string& strip_id, int slot) const;
+    /// The processor in an insert slot, or null (message thread; look it up
+    /// each time - a rebuild replaces it). The rack reads its live meters.
+    InsertProcessor* insert_processor(const std::string& strip_id, int slot) const;
     /// Deliverable rendering: only the tracks a deliverable includes play
     /// (reference/temp tracks are left out unless opted in).
     void set_export_mode(bool on);

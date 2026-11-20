@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "audio/AutomationRt.h"
+#include "audio/DynamicEq.h"
 #include "audio/PluginHost.h"
 
 namespace vcc::desktop {
@@ -276,6 +277,11 @@ int insert_automation_index(const std::string& kind, const std::string& name)
     if (kind == "limiter") return index_in(kLimiterParams, name);
     if (kind == "saturation") return index_in(kSaturationParams, name);
     if (kind == "hardware") return index_in(kHardwareParams, name);
+    if (kind == "dyneq") {
+        const auto& names = dyneq_param_names();
+        for (std::size_t i = 0; i < names.size(); ++i)
+            if (names[i] == name) return static_cast<int>(i);
+    }
     return -1;
 }
 
@@ -323,7 +329,7 @@ public:
         }
         project::ChannelStrip s = box_.latest();
         auto a = [&](int i, double& field) {
-            if (automated_mask_ & (1u << i)) field = automated_[static_cast<std::size_t>(i)];
+            if (automated_mask_ & (std::uint64_t{1} << i)) field = automated_[static_cast<std::size_t>(i)];
         };
         if (kind_ == 0) {
             a(0, s.lf.gain_db), a(1, s.lf.freq), a(2, s.lmf.gain_db), a(3, s.lmf.freq), a(4, s.hmf.gain_db);
@@ -681,7 +687,7 @@ private:
 bool is_known_insert_kind(const std::string& k) noexcept
 {
     return k == "eq" || k == "compressor" || k == "gate" || k == "reverb" || k == "delay" || k == "limiter" ||
-           k == "saturation" || k == "hardware" || k == "plugin";
+           k == "saturation" || k == "hardware" || k == "dyneq" || k == "plugin";
 }
 
 std::unique_ptr<InsertProcessor> create_insert(const project::InsertSlot& slot, PluginHost& host, double sr, int max_block)
@@ -694,6 +700,7 @@ std::unique_ptr<InsertProcessor> create_insert(const project::InsertSlot& slot, 
     else if (k == "limiter") p = std::make_unique<LimiterInsert>();
     else if (k == "saturation") p = std::make_unique<SaturationInsert>();
     else if (k == "hardware") p = std::make_unique<HardwareInsert>();
+    else if (k == "dyneq") p = std::make_unique<DynamicEqInsert>();
     else if (k == "plugin") {
         if (slot.plugin.empty()) {
             p = std::make_unique<MissingInsert>("No plug-in chosen");

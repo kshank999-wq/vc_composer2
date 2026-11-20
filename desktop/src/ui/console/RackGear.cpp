@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "audio/ChannelDsp.h"
+#include "audio/DynamicEq.h"
 #include "ui/console/MixActions.h"
 #include "ui/hw/HwControls.h"
 #include "vcc/project/Automation.h"
@@ -36,6 +37,7 @@ const Spec kSpecs[] = {
     {"reverb", "VC Reverb", "STEREO PLATE REVERBERATOR", 0xff1e2949, 0xffcfd8f4, 1, false},
     {"delay", "VC Delay", "ANALOGUE-STYLE ECHO", 0xffcbb68b, 0xff2a2214, 1, false},
     {"saturation", "VC Saturator", "VALVE SATURATION", 0xff6a3913, 0xfff4dec2, 1, false},
+    {"dyneq", "VC Dynamic EQ", "PARALLEL DYNAMIC EQUALIZER", 0xff24272c, 0xffdfe6ee, 4, false},
     {"hardware", "VC Outboard", "HARDWARE INSERT  -  SEND / RETURN", 0xff3a3d42, 0xffd3d9e0, 1, false},
 };
 const Spec kPlugin{"plugin", "", "PLUG-IN", 0xff2a2c30, 0xffc8ced6, 1, false};
@@ -163,8 +165,46 @@ void paint_plate(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour plate
     g.drawHorizontalLine(juce::roundToInt(r.getBottom() - 1.0f), r.getX(), r.getRight());
 }
 
+/// What the rack asks of each unit.
+class RackUnit : public juce::Component {
+public:
+    virtual int slot() const noexcept = 0;
+    virtual void refresh() = 0;
+    virtual void flash() {}
+    virtual bool has_vu() const noexcept { return false; }
+    virtual void push_level(float) {}
+    /// The rack's 30 Hz tick (the dynamic EQ's live curve and analyser).
+    virtual void tick() {}
+};
+
+/// Reads a built-in insert's parameter as the document holds it.
+double read_param(AppContext& c, const std::string& owner, const std::string& id, double fallback)
+{
+    const auto& d = c.session.data();
+    std::optional<double> v;
+    if (const auto* t = d.find_track(owner)) v = project::static_value(*t, id);
+    else if (const auto* b = d.find_bus(owner)) v = project::static_value(*b, id);
+    return v.value_or(fallback);
+}
+
+/// Writes several of a built-in insert's parameters as one edit, `label`
+/// naming it (edits under the same label in a row are one undo step).
+void write_params(AppContext& c, const std::string& owner, const std::vector<std::pair<std::string, double>>& values,
+                  const std::string& label)
+{
+    auto& session = c.session;
+    if (session.data().find_track(owner))
+        session.update_track_mix(owner, label, [&](project::Track& t) {
+            for (const auto& [id, v] : values) project::set_static_value(t, id, v);
+        });
+    else
+        session.update_bus(owner, label, [&](project::Bus& b) {
+            for (const auto& [id, v] : values) project::set_static_value(b, id, v);
+        });
+}
+
 /// One unit of the rack: the faceplate for one insert slot.
-class GearUnit final : public juce::Component, private juce::Timer {
+class GearUnit final : public RackUnit, private juce::Timer {
 public:
     GearUnit(AppContext& c, std::string owner, int slot, const project::InsertSlot& s)
         : context_(c), owner_(std::move(owner)), slot_(slot), kind_(s.kind), spec_(spec_for(s.kind))
@@ -228,18 +268,18 @@ public:
         setSize(kRackWidth, kOneU * spec_.units);
     }
 
-    int slot() const noexcept { return slot_; }
+    int slot() const noexcept override { return slot_; }
     const std::string& kind() const noexcept { return kind_; }
-    bool has_vu() const noexcept { return spec_.vu; }
+    bool has_vu() const noexcept override { return spec_.vu; }
 
     /// Lit for a moment: the unit the click opened.
-    void flash()
+    void flash() override
     {
         flash_ = 20;
         startTimerHz(20);
     }
 
-    void refresh()
+    void refresh() override
     {
         const auto& d = context_.session.data();
         const auto* list = inserts_of(context_, owner_);
@@ -262,7 +302,7 @@ public:
     }
 
     /// The output level for the VU (dB), pushed by the rack at 30 Hz.
-    void push_level(float db)
+    void push_level(float db) override
     {
         // VU ballistics: about 300 ms to get there.
         vu_ += (std::max(-40.0f, db) - vu_) * 0.25f;
@@ -579,6 +619,733 @@ private:
     float vu_ = -40.0f;
 };
 
+/// The power switch drawn on a faceplate: lamp, bat-handle toggle, IN / BYPASS.
+void paint_power_switch(juce::Graphics& g, juce::Rectangle<int> area, bool on, juce::Colour ink)
+{
+    const auto p = area.toFloat();
+    g.setColour(ink.withAlpha(0.85f));
+    g.setFont(juce::FontOptions(9.0f, juce::Font::bold));
+    g.drawText("POWER", p.withHeight(12.0f), juce::Justification::centred);
+    hw::paint::led(g, {p.getCentreX(), p.getY() + 20.0f}, on, juce::Colour(0xffff3b30), 8.0f);
+    const auto plate = juce::Rectangle<float>(20.0f, 34.0f).withCentre({p.getCentreX(), p.getY() + 50.0f});
+    g.setColour(juce::Colours::black.withAlpha(0.55f));
+    g.fillRoundedRectangle(plate, 4.0f);
+    g.setColour(juce::Colour(0xffa9aeb4));
+    g.fillEllipse(juce::Rectangle<float>(12.0f, 12.0f).withCentre(plate.getCentre()));
+    const float tip = on ? plate.getY() - 2.0f : plate.getBottom() + 2.0f;
+    juce::Path bat;
+    bat.startNewSubPath(plate.getCentreX(), plate.getCentreY());
+    bat.lineTo(plate.getCentreX(), tip);
+    g.setColour(juce::Colour(0xffe4e7ea));
+    g.strokePath(bat, juce::PathStrokeType(4.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.fillEllipse(juce::Rectangle<float>(8.0f, 8.0f).withCentre({plate.getCentreX(), tip}));
+    g.setColour(ink.withAlpha(0.7f));
+    g.setFont(juce::FontOptions(8.0f));
+    g.drawText(on ? "IN" : "BYPASS", juce::Rectangle<float>(p.getX(), plate.getBottom() + 6.0f, p.getWidth(), 10.0f),
+               juce::Justification::centred);
+}
+
+/// VC Dynamic EQ in the rack ("VC EQ" on its face): a display with the
+/// curve, the four band nodes (drag for frequency and gain, wheel for Q)
+/// and a spectrum of what it plays; under it the selected band's shape, Q,
+/// frequency and gain, its dynamics (threshold, ratio, attack, release),
+/// the filters, and the output (dry mix, out gain, auto gain, sidechain).
+class DynEqUnit final : public RackUnit {
+public:
+    static constexpr int kUnits = 4;
+
+    DynEqUnit(AppContext& c, std::string owner, int slot) : context_(c), owner_(std::move(owner)), slot_(slot)
+    {
+        setComponentID("gear_" + juce::String(slot));
+        setTitle("VC Dynamic EQ");
+        prefix_ = "insert:" + std::to_string(slot) + ":";
+        const auto ink = juce::Colour(kInk);
+        // The selected band's knobs, one set per band (only one shows).
+        for (int b = 0; b < 4; ++b)
+            for (const char* f : {"q", "freq", "gain_db", "threshold_db", "ratio", "attack_ms", "release_ms"})
+                band_knobs_[static_cast<std::size_t>(b)].push_back(make_knob("b" + std::to_string(b + 1) + "_" + f, ink));
+        for (const char* f : {"hp_freq", "lp_freq", "dry_mix", "out_db"}) global_knobs_.push_back(make_knob(f, ink));
+        // Keys.
+        for (int b = 0; b < 4; ++b) {
+            auto& k = band_keys_[static_cast<std::size_t>(b)];
+            k.setButtonText(juce::String(b + 1));
+            k.setComponentID("dyneq_band_" + juce::String(b + 1));
+            k.setTooltip("Band " + juce::String(b + 1) + ": show its controls");
+            k.onClick = [this, b] { select(b); };
+            auto& on = band_on_[static_cast<std::size_t>(b)];
+            on.setButtonText("ON");
+            on.setComponentID("dyneq_on_" + juce::String(b + 1));
+            on.setTooltip("Band " + juce::String(b + 1) + " in or out");
+            on.onClick = [this, b] { toggle(band_id(b, "on")); };
+        }
+        static const char* shapes[] = {"LOW SHELF", "BELL", "HIGH SHELF"};
+        for (int t = 0; t < 3; ++t) {
+            auto& k = shape_[static_cast<std::size_t>(t)];
+            k.setButtonText(shapes[t]);
+            k.setComponentID("dyneq_shape_" + juce::String(t));
+            k.onClick = [this, t] { write({{band_id(selected_, "type"), static_cast<double>(t)}}, "Band shape"); };
+        }
+        dyn_.setButtonText("DYNAMIC");
+        dyn_.setComponentID("dyneq_dyn");
+        dyn_.setTooltip("The band follows the level: above the threshold its gain comes down by the ratio");
+        dyn_.onClick = [this] { toggle(band_id(selected_, "dyn")); };
+        solo_.setButtonText("SOLO");
+        solo_.setComponentID("dyneq_solo");
+        solo_.setTooltip("Hear the selected band alone");
+        solo_.onClick = [this] {
+            const int now = juce::roundToInt(value("solo"));
+            write({{prefix_ + "solo", now == selected_ + 1 ? 0.0 : static_cast<double>(selected_ + 1)}}, "Band solo");
+        };
+        hp_on_.setButtonText("HP");
+        hp_on_.setComponentID("dyneq_hp");
+        hp_on_.onClick = [this] { toggle(prefix_ + "hp_on"); };
+        lp_on_.setButtonText("LP");
+        lp_on_.setComponentID("dyneq_lp");
+        lp_on_.onClick = [this] { toggle(prefix_ + "lp_on"); };
+        hp_slope_.setComponentID("dyneq_hp_slope");
+        hp_slope_.setTooltip("High-pass slope: 12, 24, 36 or 48 dB per octave");
+        hp_slope_.onClick = [this] { cycle_slope("hp_slope"); };
+        lp_slope_.setComponentID("dyneq_lp_slope");
+        lp_slope_.setTooltip("Low-pass slope: 12, 24, 36 or 48 dB per octave");
+        lp_slope_.onClick = [this] { cycle_slope("lp_slope"); };
+        auto_gain_.setButtonText("AUTO GAIN");
+        auto_gain_.setComponentID("dyneq_auto_gain");
+        auto_gain_.setTooltip("Automatic gain compensation: the output stays as loud as the input, so you hear the EQ's colour, not its level");
+        auto_gain_.onClick = [this] { toggle(prefix_ + "auto_gain"); };
+        ext_sc_.setButtonText("EXT SC");
+        ext_sc_.setComponentID("dyneq_ext_sc");
+        ext_sc_.setTooltip("External sidechain: dynamic bands listen to another track or bus (each band hears its own range of it)");
+        ext_sc_.onClick = [this] {
+            toggle(prefix_ + "ext_sc");
+            if (sidechain_text(context_, owner_, slot_).isEmpty()) show_sidechain_menu(context_, owner_, slot_, key_source_);
+        };
+        key_source_.setComponentID("dyneq_key_source");
+        key_source_.setTooltip("What keys the dynamic bands: its own signal, or another track or bus");
+        key_source_.onClick = [this] { show_sidechain_menu(context_, owner_, slot_, key_source_); };
+        for (auto* k : all_keys()) {
+            k->set_legend_size(9.0f);
+            k->setWantsKeyboardFocus(false);
+            addAndMakeVisible(*k);
+        }
+        refresh();
+        setSize(kRackWidth, kOneU * kUnits);
+    }
+
+    int slot() const noexcept override { return slot_; }
+
+    void refresh() override
+    {
+        const auto* list = inserts_of(context_, owner_);
+        if (list && slot_ < static_cast<int>(list->size())) {
+            const auto& s = (*list)[static_cast<std::size_t>(slot_)];
+            bypass_ = s.bypass;
+            settings_ = DynEqSettings::from_slot(s);
+        }
+        refreshing_ = true;
+        auto set_knob = [this](Knob& k) {
+            if (!k.knob->isMouseButtonDown()) k.knob->setValue(value(k.field), juce::dontSendNotification);
+        };
+        for (auto& set : band_knobs_)
+            for (auto& k : set) set_knob(k);
+        for (auto& k : global_knobs_) set_knob(k);
+        refreshing_ = false;
+        for (int b = 0; b < 4; ++b) {
+            band_keys_[static_cast<std::size_t>(b)].setToggleState(b == selected_, juce::dontSendNotification);
+            band_on_[static_cast<std::size_t>(b)].setToggleState(settings_.bands[static_cast<std::size_t>(b)].on, juce::dontSendNotification);
+        }
+        const auto& band = settings_.bands[static_cast<std::size_t>(selected_)];
+        for (int t = 0; t < 3; ++t) shape_[static_cast<std::size_t>(t)].setToggleState(band.type == t, juce::dontSendNotification);
+        dyn_.setToggleState(band.dyn, juce::dontSendNotification);
+        solo_.setToggleState(settings_.solo == selected_ + 1, juce::dontSendNotification);
+        hp_on_.setToggleState(settings_.hp_on, juce::dontSendNotification);
+        lp_on_.setToggleState(settings_.lp_on, juce::dontSendNotification);
+        static const char* slopes[] = {"12 dB", "24 dB", "36 dB", "48 dB"};
+        hp_slope_.setButtonText(slopes[settings_.hp_slope]);
+        lp_slope_.setButtonText(slopes[settings_.lp_slope]);
+        auto_gain_.setToggleState(settings_.auto_gain, juce::dontSendNotification);
+        ext_sc_.setToggleState(settings_.ext_sc, juce::dontSendNotification);
+        const auto key = sidechain_text(context_, owner_, slot_);
+        key_source_.setButtonText(key.isEmpty() ? juce::String("KEY: SELF") : "KEY: " + key.toUpperCase());
+        store_nodes();
+        // The dynamics knobs read as off while the band is static.
+        for (std::size_t i = 3; i < band_knobs_[static_cast<std::size_t>(selected_)].size(); ++i)
+            band_knobs_[static_cast<std::size_t>(selected_)][i].knob->setAlpha(band.dyn ? 1.0f : 0.45f);
+        update_visibility();
+        repaint();
+    }
+
+    void tick() override
+    {
+        // The live band gains and the spectrum, from the processor now playing.
+        auto* proc = dynamic_cast<DynamicEqInsert*>(context_.engine.insert_processor(owner_, slot_));
+        bool changed = false;
+        if (proc) {
+            for (int b = 0; b < 4; ++b) {
+                const float g = proc->live_gain_db[static_cast<std::size_t>(b)].load();
+                if (std::abs(g - live_[static_cast<std::size_t>(b)]) > 0.05f) changed = true;
+                live_[static_cast<std::size_t>(b)] = g;
+            }
+            live_valid_ = true;
+            auto_db_ = proc->live_auto_gain_db.load();
+            sr_ = proc->sample_rate();
+            // Real-time analysis: the output, filled, and the input as a line.
+            if (proc->read_spectrum_samples(samples_.data(), kFft)) {
+                analyse(spectrum_);
+                if (proc->read_spectrum_samples(samples_.data(), kFft, true)) analyse(spectrum_in_);
+                has_spectrum_ = true;
+                changed = true;
+            }
+        }
+        if (changed) repaint(display_);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        const auto r = getLocalBounds().toFloat();
+        const auto plate = juce::Colour(kPlate);
+        paint_plate(g, r, plate);
+        paint_ears(g, r, plate);
+        const auto ink = juce::Colour(kInk);
+        // The badge and the logo: VC EQ.
+        auto left = logo_.toFloat();
+        const auto badge = left.removeFromTop(18.0f).withWidth(30.0f);
+        g.setColour(ink);
+        g.drawRoundedRectangle(badge.reduced(0.5f), 3.0f, 1.2f);
+        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        g.drawText("VC", badge, juce::Justification::centred);
+        left.removeFromTop(4.0f);
+        g.setFont(juce::FontOptions(40.0f, juce::Font::bold));
+        g.drawText("VC EQ", left.removeFromTop(44.0f), juce::Justification::centredLeft);
+        g.setColour(ink.withAlpha(0.75f));
+        g.setFont(juce::FontOptions(8.5f, juce::Font::bold));
+        g.drawText("PARALLEL DYNAMIC EQUALIZER", left.removeFromTop(12.0f), juce::Justification::centredLeft);
+        // Power.
+        paint_power_switch(g, power_, !bypass_, ink);
+        // Group panels under the display.
+        for (const auto& grp : groups_) {
+            g.setColour(juce::Colours::black.withAlpha(0.22f));
+            g.fillRoundedRectangle(grp.area.toFloat(), 5.0f);
+            g.setColour(ink.withAlpha(0.8f));
+            g.setFont(juce::FontOptions(9.0f, juce::Font::bold));
+            g.drawText(grp.title, grp.area.toFloat().removeFromTop(14.0f).withTrimmedLeft(8.0f), juce::Justification::centredLeft);
+        }
+        // Knob legends and readouts.
+        auto legend = [&](const Knob& k) {
+            if (!k.knob->isVisible()) return;
+            const auto kb = k.knob->getBounds().toFloat();
+            g.setColour(ink.withAlpha(0.9f * k.knob->getAlpha()));
+            g.setFont(juce::FontOptions(8.5f, juce::Font::bold));
+            g.drawText(k.label, juce::Rectangle<float>(kb.getX() - 14.0f, kb.getY() - 11.0f, kb.getWidth() + 28.0f, 10.0f),
+                       juce::Justification::centred);
+            const auto lcd = juce::Rectangle<float>(kb.getCentreX() - 30.0f, kb.getBottom() + 1.0f, 60.0f, 13.0f);
+            hw::paint::lcd_window(g, lcd);
+            const bool is_q = k.field.size() >= 2 && k.field.compare(k.field.size() - 2, 2, "_q") == 0;
+            hw::paint::lcd_text(g, is_q ? juce::String(k.knob->getValue(), 2) : value_text(k.info, k.knob->getValue()), lcd, 8.5f,
+                                juce::Justification::centred,
+                                bypass_ ? 0.45f : k.knob->getAlpha());
+        };
+        for (const auto& k : band_knobs_[static_cast<std::size_t>(selected_)]) legend(k);
+        for (const auto& k : global_knobs_) legend(k);
+        if (settings_.auto_gain && live_valid_) {
+            g.setColour(juce::Colour(0xff7fd7ff));
+            g.setFont(juce::FontOptions(9.0f, juce::Font::bold));
+            g.drawText("AUTO " + juce::String(auto_db_ > 0.05f ? "+" : "") + juce::String(auto_db_, 1) + " dB",
+                       auto_gain_.getBounds().toFloat().translated(0.0f, 22.0f).withHeight(12.0f), juce::Justification::centred);
+        }
+        // The line between the band's EQ and its dynamics.
+        if (band_divider_ > 0)
+            for (const auto& grp : groups_)
+                if (grp.title == "BAND") {
+                    g.setColour(juce::Colours::black.withAlpha(0.35f));
+                    g.drawHorizontalLine(band_divider_, static_cast<float>(grp.area.getX() + 6), static_cast<float>(grp.area.getRight() - 6));
+                }
+        paint_display(g);
+    }
+
+    void resized() override
+    {
+        auto face = getLocalBounds().reduced(kEar + 12, 10);
+        auto left = face.removeFromLeft(170);
+        logo_ = left.removeFromTop(78);
+        power_ = left.removeFromTop(96).withSizeKeepingCentre(56, 96).withX(left.getX());
+        left.removeFromTop(8);
+        auto_gain_.setBounds(left.removeFromTop(22).removeFromLeft(110));
+        left.removeFromTop(18);
+        ext_sc_.setBounds(left.removeFromTop(22).removeFromLeft(110));
+        left.removeFromTop(4);
+        key_source_.setBounds(left.removeFromTop(22).removeFromLeft(150));
+        face.removeFromLeft(8);
+        display_ = face.removeFromTop(170);
+        face.removeFromTop(6);
+        // Controls: filters | bands | selected band | output.
+        groups_.clear();
+        auto filters = face.removeFromLeft(112);
+        groups_.push_back({filters, "FILTERS"});
+        face.removeFromLeft(6);
+        auto bands = face.removeFromLeft(112);
+        groups_.push_back({bands, "BANDS"});
+        face.removeFromLeft(6);
+        auto output = face.removeFromRight(104);
+        groups_.push_back({output, "OUTPUT"});
+        face.removeFromRight(6);
+        auto band = face;
+        groups_.push_back({band, "BAND"});
+        const int knob = 36;
+        auto place = [&](Knob& k, juce::Point<int> c) { k.knob->setBounds(juce::Rectangle<int>(knob, knob).withCentre(c)); };
+        // Filters: HP / LP keys, their frequency knobs and slopes.
+        {
+            auto f = filters.reduced(6, 0).withTrimmedTop(16);
+            const int cx1 = f.getX() + f.getWidth() / 4, cx2 = f.getX() + 3 * f.getWidth() / 4;
+            hp_on_.setBounds(juce::Rectangle<int>(46, 18).withCentre({cx1, f.getY() + 10}));
+            lp_on_.setBounds(juce::Rectangle<int>(46, 18).withCentre({cx2, f.getY() + 10}));
+            place(global_knobs_[0], {cx1, f.getY() + 52});
+            place(global_knobs_[1], {cx2, f.getY() + 52});
+            hp_slope_.setBounds(juce::Rectangle<int>(50, 18).withCentre({cx1, f.getY() + 98}));
+            lp_slope_.setBounds(juce::Rectangle<int>(50, 18).withCentre({cx2, f.getY() + 98}));
+        }
+        // Bands: 1-4 with their on keys, and solo.
+        {
+            auto b = bands.reduced(6, 0).withTrimmedTop(18);
+            const int w = b.getWidth() / 4;
+            for (int i = 0; i < 4; ++i) {
+                band_keys_[static_cast<std::size_t>(i)].setBounds(b.getX() + i * w + 2, b.getY() + 2, w - 4, 30);
+                band_on_[static_cast<std::size_t>(i)].setBounds(b.getX() + i * w + 2, b.getY() + 36, w - 4, 18);
+            }
+            solo_.setBounds(b.getX() + 2, b.getY() + 66, b.getWidth() - 4, 22);
+        }
+        // The selected band: its shape and EQ knobs (Q, freq, gain) on the
+        // left, its dynamics (switch, threshold, ratio, attack, release) on the right.
+        {
+            // Two rows: the shape and the EQ knobs, then the dynamics.
+            auto b = band.reduced(8, 0).withTrimmedTop(16);
+            auto top = b.removeFromTop(20);
+            const int sw = top.getWidth() / 3;
+            for (int t = 0; t < 3; ++t) shape_[static_cast<std::size_t>(t)].setBounds(top.removeFromLeft(sw).reduced(2, 0));
+            dyn_.setBounds(b.getX() + 2, b.getY() + 66, 96, 18);
+            for (int band_i = 0; band_i < 4; ++band_i) {
+                auto& set = band_knobs_[static_cast<std::size_t>(band_i)];
+                const int w = b.getWidth() / 3;
+                for (int i = 0; i < 3; ++i) place(set[static_cast<std::size_t>(i)], {b.getX() + w * i + w / 2, b.getY() + 28});
+                const int w2 = b.getWidth() / 4;
+                for (int i = 0; i < 4; ++i) place(set[static_cast<std::size_t>(3 + i)], {b.getX() + w2 * i + w2 / 2, b.getY() + 116});
+            }
+            band_divider_ = b.getY() + 62;
+        }
+        // Output: dry mix and out gain.
+        {
+            auto o = output.reduced(6, 0).withTrimmedTop(16);
+            place(global_knobs_[2], {o.getX() + o.getWidth() / 4, o.getY() + 52});
+            place(global_knobs_[3], {o.getX() + 3 * o.getWidth() / 4, o.getY() + 52});
+        }
+        update_visibility();
+        store_nodes();
+    }
+
+    /// Where the nodes are, as properties (node1 .. node4: "x y"), for the checks.
+    void store_nodes()
+    {
+        for (int b = 0; b < 4; ++b) {
+            const auto c = node(b);
+            getProperties().set("node" + juce::String(b + 1), juce::String(c.x) + " " + juce::String(c.y));
+        }
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        drag_band_ = -1;
+        if (power_.contains(e.getPosition())) return;
+        if (!display_.contains(e.getPosition())) return;
+        // The nearest band node within reach.
+        float best = 14.0f;
+        for (int b = 0; b < 4; ++b) {
+            const float d = node(b).getDistanceFrom(e.position);
+            if (d < best) {
+                best = d;
+                drag_band_ = b;
+            }
+        }
+        if (drag_band_ >= 0) {
+            ++gesture_;
+            select(drag_band_);
+        }
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (drag_band_ < 0) return;
+        const double f = std::clamp(freq_at(e.position.x), 20.0, 20000.0);
+        const double gdb = std::clamp(db_at(e.position.y), -24.0, 24.0);
+        write({{band_id(drag_band_, "freq"), f}, {band_id(drag_band_, "gain_db"), std::round(gdb * 10.0) / 10.0}},
+              "Band " + std::to_string(drag_band_ + 1) + " node");
+    }
+
+    void mouseUp(const juce::MouseEvent& e) override
+    {
+        if (drag_band_ >= 0) {
+            ++gesture_;
+            drag_band_ = -1;
+            return;
+        }
+        if (!e.mouseWasDraggedSinceMouseDown() && power_.contains(e.getPosition()))
+            toggle_insert_bypass(context_, owner_, slot_);
+        else if (e.mods.isPopupMenu() && !display_.contains(e.getPosition()))
+            show_insert_menu(context_, owner_, slot_, *this);
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent& e) override
+    {
+        // A node: back to 0 dB.
+        for (int b = 0; b < 4; ++b)
+            if (node(b).getDistanceFrom(e.position) < 12.0f) {
+                ++gesture_;
+                write({{band_id(b, "gain_db"), 0.0}}, "Band gain");
+                return;
+            }
+    }
+
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        // The wheel over a node sets its Q.
+        for (int b = 0; b < 4; ++b)
+            if (node(b).getDistanceFrom(e.position) < 16.0f) {
+                const double q = settings_.bands[static_cast<std::size_t>(b)].q * (w.deltaY > 0 ? 1.12 : 1.0 / 1.12);
+                write({{band_id(b, "q"), std::clamp(q, 0.1, 18.0)}}, "Band Q");
+                return;
+            }
+        juce::Component::mouseWheelMove(e, w);
+    }
+
+    /// The node's centre on screen (for the checks and the mouse).
+    juce::Point<float> node(int b) const
+    {
+        const auto& band = settings_.bands[static_cast<std::size_t>(b)];
+        return {x_at(band.freq), y_at(std::clamp(band.gain_db, -kRange, kRange))};
+    }
+
+private:
+    static constexpr juce::uint32 kPlate = 0xff24272c, kInk = 0xffdfe6ee;
+    static constexpr double kRange = 18.0;  // the display's dB, up and down
+    static constexpr int kFft = 2048;
+
+    struct Knob {
+        std::string field;
+        project::ParamInfo info;
+        juce::String label;
+        std::unique_ptr<GearKnob> knob;
+    };
+    struct Group {
+        juce::Rectangle<int> area;
+        juce::String title;
+    };
+
+    Knob make_knob(const std::string& field, juce::Colour ink)
+    {
+        Knob k;
+        k.field = field;
+        const auto& d = context_.session.data();
+        std::vector<project::ParamInfo> params;
+        if (const auto* t = d.find_track(owner_)) params = project::automatable_params(*t, d);
+        else if (const auto* b = d.find_bus(owner_)) params = project::automatable_params(*b, d);
+        for (const auto& p : params)
+            if (p.id == prefix_ + field) k.info = p;
+        static const std::map<std::string, const char*> labels = {
+            {"q", "Q"},           {"freq", "FREQ"},       {"gain_db", "GAIN"},  {"threshold_db", "THRESHOLD"},
+            {"ratio", "RATIO"},   {"attack_ms", "ATTACK"}, {"release_ms", "RELEASE"}, {"hp_freq", "HP FREQ"},
+            {"lp_freq", "LP FREQ"}, {"dry_mix", "DRY MIX"}, {"out_db", "OUT GAIN"}};
+        const auto tail = field.size() > 3 && field[0] == 'b' && field[2] == '_' ? field.substr(3) : field;
+        k.label = labels.count(tail) ? labels.at(tail) : juce::String(tail).toUpperCase();
+        k.knob = std::make_unique<GearKnob>(cap_for(tail == "gain_db" || tail == "out_db" ? std::string("gain") : tail), ink);
+        auto& kn = *k.knob;
+        kn.setRange(k.info.min, k.info.max, 0.0);
+        if (k.info.log_scale && k.info.min > 0.0) kn.setSkewFactorFromMidPoint(std::sqrt(k.info.min * k.info.max));
+        kn.setDoubleClickReturnValue(true, k.info.default_value);
+        kn.setComponentID("dyneq_" + juce::String(field));
+        kn.setTitle("VC EQ " + k.label.toLowerCase());
+        kn.setTooltip(juce::String(k.info.name) + " (drag up or down; double-click for the default)");
+        const std::string id = prefix_ + field, label = k.info.name;
+        kn.onDragStart = [this] { ++gesture_; };
+        kn.onValueChange = [this, id, label, kp = &kn] {
+            if (refreshing_) return;
+            write({{id, kp->getValue()}}, label);
+        };
+        addAndMakeVisible(kn);
+        return k;
+    }
+
+    std::vector<hw::Keycap*> all_keys()
+    {
+        std::vector<hw::Keycap*> v;
+        for (auto& k : band_keys_) v.push_back(&k);
+        for (auto& k : band_on_) v.push_back(&k);
+        for (auto& k : shape_) v.push_back(&k);
+        for (auto* k : {&dyn_, &solo_, &hp_on_, &lp_on_, &hp_slope_, &lp_slope_, &auto_gain_, &ext_sc_, &key_source_}) v.push_back(k);
+        return v;
+    }
+
+    std::string band_id(int b, const char* field) const { return prefix_ + "b" + std::to_string(b + 1) + "_" + field; }
+    double value(const std::string& field) const { return read_param(context_, owner_, prefix_ + field, dyneq_default(field)); }
+
+    void write(const std::vector<std::pair<std::string, double>>& values, const std::string& what)
+    {
+        // One undo step per gesture: the label alternates between gestures.
+        write_params(context_, owner_, values, what + (gesture_ % 2 ? " " : ""));
+    }
+    void toggle(const std::string& id)
+    {
+        ++gesture_;
+        const std::string field = id.substr(prefix_.size());
+        write({{id, value(field) >= 0.5 ? 0.0 : 1.0}}, field);
+        ++gesture_;
+    }
+    void cycle_slope(const char* field)
+    {
+        ++gesture_;
+        write({{prefix_ + field, static_cast<double>((juce::roundToInt(value(field)) + 1) % 4)}}, field);
+        ++gesture_;
+    }
+
+    void select(int b)
+    {
+        selected_ = b;
+        refresh();
+    }
+
+    void update_visibility()
+    {
+        for (int b = 0; b < 4; ++b)
+            for (auto& k : band_knobs_[static_cast<std::size_t>(b)]) k.knob->setVisible(b == selected_);
+    }
+
+    // --- The display ---------------------------------------------------------------------------
+    float x_at(double f) const
+    {
+        const auto d = display_.toFloat();
+        return d.getX() + d.getWidth() * static_cast<float>(std::log(f / 20.0) / std::log(1000.0));
+    }
+    double freq_at(float x) const
+    {
+        const auto d = display_.toFloat();
+        return 20.0 * std::pow(1000.0, static_cast<double>((x - d.getX()) / d.getWidth()));
+    }
+    float y_at(double db) const
+    {
+        const auto d = display_.toFloat().reduced(0.0f, 8.0f);
+        return d.getY() + d.getHeight() * static_cast<float>(0.5 - db / (2.0 * kRange));
+    }
+    double db_at(float y) const
+    {
+        const auto d = display_.toFloat().reduced(0.0f, 8.0f);
+        return (0.5 - static_cast<double>((y - d.getY()) / d.getHeight())) * 2.0 * kRange;
+    }
+
+    static juce::Colour band_colour(int b)
+    {
+        static const juce::uint32 c[] = {0xffff8a3d, 0xff5bd36b, 0xff4fb3ff, 0xffd47cff};
+        return juce::Colour(c[b]);
+    }
+
+    void paint_display(juce::Graphics& g)
+    {
+        const auto d = display_.toFloat();
+        g.setColour(juce::Colours::black);
+        g.fillRoundedRectangle(d.expanded(3.0f), 4.0f);
+        juce::ColourGradient bg(juce::Colour(0xff0b1016), d.getX(), d.getY(), juce::Colour(0xff060809), d.getX(), d.getBottom(), false);
+        g.setGradientFill(bg);
+        g.fillRect(d);
+        juce::Graphics::ScopedSaveState clip(g);
+        g.reduceClipRegion(d.toNearestInt());
+        // Grid.
+        g.setFont(juce::FontOptions(8.0f));
+        for (double f : {30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0, 20000.0}) {
+            const float x = x_at(f);
+            const bool major = f == 100.0 || f == 1000.0 || f == 10000.0;
+            g.setColour(juce::Colours::white.withAlpha(major ? 0.14f : 0.06f));
+            g.drawVerticalLine(juce::roundToInt(x), d.getY(), d.getBottom());
+            g.setColour(juce::Colours::white.withAlpha(0.4f));
+            const juce::String label = f >= 1000.0 ? juce::String(static_cast<int>(f / 1000.0)) + "k" : juce::String(static_cast<int>(f));
+            g.drawText(label, juce::Rectangle<float>(x + 2.0f, d.getBottom() - 11.0f, 30.0f, 10.0f), juce::Justification::centredLeft);
+        }
+        for (double db : {-12.0, -6.0, 0.0, 6.0, 12.0}) {
+            const float y = y_at(db);
+            g.setColour(juce::Colours::white.withAlpha(db == 0.0 ? 0.2f : 0.06f));
+            g.drawHorizontalLine(juce::roundToInt(y), d.getX(), d.getRight());
+            g.setColour(juce::Colours::white.withAlpha(0.4f));
+            g.drawText((db > 0 ? "+" : "") + juce::String(static_cast<int>(db)), juce::Rectangle<float>(d.getX() + 3.0f, y - 10.0f, 24.0f, 10.0f),
+                       juce::Justification::centredLeft);
+        }
+        // The analyser: what it plays, filled.
+        if (has_spectrum_) {
+            juce::Path p;
+            p.startNewSubPath(d.getX(), d.getBottom());
+            for (int i = 0; i < kBins; ++i) {
+                const float x = d.getX() + d.getWidth() * static_cast<float>(i) / static_cast<float>(kBins - 1);
+                const float level = juce::jlimit(-90.0f, 0.0f, spectrum_[static_cast<std::size_t>(i)]);
+                p.lineTo(x, d.getBottom() - d.getHeight() * (level + 90.0f) / 90.0f);
+            }
+            p.lineTo(d.getRight(), d.getBottom());
+            p.closeSubPath();
+            g.setColour(juce::Colour(0xff2d5f8a).withAlpha(0.55f));
+            g.fillPath(p);
+            juce::Path in;
+            for (int i = 0; i < kBins; ++i) {
+                const float x = d.getX() + d.getWidth() * static_cast<float>(i) / static_cast<float>(kBins - 1);
+                const float level = juce::jlimit(-90.0f, 0.0f, spectrum_in_[static_cast<std::size_t>(i)]);
+                const float y = d.getBottom() - d.getHeight() * (level + 90.0f) / 90.0f;
+                if (i == 0) in.startNewSubPath(x, y);
+                else in.lineTo(x, y);
+            }
+            g.setColour(juce::Colours::white.withAlpha(0.35f));
+            g.strokePath(in, juce::PathStrokeType(1.0f));
+            g.setColour(juce::Colours::white.withAlpha(0.5f));
+            g.setFont(juce::FontOptions(8.0f, juce::Font::bold));
+            g.drawText("ANALYSER  IN / OUT", d.reduced(8.0f, 6.0f), juce::Justification::topLeft);
+        }
+        const double sr = sr_ > 0 ? sr_ : 48000.0;
+        const int steps = std::max(64, static_cast<int>(d.getWidth()));
+        // Each band's own shape, tinted.
+        for (int b = 0; b < 4; ++b) {
+            const auto& band = settings_.bands[static_cast<std::size_t>(b)];
+            if (!band.on || std::abs(band.gain_db) < 0.05) continue;
+            juce::Path p;
+            p.startNewSubPath(d.getX(), y_at(0.0));
+            for (int i = 0; i <= steps; ++i) {
+                const float x = d.getX() + d.getWidth() * static_cast<float>(i) / static_cast<float>(steps);
+                p.lineTo(x, y_at(std::clamp(settings_.band_response_db(b, freq_at(x), sr, band.gain_db), -kRange - 2, kRange + 2)));
+            }
+            p.lineTo(d.getRight(), y_at(0.0));
+            p.closeSubPath();
+            g.setColour(band_colour(b).withAlpha(b == selected_ ? 0.22f : 0.1f));
+            g.fillPath(p);
+        }
+        // The curve as set, and (dynamic bands moving) as it plays now.
+        auto curve = [&](const float* gains) {
+            juce::Path p;
+            for (int i = 0; i <= steps; ++i) {
+                const float x = d.getX() + d.getWidth() * static_cast<float>(i) / static_cast<float>(steps);
+                const float y = y_at(std::clamp(settings_.response_db(freq_at(x), sr, gains) - settings_.out_db, -kRange - 4, kRange + 4));
+                if (i == 0) p.startNewSubPath(x, y);
+                else p.lineTo(x, y);
+            }
+            return p;
+        };
+        bool any_dyn = false;
+        for (const auto& b : settings_.bands) any_dyn = any_dyn || (b.on && b.dyn);
+        if (any_dyn && live_valid_) {
+            g.setColour(juce::Colour(0xff7fd7ff).withAlpha(0.9f));
+            g.strokePath(curve(live_.data()), juce::PathStrokeType(1.6f));
+        }
+        g.setColour(juce::Colour(0xfff2d36b).withAlpha(bypass_ ? 0.35f : 1.0f));
+        g.strokePath(curve(nullptr), juce::PathStrokeType(2.2f));
+        // The nodes.
+        for (int b = 0; b < 4; ++b) {
+            const auto& band = settings_.bands[static_cast<std::size_t>(b)];
+            const auto c = node(b);
+            const float rad = b == selected_ ? 9.0f : 7.5f;
+            g.setColour(band_colour(b).withAlpha(band.on ? 1.0f : 0.35f));
+            g.fillEllipse(juce::Rectangle<float>(rad * 2, rad * 2).withCentre(c));
+            if (b == selected_) {
+                g.setColour(juce::Colours::white);
+                g.drawEllipse(juce::Rectangle<float>(rad * 2 + 4, rad * 2 + 4).withCentre(c), 1.5f);
+            }
+            if (band.dyn) {
+                // The dynamic range: a ring where the gain is now.
+                g.setColour(juce::Colour(0xff7fd7ff));
+                g.drawEllipse(juce::Rectangle<float>(rad * 2 + 8, rad * 2 + 8).withCentre(c), 1.0f);
+            }
+            g.setColour(juce::Colours::black);
+            g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+            g.drawText(juce::String(b + 1), juce::Rectangle<float>(rad * 2, rad * 2).withCentre(c), juce::Justification::centred);
+        }
+        if (settings_.solo > 0) {
+            g.setColour(band_colour(settings_.solo - 1));
+            g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+            g.drawText("SOLO BAND " + juce::String(settings_.solo), d.reduced(8.0f, 6.0f), juce::Justification::topRight);
+        }
+    }
+
+    /// The spectrum of the last `kFft` samples, on log-spaced bins, falling back slowly.
+    void analyse(std::array<float, 240>& spectrum)
+    {
+        std::array<std::complex<float>, kFft> x;
+        for (int i = 0; i < kFft; ++i) {
+            const float w = 0.5f - 0.5f * std::cos(2.0f * kPi * static_cast<float>(i) / static_cast<float>(kFft - 1));
+            x[static_cast<std::size_t>(i)] = {samples_[static_cast<std::size_t>(i)] * w, 0.0f};
+        }
+        // Radix-2 FFT, in place.
+        for (int i = 1, j = 0; i < kFft; ++i) {
+            int bit = kFft >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) std::swap(x[static_cast<std::size_t>(i)], x[static_cast<std::size_t>(j)]);
+        }
+        for (int len = 2; len <= kFft; len <<= 1) {
+            const float ang = -2.0f * kPi / static_cast<float>(len);
+            const std::complex<float> wl(std::cos(ang), std::sin(ang));
+            for (int i = 0; i < kFft; i += len) {
+                std::complex<float> w(1.0f, 0.0f);
+                for (int k = 0; k < len / 2; ++k) {
+                    const auto u = x[static_cast<std::size_t>(i + k)], v = x[static_cast<std::size_t>(i + k + len / 2)] * w;
+                    x[static_cast<std::size_t>(i + k)] = u + v;
+                    x[static_cast<std::size_t>(i + k + len / 2)] = u - v;
+                    w *= wl;
+                }
+            }
+        }
+        const double sr = sr_ > 0 ? sr_ : 48000.0;
+        for (int i = 0; i < kBins; ++i) {
+            const double f = 20.0 * std::pow(1000.0, static_cast<double>(i) / (kBins - 1));
+            // Between FFT bins (the low end), interpolated; above, the loudest bin in reach.
+            const double pos = std::clamp(f / sr * kFft, 1.0, kFft / 2.0 - 2.0);
+            const double next_f = 20.0 * std::pow(1000.0, static_cast<double>(i + 1) / (kBins - 1));
+            const int lo = static_cast<int>(pos), hi = std::clamp(static_cast<int>(next_f / sr * kFft), lo + 1, kFft / 2 - 1);
+            float mag = 0.0f;
+            if (hi - lo <= 1) {
+                const float t = static_cast<float>(pos - lo);
+                mag = std::abs(x[static_cast<std::size_t>(lo)]) * (1.0f - t) + std::abs(x[static_cast<std::size_t>(lo + 1)]) * t;
+            } else {
+                for (int k = lo; k < hi; ++k) mag = std::max(mag, std::abs(x[static_cast<std::size_t>(k)]));
+            }
+            mag *= 4.0f / static_cast<float>(kFft);
+            const float db = 20.0f * std::log10(mag + 1e-9f);
+            auto& s = spectrum[static_cast<std::size_t>(i)];
+            s = db > s ? db : s - 1.5f;  // falls at about 45 dB a second
+        }
+    }
+
+    AppContext& context_;
+    std::string owner_;
+    int slot_;
+    std::string prefix_;
+    DynEqSettings settings_;
+    int selected_ = 1;
+    bool bypass_ = false, refreshing_ = false;
+    int gesture_ = 0, drag_band_ = -1;
+    std::array<std::vector<Knob>, 4> band_knobs_;
+    std::vector<Knob> global_knobs_;
+    std::array<hw::Keycap, 4> band_keys_{hw::Keycap{"1", true}, hw::Keycap{"2", true}, hw::Keycap{"3", true}, hw::Keycap{"4", true}};
+    std::array<hw::Keycap, 4> band_on_{hw::Keycap{"ON", true}, hw::Keycap{"ON", true}, hw::Keycap{"ON", true}, hw::Keycap{"ON", true}};
+    std::array<hw::Keycap, 3> shape_{hw::Keycap{"LOW SHELF", true}, hw::Keycap{"BELL", true}, hw::Keycap{"HIGH SHELF", true}};
+    hw::Keycap dyn_{"DYNAMIC", true}, solo_{"SOLO", true}, hp_on_{"HP", true}, lp_on_{"LP", true}, hp_slope_{"24 dB"},
+        lp_slope_{"24 dB"}, auto_gain_{"AUTO GAIN", true}, ext_sc_{"EXT SC", true}, key_source_{"KEY: SELF"};
+    juce::Rectangle<int> logo_, power_, display_;
+    int band_divider_ = 0;
+    std::vector<Group> groups_;
+    std::array<float, 4> live_{};
+    bool live_valid_ = false;
+    float auto_db_ = 0.0f;
+    double sr_ = 48000.0;
+    static constexpr int kBins = 240;
+    std::array<float, kFft> samples_{};
+    std::array<float, kBins> spectrum_ = filled(-120.0f), spectrum_in_ = filled(-120.0f);
+    static std::array<float, kBins> filled(float v)
+    {
+        std::array<float, kBins> a{};
+        a.fill(v);
+        return a;
+    }
+    bool has_spectrum_ = false;
+};
+
 /// The rack: rails down both sides, the units bolted in, and an empty bay
 /// to add another.
 class RackContent final : public juce::Component, private juce::Timer {
@@ -590,7 +1357,7 @@ public:
         startTimerHz(30);
     }
 
-    GearUnit* unit(int slot)
+    RackUnit* unit(int slot)
     {
         for (auto& u : units_)
             if (u->slot() == slot) return u.get();
@@ -670,7 +1437,9 @@ private:
         const auto* list = inserts_of(context_, owner_);
         const int n = list ? static_cast<int>(list->size()) : 0;
         for (int i = 0; i < n; ++i) {
-            units_.push_back(std::make_unique<GearUnit>(context_, owner_, i, (*list)[static_cast<std::size_t>(i)]));
+            const auto& slot = (*list)[static_cast<std::size_t>(i)];
+            if (slot.kind == "dyneq") units_.push_back(std::make_unique<DynEqUnit>(context_, owner_, i));
+            else units_.push_back(std::make_unique<GearUnit>(context_, owner_, i, slot));
             addAndMakeVisible(*units_.back());
         }
         has_bay_ = n < 5;
@@ -682,6 +1451,7 @@ private:
     void timerCallback() override
     {
         if (!isShowing()) return;
+        for (auto& u : units_) u->tick();
         bool any = false;
         for (auto& u : units_) any = any || u->has_vu();
         if (!any) return;
@@ -694,7 +1464,7 @@ private:
 
     AppContext& context_;
     std::string owner_;
-    std::vector<std::unique_ptr<GearUnit>> units_;
+    std::vector<std::unique_ptr<RackUnit>> units_;
     std::string signature_;
     bool has_bay_ = false;
     juce::Rectangle<int> bay_;

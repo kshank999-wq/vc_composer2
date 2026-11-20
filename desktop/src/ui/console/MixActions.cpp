@@ -36,7 +36,7 @@ juce::String insert_name(const project::InsertSlot& s)
 const std::vector<std::pair<std::string, const char*>>& builtin_inserts()
 {
     static const std::vector<std::pair<std::string, const char*>> list{
-        {"eq", "VC EQ"},         {"compressor", "VC Compressor"}, {"gate", "VC Gate"},
+        {"eq", "VC EQ"}, {"dyneq", "VC Dynamic EQ"},         {"compressor", "VC Compressor"}, {"gate", "VC Gate"},
         {"limiter", "VC Limiter"}, {"reverb", "VC Reverb"},       {"delay", "VC Delay"},
         {"saturation", "VC Saturator"}, {"hardware", "VC Outboard (Hardware Insert)"}};
     return list;
@@ -110,7 +110,7 @@ void show_insert_menu(AppContext& context, const std::string& owner_id, int inde
         m.addItem(5, "Open window...");
         if (s.suggestion && s.kind != "plugin") m.addItem(3, "Use the built-in " + insert_name(s));
         m.addItem(1, "Bypass", true, s.bypass);
-        if (s.kind == "compressor" || s.kind == "gate" || s.kind == "plugin") {
+        if (s.kind == "compressor" || s.kind == "gate" || s.kind == "dyneq" || s.kind == "plugin") {
             const auto key = sidechain_text(context, owner_id, static_cast<int>(at));
             m.addItem(6, key.isEmpty() ? juce::String("Sidechain...") : "Sidechain: " + key + "...");
         }

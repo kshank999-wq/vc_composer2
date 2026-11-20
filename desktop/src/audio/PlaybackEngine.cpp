@@ -2198,6 +2198,14 @@ juce::AudioPluginInstance* PlaybackEngine::insert_plugin(const std::string& stri
     return it == inserts_.end() ? nullptr : it->second->plugin();
 }
 
+InsertProcessor* PlaybackEngine::insert_processor(const std::string& strip_id, int slot) const
+{
+    auto keys = insert_keys_.find(strip_id);
+    if (keys == insert_keys_.end() || slot < 0 || slot >= static_cast<int>(keys->second.size())) return nullptr;
+    auto it = inserts_.find(keys->second[static_cast<std::size_t>(slot)]);
+    return it == inserts_.end() ? nullptr : it->second.get();
+}
+
 std::vector<audio::LoudnessBlock> PlaybackEngine::take_loudness_blocks()
 {
     std::vector<audio::LoudnessBlock> out;

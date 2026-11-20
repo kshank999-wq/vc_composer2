@@ -49,6 +49,7 @@
 #include "ui/hw/HwGallery.h"
 #include "ui/console/MixActions.h"
 #include "ui/console/RackGear.h"
+#include "audio/DynamicEq.h"
 #include "audio/ChannelDsp.h"
 #include "ui/console/ConsoleStrip.h"
 #include "ui/console/ConsoleView.h"
@@ -6399,6 +6400,192 @@ void mixer_popout_checks(MainWindow& window, const juce::File& dir)
     check(!main.mixer_popped() && deck.getParentComponent() == &main, "closing the mixer's window docks it");
 }
 
+/// VC Dynamic EQ: what it does to the sound (bands, dynamics, sidechain,
+/// auto gain, filters) and its unit in the rack (nodes, keys, analyser).
+void dyneq_checks(MainWindow& window, const juce::File& dir)
+{
+    constexpr double sr = 48000.0;
+    constexpr int kBlock = 512;
+    auto sine = [](double freq, float amp, int n, int offset = 0) {
+        std::vector<float> v(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i)
+            v[static_cast<std::size_t>(i)] = amp * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * freq * (i + offset) / sr));
+        return v;
+    };
+    // Runs a processor over `seconds` of a signal (and key); the output's
+    // level (dB RMS) over the last quarter.
+    auto run = [&](const project::InsertSlot& slot, double freq, float amp, double seconds, const std::vector<float>* key = nullptr,
+                   std::vector<float>* out_all = nullptr) {
+        DynamicEqInsert eq;
+        eq.prepare(sr, kBlock);
+        eq.set_params(slot);
+        const int total = static_cast<int>(seconds * sr);
+        double sum = 0.0;
+        int counted = 0;
+        for (int pos = 0; pos < total; pos += kBlock) {
+            auto l = sine(freq, amp, kBlock, pos), r = l;
+            if (key) eq.set_key(key->data() + pos % (static_cast<int>(key->size()) - kBlock), key->data() + pos % (static_cast<int>(key->size()) - kBlock));
+            eq.process(l.data(), r.data(), kBlock);
+            if (out_all) out_all->insert(out_all->end(), l.begin(), l.end());
+            if (pos >= total * 3 / 4)
+                for (float x : l) {
+                    sum += static_cast<double>(x) * x;
+                    ++counted;
+                }
+        }
+        return 10.0 * std::log10(sum / std::max(1, counted) + 1e-20);
+    };
+    auto slot_with = [](std::map<std::string, double> params) {
+        project::InsertSlot s;
+        s.kind = "dyneq";
+        s.suggestion = false;
+        s.params = std::move(params);
+        return s;
+    };
+    const double ref = 10.0 * std::log10(0.25 * 0.25 / 2.0);
+    // Flat: the bands at 0 dB leave the sound exactly as it was (a null).
+    {
+        std::vector<float> out;
+        run(slot_with({}), 1000.0, 0.25f, 0.2, nullptr, &out);
+        const auto in = sine(1000.0, 0.25f, static_cast<int>(out.size()));
+        float worst = 0.0f;
+        for (std::size_t i = 0; i < out.size(); ++i) worst = std::max(worst, std::abs(out[i] - in[i]));
+        check(worst < 1e-5f, "VC Dynamic EQ with its bands at 0 dB passes the sound untouched (null " + juce::String(worst, 7) + ")");
+    }
+    // A bell: +6 dB at its centre, nothing two decades away.
+    {
+        const auto s = slot_with({{"b2_freq", 1000.0}, {"b2_gain_db", 6.0}, {"b2_q", 1.0}});
+        const double at = run(s, 1000.0, 0.25f, 0.3) - ref, away = run(s, 60.0, 0.25f, 0.5) - ref;
+        const double drawn = DynEqSettings::from_slot(s).response_db(1000.0, sr);
+        check(std::abs(at - 6.0) < 0.4 && std::abs(away) < 0.4 && std::abs(drawn - at) < 0.4,
+              "a band's bell boosts +6 dB at its centre and leaves 60 Hz alone; the drawn curve agrees (" + juce::String(at, 2) +
+                  " / " + juce::String(away, 2) + " / drawn " + juce::String(drawn, 2) + " dB)");
+    }
+    // Dynamic: above the threshold the band comes down; quiet sound is left alone.
+    {
+        const auto s = slot_with({{"b2_freq", 1000.0}, {"b2_dyn", 1.0}, {"b2_threshold_db", -40.0}, {"b2_ratio", 4.0}});
+        const double loud = run(s, 1000.0, 0.5f, 0.5) - 10.0 * std::log10(0.5 * 0.5 / 2.0);
+        const double quiet = run(s, 1000.0, 0.001f, 0.5) - 10.0 * std::log10(0.001 * 0.001 / 2.0);
+        check(loud < -10.0 && std::abs(quiet) < 0.5, "a dynamic band cuts a loud note at its frequency, not a quiet one (" +
+                                                      juce::String(loud, 1) + " / " + juce::String(quiet, 2) + " dB)");
+    }
+    // Sidechain: keyed by another signal, the band ducks even a quiet sound.
+    {
+        const auto s = slot_with({{"b2_freq", 1000.0}, {"b2_dyn", 1.0}, {"b2_threshold_db", -40.0}, {"b2_ratio", 8.0}, {"ext_sc", 1.0}});
+        const auto key = sine(1000.0, 0.5f, static_cast<int>(sr));
+        const double keyed = run(s, 1000.0, 0.005f, 0.5, &key) - 10.0 * std::log10(0.005 * 0.005 / 2.0);
+        const double unkeyed = run(s, 1000.0, 0.005f, 0.5) - 10.0 * std::log10(0.005 * 0.005 / 2.0);
+        check(keyed < -10.0 && std::abs(unkeyed) < 0.5, "with EXT SC another track's signal triggers the band (" + juce::String(keyed, 1) +
+                                                             " dB keyed, " + juce::String(unkeyed, 2) + " dB without)");
+    }
+    // Auto gain: a 12 dB boost comes back to the input's level.
+    {
+        const double boosted = run(slot_with({{"b2_freq", 1000.0}, {"b2_gain_db", 12.0}}), 1000.0, 0.1f, 4.0) - 10.0 * std::log10(0.01 / 2.0);
+        const double matched = run(slot_with({{"b2_freq", 1000.0}, {"b2_gain_db", 12.0}, {"auto_gain", 1.0}}), 1000.0, 0.1f, 4.0) -
+                               10.0 * std::log10(0.01 / 2.0);
+        check(boosted > 11.0 && std::abs(matched) < 1.0, "AUTO GAIN brings a 12 dB boost back to the input's level (" +
+                                                           juce::String(boosted, 1) + " -> " + juce::String(matched, 2) + " dB)");
+    }
+    // Filters: a 48 dB/oct high-pass at 200 Hz takes 50 Hz far down.
+    {
+        const double cut = run(slot_with({{"hp_on", 1.0}, {"hp_freq", 200.0}, {"hp_slope", 3.0}}), 50.0, 0.25f, 0.5) - ref;
+        check(cut < -40.0, "the 48 dB/oct high-pass at 200 Hz takes 50 Hz down " + juce::String(-cut, 0) + " dB");
+    }
+
+    // In the rack.
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto track = session.add_audio_track("Lead Vocal", false);
+    const auto kick = session.add_audio_track("Kick", false);
+    session.update_track_mix(track, "Dyn EQ", [](project::Track& t) {
+        project::InsertSlot slot;
+        slot.kind = "dyneq";
+        slot.suggestion = false;
+        t.inserts.push_back(slot);
+    });
+    check(console::insert_name(session.data().find_track(track)->inserts[0]) == "VC Dynamic EQ",
+          "the insert menu offers VC Dynamic EQ (the VC EQ stays as it was)");
+    ctx.engine.rebuild_now();
+    main.show_workspace(MainComponent::Workspace::Producer);
+    pump(100);
+    ctx.show_insert_window(track, 0);
+    pump(300);
+    auto* rack = console::rack_window(track);
+    std::function<juce::Component*(juce::Component&, const juce::String&)> by_id = [&](juce::Component& c, const juce::String& id) -> juce::Component* {
+        if (c.getComponentID() == id) return &c;
+        for (auto* k : c.getChildren())
+            if (auto* f = by_id(*k, id)) return f;
+        return nullptr;
+    };
+    auto* unit = rack ? by_id(*rack, "gear_0") : nullptr;
+    check(unit && unit->getTitle() == "VC Dynamic EQ" && unit->getHeight() == 4 * 96,
+          "VC Dynamic EQ opens in the rack as a 4U unit (VC EQ on its face)");
+    if (!unit) return;
+    auto key = [&](const char* id) { return dynamic_cast<juce::Button*>(by_id(*unit, id)); };
+    auto param = [&](const char* name) {
+        const auto& p = session.data().find_track(track)->inserts[0].params;
+        auto it = p.find(name);
+        return it == p.end() ? std::numeric_limits<double>::quiet_NaN() : it->second;
+    };
+    // Band 3's key shows its controls; dragging its node sets frequency and gain in one step.
+    if (auto* b3 = key("dyneq_band_3")) b3->triggerClick();
+    pump(80);
+    const auto node_text = unit->getProperties()["node3"].toString();
+    const juce::Point<float> from{node_text.upToFirstOccurrenceOf(" ", false, false).getFloatValue(),
+                                  node_text.fromFirstOccurrenceOf(" ", false, false).getFloatValue()};
+    const juce::Point<float> to = from.translated(-60.0f, -40.0f);
+    unit->mouseDown(mouse_event(*unit, from, from, false));
+    unit->mouseDrag(mouse_event(*unit, from.translated(-30.0f, -20.0f), from, true));
+    unit->mouseDrag(mouse_event(*unit, to, from, true));
+    unit->mouseUp(mouse_event(*unit, to, from, true));
+    pump(80);
+    const double f3 = param("b3_freq"), g3 = param("b3_gain_db");
+    session.undo();
+    const bool one_step = std::isnan(param("b3_freq")) && std::isnan(param("b3_gain_db"));
+    session.redo();
+    check(f3 < 2400.0 && f3 > 300.0 && g3 > 3.0 && one_step,
+          "dragging band 3's node sets its frequency and gain, one undo step (" + juce::String(f3, 0) + " Hz, " +
+              juce::String(g3, 1) + " dB)");
+    auto* q3 = dynamic_cast<juce::Slider*>(by_id(*unit, "dyneq_b3_q"));
+    auto* thr3 = dynamic_cast<juce::Slider*>(by_id(*unit, "dyneq_b3_threshold_db"));
+    auto* q1 = dynamic_cast<juce::Slider*>(by_id(*unit, "dyneq_b1_q"));
+    check(q3 && q3->isVisible() && thr3 && thr3->isVisible() && q1 && !q1->isVisible(),
+          "the selected band's knobs show (Q, freq, gain, threshold, ratio, attack, release); the others' hide");
+    if (auto* dyn = key("dyneq_dyn")) dyn->triggerClick();
+    pump(60);
+    if (auto* ag = key("dyneq_auto_gain")) ag->triggerClick();
+    pump(60);
+    session.set_sidechain(track, 0, kick);
+    if (auto* sc = key("dyneq_ext_sc")) sc->triggerClick();
+    pump(80);
+    auto* source = key("dyneq_key_source");
+    check(param("b3_dyn") == 1.0 && param("auto_gain") == 1.0 && param("ext_sc") == 1.0 && source &&
+              source->getButtonText() == "KEY: KICK",
+          "DYNAMIC, AUTO GAIN and EXT SC switch on; the key reads the sidechain source (" + (source ? source->getButtonText() : juce::String()) + ")");
+    // Real-time analysis: what the processor plays shows in the display.
+    ctx.engine.rebuild_now();
+    if (auto* proc = dynamic_cast<DynamicEqInsert*>(ctx.engine.insert_processor(track, 0))) {
+        for (int b = 0; b < 40; ++b) {
+            std::vector<float> l(kBlock), r(kBlock);
+            juce::Random rnd(b + 1);
+            for (int i = 0; i < kBlock; ++i) l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] = (rnd.nextFloat() - 0.5f) * 0.4f;
+            proc->process(l.data(), r.data(), kBlock);
+        }
+    }
+    pump(300);
+    if (rack) {
+        rack->setSize(rack->getWidth(), 4 * 96 + 60);
+        pump(200);
+        shoot(*rack, dir, "34e-vc-dynamic-eq");
+    }
+    check(ctx.engine.insert_processor(track, 0) != nullptr, "the rack reads the live processor for its analyser and dynamic curve");
+    if (auto* dw = dynamic_cast<juce::DocumentWindow*>(rack)) dw->closeButtonPressed();
+    pump(60);
+}
+
 void slur_tie_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -12195,6 +12382,7 @@ int main(int argc, char** argv)
                 {"return_to_start_checks", return_to_start_checks},
                 {"slur_tie_checks", slur_tie_checks},
                 {"rack_gear_checks", rack_gear_checks},
+                {"dyneq_checks", dyneq_checks},
                 {"producer_track_checks", producer_track_checks},
                 {"mixer_popout_checks", mixer_popout_checks},
                 {"account_checks", account_checks}};
@@ -12833,6 +13021,8 @@ int main(int argc, char** argv)
         slur_tie_checks(window, dir);
         section("rack_gear_checks");
         rack_gear_checks(window, dir);
+        section("dyneq_checks");
+        dyneq_checks(window, dir);
         section("mixer_popout_checks");
         mixer_popout_checks(window, dir);
         section("sidechain_checks");

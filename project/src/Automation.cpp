@@ -102,10 +102,44 @@ const StripField* strip_field(const std::string& id)
     return nullptr;
 }
 
+/// VC Dynamic EQ's parameters (desktop/src/audio/DynamicEq.h), in its
+/// automation order: four bands of ten, then the filters and the output.
+std::vector<ParamInfo> dyneq_params()
+{
+    std::vector<ParamInfo> out;
+    const double freqs[] = {120, 600, 2500, 8000};
+    for (int b = 1; b <= 4; ++b) {
+        const std::string k = "b" + std::to_string(b) + "_", n = "Band " + std::to_string(b) + " ";
+        out.push_back(P(k + "on", n + "On", "", 0, 1, 1, true));
+        out.push_back(P(k + "type", n + "Shape", "shape", 0, 2, 1));
+        out.push_back(P(k + "freq", n + "Freq", "Hz", 20, 20000, freqs[b - 1], false, true));
+        out.push_back(P(k + "q", n + "Q", "", 0.1, 18, 1, false, true));
+        out.push_back(P(k + "gain_db", n + "Gain", "dB", -24, 24, 0));
+        out.push_back(P(k + "dyn", n + "Dynamic", "", 0, 1, 0, true));
+        out.push_back(P(k + "threshold_db", n + "Threshold", "dB", -80, 0, -30));
+        out.push_back(P(k + "ratio", n + "Ratio", ":1", 1, 20, 2, false, true));
+        out.push_back(P(k + "attack_ms", n + "Attack", "ms", 0.1, 500, 10, false, true));
+        out.push_back(P(k + "release_ms", n + "Release", "ms", 5, 5000, 150, false, true));
+    }
+    out.push_back(P("hp_on", "HP On", "", 0, 1, 0, true));
+    out.push_back(P("hp_freq", "HP Freq", "Hz", 10, 2000, 40, false, true));
+    out.push_back(P("hp_slope", "HP Slope", "slope", 0, 3, 1));
+    out.push_back(P("lp_on", "LP On", "", 0, 1, 0, true));
+    out.push_back(P("lp_freq", "LP Freq", "Hz", 500, 22000, 18000, false, true));
+    out.push_back(P("lp_slope", "LP Slope", "slope", 0, 3, 1));
+    out.push_back(P("dry_mix", "Dry Mix", "", 0, 1, 0));
+    out.push_back(P("out_db", "Out Gain", "dB", -24, 24, 0));
+    out.push_back(P("solo", "Band Solo", "band", 0, 4, 0));
+    out.push_back(P("auto_gain", "Auto Gain", "", 0, 1, 0, true));
+    out.push_back(P("ext_sc", "External Sidechain", "", 0, 1, 0, true));
+    return out;
+}
+
 /// Built-in insert params, as the engine documents them in ChannelDsp.h.
 const std::map<std::string, std::vector<ParamInfo>>& insert_params()
 {
     static const std::map<std::string, std::vector<ParamInfo>> table = {
+        {"dyneq", dyneq_params()},
         {"compressor",
          {P("threshold_db", "Threshold", "dB", -60, 0, -18), P("ratio", "Ratio", ":1", 1, 20, 3, false, true),
           P("attack_ms", "Attack", "ms", 0.1, 100, 10, false, true),
