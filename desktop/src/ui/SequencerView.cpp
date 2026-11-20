@@ -1,5 +1,7 @@
 #include "ui/SequencerView.h"
 
+#include "ui/console/MixActions.h"
+
 #include "ui/Deferred.h"
 
 #include <algorithm>
@@ -39,7 +41,7 @@ constexpr int kRuler = 34;
 constexpr int kLaneHeight = 72;   ///< An instrument or MIDI track, collapsed.
 constexpr int kAudioRow = 84;     ///< An audio track.
 constexpr int kExpandedRow = 272; ///< An instrument track expanded: piano roll and velocity inline.
-constexpr int kAudioLane = 26;    ///< An instrument track's own audio lane, at the bottom of its row.
+constexpr int kLaneTrack = 64;    ///< An instrument track's own audio lane, shown (Audio or Both) as a track of its own under it.
 constexpr int kHeaderTop = 52;    ///< Header rows 1-2; an expanded row's piano roll starts under them.
 constexpr int kRollInset = kHeader - 62;  ///< The inline piano roll leaves the header's left part to it.
 constexpr int kMinRow = 48;
@@ -100,6 +102,8 @@ struct LaneView {
     int number = 0;
     bool midi_only = false;  ///< A MIDI track (external instrument) rather than an Instrument track.
     bool mute = false, solo = false, monitor_input = false;
+    bool lane_mute = false, lane_solo = false;  ///< The audio lane's own switches.
+    juce::String output;                         ///< "OUT > MASTER" (shared by the lane).
     double gain_db = 0.0;
     std::string playback = "both";
     std::string record_source = "midi";
@@ -347,7 +351,15 @@ struct Model final : AutomationTimeline {
     bool is_expanded(const LaneView& l) const { return has_audio_lane(l) && expanded == l.id; }
     /// The height slider (bottom right): every row taller or shorter.
     double height_zoom = 1.0;
-    int base_height(const LaneView& l) const
+    /// The instrument track's audio lane under it: shown (as a track of its
+    /// own) while the track plays its audio or both; hidden on MIDI.
+    bool shows_audio_lane(const LaneView& l) const { return has_audio_lane(l) && l.playback != "midi"; }
+    int lane_height(const LaneView& l) const
+    {
+        return shows_audio_lane(l) ? std::max(40, static_cast<int>(std::lround(kLaneTrack * height_zoom))) : 0;
+    }
+    /// The track's own part of its row (the MIDI, or the piano roll expanded).
+    int midi_height(const LaneView& l) const
     {
         if (l.bus) return kBusHeight;
         const std::string key = is_expanded(l) ? l.id + "#x" : l.id;
@@ -355,18 +367,19 @@ struct Model final : AutomationTimeline {
         if (auto it = heights.find(key); it != heights.end()) h = it->second;
         return std::max(min_height(l), static_cast<int>(std::lround(h * height_zoom)));
     }
+    int base_height(const LaneView& l) const { return midi_height(l) + (l.bus ? 0 : lane_height(l)); }
     /// A row's height as stored (before the height slider).
     int stored_height(int shown) const { return static_cast<int>(std::lround(shown / std::max(0.1, height_zoom))); }
     /// The smallest a row can be dragged to.
     int min_height(const LaneView& l) const
     {
-        return is_expanded(l) ? kHeaderTop + kRollHeader + kVelocity + 4 * kKeyHeight + kAudioLane : kMinRow;
+        return is_expanded(l) ? kHeaderTop + kRollHeader + kVelocity + 4 * kKeyHeight : kMinRow;
     }
     /// Where a track's main-lane clips sit: the whole row of an audio track,
     /// the audio lane at the bottom of an instrument track's.
     juce::Rectangle<int> clip_row(const LaneView& l, juce::Rectangle<int> base) const
     {
-        return has_audio_lane(l) ? base.withTop(base.getBottom() - kAudioLane) : base;
+        return has_audio_lane(l) ? base.withTop(base.getBottom() - lane_height(l)) : base;
     }
     void set_expanded(const std::string& id)
     {
@@ -505,6 +518,9 @@ struct Model final : AutomationTimeline {
             l.monitor_input = t->monitor == "input";
             l.gain_db = t->gain_db;
             l.playback = t->playback;
+            l.lane_mute = t->lane_mute;
+            l.lane_solo = t->lane_solo;
+            l.output = console::output_text(ctx, t->id);
             l.printed_fx = t->printed_fx;
             for (const auto& slot : t->inserts)
                 l.inserts.push_back(slot.kind.empty() ? 0 : (slot.bypass || slot.suggestion) ? 2 : 1);
@@ -1336,7 +1352,7 @@ public:
             if (const auto* l = resize_edge_at(e.getPosition())) {
                 resize_track_ = l->id;
                 resize_key_ = m_.is_expanded(*l) ? l->id + "#x" : l->id;
-                resize_start_ = m_.base_height(*l);
+                resize_start_ = m_.midi_height(*l);
                 resize_min_ = m_.min_height(*l);
                 return;
             }
@@ -1953,8 +1969,36 @@ private:
             return true;
         }
         if (l.bus) return false;
+        // The audio lane's own header.
+        if (const auto lp = lane_parts(l, row); lp.area.contains(pt)) {
+            if (lp.rec.contains(pt)) {
+                // Records the track's own instrument onto this lane (a print):
+                // nothing to route, it is wired to the track.
+                const bool on = l.armed && l.record_source == "print";
+                if (!on) session.set_record_source(id, "print");
+                session.set_record_armed(id, !on);
+                return true;
+            }
+            if (lp.solo.contains(pt)) {
+                session.update_track_mix(id, "Solo audio lane", [on = !l.lane_solo](project::Track& t) { t.lane_solo = on; });
+                return true;
+            }
+            if (lp.mute.contains(pt)) {
+                session.update_track_mix(id, "Mute audio lane", [on = !l.lane_mute](project::Track& t) { t.lane_mute = on; });
+                return true;
+            }
+            if (lp.out.contains(pt)) {
+                console::show_output_menu(m_.ctx, id, *this);
+                return true;
+            }
+            session.select_track(id);
+            return true;
+        }
         if (p.rec.contains(pt)) {
-            session.set_record_armed(id, !l.armed);
+            // The track's own R records MIDI (the lane's R prints audio).
+            const bool on = l.armed && l.record_source != "print";
+            if (!on && l.record_source == "print") session.set_record_source(id, "midi");
+            session.set_record_armed(id, !on);
             return true;
         }
         if (p.solo.contains(pt)) {
@@ -2446,6 +2490,28 @@ private:
         juce::Rectangle<int> route, inserts, print, freeze, roll, score;
     };
 
+    /// The audio lane's own header, under the track's: it reads as a track
+    /// of its own, wired to the track's instrument.
+    struct LaneParts {
+        juce::Rectangle<int> area, tag, name, link, rec, solo, mute, out;
+    };
+    LaneParts lane_parts(const LaneView& l, juce::Rectangle<int> row) const
+    {
+        LaneParts p;
+        const int h = m_.lane_height(l);
+        if (h <= 0) return p;
+        p.area = juce::Rectangle<int>(0, row.getBottom() - h, kHeader, h);
+        const int y = p.area.getY();
+        p.tag = {26, y + 7, 44, 16};
+        p.name = {74, y + 6, kHeader - 82, 18};
+        p.rec = {26, y + 30, 22, 18};
+        p.solo = {51, y + 30, 22, 18};
+        p.mute = {76, y + 30, 22, 18};
+        p.out = {101, y + 30, kHeader - 109, 18};
+        if (h >= 60) p.link = {26, y + 50, kHeader - 34, 11};
+        return p;
+    }
+
     HeaderParts header_parts(const LaneView& l, juce::Rectangle<int> row) const
     {
         HeaderParts p;
@@ -2568,7 +2634,7 @@ private:
         paint_automation_button(g, l, row, m_.show_automation.count(l.id) > 0);
         if (l.bus) return;
         // R S M I, and the volume.
-        key(g, p.rec, "R", l.armed, hw::tok::rec);
+        key(g, p.rec, "R", l.armed && !(m_.shows_audio_lane(l) && l.record_source == "print"), hw::tok::rec);
         key(g, p.solo, "S", l.solo, hw::tok::solo);
         key(g, p.mute, "M", l.mute, hw::tok::mute);
         key(g, p.input, "I", l.monitor_input, hw::tok::input_monitor);
@@ -2619,6 +2685,52 @@ private:
             key(g, p.roll, "Piano roll", true);
             key(g, p.score, "Score", false);
         }
+        paint_lane_header(g, l, row);
+    }
+
+    /// The audio lane's header: its own panel, tag, name, R S M and output,
+    /// and where its input comes from (the track's instrument, wired for you).
+    void paint_lane_header(juce::Graphics& g, const LaneView& l, juce::Rectangle<int> row)
+    {
+        const auto p = lane_parts(l, row);
+        if (p.area.isEmpty()) return;
+        const auto a = p.area.toFloat();
+        g.setGradientFill(juce::ColourGradient::vertical(hw::tok::panel_top.darker(0.15f), a.getY(), hw::tok::panel_bottom.darker(0.2f),
+                                                         a.getBottom()));
+        g.fillRect(a);
+        g.setColour(hw::tok::edge);
+        g.drawHorizontalLine(p.area.getY(), 0.0f, a.getRight());
+        g.setColour(juce::Colours::white.withAlpha(0.05f));
+        g.drawHorizontalLine(p.area.getY() + 1, 0.0f, a.getRight());
+        // The track's colour, then the audio type's: a lane of this track.
+        g.setColour(l.colour);
+        g.fillRect(a.withWidth(5.0f));
+        g.setColour(hw::tok::type_audio);
+        g.fillRect(a.withX(7.0f).withWidth(3.0f).reduced(0.0f, 4.0f));
+        // The elbow: it hangs from the track above.
+        g.setColour(hw::tok::silk.withAlpha(0.7f));
+        g.drawLine(16.0f, a.getY(), 16.0f, a.getY() + 15.0f, 1.2f);
+        g.drawLine(16.0f, a.getY() + 15.0f, 23.0f, a.getY() + 15.0f, 1.2f);
+        const auto tc = hw::tok::type_audio;
+        g.setColour(tc.withAlpha(0.18f));
+        g.fillRoundedRectangle(p.tag.toFloat(), 3.0f);
+        g.setColour(tc);
+        g.drawRoundedRectangle(p.tag.toFloat().reduced(0.5f), 3.0f, 1.0f);
+        g.setFont(hw::fonts::silk(9.5f, 0.08f));
+        g.drawText("AUDIO", p.tag, juce::Justification::centred, false);
+        hw::paint::lcd_window(g, p.name.toFloat());
+        hw::paint::lcd_text(g, (l.name + " audio").toUpperCase(), p.name.toFloat().reduced(5.0f, 0.0f), 10.5f,
+                            juce::Justification::centredLeft, l.lane_mute ? 0.5f : 1.0f);
+        const bool print_armed = l.armed && l.record_source == "print";
+        key(g, p.rec, "R", print_armed, hw::tok::rec);
+        key(g, p.solo, "S", l.lane_solo, hw::tok::solo);
+        key(g, p.mute, "M", l.lane_mute, hw::tok::mute);
+        hw::paint::lcd_window(g, p.out.toFloat());
+        hw::paint::lcd_text(g, l.output.isEmpty() ? juce::String("OUT") : l.output, p.out.toFloat().reduced(4.0f, 0.0f), 9.0f,
+                            juce::Justification::centredLeft);
+        if (!p.link.isEmpty())
+            hw::paint::silk(g, "IN: " + l.name.toUpperCase() + " INSTRUMENT  (LINKED)",
+                            p.link.toFloat(), 8.5f, juce::Justification::centredLeft, tc.withAlpha(0.85f));
     }
 
     void paint_clip(juce::Graphics& g, const LaneView& l, std::size_t index, juce::Rectangle<int> row,
@@ -2794,18 +2906,22 @@ private:
                 paint_notes(g, l, midi);
                 if (dim < 1.0f) g.endTransparencyLayer();
             }
-            g.setColour(juce::Colours::black.withAlpha(0.28f));
+            // The audio lane: a track of its own, under the MIDI.
+            g.setColour(juce::Colours::black.withAlpha(0.22f));
             g.fillRect(audio_lane);
-            g.setColour(hw::tok::type_audio.withAlpha(0.22f));
+            g.setColour(hw::tok::type_audio.withAlpha(0.05f));
+            g.fillRect(audio_lane);
+            g.setColour(hw::tok::edge);
             g.drawHorizontalLine(audio_lane.getY(), static_cast<float>(audio_lane.getX()), static_cast<float>(audio_lane.getRight()));
-            if (!has_main_clips && !(l.armed && m_.recording)) {
-                hw::paint::silk(g, l.record_source == "print"
-                                       ? (l.armed ? "PRINT ARMED - press Record: the instrument goes onto this lane as a WAV, then unloads"
-                                                  : "Records by printing: arm, then Record puts the instrument here as a WAV")
-                                   : l.playback == "midi" ? "Audio lane (off: this track plays its MIDI)"
-                                                          : "Audio lane - print the instrument here as a WAV (arm with Print, then Record)",
-                                audio_lane.reduced(10, 0).toFloat(), 9.0f, juce::Justification::centredLeft,
-                                hw::tok::silk.withAlpha(0.6f));
+            g.setColour(hw::tok::type_audio.withAlpha(0.25f));
+            g.drawHorizontalLine(audio_lane.getY() + 1, static_cast<float>(audio_lane.getX()), static_cast<float>(audio_lane.getRight()));
+            if (!has_main_clips && !(l.armed && m_.recording) && audio_lane.getHeight() > 0) {
+                const bool print_armed = l.armed && l.record_source == "print";
+                hw::paint::silk(g, print_armed ? "ARMED - PRESS RECORD: THE " + l.name.toUpperCase() + " INSTRUMENT RECORDS ONTO THIS LANE"
+                                               : "AUDIO LANE - R RECORDS THE " + l.name.toUpperCase() +
+                                                     " INSTRUMENT HERE (WIRED TO IT, NOTHING TO ROUTE)",
+                                audio_lane.reduced(10, 0).toFloat(), 9.5f, juce::Justification::centredLeft,
+                                print_armed ? hw::tok::rec.withAlpha(0.85f) : hw::tok::silk.withAlpha(0.6f));
             }
             // The track's freeze state, in words (spec: labels, not colour alone).
             if (m_.ctx.track_state) {
@@ -2826,10 +2942,12 @@ private:
         }
 
         const auto clips_row = m_.clip_row(l, row);
-        if (l.playback == "midi" && m_.has_audio_lane(l)) g.beginTransparencyLayer(0.4f);
-        for (std::size_t i = 0; i < l.clips.size(); ++i)
-            if (l.clips[i].lane == 0) paint_clip(g, l, i, clips_row, body, false);
-        if (l.playback == "midi" && m_.has_audio_lane(l)) g.endTransparencyLayer();
+        const bool lane_dim = m_.has_audio_lane(l) && l.lane_mute;
+        if (lane_dim) g.beginTransparencyLayer(0.4f);
+        if (clips_row.getHeight() > 0)
+            for (std::size_t i = 0; i < l.clips.size(); ++i)
+                if (l.clips[i].lane == 0) paint_clip(g, l, i, clips_row, body, false);
+        if (lane_dim) g.endTransparencyLayer();
 
         // A pass being recorded grows from where it started to the playhead.
         if (l.armed && m_.recording && m_.playhead > m_.record_start) {
@@ -3007,7 +3125,7 @@ public:
         int top = -scroll_y_;
         for (const auto& l : m_.lanes) {
             if (m_.is_expanded(l)) {
-                const int h = m_.base_height(l) - kHeaderTop - kAudioLane;
+                const int h = m_.midi_height(l) - kHeaderTop;
                 roll_->setBounds(0, top + kHeaderTop, getWidth() - kScroll, std::max(0, h));
                 if (roll_inset_) roll_inset_(kRollInset);
                 roll_->setVisible(h > 0);
@@ -5621,7 +5739,9 @@ void SequencerView::set_row_height(const std::string& track_id, int height)
     auto& m = impl_->model;
     const auto* l = m.lane(track_id);
     if (!l) return;
-    m.heights[m.is_expanded(*l) ? track_id + "#x" : track_id] = m.stored_height(juce::jlimit(m.min_height(*l), 600, height));
+    // The height asked for is the whole row: the audio lane under it keeps its own.
+    m.heights[m.is_expanded(*l) ? track_id + "#x" : track_id] =
+        m.stored_height(juce::jlimit(m.min_height(*l), 600, height - m.lane_height(*l)));
     impl_->lanes.update_scroll();
     impl_->lanes.repaint();
 }

@@ -21,14 +21,19 @@ TEST_CASE("an instrument track plays MIDI, its audio lane or both, saved and und
     s.new_empty();
     const auto t = s.add_track("Flute", "woodwinds.flute");
     REQUIRE(!t.empty());
-    CHECK(s.data().find_track(t)->playback == "both");
+    CHECK(s.data().find_track(t)->playback == "midi");  // new tracks play their MIDI
     CHECK(s.set_playback(t, "audio"));
     CHECK(s.data().find_track(t)->playback == "audio");
     CHECK(!s.set_playback(t, "audio"));    // unchanged
     CHECK(!s.set_playback(t, "loud"));     // not a choice
     s.undo();
-    CHECK(s.data().find_track(t)->playback == "both");
-    CHECK(s.set_playback(t, "midi"));
+    CHECK(s.data().find_track(t)->playback == "midi");
+    CHECK(s.set_playback(t, "both"));
+    // The audio lane's own mute and solo, saved with the track.
+    CHECK(s.update_track_mix(t, "lane", [](project::Track& x) {
+        x.lane_mute = true;
+        x.lane_solo = true;
+    }));
 
     // An audio clip on the instrument track's own lane.
     project::AudioClip clip;
@@ -48,7 +53,9 @@ TEST_CASE("an instrument track plays MIDI, its audio lane or both, saved and und
     REQUIRE(s.save_as(path, &err));
     session::Session r(catalogs());
     REQUIRE(r.open(path, &err));
-    CHECK(r.data().find_track(t)->playback == "midi");
+    CHECK(r.data().find_track(t)->playback == "both");
+    CHECK(r.data().find_track(t)->lane_mute);
+    CHECK(r.data().find_track(t)->lane_solo);
     CHECK(r.data().find_track(t)->active_version()->audio_clips.size() == 1);
 }
 
@@ -86,7 +93,7 @@ TEST_CASE("a print lands on the track's own audio lane as one undo step, the las
     CHECK(track->active_version()->audio_clips.size() == 1);
     CHECK(track->active_version()->audio_clips[0].lane == 0);
     s.undo();
-    CHECK(s.data().find_track(t)->playback == "both");
+    CHECK(s.data().find_track(t)->playback == "midi");
     CHECK(s.data().find_track(t)->active_version()->audio_clips.empty());
 
     // On an audio track it is a bounce in place: the clips it covers move to

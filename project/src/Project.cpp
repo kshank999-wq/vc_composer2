@@ -1188,6 +1188,8 @@ static json::Value track_to_json(const Track& t)
     o.set("monitor", t.monitor);
     o.set("playback", t.playback);
     if (t.printed_fx) o.set("printed_fx", true);
+    if (t.lane_mute) o.set("lane_mute", true);
+    if (t.lane_solo) o.set("lane_solo", true);
     if (!t.print_signature.empty()) o.set("print_signature", t.print_signature);
     if (t.instrument_unloaded) o.set("instrument_unloaded", true);
     if (t.instrument_suspended) o.set("instrument_suspended", true);
@@ -1561,6 +1563,8 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         t.monitor = j.get_string("monitor", "auto");
         t.playback = j.get_string("playback", "both");
         t.printed_fx = j.get_bool("printed_fx", false);
+        t.lane_mute = j.get_bool("lane_mute", false);
+        t.lane_solo = j.get_bool("lane_solo", false);
         t.print_signature = j.get_string("print_signature");
         t.instrument_unloaded = j.get_bool("instrument_unloaded", false);
         t.instrument_suspended = j.get_bool("instrument_suspended", false);
@@ -1929,7 +1933,7 @@ std::string render_signature(const ProjectData& d, const Track& t)
                           "input", "input_stereo", "monitor", "playback", "print_signature", "instrument_unloaded", "instrument_suspended",
                           "include_in_export", "record_source", "output_bus_id", "template_origin", "automation_mode",
                           "input_quantize", "range_policy", "assignment", "articulation_intents", "fallback_instruments",
-                          "plugin_requirements", "sidechain"})
+                          "plugin_requirements", "sidechain", "lane_mute", "lane_solo"})
         j.remove(k);
     // The strip and inserts count only when the print went through them.
     if (!t.printed_fx) {

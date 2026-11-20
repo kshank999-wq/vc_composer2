@@ -6753,6 +6753,111 @@ void section_zoom_checks(MainWindow& window, const juce::File& dir)
     pump(100);
 }
 
+/// An instrument track's audio lane as a track of its own: hidden on MIDI,
+/// shown under it on Audio or Both with its own header (R prints the
+/// track's instrument onto it, its own S and M), and what the engine plays.
+void audio_lane_track_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto strings = session.add_track("Strings", "strings.violins_1");
+    const auto vox = session.add_audio_track("Vox", false);
+    main.show_workspace(MainComponent::Workspace::Producer);
+    main.show_bottom_mixer(false);
+    session.select_track(vox);  // keep the instrument track collapsed
+    pump(150);
+    auto& seq = main.sequencer();
+    const int midi_row = seq.row_height(strings);
+    check(session.data().find_track(strings)->playback == "midi" && midi_row <= 80,
+          "a new instrument track plays its MIDI: no audio lane under it (" + juce::String(midi_row) + " px)");
+    session.set_playback(strings, "both");
+    pump(120);
+    const int both_row = seq.row_height(strings);
+    check(both_row >= midi_row + 40, "on Both its audio lane shows under it, a track of its own (" + juce::String(midi_row) + " -> " +
+                                         juce::String(both_row) + " px)");
+    shoot(main, dir, "36g-audio-lane-track");
+    // Its header: R records the track's own instrument onto it; S and M are the lane's.
+    auto* lanes = find_by_id(main, "sequencer_lanes");
+    if (lanes) {
+        const int lane_top = both_row - (both_row - midi_row);
+        auto click = [&](int x, int y) {
+            const juce::Point<float> pt(static_cast<float>(x), static_cast<float>(y));
+            lanes->mouseDown(mouse_event(*lanes, pt, pt, false));
+            lanes->mouseUp(mouse_event(*lanes, pt, pt, false));
+            pump(60);
+        };
+        click(37, lane_top + 39);  // R
+        const auto* t = session.data().find_track(strings);
+        check(t->record_armed && t->record_source == "print",
+              "the lane's R arms it to record the track's instrument onto it (wired: record source print)");
+        click(62, lane_top + 39);  // S
+        click(87, lane_top + 39);  // M
+        t = session.data().find_track(strings);
+        check(t->lane_solo && t->lane_mute && !t->solo && !t->mute, "the lane's S and M are its own (the track's stay off)");
+        session.update_track_mix(strings, "reset", [](project::Track& x) {
+            x.lane_solo = false;
+            x.lane_mute = false;
+            x.record_armed = false;
+        });
+    } else {
+        check(false, "the Producer lanes are there");
+    }
+    // What plays: the same tone on the lane and on Vox.
+    const auto file = dir.getChildFile("Audio Files").getChildFile("lane-tone.wav");
+    file.getParentDirectory().createDirectory();
+    file.deleteFile();
+    {
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(2).withBitsPerSample(24));
+        juce::AudioBuffer<float> wave(2, 48000 * 4);
+        for (int i = 0; i < wave.getNumSamples(); ++i) {
+            const float v = 0.25f * std::sin(2.0f * juce::MathConstants<float>::pi * 220.0f * static_cast<float>(i) / 48000.0f);
+            wave.setSample(0, i, v);
+            wave.setSample(1, i, v);
+        }
+        if (writer) writer->writeFromAudioSampleBuffer(wave, 0, wave.getNumSamples());
+    }
+    project::AudioClip clip;
+    clip.file = file.getFullPathName().toStdString();
+    clip.name = "tone";
+    clip.length = 4.0;
+    clip.channels = 2;
+    clip.file_sample_rate = 48000.0;
+    session.add_audio_clips({{strings, clip}, {vox, clip}}, "Tones");
+    auto energy = [&] {
+        PlaybackEngine e(session, ctx.plugins);
+        e.prepare_offline(48000.0, 512);
+        e.locate(0);
+        e.play();
+        juce::AudioBuffer<float> out(2, 512);
+        double sum = 0.0;
+        for (int b = 0; b < 100; ++b) {
+            e.render_offline(out, 512);
+            if (b >= 20) sum += out.getRMSLevel(0, 0, 512);
+        }
+        e.stop();
+        return sum / 80.0;
+    };
+    const double both = energy();
+    session.update_track_mix(strings, "solo lane", [](project::Track& x) { x.lane_solo = true; });
+    const double lane_alone = energy();
+    session.update_track_mix(strings, "mute lane", [](project::Track& x) {
+        x.lane_solo = false;
+        x.lane_mute = true;
+    });
+    session.set_mute(vox, true);
+    const double muted = energy();
+    session.set_mute(vox, false);
+    check(both > 0.05 && lane_alone > 0.05 && lane_alone < both * 0.75 && muted < 0.005,
+          "the lane's S plays it alone and its M silences it (" + juce::String(both, 3) + " both, " + juce::String(lane_alone, 3) +
+              " lane alone, " + juce::String(muted, 4) + " lane muted)");
+    main.show_bottom_mixer(true);
+}
+
 void slur_tie_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -12568,6 +12673,7 @@ int main(int argc, char** argv)
                 {"rack_gear_checks", rack_gear_checks},
                 {"dyneq_checks", dyneq_checks},
                 {"section_zoom_checks", section_zoom_checks},
+                {"audio_lane_track_checks", audio_lane_track_checks},
                 {"producer_track_checks", producer_track_checks},
                 {"mixer_popout_checks", mixer_popout_checks},
                 {"account_checks", account_checks}};
@@ -13210,6 +13316,8 @@ int main(int argc, char** argv)
         dyneq_checks(window, dir);
         section("section_zoom_checks");
         section_zoom_checks(window, dir);
+        section("audio_lane_track_checks");
+        audio_lane_track_checks(window, dir);
         section("mixer_popout_checks");
         mixer_popout_checks(window, dir);
         section("sidechain_checks");

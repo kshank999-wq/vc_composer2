@@ -440,7 +440,8 @@ MixPlan make_plan(const project::ProjectData& d, std::vector<const project::Trac
     // Solo-in-place. A render override replaces the document's solo switches.
     const std::set<std::string> override_solo =
         over ? std::set<std::string>(over->solo.begin(), over->solo.end()) : std::set<std::string>{};
-    auto track_solo = [&](const project::Track* t) { return over ? override_solo.count(t->id) > 0 : t->solo; };
+    // A soloed audio lane solos its track (only the lane plays: see the MIDI gate below).
+    auto track_solo = [&](const project::Track* t) { return over ? override_solo.count(t->id) > 0 : (t->solo || t->lane_solo); };
     auto bus_solo = [&](const project::Bus* b) { return over ? override_solo.count(b->id) > 0 : b->solo; };
     bool any_solo = over != nullptr;
     for (const auto* t : p.tracks) any_solo = any_solo || track_solo(t);
@@ -1497,7 +1498,9 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
             // (for a MIDI keyboard) but sends it none of its notes.
             const bool printing_this = (print_tap_ && print_tap_->track_id == t->id) || live_slot >= 0;
             // An expanded part plays through its articulation tracks, never itself.
-            if ((t->playback != "audio" || printing_this) && !t->articulations_expanded) {
+            // The audio lane soloed alone: the track's MIDI is silent (the lane plays).
+            const bool lane_only = t->lane_solo && !t->solo && t->playback != "midi" && !printing_this;
+            if ((t->playback != "audio" || printing_this) && !lane_only && !t->articulations_expanded) {
                 // The built-in orchestra plays written pizzicato, tremolo,
                 // mutes and harmonics on General MIDI's own sounds for them.
                 const auto* pack = dynamic_cast<SoundFontInstrument*>(st.instrument.get());
@@ -1520,7 +1523,8 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
         if (const project::TrackVersion* v = t->active_version()) {
             juce::StringArray problems;
             // An instrument track set to "midi" leaves its audio lane silent.
-            const bool lane_silent = (has_instrument(*t) && t->playback == "midi") || live_slot >= 0;
+            // ...and so is a muted lane.
+            const bool lane_silent = (has_instrument(*t) && (t->playback == "midi" || t->lane_mute)) || live_slot >= 0;
             for (const auto& c : v->audio_clips) {
                 if (lane_silent || c.lane != 0 || c.muted || c.length <= 0.0) continue;
                 const std::int64_t length = std::llround(c.length * sample_rate_);

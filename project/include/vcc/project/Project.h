@@ -336,8 +336,14 @@ struct Track {
     std::string monitor = "auto";  ///< "auto" (input while armed and stopped/recording), "input", "off".
     /// What an instrument or MIDI track plays (docs/spec/ui, Producer view):
     /// "midi" (its notes through its instrument), "audio" (only its own
-    /// audio lane - say, the score printed to audio) or "both".
-    std::string playback = "both";
+    /// audio lane - say, the score printed to audio) or "both". New tracks
+    /// play MIDI; a file without the field (older projects) reads as "both".
+    std::string playback = "midi";
+    /// The audio lane's own mute and solo (the track's own mute and solo,
+    /// on its channel, cover both): mute silences only the lane; solo plays
+    /// only the lane (the track's MIDI is silent while the lane alone is soloed).
+    bool lane_mute = false;
+    bool lane_solo = false;
     /// The audio lane was printed with the channel strip and inserts: while
     /// the track plays its audio lane they are bypassed, so they are not
     /// heard twice. Set by Print to audio with effects.
