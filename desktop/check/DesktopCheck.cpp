@@ -2193,6 +2193,8 @@ void producer_track_checks(MainWindow& window, const juce::File& dir)
         return;
     }
     const std::string first = inst[0], second = inst[1];
+    // The keyboard in the bottom deck (shorter than the mixer): room for a 272 px row.
+    main.show_bottom_mixer(false);
     session.select_track(first);
     pump(80);
 
@@ -2233,6 +2235,7 @@ void producer_track_checks(MainWindow& window, const juce::File& dir)
         check(session.data().find_track(first)->solo, "the header's S key solos the track");
         session.set_solo(first, false);
     }
+    main.show_bottom_mixer(true);
 
     // The instrument track's own audio lane: a printed WAV plays when the
     // track plays audio (or both), and is silent when it plays MIDI.
@@ -12192,6 +12195,7 @@ int main(int argc, char** argv)
                 {"return_to_start_checks", return_to_start_checks},
                 {"slur_tie_checks", slur_tie_checks},
                 {"rack_gear_checks", rack_gear_checks},
+                {"producer_track_checks", producer_track_checks},
                 {"mixer_popout_checks", mixer_popout_checks},
                 {"account_checks", account_checks}};
             juce::StringArray wanted;
