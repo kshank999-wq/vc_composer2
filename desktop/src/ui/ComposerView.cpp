@@ -298,6 +298,8 @@ ComposerView::ComposerView(AppContext& context) : context_(context)
     hint_.setColour(juce::Label::textColourId, colours::text_dim);
     hint_.setFont(hw::fonts::ui(11.5f));
     hear_entry_ = hw::ui_settings().getBoolValue("composer_hear_entry", true);
+    cresc_level_ = juce::jlimit(0, 100, hw::ui_settings().getIntValue("composer_cresc_level", 20));
+    dim_level_ = juce::jlimit(0, 100, hw::ui_settings().getIntValue("composer_dim_level", 20));
     for (auto* z : {&zoom_w_, &zoom_h_}) {
         z->setSliderStyle(juce::Slider::LinearHorizontal);
         z->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -1012,7 +1014,8 @@ void ComposerView::perform(Command command)
                 }
             if (to > from) {
                 handle(editor_->add_hairpin(staff, from, to,
-                                            kind == 1 ? notation::HairpinKind::Crescendo : notation::HairpinKind::Diminuendo));
+                                            kind == 1 ? notation::HairpinKind::Crescendo : notation::HairpinKind::Diminuendo,
+                                kind == 1 ? cresc_level_ : dim_level_));
                 return;
             }
         }
@@ -1100,7 +1103,8 @@ void ComposerView::hairpin_drawn(const std::string& track_id, std::size_t staff,
     context_.session.select_track(track_id);
     if (!editor_ || editing_track_ != track_id) return;
     handle(editor_->add_hairpin(staff, start, end,
-                                kind == 1 ? notation::HairpinKind::Crescendo : notation::HairpinKind::Diminuendo));
+                                kind == 1 ? notation::HairpinKind::Crescendo : notation::HairpinKind::Diminuendo,
+                                kind == 1 ? cresc_level_ : dim_level_));
 }
 
 void ComposerView::wire_tools(composer_ui::StaffTools& t)
@@ -1109,6 +1113,12 @@ void ComposerView::wire_tools(composer_ui::StaffTools& t)
         note_activity();
         set_note_entry(write);
         grabKeyboardFocus();
+    };
+    t.on_hairpin_level = [this](int kind, int value) {
+        note_activity();
+        (kind == 1 ? cresc_level_ : dim_level_) = juce::jlimit(0, 100, value);
+        hw::ui_settings().setValue(kind == 1 ? "composer_cresc_level" : "composer_dim_level", value);
+        context_.status(juce::String(kind == 1 ? "Crescendos now start at " : "Diminuendos now end at ") + juce::String(value));
     };
     t.on_accent = [this](int strength) {
         note_activity();
@@ -1227,6 +1237,8 @@ composer_ui::StaffToolsState ComposerView::tools_state() const
     s.chord_mode = chord_mode_;
     s.writing = note_entry_;
     s.hairpin = hairpin_drawing_;
+    s.cresc_level = cresc_level_;
+    s.dim_level = dim_level_;
     if (const auto* t = context_.session.data().find_track(context_.session.selected_track())) {
         s.track = t->name;
         s.accent = t->accent_strength;
@@ -1257,7 +1269,8 @@ void ComposerView::update_staff_tools()
     auto same = [](const composer_ui::StaffToolsState& a, const composer_ui::StaffToolsState& b) {
         return a.editable == b.editable && a.has_selection == b.has_selection && a.pitched == b.pitched && a.value == b.value &&
                a.dot == b.dot && a.triplet == b.triplet && a.rest == b.rest && a.voice == b.voice &&
-               a.chord_mode == b.chord_mode && a.track == b.track && a.writing == b.writing && a.accent == b.accent && a.hairpin == b.hairpin;
+               a.chord_mode == b.chord_mode && a.track == b.track && a.writing == b.writing && a.accent == b.accent && a.hairpin == b.hairpin &&
+               a.cresc_level == b.cresc_level && a.dim_level == b.dim_level;
     };
     // The dial is turned by hand without the state knowing: compare what it shows too
     // (undo puts the strength back; the dial must follow).

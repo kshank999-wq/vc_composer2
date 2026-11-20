@@ -1259,7 +1259,7 @@ EditResult ScoreEditor::start_hairpin(notation::HairpinKind kind)
 }
 
 EditResult ScoreEditor::add_hairpin(std::size_t staff, notation::Ticks start, notation::Ticks end,
-                                    notation::HairpinKind kind)
+                                    notation::HairpinKind kind, int quiet)
 {
     if (end < start) std::swap(start, end);
     if (end - start <= 0) return refused("Drag across the notes the hairpin should span");
@@ -1269,6 +1269,10 @@ EditResult ScoreEditor::add_hairpin(std::size_t staff, notation::Ticks start, no
     hairpin.kind = kind;
     hairpin.voice = cursor_.voice;
     hairpin.staff = static_cast<std::uint8_t>(std::min<std::size_t>(staff, 255));
+    if (quiet >= 0) {
+        if (kind == notation::HairpinKind::Crescendo) hairpin.expression_start = static_cast<std::int16_t>(std::min(quiet, 127));
+        else hairpin.expression_end = static_cast<std::int16_t>(std::min(quiet, 127));
+    }
     if (!hairpin.is_valid()) return refused("That hairpin is not one this model represents");
 
     EditStep step;

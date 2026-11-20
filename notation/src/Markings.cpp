@@ -225,13 +225,13 @@ double evaluate_curve(CurveShape shape, double position) noexcept
 int hairpin_expression_start(const Hairpin& h) noexcept
 {
     if (h.expression_start >= 0) return std::min<int>(127, h.expression_start);
-    return h.kind == HairpinKind::Crescendo ? 0 : kNeutralExpression;
+    return h.kind == HairpinKind::Crescendo ? kQuietExpression : kNeutralExpression;
 }
 
 int hairpin_expression_end(const Hairpin& h) noexcept
 {
     if (h.expression_end >= 0) return std::min<int>(127, h.expression_end);
-    return h.kind == HairpinKind::Crescendo ? kNeutralExpression : 0;
+    return h.kind == HairpinKind::Crescendo ? kNeutralExpression : kQuietExpression;
 }
 
 bool Hairpin::is_valid() const noexcept

@@ -212,6 +212,8 @@ private:
     double spaces_per_quarter_ = kSpacesPerQuarter;  ///< Horizontal zoom (the W slider).
     std::map<std::string, double> lane_room_;          ///< Per staff: extra room above and below, in staff spaces.
     bool quick_playing_ = false, quick_was_playing_ = false, hear_entry_ = true;
+    /// The quiet level of new hairpins (the numbers under < and >), remembered.
+    int cresc_level_ = 20, dim_level_ = 20;
     Ticks quick_return_ = 0;
     void sound_note(int midi);
     juce::Slider zoom_w_, zoom_h_;

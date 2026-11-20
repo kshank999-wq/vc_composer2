@@ -4882,8 +4882,8 @@ void swell_checks(MainWindow& window, const juce::File& dir)
             if (c.controller == 11 && c.tick <= at) v = c.value;
         return v;
     };
-    check(cc11(0) == 0 && cc11(2 * Q) > 35 && cc11(2 * Q) < 65 && cc11(4 * Q) == 100,
-          "it plays as a swell of expression, CC11 0 -> 100 (" + juce::String(cc11(0)) + ", " + juce::String(cc11(2 * Q)) +
+    check(cc11(0) == 20 && cc11(2 * Q) > 45 && cc11(2 * Q) < 75 && cc11(4 * Q) == 100,
+          "it plays as a swell of expression, CC11 20 (heard) -> 100 (" + juce::String(cc11(0)) + ", " + juce::String(cc11(2 * Q)) +
               ", " + juce::String(cc11(4 * Q)) + ")");
     shoot(main, dir, "107a-crescendo", true);
 
@@ -4903,8 +4903,14 @@ void swell_checks(MainWindow& window, const juce::File& dir)
     hs = hairpins();
     const bool dim = hs.size() == 2 && hs[1].kind == notation::HairpinKind::Diminuendo && hs[1].start_tick == 4 * Q &&
                      hs[1].end_tick == 8 * Q;
-    check(cancelled && dim && cc11(4 * Q) == 100 && cc11(8 * Q - 1) <= 4,
-          "Esc cancels drawing; > with a note selected draws a diminuendo across it, 100 -> 0");
+    check(cancelled && dim && cc11(4 * Q) == 100 && cc11(8 * Q - 1) <= 24,
+          "Esc cancels drawing; > with a note selected draws a diminuendo across it, 100 -> 20");
+    // The numbers under < and >: the quiet level of the next hairpin.
+    {
+        auto& lv = tools.hairpin_level(1);
+        check(lv.isShowing() && juce::roundToInt(lv.getValue()) == 20 && tools.hairpin_level(2).isShowing(),
+              "a level number sits under Crescendo and under Diminuendo (20)");
+    }
 
     // The Producer's CC11 lane shows each swell; dragging its end handle edits it.
     main.show_workspace(MainComponent::Workspace::Producer);
@@ -4914,9 +4920,9 @@ void swell_checks(MainWindow& window, const juce::File& dir)
     seq.set_cc_lane(11);
     pump(150);
     const auto sw = seq.swells(track);
-    check(sw.size() == 2 && sw[0].start_value == 0 && sw[0].end_value == 100 && sw[1].start_value == 100 &&
-              sw[1].end_value == 0,
-          "the Producer's CC11 lane shows both swells (0 -> 100, 100 -> 0)");
+    check(sw.size() == 2 && sw[0].start_value == 20 && sw[0].end_value == 100 && sw[1].start_value == 100 &&
+              sw[1].end_value == 20,
+          "the Producer's CC11 lane shows both swells (20 -> 100, 100 -> 20)");
     for (int v = 105; v <= 127; v += 11) seq.set_swell(track, 0, true, v);
     seq.set_swell(track, 1, false, 90);
     pump(100);

@@ -126,6 +126,29 @@ StaffTools::StaffTools(bool detached) : detached_(detached)
         if (on_accent) on_accent(juce::roundToInt(accent_.getValue()));
     };
     addAndMakeVisible(accent_);
+    // The quiet level of a new crescendo / diminuendo, under its key: drag
+    // or double-click and type (expression 0-100; 20 to start, so the first note is heard).
+    for (auto* lv : {&cresc_level_, &dim_level_}) {
+        lv->setSliderStyle(juce::Slider::LinearBar);
+        lv->setRange(0.0, 100.0, 1.0);
+        lv->setValue(20.0, juce::dontSendNotification);
+        lv->setTextBoxIsEditable(true);
+        lv->setWantsKeyboardFocus(false);
+        lv->setColour(juce::Slider::trackColourId, hw::Theme::get().led().withAlpha(0.35f));
+        lv->setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xffd9d4c8));
+        lv->setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        addAndMakeVisible(*lv);
+    }
+    cresc_level_.setComponentID("staff_tools_cresc_level");
+    dim_level_.setComponentID("staff_tools_dim_level");
+    cresc_level_.setTooltip("Where a crescendo starts: its quiet level (expression 0-100)");
+    dim_level_.setTooltip("Where a diminuendo ends: its quiet level (expression 0-100)");
+    cresc_level_.onValueChange = [this] {
+        if (on_hairpin_level) on_hairpin_level(1, juce::roundToInt(cresc_level_.getValue()));
+    };
+    dim_level_.onValueChange = [this] {
+        if (on_hairpin_level) on_hairpin_level(2, juce::roundToInt(dim_level_.getValue()));
+    };
     accent_label_.setText("Accent\n50", juce::dontSendNotification);
     accent_label_.setFont(juce::FontOptions(9.5f, juce::Font::bold));
     accent_label_.setColour(juce::Label::textColourId, juce::Colour(0xffd9d4c8));
@@ -281,6 +304,8 @@ void StaffTools::set_state(const StaffToolsState& s)
     if (juce::roundToInt(accent_.getValue()) != s.accent) {
         accent_.setValue(s.accent, juce::dontSendNotification);
         accent_label_.setText("Accent\n" + juce::String(s.accent), juce::dontSendNotification);
+    cresc_level_.setValue(s.cresc_level, juce::dontSendNotification);
+    dim_level_.setValue(s.dim_level, juce::dontSendNotification);
     }
     resized();
     repaint();
@@ -304,7 +329,17 @@ void StaffTools::layout(int width, bool apply, int* height) const
     for (const auto& k : keys_) {
         if (!k.cap->isVisible()) continue;
         const bool wide = k.cap->getButtonText().length() > 2;
-        place(*k.cap, wide ? 38 : kKey, k.group_start);
+        const bool hairpin = k.command == composer::Command::StartCrescendo || k.command == composer::Command::StartDiminuendo;
+        place(*k.cap, hairpin ? 34 : wide ? 38 : kKey, k.group_start);
+        if (hairpin && apply) {
+            // The key on top, its level number under it.
+            auto& cap = *k.cap;
+            const auto b = cap.getBounds();
+            cap.setBounds(b.withHeight(17));
+            auto& lv = const_cast<juce::Slider&>(k.command == composer::Command::StartCrescendo ? cresc_level_ : dim_level_);
+            lv.setBounds(b.getX(), b.getY() + 18, b.getWidth(), b.getHeight() - 18);
+            lv.setTextBoxStyle(juce::Slider::TextBoxLeft, false, b.getWidth(), b.getHeight() - 18);
+        }
     }
     place(const_cast<hw::Keycap&>(chord_), 52, true);
     place(const_cast<hw::Keycap&>(circle_), 52, false);

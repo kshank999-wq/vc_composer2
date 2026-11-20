@@ -186,6 +186,9 @@ int hairpin_expression_start(const Hairpin& hairpin) noexcept;
 int hairpin_expression_end(const Hairpin& hairpin) noexcept;
 /// A part's expression outside any hairpin.
 constexpr int kNeutralExpression = 100;
+/// Where a hairpin starts (crescendo) or ends (diminuendo) when it has no
+/// level of its own: quiet, but heard - from silence the first note is lost.
+constexpr int kQuietExpression = 20;
 
 /// A slur or phrase marking (spec 5.3).
 struct Slur {

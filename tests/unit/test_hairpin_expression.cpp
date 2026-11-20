@@ -52,31 +52,31 @@ int value_at(const std::vector<ControllerEvent>& ev, Ticks t)
 }
 }  // namespace
 
-TEST_CASE("hairpin expression: a crescendo swells the held note from 0 to 100")
+TEST_CASE("hairpin expression: a crescendo swells the held note from 20 (heard) to 100")
 {
     session::Session s(catalogs());
     s.new_empty();
     const auto id = swell(s, notation::HairpinKind::Crescendo);
     const auto ev = expression(*s.data().find_track(id));
     REQUIRE(!ev.empty());
-    CHECK_EQ(value_at(ev, 0), 0);
+    CHECK_EQ(value_at(ev, 0), notation::kQuietExpression);
     const int mid = value_at(ev, 2 * kQ);
-    CHECK(mid > 35);
-    CHECK(mid < 65);
+    CHECK(mid > 45);
+    CHECK(mid < 75);
     CHECK_EQ(value_at(ev, 4 * kQ), 100);
     // Rising all the way: never down.
     for (std::size_t i = 1; i < ev.size(); ++i)
         if (ev[i].tick > 0 && ev[i].tick <= 4 * kQ) CHECK(ev[i].value >= ev[i - 1].value);
 }
 
-TEST_CASE("hairpin expression: a diminuendo dies away to 0, and the next note is back at 100")
+TEST_CASE("hairpin expression: a diminuendo dies away to 20, and the next note is back at 100")
 {
     session::Session s(catalogs());
     s.new_empty();
     const auto id = swell(s, notation::HairpinKind::Diminuendo);
     const auto ev = expression(*s.data().find_track(id));
     CHECK_EQ(value_at(ev, 0), 100);
-    CHECK_EQ(value_at(ev, 4 * kQ - 1) <= 4, true);
+    CHECK_EQ(value_at(ev, 4 * kQ - 1) <= notation::kQuietExpression + 4, true);
     CHECK_EQ(value_at(ev, 4 * kQ), 100);  // the next note starts at 100 again
 }
 
@@ -93,7 +93,7 @@ TEST_CASE("hairpin expression: edited values play, are one undo step a drag, and
     CHECK_EQ(value_at(ev, 4 * kQ - 1) >= 115, true);
     CHECK(s.undo());
     ev = expression(*s.data().find_track(id));
-    CHECK_EQ(value_at(ev, 0), 0);  // back to the default 0-100
+    CHECK_EQ(value_at(ev, 0), notation::kQuietExpression);  // back to the default 20-100
     CHECK(s.redo());
 
     // Saved with the score, and read back.

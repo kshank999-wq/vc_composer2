@@ -31,6 +31,8 @@ struct StaffToolsState {
     bool writing = false;       ///< Write (the quill) or Select (the arrow).
     int accent = 50;            ///< The track's accent strength, 1-100.
     int hairpin = 0;            ///< Drawing a crescendo (1) or diminuendo (2) with the mouse.
+    int cresc_level = 20;       ///< Where a new crescendo starts (expression, 0-100).
+    int dim_level = 20;         ///< Where a new diminuendo ends.
     juce::String track;         ///< The staff's name, for the header.
 };
 
@@ -69,6 +71,9 @@ public:
     std::function<void(bool)> on_mode;
     /// The accent dial turned (1-100).
     std::function<void(int)> on_accent;
+    /// A hairpin's quiet level changed: (1 crescendo, 2 diminuendo, value).
+    std::function<void(int, int)> on_hairpin_level;
+    juce::Slider& hairpin_level(int kind) { return kind == 1 ? cresc_level_ : dim_level_; }
 
     /// A key by its command (for checks), or null when not shown.
     hw::Keycap* key_for(composer::Command command);
@@ -107,6 +112,7 @@ private:
     IconKey select_{IconKey::Icon::Arrow}, write_{IconKey::Icon::Quill};
     hw::SmallKnob accent_;
     juce::Label accent_label_;
+    juce::Slider cresc_level_, dim_level_;  ///< The numbers under < and >.
 };
 
 }  // namespace vcc::desktop::composer_ui
