@@ -32,7 +32,10 @@ class OstinatoCreator::Card final : public juce::Component {
 public:
     Card(OstinatoCreator& owner, int index) : owner_(owner), index_(index)
     {
-        for (auto* b : {&audition_, &vary_, &send_}) addAndMakeVisible(*b);
+        for (auto* b : {&audition_, &vary_, &send_, &save_}) addAndMakeVisible(*b);
+        save_.setComponentID("ostinato_save_" + juce::String(index_));
+        save_.setTooltip("Keep this variant: save it as a custom preset, named, in a folder");
+        save_.onClick = [this] { owner_.ask_save_variant(index_); };
         addAndMakeVisible(lock_);
         auto& font = music_font();
         if (font.loaded) {
@@ -165,6 +168,7 @@ public:
         fit_view();
         auto lock_row = getLocalBounds().reduced(14, 12).removeFromBottom(28 + 26).removeFromTop(24);
         lock_.setBounds(lock_row.removeFromLeft(120));
+        save_.setBounds(lock_row.removeFromRight(70));
         const int w = (buttons.getWidth() - 12) / 3;
         audition_.setBounds(buttons.removeFromLeft(w));
         buttons.removeFromLeft(6);
@@ -191,7 +195,7 @@ private:
     std::unique_ptr<notation::Score> score_;
     Ticks from_ = 0, to_ = 0;
     vcc::ui::NotationView view_;
-    juce::TextButton audition_{"Audition"}, vary_{"Vary..."}, send_{"Send to Track"};
+    juce::TextButton audition_{"Audition"}, vary_{"Vary..."}, send_{"Send to Track"}, save_{"Save..."};
     juce::ToggleButton lock_{"Lock rhythm"};
 };
 
@@ -315,8 +319,14 @@ OstinatoCreator::OstinatoCreator(AppContext& c) : context_(c), target_(c, "New O
 
     addAndMakeVisible(generate_);
     generate_.setColour(juce::TextButton::buttonColourId, colours::accent);
-    generate_.setTooltip("Generate variants A, B and C from the seed");
-    generate_.onClick = [this] { generate(); };
+    // Generate: three new variants (a new seed each press; a seed typed in still gives its figures).
+    generate_.onClick = [this] { new_seed(); };
+    generate_.setTooltip("Three new variants (A, B, C) from a new seed");
+    generate_.setComponentID("ostinato_generate");
+    custom_.setComponentID("ostinato_custom_presets");
+    custom_.setTooltip("Your saved ostinatos: load one, name them, sort them into folders");
+    custom_.onClick = [this] { open_library(); };
+    addAndMakeVisible(custom_);
     addAndMakeVisible(stop_);
     stop_.onClick = [this] { stop(); };
     // The cards show the figure as notation (as it goes on the staff) or as MIDI.
@@ -405,9 +415,10 @@ void OstinatoCreator::resized()
     seed_.setBounds(row2.removeFromLeft(90));
     row2.removeFromLeft(6);
     new_seed_.setBounds(row2.removeFromLeft(84));
-    generate_.setBounds(row2.removeFromRight(110));
+    generate_.setBounds(row2.removeFromRight(140));
 
     auto row3 = row_of();
+    custom_.setBounds(row3.removeFromRight(140));  // under Generate
     place(row3, density_caption_, 52, density_, 220);
     place(row3, swing_caption_, 44, swing_, 200);
     evolve_.setBounds(row3.removeFromLeft(170));
@@ -648,6 +659,94 @@ void OstinatoCreator::update_info()
     info_.setText(s, juce::dontSendNotification);
     info_.setColour(juce::Label::textColourId,
                     follow_note_.startsWith("cannot") ? colours::accent_warm : colours::text_dim);
+}
+
+// --- Custom presets ----------------------------------------------------------------------------
+
+std::string OstinatoCreator::save_variant(int index, const std::string& name, const std::string& folder)
+{
+    if (index < 0 || index >= static_cast<int>(variants_.size())) return {};
+    OstinatoUserPreset p;
+    p.name = name;
+    p.folder = folder;
+    p.base_preset = preset_.getText().toStdString();
+    p.tonic = tonic_.getText().toStdString();
+    p.mode = mode_.getText().toStdString();
+    p.follow = follow_.getSelectedId();
+    p.length_bars = static_cast<int>(length_.getValue());
+    p.density = density_.getValue();
+    p.swing = swing_.getValue();
+    p.evolve = evolve_.getToggleState();
+    p.call_response = call_response_.getToggleState();
+    p.seed = seed_.getText().toStdString();
+    p.variant = variants_[static_cast<std::size_t>(index)].to_json();
+    const auto id = OstinatoLibrary::get().add(p);
+    context_.status("Saved \"" + utf8(name) + "\"" + (folder.empty() ? juce::String() : " in " + utf8(folder)) +
+                    ": Custom Presets has it");
+    return id;
+}
+
+void OstinatoCreator::ask_save_variant(int index)
+{
+    if (index < 0 || index >= static_cast<int>(variants_.size())) return;
+    static const char* letters[] = {"A", "B", "C"};
+    auto* w = new juce::AlertWindow("Save as a Custom Preset",
+                                    "Keep variant " + juce::String(letters[std::min(index, 2)]) + " with these settings.",
+                                    juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor("name", preset_.getText() + " " + letters[std::min(index, 2)], "Name");
+    juce::StringArray folders{"(no folder)"};
+    for (const auto& f : OstinatoLibrary::get().folders()) folders.add(utf8(f));
+    w->addComboBox("folder", folders, "Folder");
+    w->addTextEditor("new_folder", "", "Or a new folder");
+    w->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<OstinatoCreator> self(this);
+    w->enterModalState(true, juce::ModalCallbackFunction::create([self, w, index](int r) {
+                           if (r != 1 || self == nullptr) return;
+                           auto folder = w->getTextEditorContents("new_folder").trim();
+                           if (folder.isEmpty())
+                               if (auto* box = w->getComboBoxComponent("folder"); box && box->getSelectedItemIndex() > 0)
+                                   folder = box->getText();
+                           self->save_variant(index, w->getTextEditorContents("name").trim().toStdString(), folder.toStdString());
+                       }),
+                       true);
+}
+
+void OstinatoCreator::load_user_preset(const OstinatoUserPreset& p)
+{
+    // The settings it came from...
+    for (int i = 0; i < preset_.getNumItems(); ++i)
+        if (preset_.getItemText(i).toStdString() == p.base_preset) preset_.setSelectedItemIndex(i, juce::dontSendNotification);
+    for (auto* box : {&tonic_, &mode_})
+        for (int i = 0; i < box->getNumItems(); ++i)
+            if (box->getItemText(i).toStdString() == (box == &tonic_ ? p.tonic : p.mode))
+                box->setSelectedItemIndex(i, juce::dontSendNotification);
+    follow_.setSelectedId(p.follow, juce::dontSendNotification);
+    length_.setValue(p.length_bars, juce::dontSendNotification);
+    density_.setValue(p.density, juce::dontSendNotification);
+    swing_.setValue(p.swing, juce::dontSendNotification);
+    evolve_.setToggleState(p.evolve, juce::dontSendNotification);
+    call_response_.setToggleState(p.call_response, juce::dontSendNotification);
+    seed_.setText(utf8(p.seed), false);
+    generate();
+    // ...and its figure, exactly, as variant A.
+    if (const auto stored = ostinato::Variant::from_json(p.variant); stored && !variants_.empty()) {
+        ostinato::Generator generator(options_);
+        variants_[0] = generator.regenerate(*stored);
+        variants_[0].id = "A";
+        update_info();
+        refresh_notation();
+        for (auto& card : cards_) card->repaint();
+    }
+    context_.status("Loaded \"" + utf8(p.name) + "\" as variant A");
+}
+
+void OstinatoCreator::open_library()
+{
+    juce::Component::SafePointer<OstinatoCreator> self(this);
+    show_ostinato_library([self](const OstinatoUserPreset& p) {
+        if (self != nullptr) self->load_user_preset(p);
+    });
 }
 
 }  // namespace vcc::desktop

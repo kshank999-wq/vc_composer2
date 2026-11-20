@@ -34,6 +34,8 @@
 #include "vcc/interchange/MusicXml.h"
 #include "ui/Dialogs.h"
 #include "ui/ChordExplorer.h"
+#include "ui/OstinatoCreator.h"
+#include "ui/OstinatoLibrary.h"
 #include "ui/StudioSetup.h"
 #include "ui/RecentProjects.h"
 #include "ui/TrackListPalette.h"
@@ -4066,6 +4068,68 @@ void chord_builder_checks(MainWindow& window, const juce::File& dir)
     check(!ex->build_chord(0) && ex->render_build() == std::nullopt, "Clear empties the build");
     w->closeButtonPressed();
     pump(60);
+}
+
+/// Ostinato Creator: Generate makes new variants; Custom Presets keeps the
+/// ones you like, named, in folders you make, and loads them back.
+void ostinato_library_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    ctx.engine.stop();
+    ctx.session.new_empty();
+    const auto store = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("vcc_check_ostinato_presets.json");
+    store.deleteFile();
+    OstinatoLibrary::get().use_file(store);
+    show_ostinato_creator(ctx);
+    pump(300);
+    auto* w = dynamic_cast<juce::DocumentWindow*>(find_dialog("Ostinato Creator"));
+    auto* oc = w ? dynamic_cast<OstinatoCreator*>(w->getContentComponent()) : nullptr;
+    check(oc != nullptr, "the Ostinato Creator opens");
+    if (!oc) return;
+    auto seeds = [&] {
+        std::vector<std::uint64_t> s;
+        for (const auto& v : oc->variants()) s.push_back(v.seed);
+        return s;
+    };
+    const auto before = seeds();
+    if (auto* gen = dynamic_cast<juce::Button*>(find_by_id(*oc, "ostinato_generate"))) gen->triggerClick();
+    pump(200);
+    const auto after = seeds();
+    check(after.size() == 3 && after != before, "Generate makes three new variants (A, B, C)");
+    // Save B in a new folder; it is in the library, named, in that folder.
+    const auto id = oc->save_variant(1, "Driving cellos", "Action");
+    const auto* saved = OstinatoLibrary::get().find(id);
+    check(saved && saved->name == "Driving cellos" && saved->folder == "Action" && OstinatoLibrary::get().folders().size() == 1 &&
+              find_by_id(*oc, "ostinato_save_1") && find_by_id(*oc, "ostinato_custom_presets"),
+          "a variant saves as a custom preset, named, in a folder of your own (Save on each card)");
+    OstinatoLibrary::get().add_folder("Ambient");
+    OstinatoLibrary::get().rename("" + id, "Driving celli");
+    OstinatoLibrary::get().move(id, "Ambient");
+    check(OstinatoLibrary::get().find(id)->name == "Driving celli" && OstinatoLibrary::get().find(id)->folder == "Ambient" &&
+              OstinatoLibrary::get().folders().size() == 2,
+          "presets rename and move between folders you make");
+    // Generate again, then Load: variant A is the saved figure again.
+    if (auto* gen = dynamic_cast<juce::Button*>(find_by_id(*oc, "ostinato_generate"))) gen->triggerClick();
+    pump(200);
+    oc->load_user_preset(*OstinatoLibrary::get().find(id));
+    pump(200);
+    check(!oc->variants().empty() && oc->variants()[0].seed == after[1], "Load puts the saved figure back as variant A");
+    // The window, and the file it keeps.
+    oc->open_library();
+    pump(300);
+    auto* lib = find_dialog("Custom Ostinato Presets");
+    check(lib != nullptr && store.existsAsFile(), "Custom Presets opens its library; the presets are kept in a file");
+    if (lib) {
+        shoot(*lib, dir, "ostinato-library");
+        if (auto* dw = dynamic_cast<juce::DocumentWindow*>(lib)) dw->closeButtonPressed();
+    }
+    // Read back from the file.
+    OstinatoLibrary::get().use_file(store);
+    check(OstinatoLibrary::get().find(id) != nullptr && OstinatoLibrary::get().folders().size() == 2, "saved presets and folders come back");
+    OstinatoLibrary::get().remove_folder("Action");
+    w->closeButtonPressed();
+    pump(60);
+    store.deleteFile();
 }
 
 void midi_comp_checks(MainWindow& window, const juce::File& dir)
@@ -11619,6 +11683,7 @@ int main(int argc, char** argv)
                 {"midi_comp_checks", midi_comp_checks},
                 {"articulation_bar_checks", articulation_bar_checks},
                 {"chord_builder_checks", chord_builder_checks},
+                {"ostinato_library_checks", ostinato_library_checks},
                 {"account_checks", account_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
@@ -12243,6 +12308,8 @@ int main(int argc, char** argv)
         articulation_bar_checks(window, dir);
         section("chord_builder_checks");
         chord_builder_checks(window, dir);
+        section("ostinato_library_checks");
+        ostinato_library_checks(window, dir);
         section("sidechain_checks");
         sidechain_checks(window, dir);
         section("page_view_checks");

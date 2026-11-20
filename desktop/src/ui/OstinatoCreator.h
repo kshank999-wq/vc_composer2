@@ -9,6 +9,7 @@
 
 #include "ui/AppContext.h"
 #include "ui/Dialogs.h"
+#include "ui/OstinatoLibrary.h"
 
 namespace vcc::desktop {
 
@@ -19,6 +20,17 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+
+    /// Saves variant `index` (0 = A) with the settings it came from, as a
+    /// custom preset named `name` in `folder` (made if new). Returns its id.
+    std::string save_variant(int index, const std::string& name, const std::string& folder);
+    /// Asks for a name and a folder, then saves variant `index`.
+    void ask_save_variant(int index);
+    /// Puts a custom preset back: its settings, and its figure as variant A.
+    void load_user_preset(const OstinatoUserPreset& preset);
+    /// The Custom Presets window.
+    void open_library();
+    const std::vector<ostinato::Variant>& variants() const noexcept { return variants_; }
 
 private:
     class Card;
@@ -48,6 +60,7 @@ private:
     juce::Label meter_;
     juce::TextEditor seed_;
     juce::TextButton new_seed_{"New seed"}, generate_{"Generate"}, stop_{"Stop"};
+    juce::TextButton custom_{"Custom Presets..."};
     /// The cards show the figure as notation (default) or as MIDI.
     juce::TextButton show_notation_{"Notation"}, show_midi_{"MIDI"};
     bool notation_ = true;
