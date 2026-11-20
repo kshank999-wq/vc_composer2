@@ -82,6 +82,16 @@ public:
     }
     /// The notes selected in the score being edited (the shared selection's notes).
     std::vector<notation::EventId> selected_notes() const;
+    /// A box drawn over a track's staff (Select mode): its notes become the
+    /// selection (`add`: added to it).
+    void box_selected(const std::string& track_id, std::vector<notation::EventId> ids, bool add);
+    /// Copies the selected notes onto another track at the same time and
+    /// pitch, as notation there (one undo step). Returns how many went.
+    int send_selected_notes(const std::string& target_track);
+    /// The Send to Track dialog: a list of tracks, then Send.
+    void ask_send_selected_notes();
+    /// The checks: answers the Send to Track dialog (the track to send to).
+    std::function<std::string()> send_target_hook;
     /// The editor's cursor (value, dots, rest, voice), when a track is being written on.
     std::optional<editing::EditCursor> cursor() const;
 

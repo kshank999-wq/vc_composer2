@@ -6064,6 +6064,83 @@ void trans_checks(MainWindow& window, const juce::File& dir)
 /// it, following the selection, acting on that staff, adapting to the
 /// selection, folding and unfolding, detached to a remembered place (kept on
 /// a display), and docked back.
+/// Select mode: a box drawn over a staff selects its notes; Delete takes
+/// them away; Send to Track copies them onto another track.
+void box_select_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto vln = session.add_track("Violins I", "strings.violins_1");
+    const auto fl = session.add_track("Flute", "woodwinds.flute");
+    {
+        notation::Score sc = session.data().find_track(vln)->active_version()->score;
+        for (int i = 0; i < 4; ++i)
+            sc.insert_chord(0, i * kTicksPerQuarter, notation::quarter(), {notation::spell_midi_note(67 + 2 * i, {})});
+        session.commit_score(vln, sc, "Write");
+    }
+    main.show_workspace(MainComponent::Workspace::Composer);
+    session.select_track(vln);
+    pump(200);
+    auto& composer = main.composer();
+    composer.set_note_entry(false);  // Select mode
+    pump(60);
+    int lane = -1;
+    for (int i = 0; i < composer.strip_count(); ++i)
+        if (composer.header(i).scribble().text().startsWith("VIOLINS I")) lane = i;
+    check(lane >= 0, "the Violins I staff is there");
+    if (lane < 0) return;
+    auto& view = composer.lane(lane);
+    // A box over the whole staff, from empty staff: the four notes.
+    const auto all = view.notes_in(view.getLocalBounds().toFloat());
+    check(all.size() >= 4, "the box finds the notes under it (" + juce::String(static_cast<int>(all.size())) + ")");
+    // As the mouse does it: press on empty staff, drag, let go.
+    {
+        const auto& src = juce::Desktop::getInstance().getMainMouseSource();
+        const auto t = juce::Time::getCurrentTime();
+        const juce::Point<float> a(4.0f, 4.0f), b(static_cast<float>(view.getWidth() - 4), static_cast<float>(view.getHeight() - 4));
+        auto ev = [&](juce::Point<float> p, juce::ModifierKeys mods) {
+            return juce::MouseEvent(src, p, mods, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, &view, &view, t, a, t, 1, false);
+        };
+        const auto down = juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier);
+        view.mouseDown(ev(a, down));
+        view.mouseDrag(ev(b, down));
+        view.mouseUp(ev(b, juce::ModifierKeys()));
+    }
+    pump(100);
+    const auto selected = composer.selected_notes();
+    check(selected.size() == 4, "Select mode: dragging a box over the staff selects the notes in it (" +
+                                    juce::String(static_cast<int>(selected.size())) + ")");
+    shoot(main, dir, "box-select");
+    // Send them to the flute: same bars, same pitches, one undo step.
+    composer.send_target_hook = [fl] { return fl; };
+    composer.ask_send_selected_notes();
+    composer.send_target_hook = nullptr;
+    pump(150);
+    std::vector<int> sent;
+    for (const auto& n : session.data().find_track(fl)->active_version()->score.notes(0))
+        if (!n.is_rest) sent.push_back(notation::midi_note_number(n.pitch));
+    check(sent == std::vector<int>{67, 69, 71, 72} || sent == std::vector<int>{67, 69, 71, 73},
+          "Send to Track copies the selected notes onto the chosen track, at the same time and pitch (" +
+              juce::String(static_cast<int>(sent.size())) + " notes)");
+    // Delete: the box's notes go.
+    session.select_track(vln);
+    pump(100);
+    for (int i = 0; i < composer.strip_count(); ++i)
+        if (composer.header(i).scribble().text().startsWith("VIOLINS I")) lane = i;
+    auto& again = composer.lane(lane);  // the lanes are rebuilt as tracks change
+    composer.box_selected(vln, again.notes_in(again.getLocalBounds().toFloat()), false);
+    const auto boxed = composer.selected_notes().size();
+    composer.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey));
+    pump(150);
+    int left = 0;
+    for (const auto& n : session.data().find_track(vln)->active_version()->score.notes(0)) left += n.is_rest ? 0 : 1;
+    check(boxed == 4 && left == 0, "Delete removes the boxed notes (" + juce::String(static_cast<int>(boxed)) + " boxed, " +
+                                     juce::String(left) + " left)");
+}
+
 void staff_tools_checks(MainWindow& window, const juce::File& dir)
 {
     using composer::Command;
@@ -11684,6 +11761,7 @@ int main(int argc, char** argv)
                 {"articulation_bar_checks", articulation_bar_checks},
                 {"chord_builder_checks", chord_builder_checks},
                 {"ostinato_library_checks", ostinato_library_checks},
+                {"box_select_checks", box_select_checks},
                 {"account_checks", account_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
@@ -12310,6 +12388,8 @@ int main(int argc, char** argv)
         chord_builder_checks(window, dir);
         section("ostinato_library_checks");
         ostinato_library_checks(window, dir);
+        section("box_select_checks");
+        box_select_checks(window, dir);
         section("sidechain_checks");
         sidechain_checks(window, dir);
         section("page_view_checks");

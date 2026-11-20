@@ -89,6 +89,9 @@ public:
         view_.on_event_menu = [this](notation::EventId id) { owner_.note_menu(*this, id); };
         view_.on_event_dragged = [this](notation::EventId id, const engraving::InsertionPoint& from,
                                         const engraving::InsertionPoint& to) { owner_.note_dragged(*this, id, from, to); };
+        view_.on_box_selected = [this](std::vector<notation::EventId> ids, bool add) {
+            owner_.box_selected(track_id_, std::move(ids), add);
+        };
         view_.on_span_drawn = [this](std::size_t staff, Ticks start, Ticks end) {
             owner_.hairpin_drawn(track_id_, staff, start, end);
         };
@@ -503,6 +506,8 @@ void ComposerView::apply_view_settings()
         auto& view = s->view();
         view.set_layout_options(options);
         // Writing: the quill is the pointer over the staff that writes.
+        // Select mode: a drag on empty staff draws a box that selects the notes in it.
+        view.set_box_select(!note_entry_ && !chord_mode_);
         view.set_idle_cursor(note_entry_ && !chord_mode_ && s->track_id() == editing_track_
                                  ? composer_ui::IconKey::quill_cursor()
                                  : juce::MouseCursor(juce::MouseCursor::NormalCursor));
@@ -734,9 +739,13 @@ void ComposerView::note_menu(Strip& strip, notation::EventId id)
     if (!editor_ || strip.track_id() != editing_track_) return;
     const auto* n = working_.find_note(id);
     if (n == nullptr) return;
-    handle(editor_->select_and_follow(id));
+    // A note of a box selection keeps the selection; another note is selected alone.
+    const auto current = editor_->selection();
+    const bool in_selection = std::find(current.begin(), current.end(), id) != current.end();
+    if (!in_selection || current.size() < 2) handle(editor_->select_and_follow(id));
+    const int count = static_cast<int>(editor_->selection().size());
     juce::PopupMenu m;
-    m.addSectionHeader(n->is_rest ? "Rest" : "Note");
+    m.addSectionHeader(count > 1 ? juce::String(count) + " notes selected" : juce::String(n->is_rest ? "Rest" : "Note"));
     juce::Component::SafePointer<ComposerView> self(this);
     auto act = [self](std::function<editing::EditResult(editing::ScoreEditor&)> f) {
         return [self, f] {
@@ -754,7 +763,12 @@ void ComposerView::note_menu(Strip& strip, notation::EventId id)
     m.addItem("Up an octave", note, false, act([](editing::ScoreEditor& e) { return e.transpose_selection_octaves(1); }));
     m.addItem("Down an octave", note, false, act([](editing::ScoreEditor& e) { return e.transpose_selection_octaves(-1); }));
     m.addSeparator();
-    m.addItem("Delete", act([](editing::ScoreEditor& e) { return e.delete_selection(); }));
+    m.addItem(count > 1 ? "Delete " + juce::String(count) + " Notes" : juce::String("Delete"),
+              act([](editing::ScoreEditor& e) { return e.delete_selection(); }));
+    m.addSeparator();
+    m.addItem(count > 1 ? "Send " + juce::String(count) + " Notes to Track..." : juce::String("Send Note to Track..."), [self] {
+        if (self) self->ask_send_selected_notes();
+    });
     if (note_menu_hook) {
         note_menu_hook(m);  // the checks pick an item
         return;
@@ -1587,6 +1601,11 @@ bool ComposerView::keyPressed(const juce::KeyPress& key)
         context_.engine.toggle_play();
         return true;
     }
+    // Delete (or Backspace) with notes selected - a box, a click, Select All: they go.
+    if ((key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) && editor_ && !editor_->selection().empty()) {
+        handle(editor_->delete_selection());
+        return true;
+    }
     composer::KeyStroke stroke;
     if (!ui::key_stroke_from(key, stroke)) return false;
     notation::Step step = notation::Step::C;
@@ -1647,6 +1666,178 @@ void ComposerView::resized()
     const double end = static_cast<double>(context_.session.content_end());
     hscroll_.setRangeLimits(0.0, end + static_cast<double>(kTicksPerWhole) * 4, juce::dontSendNotification);
     hscroll_.setCurrentRange(static_cast<double>(origin_), static_cast<double>(visible_ticks()), juce::dontSendNotification);
+}
+
+// --- Box selection and Send to Track -------------------------------------------------------------
+
+void ComposerView::box_selected(const std::string& track_id, std::vector<notation::EventId> ids, bool add)
+{
+    if (track_id != editing_track_) context_.session.select_track(track_id);
+    if (!editor_ || track_id != editing_track_) return;
+    // Rests stay out: a box selects the music.
+    ids.erase(std::remove_if(ids.begin(), ids.end(),
+                             [&](notation::EventId id) {
+                                 const auto* n = working_.find_note(id);
+                                 return n == nullptr || n->is_rest;
+                             }),
+              ids.end());
+    if (add) {
+        auto mine = editor_->selection();
+        for (auto id : ids)
+            if (std::find(mine.begin(), mine.end(), id) == mine.end()) mine.push_back(id);
+        ids = std::move(mine);
+    }
+    editor_->set_selection(ids);
+    publish_selection();
+    for (auto& s : strips_)
+        if (s->track_id() == editing_track_) s->view().set_selection(editor_->selection());
+    repaint();
+    context_.status(ids.empty() ? juce::String("No notes in the box")
+                                : juce::String(static_cast<int>(ids.size())) +
+                                      " notes selected: Delete removes them; right-click one to send them to another track");
+}
+
+int ComposerView::send_selected_notes(const std::string& target_track)
+{
+    if (!editor_ || target_track.empty() || target_track == editing_track_) return 0;
+    auto& session = context_.session;
+    const auto* source = session.data().find_track(editing_track_);
+    if (!source) return 0;
+    // Written pitches back to what sounds (a B-flat clarinet's written D sounds C).
+    int shift = 0;
+    if (const auto* def = session.instrument_for(*source)) shift = def->transposition;
+    std::vector<NoteEvent> events;
+    Ticks from = std::numeric_limits<Ticks>::max(), to = 0;
+    for (auto id : editor_->selection()) {
+        const auto* n = working_.find_note(id);
+        if (!n || n->is_rest) continue;
+        const Ticks end = n->end_tick();
+        events.push_back({n->start_tick, std::max<Ticks>(1, end - n->start_tick),
+                          juce::jlimit(0, 127, notation::midi_note_number(n->pitch) + shift), 90, 0, {}});
+        from = std::min(from, n->start_tick);
+        to = std::max(to, end);
+    }
+    if (events.empty()) return 0;
+    std::sort(events.begin(), events.end(), [](const NoteEvent& a, const NoteEvent& b) {
+        return a.start != b.start ? a.start < b.start : a.pitch < b.pitch;
+    });
+    const auto result =
+        session.insert_notes(target_track, from, to, events, project::CollisionPolicy::Merge, "Sent from " + source->name);
+    const auto* target = session.data().find_track(target_track);
+    if (!result.ok) {
+        context_.status("Could not send the notes: " + juce::String(result.error));
+        return 0;
+    }
+    context_.status(juce::String(static_cast<int>(events.size())) + " notes sent to " +
+                    juce::String(target ? target->name : std::string()) + " (Undo takes them back)");
+    return static_cast<int>(events.size());
+}
+
+namespace {
+
+/// The tracks to send notes to, in a list, with Send and Cancel.
+class SendNotesPanel final : public juce::Component, private juce::ListBoxModel {
+public:
+    SendNotesPanel(std::vector<std::pair<std::string, juce::String>> tracks, int count, std::function<void(const std::string&)> send)
+        : tracks_(std::move(tracks)), send_(std::move(send))
+    {
+        setComponentID("send_notes_dialog");
+        caption_.setText("Send " + juce::String(count) + (count == 1 ? " note" : " notes") +
+                             " to (the same bars and pitches, written as notation there):",
+                         juce::dontSendNotification);
+        caption_.setColour(juce::Label::textColourId, colours::text);
+        addAndMakeVisible(caption_);
+        list_.setModel(this);
+        list_.setRowHeight(28);
+        list_.setColour(juce::ListBox::backgroundColourId, colours::panel);
+        list_.setColour(juce::ListBox::outlineColourId, colours::outline);
+        list_.setOutlineThickness(1);
+        addAndMakeVisible(list_);
+        send_key_.setColour(juce::TextButton::buttonColourId, colours::accent);
+        send_key_.onClick = [this] { go(); };
+        cancel_.onClick = [this] { close(); };
+        addAndMakeVisible(send_key_);
+        addAndMakeVisible(cancel_);
+        if (!tracks_.empty()) list_.selectRow(0);
+        setSize(420, 440);
+    }
+    ~SendNotesPanel() override { list_.setModel(nullptr); }
+    void paint(juce::Graphics& g) override { g.fillAll(colours::background); }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(12);
+        caption_.setBounds(r.removeFromTop(36));
+        auto b = r.removeFromBottom(30);
+        send_key_.setBounds(b.removeFromRight(100));
+        b.removeFromRight(8);
+        cancel_.setBounds(b.removeFromRight(90));
+        r.removeFromBottom(8);
+        list_.setBounds(r);
+    }
+
+private:
+    int getNumRows() override { return static_cast<int>(tracks_.size()); }
+    void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected) override
+    {
+        if (row < 0 || row >= getNumRows()) return;
+        g.fillAll(selected ? colours::accent.withAlpha(0.3f) : colours::panel);
+        g.setColour(colours::text);
+        g.setFont(juce::FontOptions(14.0f));
+        g.drawText(tracks_[static_cast<std::size_t>(row)].second, 10, 0, w - 16, h, juce::Justification::centredLeft, true);
+    }
+    void listBoxItemDoubleClicked(int, const juce::MouseEvent&) override { go(); }
+    void go()
+    {
+        const int r = list_.getSelectedRow();
+        if (r < 0 || r >= getNumRows()) return;
+        const auto id = tracks_[static_cast<std::size_t>(r)].first;
+        auto send = send_;
+        close();
+        if (send) send(id);
+    }
+    void close()
+    {
+        if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState(0);
+    }
+
+    std::vector<std::pair<std::string, juce::String>> tracks_;
+    std::function<void(const std::string&)> send_;
+    juce::Label caption_;
+    juce::ListBox list_;
+    juce::TextButton send_key_{"Send"}, cancel_{"Cancel"};
+};
+
+}  // namespace
+
+void ComposerView::ask_send_selected_notes()
+{
+    if (!editor_) return;
+    int count = 0;
+    for (auto id : editor_->selection())
+        if (const auto* n = working_.find_note(id); n && !n->is_rest) ++count;
+    if (count == 0) {
+        context_.status("Select notes first: drag a box over them, or click one");
+        return;
+    }
+    if (send_target_hook) {  // the checks
+        send_selected_notes(send_target_hook());
+        return;
+    }
+    std::vector<std::pair<std::string, juce::String>> tracks;
+    for (const auto* t : context_.session.composer_tracks())
+        if (t->id != editing_track_ && t->kind == project::TrackKind::Instrument)
+            tracks.push_back({t->id, juce::String::fromUTF8(t->name.c_str())});
+    juce::Component::SafePointer<ComposerView> self(this);
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned(new SendNotesPanel(std::move(tracks), count, [self](const std::string& id) {
+        if (self) self->send_selected_notes(id);
+    }));
+    o.dialogTitle = "Send Notes to Track";
+    o.dialogBackgroundColour = colours::background;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = false;
+    o.resizable = false;
+    o.launchAsync();
 }
 
 }  // namespace vcc::desktop

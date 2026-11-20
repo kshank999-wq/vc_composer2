@@ -314,6 +314,14 @@ void NotationView::paint(juce::Graphics& graphics)
         graphics.fillRect(juce::Rectangle<float>(std::min(x0, x1), y - open - 2.0f, std::abs(x1 - x0), 2.0f * open + 4.0f));
     }
 
+    if (boxing_ && drag_at_.getDistanceFrom(press_at_) > 4) {
+        // The selection box.
+        const auto box = juce::Rectangle<int>(press_at_, drag_at_).toFloat();
+        graphics.setColour(settings_.colours.playhead.withAlpha(0.12f));
+        graphics.fillRect(box);
+        graphics.setColour(settings_.colours.playhead.withAlpha(0.8f));
+        graphics.drawRect(box, 1.0f);
+    }
     if (dragging_) {
         // Where the dragged note will land: a ghost head under the pointer.
         const float space = static_cast<float>(settings_.pixels_per_staff_space);
@@ -382,12 +390,33 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
 
     const engraving::InsertionPoint insertion =
         engraving::insertion_point_at(layout_, *score_, timeline_, point, entry_grid_);
+    if (box_select_ && !event.mods.isPopupMenu()) {
+        // Maybe a box: decided when the pointer moves (a plain click stays a click).
+        boxing_ = true;
+        box_click_ = insertion;
+        press_at_ = drag_at_ = event.getPosition();
+        return;
+    }
     if (insertion.valid && on_staff_clicked)
         on_staff_clicked(insertion);
 }
 
+std::vector<notation::EventId> NotationView::notes_in(juce::Rectangle<float> area)
+{
+    relayout_if_needed();
+    std::vector<notation::EventId> ids;
+    for (const auto& n : layout_.notes)
+        if (notehead_bounds(n.id).intersects(area) && std::find(ids.begin(), ids.end(), n.id) == ids.end()) ids.push_back(n.id);
+    return ids;
+}
+
 void NotationView::mouseDrag(const juce::MouseEvent& event)
 {
+    if (boxing_) {
+        drag_at_ = event.getPosition();
+        repaint();
+        return;
+    }
     if (spanning_) {
         drag_at_ = event.getPosition();
         repaint();
@@ -406,6 +435,17 @@ void NotationView::mouseDrag(const juce::MouseEvent& event)
 
 void NotationView::mouseUp(const juce::MouseEvent& event)
 {
+    if (boxing_) {
+        boxing_ = false;
+        repaint();
+        if (event.getPosition().getDistanceFrom(press_at_) <= 4) {
+            if (box_click_.valid && on_staff_clicked) on_staff_clicked(box_click_);
+            return;
+        }
+        const auto box = juce::Rectangle<int>(press_at_, event.getPosition()).toFloat();
+        if (on_box_selected) on_box_selected(notes_in(box), event.mods.isShiftDown());
+        return;
+    }
     if (spanning_) {
         spanning_ = false;
         repaint();

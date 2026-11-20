@@ -150,6 +150,14 @@ public:
     /// Empty staff was clicked: where a note would be entered (spec 5.2).
     std::function<void(const engraving::InsertionPoint&)> on_staff_clicked;
 
+    /// Box selection: while on, a drag that starts on empty staff draws a box
+    /// and letting go reports the notes inside it (`add`: Shift was held, to
+    /// add them to the selection). A click without a drag is still a click.
+    void set_box_select(bool on) { box_select_ = on; }
+    std::function<void(std::vector<notation::EventId> ids, bool add)> on_box_selected;
+    /// The notes whose heads touch this area (view coordinates).
+    std::vector<notation::EventId> notes_in(juce::Rectangle<float> area);
+
     /// The view scrolled or zoomed, so a host-side follower can keep up.
     std::function<void(notation::Ticks origin_tick)> on_scrolled;
 
@@ -210,6 +218,8 @@ private:
     const MusicFont* music_font_ = nullptr;
 
     std::vector<notation::EventId> selection_;
+    bool box_select_ = false, boxing_ = false;
+    engraving::InsertionPoint box_click_;
 
     notation::Ticks playhead_tick_ = 0;
     bool playhead_visible_ = false;
