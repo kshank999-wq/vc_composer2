@@ -146,7 +146,7 @@ private:
     std::unique_ptr<BuildStrip> strip_;
     juce::Viewport strip_view_;
     juce::TextButton use_preset_{"Preset"}, use_build_key_{"My Build"}, fill_{"Fill from Preset"}, clear_{"Clear"};
-    juce::TextButton add_bars_{"+ 4 Bars"}, remove_bar_{"- Bar"};
+    juce::TextButton add_bars_{"+ Bar"}, remove_bar_{"- Bar"};
     juce::Slider zoom_w_, zoom_h_;
     juce::Label zoom_w_caption_, zoom_h_caption_;
     double zoom_width_ = 1.0, zoom_height_ = 1.0;

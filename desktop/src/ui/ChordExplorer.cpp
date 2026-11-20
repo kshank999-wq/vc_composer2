@@ -821,9 +821,9 @@ ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmo
     addAndMakeVisible(strip_view_);
     add_bars_.setComponentID("chord_add_bars");
     remove_bar_.setComponentID("chord_remove_bar");
-    add_bars_.setTooltip("Four more bars at the end");
+    add_bars_.setTooltip("One more bar at the end");
     remove_bar_.setTooltip("Take the last bar away");
-    add_bars_.onClick = [this] { add_bars(4); };
+    add_bars_.onClick = [this] { add_bars(1); };
     remove_bar_.onClick = [this] { remove_last_bar(); };
     addAndMakeVisible(add_bars_);
     addAndMakeVisible(remove_bar_);
@@ -990,7 +990,7 @@ void ChordExplorer::resized()
         band.removeFromTop(6);
         // Under the bars: more bars, and the zoom bottom right.
         auto foot = band.removeFromBottom(22);
-        add_bars_.setBounds(foot.removeFromLeft(80));
+        add_bars_.setBounds(foot.removeFromLeft(60));
         foot.removeFromLeft(6);
         remove_bar_.setBounds(foot.removeFromLeft(60));
         foot.removeFromLeft(24);

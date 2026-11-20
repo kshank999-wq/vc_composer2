@@ -5393,6 +5393,35 @@ void chord_palette_checks(MainWindow& window, const juce::File& dir)
     pump(100);
     check(find_dialog("Chord Mode") == nullptr, "turning Chord mode off closes its window");
     session.new_empty();
+    // In D major the root keys are the key's scale (F sharp, C sharp), each
+    // with its numeral; the borrowed chords and where they come from beneath.
+    {
+        session.set_key("D major");
+        composer.set_chord_mode(false);
+        composer.set_chord_mode(true);
+        pump(120);
+        auto& pal = composer.chord_palette();
+        const auto f_legend = pal.root_key(3).getButtonText();  // F
+        pal.root_key(3).triggerClick();
+        pump(40);
+        auto* scale_box = &pal.borrow_box();
+        check(f_legend == juce::String::fromUTF8("F\xe2\x99\xaf") && pal.name_lcd_text().startsWith(juce::String::fromUTF8("F\xe2\x99\xaf")),
+              "Chord Mode's roots are the key's scale: in D major the F key is F sharp, and gives F#m (" + f_legend + ", " +
+                  pal.name_lcd_text() + ")");
+        check(pal.borrowed_count() >= 4 && scale_box->getNumItems() >= 8 && scale_box->isShowing(),
+              "beneath them, the borrowed chords and the same Borrow from list as the Chord Explorer");
+        pal.borrowed_key(0).triggerClick();
+        pump(40);
+        const auto borrowed_name = pal.name_lcd_text();
+        scale_box->setSelectedItemIndex(3, juce::sendNotificationSync);  // Lydian
+        pump(40);
+        check(borrowed_name.isNotEmpty() && borrowed_name != "--" && pal.borrowed_count() > 0,
+              "a borrowed chord is chosen with a click (" + borrowed_name + "); Borrow from changes the row");
+        if (auto* w = find_dialog("Chord Mode")) shoot(*w, dir, "chord-palette-scale");
+        scale_box->setSelectedItemIndex(0, juce::sendNotificationSync);
+        session.set_key("C major");
+        pump(60);
+    }
 }
 
 /// Instrument range guardrails (Add-On spec §4): Strict refuses a note

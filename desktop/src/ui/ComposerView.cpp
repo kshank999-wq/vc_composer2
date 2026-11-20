@@ -401,6 +401,14 @@ void ComposerView::timerCallback()
 
 void ComposerView::rebuild()
 {
+    // The key changed: Chord Mode's scale follows it.
+    if (palette_ && chord_mode_) {
+        const auto k = dialogs::project_key(context_);
+        if (!(k.tonic == chord_state_.key.tonic) || k.mode != chord_state_.key.mode) {
+            chord_state_.key = k;
+            palette_->refresh();
+        }
+    }
     const auto tracks = context_.session.composer_tracks();
     std::vector<std::string> ids;
     for (const auto* t : tracks)
@@ -1313,6 +1321,9 @@ void ComposerView::set_chord_mode(bool on)
 {
     chord_mode_ = on;
     auto& p = chord_palette();
+    // Always the project's key: the root keys show its scale, the borrowed row its borrowings.
+    chord_state_.key = dialogs::project_key(context_);
+    p.refresh();
     // Its own floating window: kept above VC Composer, movable to another screen.
     if (on) {
         if (palette_window_ == nullptr) {

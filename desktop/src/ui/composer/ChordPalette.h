@@ -14,6 +14,7 @@
 #include "ui/AppContext.h"
 #include "ui/hw/HwControls.h"
 #include "vcc/notation/Score.h"
+#include "vcc/theory/KeyReference.h"
 #include "vcc/theory/Voicing.h"
 
 namespace vcc::desktop::composer_ui {
@@ -40,6 +41,9 @@ struct ChordModeState {
     theory::Key key{};                   ///< The project's key, for "triad" and "seventh".
     bool open = false;                   ///< Open voicing (else close).
     int span = 1;                        ///< Spread over 1 or 2 octaves.
+    /// Where the borrowed chords come from (theory::borrow_sources() index):
+    /// the parallel key with the Neapolitan, or another mode on the tonic.
+    int borrow_source = 0;
 };
 
 /// The chord types the palette offers, as (type id, key legend).
@@ -61,7 +65,7 @@ std::optional<theory::Chord> chord_for(const ChordModeState& state, std::string*
 class ChordPalette final : public hw::Panel {
 public:
     static constexpr int kWidth = 420;
-    static constexpr int kHeight = 436;
+    static constexpr int kHeight = 512;
 
     explicit ChordPalette(ChordModeState& state);
 
@@ -81,6 +85,9 @@ public:
     hw::Keycap& accidental_key(int accidental) { return *accidentals_[static_cast<std::size_t>(accidental + 1)]; }
     hw::Keycap* alteration_key(const std::string& name);
     juce::ComboBox& quality_box() { return quality_; }
+    juce::ComboBox& borrow_box() { return borrow_from_; }
+    int borrowed_count() const noexcept { return static_cast<int>(borrowed_keys_.size()); }
+    hw::Keycap& borrowed_key(int i) { return *borrowed_keys_[static_cast<std::size_t>(i)]; }
     juce::ComboBox& bass_box() { return bass_; }
     juce::ComboBox& voicing_box() { return voicing_; }
     juce::ComboBox& then_box() { return then_; }
@@ -95,6 +102,7 @@ public:
     hw::Keycap& span_key(int octaves) { return octaves >= 2 ? span2_ : span1_; }
     hw::Keycap& symbol_key() { return symbol_; }
     const juce::String& preview_notes() const noexcept { return notes_; }
+    juce::String name_lcd_text() const { return name_lcd_.text(); }
     const juce::String& preview_warning() const noexcept { return warning_; }
 
     void paint(juce::Graphics& g) override;
@@ -105,10 +113,20 @@ public:
 private:
     void changed();
     void fill_bass_box();
+    /// The root keys as the key's scale (F# in D major), its numerals over
+    /// them, and the borrowed chords from the chosen source.
+    void fill_scale();
     juce::Component& drag_target();
 
     ChordModeState& state_;
     std::vector<std::unique_ptr<hw::Keycap>> roots_, accidentals_, alterations_, types_, inversions_;
+    std::vector<std::unique_ptr<hw::Keycap>> borrowed_keys_;
+    std::vector<theory::Chord> borrowed_;
+    std::vector<int> scale_accidental_ = std::vector<int>(7, 0);  ///< Per letter: the key's accidental.
+    std::vector<juce::String> numerals_ = std::vector<juce::String>(7);  ///< Per letter: its numeral in the key.
+    juce::ComboBox borrow_from_;
+    theory::Key shown_key_{};
+    int shown_source_ = -1, shown_size_ = 0;
     hw::Keycap close_voicing_{"Close", true}, open_{"Open", true}, span1_{"1 Oct", true}, span2_{"2 Oct", true};
     juce::ComboBox quality_, bass_, voicing_, then_, send_;
     hw::Keycap octave_down_{"-"}, octave_up_{"+"}, symbol_{"Symbol", true}, close_{"x"};

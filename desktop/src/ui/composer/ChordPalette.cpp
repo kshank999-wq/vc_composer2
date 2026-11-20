@@ -183,11 +183,23 @@ ChordPalette::ChordPalette(ChordModeState& state) : hw::Panel("Chord mode", fals
         auto& k = *roots_.back();
         k.setComponentID("chord_root_" + juce::String::charToString(kLetters[i]));
         k.onClick = [this, i] {
+            // A note of the key's scale: F# in D major, Bb in F.
             state_.letter = i;
+            state_.accidental = scale_accidental_[static_cast<std::size_t>(i)];
             changed();
         };
         addAndMakeVisible(k);
     }
+    borrow_from_.setComponentID("chord_borrow_from");
+    borrow_from_.setTitle("Borrow from");
+    borrow_from_.setTooltip("Where the borrowed chords come from: the parallel key (with the Neapolitan), or another mode on "
+                            "the same tonic");
+    borrow_from_.onChange = [this] {
+        if (refreshing_) return;
+        state_.borrow_source = std::max(0, borrow_from_.getSelectedItemIndex());
+        changed();
+    };
+    addAndMakeVisible(borrow_from_);
     const char* acc[] = {"\xE2\x99\xAD", "\xE2\x99\xAE", "\xE2\x99\xAF"};
     for (int i = 0; i < 3; ++i) {
         accidentals_.push_back(std::make_unique<hw::Keycap>(juce::String::fromUTF8(acc[i]), false));
@@ -426,10 +438,84 @@ void ChordPalette::fill_bass_box()
     bass_.setSelectedId(id, juce::dontSendNotification);
 }
 
+void ChordPalette::fill_scale()
+{
+    const auto key = state_.key;
+    const int size = state_.type == "seventh" ? 4 : 3;
+    const bool same = shown_source_ == state_.borrow_source && shown_size_ == size && shown_key_.tonic == key.tonic &&
+                      shown_key_.mode == key.mode;
+    if (same) return;
+    shown_key_ = key;
+    shown_source_ = state_.borrow_source;
+    shown_size_ = size;
+    // The scale's notes on the root keys, its numerals over them.
+    const auto chords = theory::diatonic_chords(key, size);
+    const auto scale = key.scale();
+    for (int l = 0; l < 7; ++l) {
+        scale_accidental_[static_cast<std::size_t>(l)] = 0;
+        numerals_[static_cast<std::size_t>(l)].clear();
+    }
+    for (std::size_t d = 0; d < scale.size() && d < 7; ++d) {
+        const auto& p = scale[d];
+        const int l = p.letter;
+        if (l < 0 || l > 6) continue;
+        scale_accidental_[static_cast<std::size_t>(l)] = p.alteration;
+        roots_[static_cast<std::size_t>(l)]->setButtonText(juce::String::fromUTF8(p.display_name().c_str()));
+        if (d < chords.size())
+            numerals_[static_cast<std::size_t>(l)] =
+                juce::String::fromUTF8(theory::roman_label(static_cast<int>(d) + 1, chords[d].quality).c_str());
+        roots_[static_cast<std::size_t>(l)]->setTooltip(numerals_[static_cast<std::size_t>(l)] + " in " +
+                                                       juce::String::fromUTF8(key.name().c_str()));
+    }
+    // Borrow from: as in the Circle of Fifths and the Chord Explorer.
+    const auto ref = theory::key_reference(key);
+    const bool minor_home = theory::is_minor_family(ref.key.mode);
+    borrow_from_.clear(juce::dontSendNotification);
+    int n = 0;
+    for (auto src : theory::borrow_sources())
+        borrow_from_.addItem("Borrow from " + juce::String(theory::borrow_source_name(src, minor_home)) +
+                                 (src == theory::BorrowSource::Parallel ? " + Neapolitan" : ""),
+                             ++n);
+    const auto& sources = theory::borrow_sources();
+    const int src = std::clamp(state_.borrow_source, 0, static_cast<int>(sources.size()) - 1);
+    borrow_from_.setSelectedItemIndex(src, juce::dontSendNotification);
+    for (auto& k : borrowed_keys_) removeChildComponent(k.get());
+    borrowed_keys_.clear();
+    borrowed_.clear();
+    for (const auto& b : theory::borrowed_chords(ref, sources[static_cast<std::size_t>(src)], size > 3)) {
+        borrowed_.push_back(b.chord);
+        auto k = std::make_unique<hw::Keycap>(juce::String::fromUTF8(b.roman.c_str()), false);
+        k->set_legend_size(10.5f);
+        k->setComponentID("chord_borrowed_" + juce::String(static_cast<int>(borrowed_keys_.size())));
+        k->setTooltip(juce::String::fromUTF8(b.chord.display_name().c_str()) + ", borrowed from " +
+                      juce::String::fromUTF8(b.source.c_str()) + (b.name.empty() ? juce::String() : " (" + juce::String(b.name) + ")"));
+        const auto chord = b.chord;
+        k->onClick = [this, chord] {
+            // The borrowed chord outright: its root and its quality.
+            state_.letter = chord.root.letter;
+            state_.accidental = chord.root.alteration;
+            state_.type = "custom";
+            state_.quality = chord.quality.id;
+            changed();
+        };
+        addAndMakeVisible(*k);
+        borrowed_keys_.push_back(std::move(k));
+    }
+    resized();
+}
+
 void ChordPalette::refresh()
 {
     refreshing_ = true;
-    for (int i = 0; i < 7; ++i) roots_[static_cast<std::size_t>(i)]->setToggleState(state_.letter == i, juce::dontSendNotification);
+    fill_scale();
+    for (int i = 0; i < 7; ++i)
+        roots_[static_cast<std::size_t>(i)]->setToggleState(
+            state_.letter == i && state_.accidental == scale_accidental_[static_cast<std::size_t>(i)], juce::dontSendNotification);
+    for (std::size_t i = 0; i < borrowed_keys_.size() && i < borrowed_.size(); ++i)
+        borrowed_keys_[i]->setToggleState(state_.type == "custom" && borrowed_[i].root.letter == state_.letter &&
+                                              borrowed_[i].root.alteration == state_.accidental &&
+                                              borrowed_[i].quality.id == state_.quality,
+                                          juce::dontSendNotification);
     for (int i = 0; i < 3; ++i)
         accidentals_[static_cast<std::size_t>(i)]->setToggleState(state_.accidental == i - 1, juce::dontSendNotification);
     for (std::size_t i = 0; i < alterations_.size(); ++i)
@@ -497,13 +583,22 @@ void ChordPalette::paint(juce::Graphics& g)
     hw::Panel::paint(g);
     auto r = content().reduced(10, 4);
     auto silk = [&](const juce::String& t, int y) {
-        hw::paint::silk(g, t, juce::Rectangle<float>(static_cast<float>(r.getX()), static_cast<float>(y), 120.0f, 12.0f), 9.5f);
+        hw::paint::silk(g, t, juce::Rectangle<float>(static_cast<float>(r.getX()), static_cast<float>(y), 300.0f, 12.0f), 9.5f);
     };
-    silk("Root (or click a staff)", r.getY());
-    silk("Type", r.getY() + 46);
-    silk("Alter / omit", r.getY() + 92);
-    silk("Inversion", r.getY() + 138);
-    silk("Voicing and spread", r.getY() + 184);
+    silk("Root: the key's scale (or click a staff)", r.getY());
+    // Each scale note's numeral over its key.
+    for (int l = 0; l < 7; ++l) {
+        const auto kb = roots_[static_cast<std::size_t>(l)]->getBounds();
+        hw::paint::silk(g, numerals_[static_cast<std::size_t>(l)],
+                        juce::Rectangle<float>(static_cast<float>(kb.getX()), static_cast<float>(kb.getY() - 12),
+                                               static_cast<float>(kb.getWidth()), 11.0f),
+                        9.0f, juce::Justification::centred);
+    }
+    silk("Borrowed chords", r.getY() + 54);
+    silk("Type", r.getY() + 124);
+    silk("Alter / omit", r.getY() + 170);
+    silk("Inversion", r.getY() + 216);
+    silk("Voicing and spread", r.getY() + 262);
     // The notes and any warning, under the controls.
     const auto preview = juce::Rectangle<float>(static_cast<float>(r.getX()), static_cast<float>(getHeight() - 82),
                                                 static_cast<float>(r.getWidth()), 34.0f);
@@ -519,30 +614,44 @@ void ChordPalette::resized()
     close_.setBounds(getWidth() - 34, 6, 24, 20);
     auto r = content().reduced(10, 4);
     auto line = [&](int y, int h) { return juce::Rectangle<int>(r.getX(), r.getY() + y, r.getWidth(), h); };
-    // Root: seven letters and three accidentals.
-    auto row = line(14, 26);
-    for (auto& k : roots_) k->setBounds(row.removeFromLeft(28).withTrimmedRight(3));
-    row.removeFromLeft(8);
-    for (auto& k : accidentals_) k->setBounds(row.removeFromLeft(30).withTrimmedRight(3));
-    row = line(60, 26);
+    // Root: the key's seven notes in scale order from the tonic, then the
+    // three accidentals for a chromatic root.
+    auto row = line(24, 26);
+    {
+        auto acc = row.removeFromRight(96);
+        for (auto& k : accidentals_) k->setBounds(acc.removeFromLeft(32).withTrimmedRight(3));
+        row.removeFromRight(8);
+        const int kw = row.getWidth() / 7;
+        const int tonic = std::clamp(shown_key_.tonic.letter, 0, 6);
+        for (int d = 0; d < 7; ++d) roots_[static_cast<std::size_t>((tonic + d) % 7)]->setBounds(row.removeFromLeft(kw).withTrimmedRight(3));
+    }
+    // Borrowed chords and where they come from.
+    row = line(68, 24);
+    borrow_from_.setBounds(row.removeFromRight(220));
+    row = line(94, 24);
+    if (!borrowed_keys_.empty()) {
+        const int bw = std::min(48, row.getWidth() / static_cast<int>(borrowed_keys_.size()));
+        for (auto& k : borrowed_keys_) k->setBounds(row.removeFromLeft(bw).withTrimmedRight(3));
+    }
+    row = line(138, 26);
     {
         const int tw = row.getWidth() / static_cast<int>(types_.size());
         for (auto& k : types_) k->setBounds(row.removeFromLeft(tw).withTrimmedRight(3));
     }
-    row = line(106, 26);
+    row = line(184, 26);
     const int w = r.getWidth() / static_cast<int>(alterations_.size());
     for (auto& k : alterations_) k->setBounds(row.removeFromLeft(w).withTrimmedRight(3));
-    row = line(152, 26);
+    row = line(230, 26);
     for (auto& k : inversions_) k->setBounds(row.removeFromLeft(54).withTrimmedRight(3));
     row.removeFromLeft(8);
     name_lcd_.setBounds(row);
-    row = line(198, 26);
+    row = line(276, 26);
     close_voicing_.setBounds(row.removeFromLeft(62).withTrimmedRight(3));
     open_.setBounds(row.removeFromLeft(62).withTrimmedRight(3));
     row.removeFromLeft(12);
     span1_.setBounds(row.removeFromLeft(62).withTrimmedRight(3));
     span2_.setBounds(row.removeFromLeft(62).withTrimmedRight(3));
-    row = line(234, 24);
+    row = line(312, 24);
     octave_down_.setBounds(row.removeFromLeft(28));
     row.removeFromLeft(3);
     octave_lcd_.setBounds(row.removeFromLeft(86));
@@ -552,7 +661,7 @@ void ChordPalette::resized()
     symbol_.setBounds(row.removeFromLeft(76));
     row.removeFromLeft(6);
     then_.setBounds(row);
-    send_.setBounds(line(266, 24));
+    send_.setBounds(line(344, 24));
     row = juce::Rectangle<int>(r.getX(), getHeight() - 42, r.getWidth(), 30);
     insert_.setBounds(row.removeFromLeft(110));
     row.removeFromLeft(6);
