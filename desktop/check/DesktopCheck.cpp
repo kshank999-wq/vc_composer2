@@ -3919,7 +3919,10 @@ void chord_builder_checks(MainWindow& window, const juce::File& dir)
     auto* ex = w ? dynamic_cast<ChordExplorer*>(w->getContentComponent()) : nullptr;
     check(ex != nullptr, "Window > Chord Explorer opens");
     if (!ex) return;
-    check(ex->getWidth() >= 1200 && ex->getHeight() >= 840, "the Chord Explorer is bigger (" + juce::String(ex->getWidth()) + " x " +
+    // Full size, or (a smaller screen, as on the macOS runners) filling most of it.
+    const auto user = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
+    const bool fills = ex->getWidth() >= user.getWidth() * 85 / 100 - 40 || ex->getHeight() >= user.getHeight() * 75 / 100;
+    check((ex->getWidth() >= 1200 && ex->getHeight() >= 840) || fills, "the Chord Explorer is bigger (" + juce::String(ex->getWidth()) + " x " +
                                                                  juce::String(ex->getHeight()) + ")");
     check(ex->borrowed_count() >= 4, "borrowed chords sit under the key's (" + juce::String(ex->borrowed_count()) + ")");
     {

@@ -33,7 +33,9 @@ final class BridgeTests: XCTestCase {
     func testTheDesktopTemplatesOpen() throws {
         let doc = try Core.make()
         try doc.newFromTemplate("cinematic.orchestra.consolidated")
-        XCTAssertEqual(doc.tracks.count, 15)
+        // The template grows (the choir is four parts now): at least the
+        // orchestra it has always had.
+        XCTAssertGreaterThanOrEqual(doc.tracks.count, 15)
     }
 
     func testBravuraIsRegisteredAndTheScoreDraws() throws {

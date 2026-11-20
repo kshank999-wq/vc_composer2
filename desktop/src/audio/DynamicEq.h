@@ -28,6 +28,7 @@
 #include <string>
 #include <vector>
 
+#include "audio/AutomationRt.h"  // ParameterWatch complete: MSVC instantiates the base class's inline virtuals here
 #include "audio/ChannelDsp.h"
 
 namespace vcc::desktop {
