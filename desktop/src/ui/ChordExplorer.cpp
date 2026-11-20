@@ -626,6 +626,65 @@ private:
     bool showing_ = false;
 };
 
+// --- Voice picker ------------------------------------------------------------------------------
+
+/// The chord's voices, bass first: click one to send it or not, or drag
+/// across several to set them all alike.
+class ChordExplorer::VoicePicker final : public juce::Component, public juce::SettableTooltipClient {
+public:
+    explicit VoicePicker(ChordExplorer& owner) : owner_(owner)
+    {
+        setComponentID("chord_voice_picker");
+        setTitle("Voices to send");
+        setTooltip("Which voices of each chord Send writes, counting up from the bass: click one, or drag across several. "
+                   "Sent to a section, the lowest goes to its lowest instrument.");
+    }
+    juce::Rectangle<int> key(int v) const
+    {
+        const int w = (getWidth() - 58) / kMaxVoices;
+        return {58 + v * w, 0, w - 2, getHeight()};
+    }
+    int voice_at(juce::Point<int> p) const
+    {
+        for (int v = 0; v < kMaxVoices; ++v)
+            if (key(v).contains(p)) return v;
+        return -1;
+    }
+    void paint(juce::Graphics& g) override
+    {
+        g.setColour(colours::text_dim);
+        g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
+        g.drawText("VOICES", 0, 0, 56, getHeight(), juce::Justification::centredLeft);
+        for (int v = 0; v < kMaxVoices; ++v) {
+            const auto r = key(v).toFloat();
+            const bool on = owner_.voice_selected(v);
+            g.setColour(on ? colours::accent.withAlpha(0.85f) : colours::panel_raised);
+            g.fillRoundedRectangle(r, 3.0f);
+            g.setColour(on ? colours::accent : colours::outline);
+            g.drawRoundedRectangle(r.reduced(0.5f), 3.0f, 1.0f);
+            g.setColour(on ? juce::Colours::white : colours::text_dim);
+            g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+            g.drawText(v == 0 ? juce::String("Bass") : juce::String(v + 1), r, juce::Justification::centred);
+        }
+    }
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const int v = voice_at(e.getPosition());
+        if (v < 0) return;
+        painting_ = !owner_.voice_selected(v);
+        owner_.set_voice_selected(v, painting_);
+    }
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        const int v = voice_at(e.getPosition());
+        if (v >= 0 && owner_.voice_selected(v) != painting_) owner_.set_voice_selected(v, painting_);
+    }
+
+private:
+    ChordExplorer& owner_;
+    bool painting_ = true;
+};
+
 // --- Explorer ---------------------------------------------------------------------------------
 
 ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmony Track (piano)")
@@ -675,7 +734,8 @@ ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmo
     voicing_.addItem("Drop 2", 3);
     voicing_.addItem("Drop 3", 4);
     voicing_.addItem("Spread", 5);
-    voicing_.setSelectedId(1, juce::dontSendNotification);
+    voicing_.addItem("Two Hands (5 notes)", 6);
+    voicing_.setSelectedId(6, juce::dontSendNotification);  // a full two-handed chord: 2 in the bass clef, 3 above
     rhythm_.setTitle("Rhythm");
     rhythm_.addItem("Block", 1);
     rhythm_.addItem("Pulse", 2);
@@ -767,6 +827,20 @@ ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmo
     remove_bar_.onClick = [this] { remove_last_bar(); };
     addAndMakeVisible(add_bars_);
     addAndMakeVisible(remove_bar_);
+    voice_picker_ = std::make_unique<VoicePicker>(*this);
+    addAndMakeVisible(*voice_picker_);
+    send_to_box_.setComponentID("chord_send_to");
+    send_to_box_.setTitle("Send to");
+    send_to_box_.addItem("The Target Track", 1);
+    send_to_box_.addItem("Strings (spread)", 2);
+    send_to_box_.addItem("Woodwinds (spread)", 3);
+    send_to_box_.addItem("Brass (spread)", 4);
+    send_to_box_.addItem("Choir (spread)", 5);
+    send_to_box_.setSelectedId(1, juce::dontSendNotification);
+    send_to_box_.setTooltip("Send to the Target track, or spread the chosen voices over a section: the lowest voice to its "
+                            "lowest instrument (Basses), up to the highest (Violins I)");
+    send_to_box_.onChange = [this] { set_send_to(static_cast<SendTo>(send_to_box_.getSelectedId() - 1)); };
+    addAndMakeVisible(send_to_box_);
     for (auto* z : {&zoom_w_, &zoom_h_}) {
         z->setSliderStyle(juce::Slider::LinearHorizontal);
         z->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -901,7 +975,9 @@ void ChordExplorer::resized()
     use_build_key_.setBounds(bottom.removeFromLeft(90));
     send_.setBounds(bottom.removeFromRight(130));
     bottom.removeFromRight(8);
-    target_.setBounds(bottom.removeFromRight(240));
+    target_.setBounds(bottom.removeFromRight(220));
+    bottom.removeFromRight(6);
+    send_to_box_.setBounds(bottom.removeFromRight(170));
     bottom.removeFromRight(6);
     target_caption_.setBounds(bottom.removeFromRight(50));
 
@@ -917,6 +993,8 @@ void ChordExplorer::resized()
         add_bars_.setBounds(foot.removeFromLeft(80));
         foot.removeFromLeft(6);
         remove_bar_.setBounds(foot.removeFromLeft(60));
+        foot.removeFromLeft(24);
+        voice_picker_->setBounds(foot.removeFromLeft(330));
         zoom_h_.setBounds(foot.removeFromRight(110));
         zoom_h_caption_.setBounds(foot.removeFromRight(24));
         foot.removeFromRight(10);
@@ -1026,11 +1104,16 @@ theory::VoicingOptions ChordExplorer::voicing_options() const
     theory::VoicingOptions v;
     static const theory::VoicingStyle styles[] = {theory::VoicingStyle::Closed, theory::VoicingStyle::Open,
                                                   theory::VoicingStyle::Drop2, theory::VoicingStyle::Drop3,
-                                                  theory::VoicingStyle::Spread};
-    v.style = styles[juce::jlimit(1, 5, voicing_.getSelectedId()) - 1];
+                                                  theory::VoicingStyle::Spread, theory::VoicingStyle::TwoHands};
+    v.style = styles[juce::jlimit(1, 6, voicing_.getSelectedId()) - 1];
     v.voice_lead = voice_lead_.getToggleState();
     const auto id = target_.track_id();
-    if (const auto* t = id.empty() ? nullptr : context_.session.data().find_track(id)) {
+    if (v.style == theory::VoicingStyle::TwoHands || send_to_ != SendTo::Track) {
+        // Both hands (or a section): the whole keyboard; a section's parts are fitted to each instrument.
+        v.low = 21;
+        v.high = 108;
+        v.center = 66;
+    } else if (const auto* t = id.empty() ? nullptr : context_.session.data().find_track(id)) {
         const auto [low, high] = context_.session.range_for(*t);
         v.low = std::max(low, 28);
         v.high = std::min(high, 100);
@@ -1212,13 +1295,17 @@ void ChordExplorer::send()
             rerender();
         }
         if (!build_render_) return;
+        if (send_to_ != SendTo::Track) {
+            send_to_section(*build_render_, "Your progression");
+            return;
+        }
         int bars = 0;
         for (int b = 0; b < bar_count(); ++b)
             for (const auto& c : bars_[static_cast<std::size_t>(b)].cells)
                 if (c) bars = b + 1;
         const juce::String what = "Your progression (" + juce::String(bars) + " bars from bar " +
                                   juce::String(static_cast<int>(start_.getValue())) + ")";
-        send_with(track, *build_render_, "built", what, project::CollisionPolicy::Ask);
+        send_with(track, chosen_voices(*build_render_), "built", what, project::CollisionPolicy::Ask);
         return;
     }
     const auto* p = chosen();
@@ -1237,7 +1324,11 @@ void ChordExplorer::send()
     if (!render_) return;
     const juce::String what = utf8(p->name) + " (" + juce::String(length_.getSelectedId()) + " bars from bar " +
                               juce::String(static_cast<int>(start_.getValue())) + ")";
-    send_with(track, *render_, p->id, what, project::CollisionPolicy::Ask);
+    if (send_to_ != SendTo::Track) {
+        send_to_section(*render_, what);
+        return;
+    }
+    send_with(track, chosen_voices(*render_), p->id, what, project::CollisionPolicy::Ask);
 }
 
 void ChordExplorer::send_with(const std::string& track_id, const theory::ProgressionRender& render,
@@ -1503,5 +1594,111 @@ void ChordExplorer::use_build(bool build)
 
 const theory::Chord& ChordExplorer::borrowed_chord(int i) const { return borrowed_[static_cast<std::size_t>(i)]->chord(); }
 const theory::Chord& ChordExplorer::key_chord(int i) const { return matrix_[static_cast<std::size_t>(i)]->chord(); }
+
+// --- Voices and sections -------------------------------------------------------------------------
+
+void ChordExplorer::set_voice_selected(int voice, bool on)
+{
+    if (voice < 0 || voice >= kMaxVoices) return;
+    voices_[static_cast<std::size_t>(voice)] = on;
+    if (voice_picker_) voice_picker_->repaint();
+}
+
+bool ChordExplorer::voice_selected(int voice) const
+{
+    return voice >= 0 && voice < kMaxVoices && voices_[static_cast<std::size_t>(voice)];
+}
+
+void ChordExplorer::set_send_to(SendTo to)
+{
+    send_to_ = to;
+    send_to_box_.setSelectedId(static_cast<int>(to) + 1, juce::dontSendNotification);
+    target_.setEnabled(to == SendTo::Track);
+    rerender();
+}
+
+theory::ProgressionRender ChordExplorer::chosen_voices(const theory::ProgressionRender& render) const
+{
+    theory::ProgressionRender out = render;
+    out.notes.clear();
+    for (auto& rc : out.chords) {
+        auto sorted = rc.voicing.notes;
+        std::sort(sorted.begin(), sorted.end());
+        std::vector<int> keep;
+        for (std::size_t v = 0; v < sorted.size(); ++v)
+            // Voices past the sixth go with the top one.
+            if (voice_selected(static_cast<int>(std::min<std::size_t>(v, kMaxVoices - 1)))) keep.push_back(sorted[v]);
+        for (const auto& n : render.notes)
+            if (n.start >= rc.start && n.start < rc.start + rc.duration &&
+                std::find(keep.begin(), keep.end(), n.pitch) != keep.end())
+                out.notes.push_back(n);
+        rc.voicing.notes = keep;
+    }
+    return out;
+}
+
+void ChordExplorer::send_to_section(const theory::ProgressionRender& render, const juce::String& what)
+{
+    using S = session::Session::Section;
+    const S section = send_to_ == SendTo::Strings ? S::Strings : send_to_ == SendTo::Woodwinds ? S::Woodwinds
+                                                    : send_to_ == SendTo::Brass         ? S::Brass
+                                                                                        : S::Choir;
+    auto& session = context_.session;
+    // The section's instruments that are in the project, lowest first.
+    std::vector<std::string> tracks;
+    for (const auto& id : session.section_tracks(section))
+        if (!id.empty()) tracks.insert(tracks.begin(), id);
+    if (tracks.empty()) {
+        context_.status("No " + send_to_box_.getText().upToFirstOccurrenceOf(" (", false, false).toLowerCase() +
+                        " in this project to spread the chords over");
+        return;
+    }
+    const auto picked = chosen_voices(render);
+    // Voice v of each chord (counting the chosen ones up from the bass) to
+    // track t: one each when the numbers match; otherwise spread evenly.
+    const int m = static_cast<int>(tracks.size());
+    std::vector<std::pair<std::string, theory::ProgressionRender>> parts;
+    for (int t = 0; t < m; ++t) {
+        theory::ProgressionRender part = picked;
+        part.notes.clear();
+        const auto* track = session.data().find_track(tracks[static_cast<std::size_t>(t)]);
+        const auto [lo, hi] = track ? session.range_for(*track) : std::pair<int, int>{0, 127};
+        for (auto& rc : part.chords) {
+            const auto& notes = rc.voicing.notes;  // the chosen voices, ascending
+            const int k = static_cast<int>(notes.size());
+            std::vector<int> mine;
+            if (k > 0) {
+                if (k >= m) {
+                    for (int v = 0; v < k; ++v)
+                        if (v * m / k == t) mine.push_back(notes[static_cast<std::size_t>(v)]);
+                } else {
+                    mine.push_back(notes[static_cast<std::size_t>(m == 1 ? 0 : juce::roundToInt(double(t) * (k - 1) / (m - 1)))]);
+                }
+            }
+            // Into the instrument's range, by octaves.
+            std::vector<int> fitted;
+            for (int n : mine) {
+                int x = n;
+                while (x < lo && x + 12 <= 127) x += 12;
+                while (x > hi && x - 12 >= 0) x -= 12;
+                fitted.push_back(x);
+            }
+            for (const auto& n : picked.notes)
+                if (n.start >= rc.start && n.start < rc.start + rc.duration)
+                    for (std::size_t i = 0; i < mine.size(); ++i)
+                        if (n.pitch == mine[i]) {
+                            auto e = n;
+                            e.pitch = fitted[i];
+                            part.notes.push_back(e);
+                        }
+            rc.voicing.notes = fitted;
+        }
+        parts.push_back({tracks[static_cast<std::size_t>(t)], std::move(part)});
+    }
+    const int written = session.send_progression_parts(parts, use_build_ ? "built" : "chord_explorer",
+                                                        "Spread " + what.toStdString() + " over the " +
+                                                            send_to_box_.getText().upToFirstOccurrenceOf(" (", false, false).toStdString());
+    context_.status(what + " spread over " + juce::String(written) + " instruments, the lowest voice to the lowest (Undo takes it back)");
+}
 
 }  // namespace vcc::desktop

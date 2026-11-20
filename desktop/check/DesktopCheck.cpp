@@ -4008,6 +4008,59 @@ void chord_builder_checks(MainWindow& window, const juce::File& dir)
     check(session.data().tracks.size() == before + 1 && harmony && notes >= 12 && session.data().chords.size() >= 4,
           "Send writes your progression on the target track as notation, with its chord symbols (" + juce::String(static_cast<int>(notes)) +
               " notes, " + juce::String(static_cast<int>(session.data().chords.size())) + " symbols)");
+    // Two hands, five notes: two in the bass clef, three from middle C up.
+    {
+        const auto two = ex->cell_notes(2, 0);
+        int left = 0, right = 0;
+        for (int n : two) (n < 60 ? left : right)++;
+        check(ex->cell(2, 0) && two.size() >= 5 && left == 2 && right >= 3,
+              "chords are voiced for two hands: 2 notes in the bass clef, 3 or more above (" + juce::String(left) + " + " +
+                  juce::String(right) + ")");
+    }
+    // All five voices to the strings: Basses, Celli, Violas, Violins II, Violins I - lowest to lowest.
+    {
+        std::map<std::string, std::string> ids;
+        for (const auto& [name, inst] : std::vector<std::pair<std::string, std::string>>{{"Violins I", "strings.violins_1"},
+                                                                                           {"Violins II", "strings.violins_2"},
+                                                                                           {"Violas", "strings.violas"},
+                                                                                           {"Celli", "strings.celli"},
+                                                                                           {"Basses", "strings.basses"}})
+            ids[name] = session.add_track(name, inst);
+        for (int v = 0; v < ChordExplorer::kMaxVoices; ++v) ex->set_voice_selected(v, true);
+        ex->clear_build();
+        ex->set_cell(0, 0, ex->key_chord(0), "I");
+        ex->set_cell(1, 0, ex->key_chord(4), "V");
+        ex->set_send_to(ChordExplorer::SendTo::Strings);
+        pump(60);
+        const auto history = session.project().history_size();
+        ex->press_send();
+        pump(200);
+        auto lowest = [&](const std::string& name) {
+            int lo = 999, count = 0;
+            for (const auto& n : session.data().find_track(ids[name])->active_version()->score.notes(0))
+                if (!n.is_rest) {
+                    lo = std::min(lo, notation::midi_note_number(n.pitch));
+                    ++count;
+                }
+            return std::pair<int, int>{lo, count};
+        };
+        const auto vb = lowest("Basses"), vc = lowest("Celli"), va = lowest("Violas"), v2 = lowest("Violins II"), v1 = lowest("Violins I");
+        check(vb.second > 0 && vc.second > 0 && va.second > 0 && v2.second > 0 && v1.second > 0 &&
+                  session.project().history_size() == history + 1,
+              "Send to Strings spreads the five voices over Basses, Celli, Violas, Violins II and Violins I, one undo step");
+        // The basses are written an octave above how they sound.
+        check(vb.first - 12 <= vc.first && v2.first <= v1.first, "the lowest voice goes to the Basses, the highest to Violins I (written " +
+                                                                juce::String(vb.first) + ", " + juce::String(vc.first) + ", " +
+                                                                juce::String(va.first) + ", " + juce::String(v2.first) + ", " +
+                                                                juce::String(v1.first) + ")");
+        // Only the top voice, to the target track.
+        ex->set_send_to(ChordExplorer::SendTo::Track);
+        for (int v = 0; v < ChordExplorer::kMaxVoices; ++v) ex->set_voice_selected(v, v == 4);
+        const auto picked = ex->render_build();
+        check(find_by_id(*ex, "chord_voice_picker") && find_by_id(*ex, "chord_send_to") && picked,
+              "the voices to send are picked under the bars; Send to chooses the track or a section");
+        for (int v = 0; v < ChordExplorer::kMaxVoices; ++v) ex->set_voice_selected(v, true);
+    }
     ex->clear_build();
     pump(60);
     check(!ex->build_chord(0) && ex->render_build() == std::nullopt, "Clear empties the build");

@@ -23,6 +23,10 @@ enum class VoicingStyle {
     Drop2,   ///< Second voice from the top dropped an octave.
     Drop3,   ///< Third voice from the top dropped an octave.
     Spread,  ///< Bass an octave or more below a closed upper structure.
+    /// Both hands of a pianist, five notes or more: two in the bass clef
+    /// (the bass and its fifth, or its octave) and three or more from
+    /// middle C up (the rest of the chord, closed).
+    TwoHands,
 };
 
 const char* to_string(VoicingStyle style) noexcept;

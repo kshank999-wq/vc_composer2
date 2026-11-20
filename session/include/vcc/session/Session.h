@@ -352,6 +352,12 @@ public:
     /// Chord Explorer "Send to Track" (Supplement §9.1): one undo step.
     project::InsertResult send_progression(const std::string& track_id, const theory::ProgressionRender& render,
                                            const std::string& progression_id, project::CollisionPolicy policy);
+    /// A chord progression's voices spread over a section, a part per
+    /// track (the Chord Explorer's Send to Strings...): each written as
+    /// send_progression writes it, replacing those bars, all in one undo
+    /// step labelled `label`. Returns how many tracks were written.
+    int send_progression_parts(const std::vector<std::pair<std::string, theory::ProgressionRender>>& parts,
+                               const std::string& progression_id, const std::string& label);
     /// One chord (or single note) to write into a score: written pitches,
     /// spelled as they are to appear, from `start` for `duration` ticks.
     struct WrittenEvent {

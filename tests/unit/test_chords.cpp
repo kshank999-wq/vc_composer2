@@ -364,3 +364,30 @@ TEST_CASE("key reference: borrowing from other scales on the same tonic")
     CHECK(double_flat);
     CHECK_EQ(borrow_source_name(BorrowSource::Parallel, true), std::string("Parallel major"));
 }
+
+TEST_CASE("two-hand voicing: two notes in the bass clef, three or more from middle C up")
+{
+    VoicingOptions o;
+    o.style = VoicingStyle::TwoHands;
+    o.low = 21;
+    o.high = 108;
+    o.center = 66;
+    auto check_hands = [](const Voicing& v) {
+        REQUIRE(v.notes.size() >= 5u);
+        int left = 0, right = 0;
+        for (int n : v.notes) (n < 60 ? left : right)++;
+        CHECK_EQ(left, 2);
+        CHECK(right >= 3);
+    };
+    const auto c = voice_chord(*parse_chord_symbol("C"), o);
+    check_hands(c);
+    CHECK_EQ(c.notes[0] % 12, 0);  // C in the bass
+    CHECK_EQ(c.notes[1] % 12, 7);  // and its fifth
+    check_hands(voice_chord(*parse_chord_symbol("G7"), o));
+    check_hands(voice_chord(*parse_chord_symbol("Am9"), o));
+    // A progression stays five-part, voice-led.
+    std::vector<Chord> prog;
+    for (const char* s : {"C", "Am", "F", "G7"}) prog.push_back(*parse_chord_symbol(s));
+    for (const auto& v : voice_progression(prog, o)) check_hands(v);
+    CHECK_EQ(std::string(to_string(VoicingStyle::TwoHands)), std::string("two_hands"));
+}

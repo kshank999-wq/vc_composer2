@@ -15,6 +15,7 @@ const char* to_string(VoicingStyle s) noexcept
         case VoicingStyle::Drop2: return "drop2";
         case VoicingStyle::Drop3: return "drop3";
         case VoicingStyle::Spread: return "spread";
+        case VoicingStyle::TwoHands: return "two_hands";
     }
     return "closed";
 }
@@ -22,7 +23,7 @@ const char* to_string(VoicingStyle s) noexcept
 std::optional<VoicingStyle> voicing_style_from_string(const std::string& t) noexcept
 {
     for (VoicingStyle s : {VoicingStyle::Closed, VoicingStyle::Open, VoicingStyle::Drop2, VoicingStyle::Drop3,
-                           VoicingStyle::Spread})
+                           VoicingStyle::Spread, VoicingStyle::TwoHands})
         if (t == to_string(s)) return s;
     return std::nullopt;
 }
@@ -93,10 +94,45 @@ struct Candidate {
     double score = 0;
 };
 
+/// Two hands: the left hand's bass and fifth (or octave) in the bass clef,
+/// the right hand's three or more notes from middle C up.
+std::vector<Voicing> two_hand_candidates(const Chord& c)
+{
+    const std::vector<int> pcs = chord_pcs(c);
+    const int bass_pc = c.bass_note().pitch_class();
+    std::vector<int> upper_pcs;
+    for (int pc : pcs)
+        if (pc != bass_pc) upper_pcs.push_back(pc);
+    // At least three in the right hand: the bass's pitch class joins a triad's two.
+    if (upper_pcs.size() < 3) upper_pcs.push_back(bass_pc);
+    while (upper_pcs.size() < 3) upper_pcs.push_back(upper_pcs.front());
+    const bool has_fifth = std::find(pcs.begin(), pcs.end(), mod12(bass_pc + 7)) != pcs.end();
+    std::vector<Voicing> out;
+    for (int bass = 36 + mod12(bass_pc - 36); bass <= 52; bass += 12) {  // C2..E3
+        const int second = has_fifth ? bass + 7 : bass + 12;
+        if (second > 59) continue;  // the left hand stays in the bass clef
+        for (std::size_t rot = 0; rot < upper_pcs.size(); ++rot) {
+            std::vector<int> upper;
+            int note = lowest_at_or_above(upper_pcs[rot], 60);
+            upper.push_back(note);
+            for (std::size_t k = 1; k < upper_pcs.size(); ++k) {
+                note = lowest_at_or_above(upper_pcs[(rot + k) % upper_pcs.size()], note + 1);
+                upper.push_back(note);
+            }
+            Voicing v;
+            v.notes = {bass, second};
+            v.notes.insert(v.notes.end(), upper.begin(), upper.end());
+            out.push_back(v);
+        }
+    }
+    return out;
+}
+
 std::vector<Voicing> candidates(const Chord& chord, int inversion, const VoicingOptions& opt)
 {
     Chord c = chord;
     c.inversion = inversion;
+    if (opt.style == VoicingStyle::TwoHands) return two_hand_candidates(c);
     std::vector<int> pcs = chord_pcs(c);
     int bass_pc = c.bass_note().pitch_class();
     std::vector<int> upper_pcs;
@@ -321,6 +357,7 @@ std::vector<VoicedTone> voice_for_entry(const Chord& chord, int bass_octave, Voi
             break;
         }
         case VoicingStyle::Spread:
+        case VoicingStyle::TwoHands:
             if (out.size() >= 2) out.front().midi -= 12;
             break;
     }

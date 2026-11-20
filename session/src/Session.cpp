@@ -1244,6 +1244,18 @@ project::InsertResult Session::insert_notes(const std::string& id, Ticks start, 
     return r;
 }
 
+int Session::send_progression_parts(const std::vector<std::pair<std::string, theory::ProgressionRender>>& parts,
+                                    const std::string& progression_id, const std::string& label)
+{
+    const auto before = project_.history_size();
+    int written = 0;
+    for (const auto& [track, render] : parts)
+        if (!render.notes.empty() && send_progression(track, render, progression_id, project::CollisionPolicy::Replace).ok) ++written;
+    if (project_.history_size() - before > 1) project_.squash_undo(project_.history_size() - before, label);
+    document_changed();
+    return written;
+}
+
 project::InsertResult Session::send_progression(const std::string& id, const theory::ProgressionRender& render,
                                                 const std::string& progression_id, project::CollisionPolicy policy)
 {

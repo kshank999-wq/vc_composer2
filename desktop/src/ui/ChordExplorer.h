@@ -83,6 +83,15 @@ public:
     const theory::Chord& key_chord(int i) const;
     juce::ComboBox& borrow_box() { return borrow_from_; }
     void press_send() { send(); }
+    /// Which voices (0 = the bass, counting up) Send writes; all by default.
+    void set_voice_selected(int voice, bool on);
+    bool voice_selected(int voice) const;
+    static constexpr int kMaxVoices = 6;
+    /// Where Send writes: the Target track, or spread over a section
+    /// (the lowest voice to its lowest instrument).
+    enum class SendTo { Track, Strings, Woodwinds, Brass, Choir };
+    void set_send_to(SendTo to);
+    SendTo send_to() const noexcept { return send_to_; }
     /// The project bar the build's first bar lands on (the Start bar).
     int first_bar() const;
     /// Plays these notes as a chord (nothing is written).
@@ -93,6 +102,7 @@ private:
     class Cards;
     class BuildStrip;
     class CellEditor;
+    class VoicePicker;
 
     int getNumRows() override;
     void paintListBoxItem(int row, juce::Graphics&, int width, int height, bool selected) override;
@@ -143,6 +153,13 @@ private:
     /// Rendered chord i came from (bar, cell): for the editor's voiced notes.
     std::vector<std::pair<int, int>> build_cells_;
     int strip_height() const;
+    std::array<bool, kMaxVoices> voices_{true, true, true, true, true, true};
+    std::unique_ptr<VoicePicker> voice_picker_;
+    juce::ComboBox send_to_box_;
+    SendTo send_to_ = SendTo::Track;
+    /// The render with only the chosen voices.
+    theory::ProgressionRender chosen_voices(const theory::ProgressionRender& render) const;
+    void send_to_section(const theory::ProgressionRender& render, const juce::String& what);
     bool use_build_ = false;
     std::unique_ptr<Cards> cards_;
     juce::Label chord_info_;
