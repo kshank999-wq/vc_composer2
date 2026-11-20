@@ -226,6 +226,17 @@ void shoot(juce::Component& c, const juce::File& dir, const juce::String& name, 
     check(colours.size() > 8, name + " screenshot has content (" + juce::String(colours.size()) + " colours)");
 }
 
+/// Sets (or, with an empty value, clears) an environment variable, on every platform.
+void set_env(const char* name, const juce::String& value)
+{
+#if JUCE_WINDOWS
+    _putenv_s(name, value.toRawUTF8());
+#else
+    if (value.isEmpty()) unsetenv(name);
+    else setenv(name, value.toRawUTF8(), 1);
+#endif
+}
+
 juce::Component* find_dialog(const juce::String& title)
 {
     for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
@@ -4645,8 +4656,8 @@ void sound_pack_checks(MainWindow& window, const juce::File& dir)
     const auto root = dir.getChildFile("sound-pack-check");
     root.deleteRecursively();
     const auto installed_dir = root.getChildFile("Sounds"), src = root.getChildFile("server");
-    setenv("VCC_SOUNDS_DIR", installed_dir.getFullPathName().toRawUTF8(), 1);
-    setenv("VCC_SOUNDS_URL", juce::URL(src).toString(false).toRawUTF8(), 1);
+    set_env("VCC_SOUNDS_DIR", installed_dir.getFullPathName());
+    set_env("VCC_SOUNDS_URL", juce::URL(src).toString(false));
     sounds::unload();
     write_test_pack(src);
 
@@ -4821,7 +4832,7 @@ void sound_pack_checks(MainWindow& window, const juce::File& dir)
     pump(100);
     check(ctx.engine.instrument_status(piano).contains("laceholder") || !ctx.engine.instrument_status(piano).startsWith("Salamander"),
           "without the pack the placeholder plays again (" + ctx.engine.instrument_status(piano) + ")");
-    unsetenv("VCC_SOUNDS_URL");
+    set_env("VCC_SOUNDS_URL", {});
     root.deleteRecursively();
 }
 
@@ -5390,7 +5401,7 @@ void chord_palette_checks(MainWindow& window, const juce::File& dir)
                 return notation::midi_note_number(a.pitch) < notation::midi_note_number(b.pitch);
             });
             for (const auto& n : ns)
-                out[st] << (out[st].isEmpty() ? "" : " ") << juce::String::charToString("CDEFGAB"[static_cast<int>(n.pitch.step)])
+                out[st] << juce::String(out[st].isEmpty() ? "" : " ") << juce::String::charToString("CDEFGAB"[static_cast<int>(n.pitch.step)])
                         << (n.pitch.alteration > 0 ? "#" : n.pitch.alteration < 0 ? "b" : "") << n.pitch.octave;
         }
         return out;
@@ -6439,8 +6450,8 @@ void mixer_popout_checks(MainWindow& window, const juce::File& dir)
 /// auto gain, filters) and its unit in the rack (nodes, keys, analyser).
 void dyneq_checks(MainWindow& window, const juce::File& dir)
 {
-    constexpr double sr = 48000.0;
-    constexpr int kBlock = 512;
+    static constexpr double sr = 48000.0;  // static: lambdas use them without capturing (MSVC)
+    static constexpr int kBlock = 512;
     auto sine = [](double freq, float amp, int n, int offset = 0) {
         std::vector<float> v(static_cast<std::size_t>(n));
         for (int i = 0; i < n; ++i)
