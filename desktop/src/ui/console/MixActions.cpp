@@ -35,10 +35,10 @@ juce::String insert_name(const project::InsertSlot& s)
 
 const std::vector<std::pair<std::string, const char*>>& builtin_inserts()
 {
-    static const std::vector<std::pair<std::string, const char*>> list{{"eq", "EQ"},         {"compressor", "Compressor"},
-                                                                       {"gate", "Gate"},     {"limiter", "Limiter"},
-                                                                       {"reverb", "Reverb"}, {"delay", "Delay"},
-                                                                       {"hardware", "Outboard (Hardware Insert)"}};
+    static const std::vector<std::pair<std::string, const char*>> list{
+        {"eq", "VC EQ"},         {"compressor", "VC Compressor"}, {"gate", "VC Gate"},
+        {"limiter", "VC Limiter"}, {"reverb", "VC Reverb"},       {"delay", "VC Delay"},
+        {"saturation", "VC Saturator"}, {"hardware", "VC Outboard (Hardware Insert)"}};
     return list;
 }
 

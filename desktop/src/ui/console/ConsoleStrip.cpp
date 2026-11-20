@@ -709,7 +709,7 @@ void Strip::refresh()
         juce::String n = insert_name(s);
         if (i + 1 == static_cast<std::size_t>(InsertRack::kSlots) && inserts->size() > i + 1)
             n << " +" << static_cast<int>(inserts->size() - i - 1);
-        slots.push_back({s.suggestion ? "? " + n : n, s.bypass, s.suggestion, true});
+        slots.push_back({n, s.bypass, s.suggestion, true, s.kind});
     }
     inserts_.set(std::move(slots));
     // Sends

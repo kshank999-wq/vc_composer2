@@ -201,7 +201,7 @@ public:
     /// displays, read independently of `take_meter` and of each other:
     /// reader 0 the top deck and track headers, 1 the channel strip, 2 the
     /// mixer deck.
-    static constexpr int kMeterReaders = 5;  // composer, inspector, mixer deck, routing canvas, mixer controller
+    static constexpr int kMeterReaders = 6;  // composer, inspector, mixer deck, routing canvas, mixer controller, rack VUs
     /// The master output's loudness, 100 ms at a time while the transport
     /// plays (BS.1770 K-weighted mean square and true peak), for the Master
     /// panel's LUFS and dBTP readings. Drained by the message thread.

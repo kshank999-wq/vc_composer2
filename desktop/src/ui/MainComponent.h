@@ -109,6 +109,12 @@ public:
     shell::MixerDeck& mixer_deck() noexcept { return mixer_deck_; }
     /// The Producer view's bottom deck: the mixer (default) or the keyboard.
     void show_bottom_mixer(bool mixer);
+    /// The mixer deck in a window of its own (drag it to another screen; it
+    /// opens where it was left), or back in the bottom deck. Closing the
+    /// window docks it.
+    void set_mixer_popped(bool popped);
+    bool mixer_popped() const noexcept { return deck_window_ != nullptr; }
+    juce::DocumentWindow* mixer_deck_window() noexcept { return deck_window_.get(); }
     /// The mixer full screen (the whole window under the toolbar, faders as
     /// long as it allows) or compact (the bottom deck). Cmd/Ctrl+M and the
     /// toolbar's Mixer key toggle it; the deck's own key switches size.
@@ -180,7 +186,6 @@ public:
 
 private:
     class PluginWindow;
-    class BuiltinInsertWindow;
     std::string insert_kind(const std::string& owner_id, int slot) const;
     void timerCallback() override;
     /// Lights the toolbar keys that mirror a mode (punch, pencil, edit mode,
@@ -262,8 +267,9 @@ private:
     std::atomic<bool> autosave_running_{false};
     Workspace workspace_ = Workspace::Composer;
     std::unique_ptr<MixerWindow> mixer_;
+    /// The mixer deck popped out (it holds mixer_deck_, not owning it).
+    std::unique_ptr<juce::DocumentWindow> deck_window_;
     std::map<std::string, std::unique_ptr<PluginWindow>> plugin_windows_;
-    std::map<std::string, std::unique_ptr<BuiltinInsertWindow>> builtin_windows_;
     std::unique_ptr<juce::FileChooser> chooser_;
     std::unique_ptr<juce::DocumentWindow> gallery_window_;
     int ticks_ = 0;

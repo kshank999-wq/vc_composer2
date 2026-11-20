@@ -48,6 +48,7 @@
 #include "system/PluginWatch.h"
 #include "ui/hw/HwGallery.h"
 #include "ui/console/MixActions.h"
+#include "ui/console/RackGear.h"
 #include "audio/ChannelDsp.h"
 #include "ui/console/ConsoleStrip.h"
 #include "ui/console/ConsoleView.h"
@@ -1232,18 +1233,27 @@ void insert_window_checks(AppContext& ctx, const juce::File& dir)
     const auto after = session.data().find_track(track)->inserts[0].plugin.state_base64;
     check(!after.empty() && after != before, "closing the effect's window stores its settings in the project");
 
-    // A built-in compressor: a window of controls, each drag one undo step.
+    // A built-in compressor: its unit in the strip's rack, knobs for its
+    // controls, each turn one undo step.
     ctx.show_insert_window(track, 1);
     pump(300);
-    auto* comp_window = find_dialog("Compressor - Dialogue (insert 2)");
+    auto* comp_window = find_dialog("Rack - Dialogue");
     std::vector<juce::Slider*> sliders;
     std::function<void(juce::Component&)> collect = [&](juce::Component& c) {
         if (auto* sl = dynamic_cast<juce::Slider*>(&c)) sliders.push_back(sl);
         for (auto* child : c.getChildren()) collect(*child);
     };
-    if (comp_window) collect(*comp_window);
-    check(comp_window != nullptr && sliders.size() == 5,
-          "a built-in compressor's window shows its controls (" + juce::String(static_cast<int>(sliders.size())) + ")");
+    std::function<juce::Component*(juce::Component&, const juce::String&)> by_id = [&](juce::Component& c, const juce::String& id) -> juce::Component* {
+        if (c.getComponentID() == id) return &c;
+        for (auto* k : c.getChildren())
+            if (auto* f = by_id(*k, id)) return f;
+        return nullptr;
+    };
+    auto* comp_unit = comp_window ? by_id(*comp_window, "gear_1") : nullptr;
+    if (comp_unit) collect(*comp_unit);
+    check(comp_unit != nullptr && comp_unit->getTitle() == "VC Compressor" && sliders.size() == 5,
+          "a built-in compressor opens as VC Compressor in the strip's rack, with a knob per control (" +
+              juce::String(static_cast<int>(sliders.size())) + ")");
     if (comp_window && sliders.size() >= 2) {
         shoot(*comp_window, dir, "14-insert-builtin");
         auto drag = [&](juce::Slider* sl, std::initializer_list<double> values) {
@@ -1268,13 +1278,16 @@ void insert_window_checks(AppContext& ctx, const juce::File& dir)
         check(one_step && !u2->inserts[1].params.count("threshold_db"),
               "each drag of a control is one undo step");
         pump(100);
-        check(std::abs(sliders[0]->getValue() - (-18.0)) < 0.01, "the window follows an undo (threshold back to " +
+        check(std::abs(sliders[0]->getValue() - (-18.0)) < 0.01, "the rack follows an undo (threshold back to " +
                                                                       juce::String(sliders[0]->getValue(), 1) + " dB)");
     }
-    // Replacing the insert closes its window.
+    // Replacing the insert swaps the unit in the rack.
     session.update_track_mix(track, "replace", [&](project::Track& t) { t.inserts[1].kind = "reverb"; });
     pump(100);
-    check(find_dialog("Compressor - Dialogue (insert 2)") == nullptr, "a window closes when its insert is replaced");
+    auto* swapped = comp_window ? by_id(*comp_window, "gear_1") : nullptr;
+    check(swapped != nullptr && swapped->getTitle() == "VC Reverb", "replacing an insert swaps its unit in the rack (now " +
+                                                                        (swapped ? swapped->getTitle() : juce::String("none")) + ")");
+    if (auto* dw = dynamic_cast<juce::DocumentWindow*>(comp_window)) dw->closeButtonPressed();
 }
 
 juce::Component* find_by_id(juce::Component& root, const juce::String& id)
@@ -6249,6 +6262,140 @@ void cursor_start_checks(MainWindow& window, const juce::File& dir)
 }
 
 /// Slurs and ties by picking two notes; a click on either takes it away.
+/// The inserts as rack gear: small units in the strips, the strip's rack
+/// (faceplates with knobs, power switches, VU meters) when one is clicked.
+void rack_gear_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto track = session.add_audio_track("Lead Vocal", false);
+    session.update_track_mix(track, "gear", [](project::Track& t) {
+        for (const char* k : {"eq", "compressor", "reverb"}) {
+            project::InsertSlot slot;
+            slot.kind = k;
+            slot.suggestion = false;
+            t.inserts.push_back(slot);
+        }
+    });
+    main.show_workspace(MainComponent::Workspace::Producer);
+    main.show_bottom_mixer(true);
+    session.select_track(track);
+    pump(200);
+    auto& deck = main.mixer_deck();
+    auto* strip = deck.strip_for(track);
+    if (!strip) {
+        check(false, "the deck has a strip for the new track");
+        return;
+    }
+    auto& slots = strip->inserts();
+    check(slots.getHeight() >= 50 && slots.slot_rect(4).getBottom() <= slots.getHeight() && slots.slot_rect(0).getHeight() >= 10,
+          "the deck's inserts are a stack of small rack units (" + juce::String(slots.slot_rect(0).getHeight()) + " px each)");
+    shoot(main, dir, "34b-mixer-deck-rack-units");
+    // A click on the compressor's unit opens the strip's rack.
+    const auto r1 = slots.slot_rect(1).toFloat();
+    const juce::Point<float> at{r1.getRight() - r1.getWidth() * 0.3f, r1.getCentreY()};
+    slots.mouseDown(mouse_event(slots, at, at, false));
+    slots.mouseUp(mouse_event(slots, at, at, false));
+    pump(300);
+    auto* rack = console::rack_window(track);
+    check(rack != nullptr && rack->isVisible() && rack->getName() == "Rack - Lead Vocal",
+          "clicking an insert's unit opens the strip's rack (" + (rack ? rack->getName() : juce::String("none")) + ")");
+    if (!rack) return;
+    std::function<juce::Component*(juce::Component&, const juce::String&)> by_id = [&](juce::Component& c, const juce::String& id) -> juce::Component* {
+        if (c.getComponentID() == id) return &c;
+        for (auto* k : c.getChildren())
+            if (auto* f = by_id(*k, id)) return f;
+        return nullptr;
+    };
+    auto knobs_in = [](juce::Component& c) {
+        std::vector<juce::Slider*> out;
+        std::function<void(juce::Component&)> walk = [&](juce::Component& x) {
+            if (auto* sl = dynamic_cast<juce::Slider*>(&x)) out.push_back(sl);
+            for (auto* k : x.getChildren()) walk(*k);
+        };
+        walk(c);
+        return out;
+    };
+    auto* eq = by_id(*rack, "gear_0");
+    auto* comp = by_id(*rack, "gear_1");
+    auto* verb = by_id(*rack, "gear_2");
+    const bool stacked = eq && comp && verb && eq->getY() < comp->getY() && comp->getY() < verb->getY();
+    check(stacked && eq->getTitle() == "VC EQ" && comp->getTitle() == "VC Compressor" && verb->getTitle() == "VC Reverb",
+          "the rack stacks the strip's gear in order: VC EQ, VC Compressor, VC Reverb");
+    if (!stacked) return;
+    check(eq->getHeight() == 2 * comp->getHeight() && knobs_in(*eq).size() == 8 && knobs_in(*comp).size() == 5 &&
+              knobs_in(*verb).size() == 4,
+          "VC EQ is a 2U unit with 8 knobs; the compressor 1U with 5, the reverb 4");
+    // Turning a knob sets the setting (one undo step); the power switch bypasses.
+    auto eq_knobs = knobs_in(*eq);
+    auto* lf = eq_knobs[0];
+    if (lf->onDragStart) lf->onDragStart();
+    for (double v : {2.0, 4.0, 6.0}) lf->setValue(v, juce::sendNotificationSync);
+    if (lf->onDragEnd) lf->onDragEnd();
+    const auto* t = session.data().find_track(track);
+    const bool turned = t && t->inserts[0].params.count("lf_gain") && std::abs(t->inserts[0].params.at("lf_gain") - 6.0) < 1e-9;
+    check(turned, "turning VC EQ's low gain knob sets the EQ (+6 dB)");
+    const juce::Point<float> power{static_cast<float>(24 + 14 + 196 + 28), static_cast<float>(verb->getHeight() / 2)};
+    verb->mouseDown(mouse_event(*verb, power, power, false));
+    verb->mouseUp(mouse_event(*verb, power, power, false));
+    pump(100);
+    t = session.data().find_track(track);
+    check(t && t->inserts[2].bypass, "VC Reverb's power switch bypasses it");
+    if (auto* dw = dynamic_cast<juce::DocumentWindow*>(rack)) {
+        dw->setSize(dw->getWidth(), 460);
+        pump(100);
+    }
+    shoot(*rack, dir, "34c-rack-gear");
+    // The lamp on the deck's unit bypasses too, without opening anything.
+    const auto lamp = slots.led_rect(0).toFloat().getCentre();
+    slots.mouseDown(mouse_event(slots, lamp, lamp, false));
+    slots.mouseUp(mouse_event(slots, lamp, lamp, false));
+    pump(80);
+    t = session.data().find_track(track);
+    check(t && t->inserts[0].bypass, "the lamp on a deck strip's unit bypasses that insert");
+    if (auto* dw = dynamic_cast<juce::DocumentWindow*>(rack)) dw->closeButtonPressed();
+    pump(60);
+}
+
+/// The Producer mixer popped out into its own window (another screen), and docked.
+void mixer_popout_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    main.show_workspace(MainComponent::Workspace::Producer);
+    main.show_bottom_mixer(true);
+    pump(120);
+    auto& deck = main.mixer_deck();
+    deck.pop_out_key().triggerClick();
+    pump(250);
+    auto* w = main.mixer_deck_window();
+    const bool out = main.mixer_popped() && w && w->isVisible() && w->getContentComponent() == &deck && deck.isVisible() &&
+                     deck.floating() && deck.display_key().isVisible() && main.keyboard().isVisible() &&
+                     deck.pop_out_key().getButtonText() == "Dock";
+    check(out, "Pop out puts the mixer in its own window (the keyboard takes the bottom deck)");
+    if (!w) return;
+    w->setBounds(140, 90, 1100, 520);
+    pump(150);
+    check(deck.strip_count() == 0 || deck.strip(0).getWidth() == shell::MixerDeck::kStripFull,
+          "in its window the strips are full size");
+    shoot(*w, dir, "34d-mixer-own-window");
+    deck.pop_out_key().triggerClick();
+    pump(200);
+    check(!main.mixer_popped() && deck.getParentComponent() == &main && deck.isVisible() &&
+              deck.getHeight() == shell::MixerDeck::kHeight && !deck.floating(),
+          "Dock puts the mixer back in the bottom deck");
+    deck.pop_out_key().triggerClick();
+    pump(250);
+    w = main.mixer_deck_window();
+    const bool remembered = w && std::abs(w->getX() - 140) < 40 && std::abs(w->getWidth() - 1100) < 40;
+    check(remembered, "it pops out where it was left (" + (w ? w->getBounds().toString() : juce::String("none")) + ")");
+    if (w) w->closeButtonPressed();
+    pump(200);
+    check(!main.mixer_popped() && deck.getParentComponent() == &main, "closing the mixer's window docks it");
+}
+
 void slur_tie_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -9237,7 +9384,7 @@ void hardware_insert_checks(MainWindow& window, const juce::File& dir)
     ins_proc.reset();
 
     // In the mixer: Outboard (Hardware Insert) in the insert menu, its window with Ping.
-    check(console::insert_name(slot) == "Outboard (Hardware Insert)", "the insert menu offers Outboard (Hardware Insert)");
+    check(console::insert_name(slot) == "VC Outboard (Hardware Insert)", "the insert menu offers VC Outboard (Hardware Insert)");
     auto& session = ctx.session;
     session.new_empty();
     const auto track = session.add_audio_track("Vocal", true);
@@ -9246,7 +9393,7 @@ void hardware_insert_checks(MainWindow& window, const juce::File& dir)
     pump(300);
     juce::Component* win = nullptr;
     for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i)
-        if (auto* c = juce::Desktop::getInstance().getComponent(i); c && c->getName().startsWith("Hardware")) win = c;
+        if (auto* c = juce::Desktop::getInstance().getComponent(i); c && c->getName() == "Rack - Vocal" && c->isVisible()) win = c;
     juce::String names;
     for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i)
         if (auto* c = juce::Desktop::getInstance().getComponent(i)) names << c->getName() << "|";
@@ -12044,6 +12191,8 @@ int main(int argc, char** argv)
                 {"cursor_start_checks", cursor_start_checks},
                 {"return_to_start_checks", return_to_start_checks},
                 {"slur_tie_checks", slur_tie_checks},
+                {"rack_gear_checks", rack_gear_checks},
+                {"mixer_popout_checks", mixer_popout_checks},
                 {"account_checks", account_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
@@ -12678,6 +12827,10 @@ int main(int argc, char** argv)
         return_to_start_checks(window, dir);
         section("slur_tie_checks");
         slur_tie_checks(window, dir);
+        section("rack_gear_checks");
+        rack_gear_checks(window, dir);
+        section("mixer_popout_checks");
+        mixer_popout_checks(window, dir);
         section("sidechain_checks");
         sidechain_checks(window, dir);
         section("page_view_checks");

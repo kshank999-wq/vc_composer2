@@ -2,6 +2,8 @@
 #include "ui/SoundsWindow.h"
 #include "ui/MainComponent.h"
 
+#include "ui/console/RackGear.h"
+
 #include "ui/composer/CircleOfFifths.h"
 #include "ui/console/RoutingCanvas.h"
 #include "ui/review/Review.h"
@@ -100,230 +102,6 @@ private:
     std::string owner_id_;
     int slot_;
     juce::AudioPluginInstance& instance_;
-};
-
-/// The window for a built-in processor in an insert slot: a control for
-/// each of its settings, the same parameters automation lanes use. Each
-/// drag is one undo step.
-class MainComponent::BuiltinInsertWindow final : public juce::DocumentWindow {
-public:
-    BuiltinInsertWindow(AppContext& c, std::string owner_id, int slot, const juce::String& title)
-        : juce::DocumentWindow(title, colours::background, juce::DocumentWindow::closeButton),
-          context_(c), owner_id_(std::move(owner_id)), slot_(slot)
-    {
-        setUsingNativeTitleBar(true);
-        auto* content = new Content(*this);
-        setContentOwned(content, true);
-        centreWithSize(content->getWidth(), content->getHeight());
-        setVisible(true);
-    }
-    void closeButtonPressed() override { setVisible(false); }
-    const std::string& owner() const noexcept { return owner_id_; }
-    int slot() const noexcept { return slot_; }
-    std::string kind() const noexcept { return kind_; }
-    /// The document changed (an undo, automation, another view): follow it.
-    void refresh()
-    {
-        if (auto* content = dynamic_cast<Content*>(getContentComponent())) content->refresh();
-    }
-
-private:
-    struct Row {
-        project::ParamInfo info;
-        std::unique_ptr<juce::Label> label;
-        std::unique_ptr<juce::Slider> slider;
-    };
-
-    class Content final : public juce::Component, private juce::Timer {
-    public:
-        explicit Content(BuiltinInsertWindow& w) : window_(w)
-        {
-            const auto& d = w.context_.session.data();
-            std::vector<project::ParamInfo> params;
-            if (const auto* t = d.find_track(w.owner_id_)) {
-                params = project::automatable_params(*t, d);
-                if (w.slot_ < static_cast<int>(t->inserts.size())) w.kind_ = t->inserts[static_cast<size_t>(w.slot_)].kind;
-            } else if (const auto* b = d.find_bus(w.owner_id_)) {
-                params = project::automatable_params(*b, d);
-                if (w.slot_ < static_cast<int>(b->inserts.size())) w.kind_ = b->inserts[static_cast<size_t>(w.slot_)].kind;
-            }
-            const std::string prefix = "insert:" + std::to_string(w.slot_) + ":";
-            for (const auto& p : params) {
-                if (p.id.rfind(prefix, 0) != 0) continue;
-                Row row;
-                row.info = p;
-                // "compressor 1 Threshold" -> "Threshold"
-                row.label = std::make_unique<juce::Label>(juce::String(), juce::String(p.name).fromFirstOccurrenceOf(
-                                                                              juce::String(w.slot_ + 1) + " ", false, false));
-                row.label->setColour(juce::Label::textColourId, colours::text_dim);
-                addAndMakeVisible(*row.label);
-                row.slider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight);
-                row.slider->setRange(p.min, p.max, p.toggle || p.unit == "pair" || p.unit == "smp" ? 1.0 : 0.0);
-                if (p.log_scale && p.min > 0.0) row.slider->setSkewFactorFromMidPoint(std::sqrt(p.min * p.max));
-                const bool whole = p.unit == "Hz" || p.unit == "ms" || p.unit == "pair" || p.unit == "smp";
-                row.slider->setTextValueSuffix(p.unit.empty() || p.unit == "pair" ? juce::String()
-                                               : p.unit == "smp"                  ? juce::String(" samples")
-                                                                                  : " " + juce::String(p.unit));
-                row.slider->setNumDecimalPlacesToDisplay(whole ? 0 : 2);
-                row.slider->setDoubleClickReturnValue(true, p.default_value);
-                const std::string id = p.id;
-                const juce::String label_text = row.label->getText();
-                row.slider->onDragStart = [this] { ++gesture_; };
-                row.slider->onValueChange = [this, id, label_text, s = row.slider.get()] {
-                    if (refreshing_) return;
-                    apply(id, label_text, s->getValue());
-                };
-                addAndMakeVisible(*row.slider);
-                rows_.push_back(std::move(row));
-            }
-            if (rows_.empty()) {
-                empty_.setText("This processor has no settings to show.", juce::dontSendNotification);
-                addAndMakeVisible(empty_);
-            }
-            if (w.kind_ == "hardware") {
-                // Outboard: which pair goes out and comes back, and the round
-                // trip measured with a click (delay compensation uses it).
-                hardware_ = true;
-                ping_.setButtonText("Ping (measure the round trip)");
-                ping_.setComponentID("hardware_ping");
-                ping_.onClick = [this] { start_ping(); };
-                addAndMakeVisible(ping_);
-                hw_info_.setColour(juce::Label::textColourId, colours::text_dim);
-                hw_info_.setJustificationType(juce::Justification::topLeft);
-                hw_info_.setComponentID("hardware_info");
-                addAndMakeVisible(hw_info_);
-            }
-            refresh();
-            setSize(460, juce::jmax(80, 20 + static_cast<int>(rows_.size()) * 34 + (hardware_ ? 96 : 0)));
-        }
-
-        /// Measures the round trip through the gear: a click out, listened for on the return.
-        void start_ping()
-        {
-            const auto pair = [this](const char* name, double fallback) {
-                for (auto& r : rows_)
-                    if (r.info.id.size() >= std::strlen(name) &&
-                        r.info.id.compare(r.info.id.size() - std::strlen(name), std::string::npos, name) == 0)
-                        return juce::roundToInt(r.slider->getValue());
-                return juce::roundToInt(fallback);
-            };
-            hardware_io().request_ping(pair("out_pair", 2), pair("in_pair", 2));
-            ping_message_ = "Listening for the click...";
-            startTimer(50);
-            refresh();
-        }
-        juce::String ping_message() const { return ping_message_; }
-
-        void timerCallback() override
-        {
-            const int r = hardware_io().ping_result();
-            if (hardware_io().pinging() || r == -1) {
-                if (++ticks_ > 60) {  // 3 s: the audio is not running
-                    stopTimer();
-                    ticks_ = 0;
-                    ping_message_ = "No answer: is the audio interface running? (Studio > Audio Setup)";
-                    refresh();
-                }
-                return;
-            }
-            stopTimer();
-            ticks_ = 0;
-            if (r >= 0) {
-                for (auto& row : rows_)
-                    if (juce::String(row.info.id).endsWith(":latency")) {
-                        apply(row.info.id, "Latency", static_cast<double>(r));
-                        break;
-                    }
-                ping_message_ = "Round trip: " + juce::String(r) + " samples - the rest of the mix waits for it";
-            } else {
-                ping_message_ = "Nothing came back within a second: check the cables, the gear's input and output "
-                                "levels, and the pairs";
-            }
-            refresh();
-        }
-
-        void refresh()
-        {
-            const auto& d = window_.context_.session.data();
-            refreshing_ = true;
-            for (auto& r : rows_) {
-                if (r.slider->isMouseButtonDown()) continue;
-                std::optional<double> v;
-                if (const auto* t = d.find_track(window_.owner_id_)) v = project::static_value(*t, r.info.id);
-                else if (const auto* b = d.find_bus(window_.owner_id_)) v = project::static_value(*b, r.info.id);
-                r.slider->setValue(v ? *v : r.info.default_value, juce::dontSendNotification);
-            }
-            refreshing_ = false;
-            if (hardware_) {
-                // The pairs by the interface's own channel names.
-                auto& engine = window_.context_.engine;
-                int out_pair = 2, in_pair = 2;
-                for (auto& r : rows_) {
-                    if (juce::String(r.info.id).endsWith(":out_pair")) out_pair = juce::roundToInt(r.slider->getValue());
-                    if (juce::String(r.info.id).endsWith(":in_pair")) in_pair = juce::roundToInt(r.slider->getValue());
-                }
-                auto* device = engine.devices().getCurrentAudioDevice();
-                auto names = [](const juce::StringArray& all, int pair) {
-                    const int a = 2 * (pair - 1);
-                    return a + 1 < all.size() ? all[a] + " / " + all[a + 1]
-                                              : "channels " + juce::String(a + 1) + "-" + juce::String(a + 2) + " (not on this interface)";
-                };
-                juce::String text = device == nullptr
-                                        ? juce::String("No audio interface open (Studio > Audio Setup)")
-                                        : "Out to: " + names(device->getOutputChannelNames(), out_pair) +
-                                              "\nBack from: " + names(device->getInputChannelNames(), in_pair);
-                if (ping_message_.isNotEmpty()) text << "\n" << ping_message_;
-                hw_info_.setText(text, juce::dontSendNotification);
-            }
-        }
-
-        void resized() override
-        {
-            auto area = getLocalBounds().reduced(10);
-            if (hardware_) {
-                auto bottom = area.removeFromBottom(90);
-                ping_.setBounds(bottom.removeFromTop(26).removeFromLeft(240));
-                bottom.removeFromTop(4);
-                hw_info_.setBounds(bottom);
-            }
-            empty_.setBounds(area);
-            for (auto& r : rows_) {
-                auto line = area.removeFromTop(34).reduced(0, 4);
-                r.label->setBounds(line.removeFromLeft(130));
-                r.slider->setBounds(line);
-            }
-        }
-        void paint(juce::Graphics& g) override { g.fillAll(colours::background); }
-
-    private:
-        void apply(const std::string& id, const juce::String& what, double value)
-        {
-            auto& session = window_.context_.session;
-            // One undo step per drag: the label alternates between gestures.
-            const std::string label = (what + (gesture_ % 2 ? " " : "")).toStdString();
-            if (session.data().find_track(window_.owner_id_))
-                session.update_track_mix(window_.owner_id_, label,
-                                         [&](project::Track& t) { project::set_static_value(t, id, value); });
-            else
-                session.update_bus(window_.owner_id_, label, [&](project::Bus& b) { project::set_static_value(b, id, value); });
-        }
-
-        BuiltinInsertWindow& window_;
-        std::vector<Row> rows_;
-        juce::Label empty_;
-        bool hardware_ = false;
-        juce::TextButton ping_;
-        juce::Label hw_info_;
-        juce::String ping_message_;
-        int ticks_ = 0;
-        int gesture_ = 0;
-        bool refreshing_ = false;
-    };
-
-    AppContext& context_;
-    std::string owner_id_;
-    int slot_;
-    std::string kind_;
 };
 
 // --- Main component -----------------------------------------------------------------------------
@@ -431,6 +209,17 @@ MainComponent::MainComponent(AppContext& context)
     mixer_deck_.on_keyboard = [this] { show_bottom_mixer(false); };
     mixer_deck_.on_full = [this](bool) { set_mixer_full(true); };
     mixer_deck_.on_console = [this] { show_console_window(); };
+    mixer_deck_.on_pop_out = [this](bool out) { set_mixer_popped(out); };
+    mixer_deck_.on_display = [this] {
+        juce::PopupMenu m;
+        for (const auto& [key, label] : display_keys())
+            m.addItem(label, [this, key = key] {
+                if (!deck_window_) return;
+                for (const auto& d : juce::Desktop::getInstance().getDisplays().displays)
+                    if (d.totalArea.toString() == key) deck_window_->setBounds(d.userArea);
+            });
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&mixer_deck_.display_key()));
+    };
     addAndMakeVisible(tracks_);
     addAndMakeVisible(composer_);
     addChildComponent(page_view_);
@@ -668,16 +457,8 @@ MainComponent::MainComponent(AppContext& context)
                 if (now != it->second->instance()) it = plugin_windows_.erase(it);
                 else ++it;
             }
-            // Built-in processor windows follow the document, and close when
-            // their slot holds something else.
-            for (auto it = builtin_windows_.begin(); it != builtin_windows_.end();) {
-                if (insert_kind(it->second->owner(), it->second->slot()) != it->second->kind()) {
-                    it = builtin_windows_.erase(it);
-                } else {
-                    it->second->refresh();
-                    ++it;
-                }
-            }
+            // The racks of built-in gear follow the document.
+            console::refresh_racks(context_);
         }
     });
 
@@ -717,6 +498,11 @@ MainComponent::MainComponent(AppContext& context)
 
 MainComponent::~MainComponent()
 {
+    if (deck_window_) {
+        // The window holds the deck (a member here): let go of it first.
+        deck_window_->clearContentComponent();
+        deck_window_.reset();
+    }
     // The Inspector window shows components this owns: it goes first.
     delete inspector_window_.getComponent();
     stopTimer();
@@ -728,7 +514,7 @@ MainComponent::~MainComponent()
     context_.engine.on_transport_changed = nullptr;
     context_.engine.on_recording_finished = nullptr;
     plugin_windows_.clear();
-    builtin_windows_.clear();
+    console::close_racks();
     context_.show_insert_window = nullptr;
     context_.capture_plugin_states = nullptr;
     context_.show_comment = nullptr;
@@ -754,9 +540,10 @@ void MainComponent::resized()
     deck_.setBounds(r.removeFromTop(shell::TopDeck::height_for(getWidth())));
     // The bottom deck: the keyboard (as tall as its key zoom needs), or in
     // the Producer view the mixer.
-    const bool mixer_deck = workspace_ == Workspace::Producer && bottom_mixer_;
+    // Popped out, the mixer is in its own window and the keyboard stays here.
+    const bool mixer_deck = workspace_ == Workspace::Producer && bottom_mixer_ && !deck_window_;
     keyboard_.setVisible(!mixer_deck && !dock_hidden_);
-    mixer_deck_.setVisible(mixer_deck && !dock_hidden_);
+    if (!deck_window_) mixer_deck_.setVisible(mixer_deck && !dock_hidden_);
     keyboard_.show_mixer_key(workspace_ == Workspace::Producer);
     auto& deck = mixer_deck ? static_cast<juce::Component&>(mixer_deck_) : keyboard_;
     const auto below_top = r;  // for the full-screen mixer
@@ -1141,6 +928,69 @@ void MainComponent::save_layout_as()
 void MainComponent::show_bottom_mixer(bool mixer)
 {
     bottom_mixer_ = mixer;
+    if (mixer && deck_window_) {
+        // It is in its own window: bring that forward.
+        deck_window_->setVisible(true);
+        deck_window_->toFront(true);
+    }
+    resized();
+}
+
+namespace {
+/// The mixer deck's own window: closing it docks the mixer again.
+class DeckWindow final : public juce::DocumentWindow {
+public:
+    explicit DeckWindow(std::function<void()> dock)
+        : juce::DocumentWindow("Mixer", hw::tok::chassis, juce::DocumentWindow::allButtons), dock_(std::move(dock))
+    {
+        setUsingNativeTitleBar(true);
+        setResizable(true, false);
+        setResizeLimits(480, shell::MixerDeck::kHeight, 10000, 10000);
+    }
+    void closeButtonPressed() override
+    {
+        // Docked from a callback, not while the window is mid-close.
+        juce::MessageManager::callAsync([d = dock_] { d(); });
+    }
+
+private:
+    std::function<void()> dock_;
+};
+}  // namespace
+
+void MainComponent::set_mixer_popped(bool popped)
+{
+    if (popped == mixer_popped()) {
+        if (deck_window_) deck_window_->toFront(true);
+        return;
+    }
+    if (popped) {
+        juce::Component::SafePointer<MainComponent> self(this);
+        auto window = std::make_unique<DeckWindow>([self] {
+            if (self) self->set_mixer_popped(false);
+        });
+        removeChildComponent(&mixer_deck_);
+        mixer_deck_.set_floating(true);
+        mixer_deck_.setVisible(true);
+        window->setContentNonOwned(&mixer_deck_, false);
+        // Where it was left (another screen, say), else a good size here.
+        const auto saved = hw::ui_settings().getValue("mixer_deck_window");
+        if (saved.isEmpty() || !window->restoreWindowStateFromString(saved)) window->centreWithSize(1200, 560);
+        window->setVisible(true);
+        window->toFront(true);
+        deck_window_ = std::move(window);
+        context_.status("Mixer in its own window - drag it to another screen; Dock (or closing it) brings it back");
+    } else {
+        hw::ui_settings().setValue("mixer_deck_window", deck_window_->getWindowStateAsString());
+        hw::ui_settings().saveIfNeeded();
+        deck_window_->clearContentComponent();
+        deck_window_.reset();
+        mixer_deck_.set_floating(false);
+        addChildComponent(mixer_deck_);
+        if (workspace_ != Workspace::Producer) show_workspace(Workspace::Producer);
+        bottom_mixer_ = true;
+        context_.status("Mixer back in the bottom deck");
+    }
     resized();
 }
 
@@ -1851,14 +1701,8 @@ void MainComponent::show_insert_window(const std::string& owner, int slot)
         w->toFront(true);
         return;
     }
-    auto& w = builtin_windows_[key];
-    if (!w || w->kind() != kind) {
-        juce::String title = juce::String(kind).substring(0, 1).toUpperCase() + juce::String(kind).substring(1);
-        w = std::make_unique<BuiltinInsertWindow>(context_, owner, slot, title + " - " + owner_name + " (insert " +
-                                                                              juce::String(slot + 1) + ")");
-    }
-    w->setVisible(true);
-    w->toFront(true);
+    // Built-in processors: the strip's rack of outboard gear, at this unit.
+    console::show_rack(context_, owner, slot);
 }
 
 void MainComponent::show_audio_settings()

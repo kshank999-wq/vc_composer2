@@ -256,9 +256,10 @@ public:
         bool bypass = false;
         bool suggestion = false;
         bool used = false;
+        std::string kind;  ///< "eq", "compressor"... "plugin": drawn as that gear's faceplate.
         bool operator==(const Slot& o) const
         {
-            return name == o.name && bypass == o.bypass && suggestion == o.suggestion && used == o.used;
+            return name == o.name && bypass == o.bypass && suggestion == o.suggestion && used == o.used && kind == o.kind;
         }
     };
     static constexpr int kSlots = 5;

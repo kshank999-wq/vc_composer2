@@ -8,10 +8,11 @@
 
 namespace vcc::desktop::shell {
 
-/// Five insert slots, A-E (docs/spec/ui, "Channel strip"). Each has a bypass
-/// LED: click the LED to bypass or activate, click the name to open the
-/// processor's window (or to add one to an empty slot), right-click for the
-/// slot's menu. Compact: the LEDs alone in a row (the mixer deck).
+/// Five insert slots, A-E (docs/spec/ui, "Channel strip"), stacked like a
+/// rack: each used slot is a small faceplate of its gear (VC EQ, VC
+/// Compressor...) with a power lamp. Click the lamp to bypass or activate,
+/// the unit to open the strip's rack of gear, an empty bay to add one;
+/// right-click for the slot's menu. Compact: thinner units (the mixer deck).
 class InsertSlots final : public juce::Component, public juce::SettableTooltipClient {
 public:
     static constexpr int kSlots = 5;

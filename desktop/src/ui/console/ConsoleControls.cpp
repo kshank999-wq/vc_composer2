@@ -1,4 +1,5 @@
 #include "ui/console/ConsoleControls.h"
+#include "ui/console/RackGear.h"
 
 #include <cmath>
 #include <map>
@@ -943,24 +944,20 @@ juce::Rectangle<float> InsertRack::slot_bounds(int i) const
 
 void InsertRack::paint(juce::Graphics& g)
 {
+    // Rack units: each insert as its gear's faceplate, an empty bay otherwise.
     for (int i = 0; i < kSlots; ++i) {
-        auto r = slot_bounds(i).reduced(0.5f, 1.0f);
-        draw_well(g, r, 2.0f);
+        const auto r = slot_bounds(i).reduced(0.0f, 0.5f);
         const Slot* s = i < static_cast<int>(slots_.size()) ? &slots_[static_cast<std::size_t>(i)] : nullptr;
-        const bool used = s && s->used;
-        auto lamp = r.removeFromLeft(r.getHeight()).reduced(3.2f);
-        const auto lamp_colour = used ? (s->suggestion ? paint::led_amber : paint::led_green) : paint::led_green;
-        g.setColour(used && !s->bypass ? lamp_colour : lamp_colour.withAlpha(0.12f));
-        g.fillRect(lamp);
-        g.setFont(juce::Font(juce::FontOptions(juce::jmin(9.5f, r.getHeight() * 0.75f))));
-        if (!used) {
-            g.setColour(paint::print_dim.withAlpha(0.35f));
-            g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\x80\x94")), r, juce::Justification::centred, false);
+        if (!s || !s->used) {
+            paint_mini_unit(g, r, nullptr);
             continue;
         }
-        g.setColour(s->suggestion ? paint::led_amber.withAlpha(0.8f)
-                                  : (s->bypass ? paint::print_dim.withAlpha(0.6f) : paint::lcd_text));
-        g.drawFittedText(s->name, r.reduced(1.0f, 0.0f).toNearestInt(), juce::Justification::centredLeft, 1, 0.65f);
+        project::InsertSlot slot;
+        slot.kind = s->kind.empty() ? std::string("plugin") : s->kind;
+        slot.bypass = s->bypass;
+        slot.suggestion = s->suggestion;
+        slot.plugin.name = s->name.toStdString();
+        paint_mini_unit(g, r, &slot);
     }
 }
 

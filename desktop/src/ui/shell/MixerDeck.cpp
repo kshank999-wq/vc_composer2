@@ -117,7 +117,8 @@ void MixerDeck::Strip::resized()
     auto r = getLocalBounds().reduced(5, 4);
     r.removeFromTop(20);  // the name plate
     r.removeFromTop(3);
-    slots_.setBounds(r.removeFromTop(16));
+    // The inserts, a stack of small rack units.
+    slots_.setBounds(r.removeFromTop(getHeight() > 400 ? 85 : 55));
     r.removeFromTop(4);
     pan_.setBounds(r.removeFromTop(28).withSizeKeepingCentre(28, 28));
     r.removeFromTop(4);
@@ -184,7 +185,7 @@ MixerDeck::MixerDeck(AppContext& context) : hw::Panel({}, true), context_(contex
     viewport_.setViewedComponent(&holder_, false);
     viewport_.setScrollBarsShown(false, true);
     viewport_.setScrollBarThickness(6);
-    for (auto* k : {&keyboard_, &console_, &full_key_}) {
+    for (auto* k : {&keyboard_, &console_, &full_key_, &pop_out_, &display_}) {
         addAndMakeVisible(*k);
         k->set_legend_size(10.0f);
         k->setWantsKeyboardFocus(false);
@@ -197,6 +198,17 @@ MixerDeck::MixerDeck(AppContext& context) : hw::Panel({}, true), context_(contex
     console_.onClick = [this] {
         if (on_console) on_console();
     };
+    pop_out_.setComponentID("mixer_pop_out_key");
+    pop_out_.setTooltip("Pop the mixer out into its own window - drag it to another screen; Dock puts it back");
+    pop_out_.onClick = [this] {
+        if (on_pop_out) on_pop_out(!floating_);
+    };
+    display_.setComponentID("mixer_display_key");
+    display_.setTooltip("Move the mixer window to another connected screen, filling it");
+    display_.onClick = [this] {
+        if (on_display) on_display();
+    };
+    display_.setVisible(false);
     full_key_.setComponentID("mixer_full_key");
     full_key_.setTooltip("Full screen mixer, or back to the compact mixer at the bottom (Cmd/Ctrl+M)");
     full_key_.onClick = [this] {
@@ -273,20 +285,42 @@ void MixerDeck::set_full(bool full)
 {
     if (full_ == full) return;
     full_ = full;
-    full_key_.setButtonText(full ? "Compact" : "Full screen");
+    full_key_.setButtonText(full && !floating_ ? "Compact" : "Full screen");
     resized();
     repaint();
+}
+
+void MixerDeck::set_floating(bool floating)
+{
+    floating_ = floating;
+    pop_out_.setButtonText(floating ? "Dock" : "Pop out");
+    // In its window: no keyboard or size keys (the window has its own size).
+    keyboard_.setVisible(!floating);
+    full_key_.setVisible(!floating);
+    display_.setVisible(floating);
+    set_full(floating);
+    full_key_.setButtonText("Full screen");
+    resized();
 }
 
 void MixerDeck::resized()
 {
     auto r = getLocalBounds().reduced(16, 0);
     auto header = r.removeFromTop(kHeader).withTrimmedTop(5).withHeight(22);
-    keyboard_.setBounds(header.removeFromRight(92));
-    header.removeFromRight(6);
+    if (!floating_) {
+        keyboard_.setBounds(header.removeFromRight(92));
+        header.removeFromRight(6);
+    }
     console_.setBounds(header.removeFromRight(84));
     header.removeFromRight(6);
-    full_key_.setBounds(header.removeFromRight(100));
+    if (!floating_) {
+        full_key_.setBounds(header.removeFromRight(100));
+        header.removeFromRight(6);
+    } else {
+        display_.setBounds(header.removeFromRight(84));
+        header.removeFromRight(6);
+    }
+    pop_out_.setBounds(header.removeFromRight(84));
     r.removeFromBottom(8);
     const int h = r.getHeight() - 8;
     const int strip_w = full_ ? kStripFull : kStrip, master_w = full_ ? kMasterStripFull : kMasterStrip;
@@ -305,7 +339,8 @@ void MixerDeck::resized()
 
 void MixerDeck::paintOverChildren(juce::Graphics& g)
 {
-    hw::paint::silk(g, full_ ? "Mixer - full screen" : "Mixer", {30.0f, 5.0f, full_ ? 160.0f : 80.0f, 22.0f}, 11.0f);
+    const juce::String title = floating_ ? "Mixer - own window" : full_ ? "Mixer - full screen" : "Mixer";
+    hw::paint::silk(g, title, {30.0f, 5.0f, full_ ? 160.0f : 80.0f, 22.0f}, 11.0f);
     hw::paint::silk(g, juce::String(strips_.size()) + " strips + master", {full_ ? 190.0f : 100.0f, 5.0f, 160.0f, 22.0f}, 9.5f);
 }
 

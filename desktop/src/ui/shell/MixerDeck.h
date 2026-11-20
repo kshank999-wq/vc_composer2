@@ -22,7 +22,7 @@ namespace vcc::desktop::shell {
 class MixerDeck final : public hw::Panel, private juce::Timer {
 public:
     /// The compact deck's height (at the bottom, where the keyboard deck is).
-    static constexpr int kHeight = 262;
+    static constexpr int kHeight = 300;
     static constexpr int kStrip = 78, kMasterStrip = 112;
     /// Full screen: wider strips, and faders as long as the window allows.
     static constexpr int kStripFull = 96, kMasterStripFull = 136;
@@ -36,6 +36,16 @@ public:
     std::function<void(bool full)> on_full;
     /// The Console key: the console window (EQ, dynamics and sends per strip).
     std::function<void()> on_console;
+    /// The Pop out / Dock key: the mixer in a window of its own (to drag to
+    /// another screen), or back in the bottom deck.
+    std::function<void(bool out)> on_pop_out;
+    /// The Display key (popped out): move the window to a connected screen.
+    std::function<void()> on_display;
+    /// In its own window: the keys say Dock, the strips are full size.
+    void set_floating(bool floating);
+    bool floating() const noexcept { return floating_; }
+    hw::Keycap& pop_out_key() { return pop_out_; }
+    hw::Keycap& display_key() { return display_; }
     /// Full screen (the whole window under the toolbar) or compact (the bottom deck).
     void set_full(bool full);
     bool full() const noexcept { return full_; }
@@ -63,8 +73,10 @@ private:
     juce::Component holder_;
     std::vector<std::unique_ptr<Strip>> strips_;
     std::vector<std::string> ids_;
-    hw::Keycap keyboard_{"Keyboard"}, console_{"Console"}, full_key_{"Full screen"};
+    hw::Keycap keyboard_{"Keyboard"}, console_{"Console"}, full_key_{"Full screen"}, pop_out_{"Pop out"},
+        display_{"Display"};
     bool full_ = false;
+    bool floating_ = false;
 };
 
 class MixerDeck::Strip final : public juce::Component {
