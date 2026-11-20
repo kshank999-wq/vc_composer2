@@ -187,6 +187,9 @@ jobs:
 
   macos:
     runs-on: macos-latest
+    # Notarization polls with its own 90-minute limit (bundle.sh); this
+    # bounds the whole job so a stuck step cannot hold it for six hours.
+    timeout-minutes: 150
     env:
       MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
       APPLE_ID: ${{ secrets.APPLE_ID }}

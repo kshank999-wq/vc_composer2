@@ -77,18 +77,37 @@ hdiutil create -volname "VC Composer" -srcfolder "$STAGE" -ov -format UDZO "$DMG
 if [ -n "${MACOS_SIGNING_IDENTITY:-}" ] && [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ]; then
     codesign --force --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$DMG"
     auth=(--apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD")
-    # Apple's notary service is sometimes briefly unavailable (503): try a few times.
-    result=""
+    # Submit (Apple's notary service is sometimes briefly unavailable, 503: try a
+    # few times), then poll its status with a time limit, so a stuck queue
+    # fails the build clearly instead of holding it until the job is killed.
+    id=""
+    submitted=""
     for attempt in 1 2 3; do
-        if result="$(xcrun notarytool submit "$DMG" "${auth[@]}" --wait --output-format json)"; then break; fi
-        echo "notarytool failed (attempt $attempt of 3)${result:+: $result}"
-        result=""
+        if submitted="$(xcrun notarytool submit "$DMG" "${auth[@]}" --output-format json)"; then
+            id="$(printf '%s' "$submitted" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
+            [ -n "$id" ] && break
+        fi
+        echo "notarytool submit failed (attempt $attempt of 3)${submitted:+: $submitted}"
         [ "$attempt" -lt 3 ] && sleep 60
     done
-    [ -n "$result" ] || { echo "error: Apple's notary service could not be reached after 3 attempts"; exit 1; }
-    echo "$result"
-    id="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
-    status="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')"
+    [ -n "$id" ] || { echo "error: Apple's notary service could not be reached after 3 attempts"; exit 1; }
+    echo "Submitted for notarization: $id"
+    limit_minutes="${NOTARY_TIMEOUT_MINUTES:-90}"
+    deadline=$(( $(date +%s) + limit_minutes * 60 ))
+    status="In Progress"
+    while :; do
+        if info="$(xcrun notarytool info "$id" "${auth[@]}" --output-format json 2>/dev/null)"; then
+            status="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')"
+        fi
+        [ "$status" != "In Progress" ] && [ -n "$status" ] && break
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            echo "error: Apple's notarization has not finished after $limit_minutes minutes (submission $id, still: $status)."
+            echo "Apple's notary queue is backed up; run the preview again later."
+            exit 1
+        fi
+        sleep 30
+    done
+    echo "Notarization: $status"
     if [ "$status" != "Accepted" ]; then
         echo "error: Apple's notarization says: $status. Its log:"
         [ -n "$id" ] && xcrun notarytool log "$id" "${auth[@]}" || true
