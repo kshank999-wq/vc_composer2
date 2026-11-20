@@ -5396,6 +5396,7 @@ void chord_palette_checks(MainWindow& window, const juce::File& dir)
     // In D major the root keys are the key's scale (F sharp, C sharp), each
     // with its numeral; the borrowed chords and where they come from beneath.
     {
+        const bool was_on = composer.chord_mode();
         session.set_key("D major");
         composer.set_chord_mode(false);
         composer.set_chord_mode(true);
@@ -5420,6 +5421,7 @@ void chord_palette_checks(MainWindow& window, const juce::File& dir)
         if (auto* w = find_dialog("Chord Mode")) shoot(*w, dir, "chord-palette-scale");
         scale_box->setSelectedItemIndex(0, juce::sendNotificationSync);
         session.set_key("C major");
+        composer.set_chord_mode(was_on);  // as the section found it
         pump(60);
     }
 }
