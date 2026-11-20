@@ -3926,7 +3926,7 @@ void chord_builder_checks(MainWindow& window, const juce::File& dir)
     if (!strip || !target) return;
     // A chord dragged from the key's row onto bar 1, another onto bar 3: dropped where it lands.
     auto drop = [&](const theory::Chord& chord, const std::string& numeral, int slot) {
-        const int w12 = strip->getWidth() / ChordExplorer::kBuildBars;
+        const int w12 = strip->getWidth() / ex->bar_count();
         const juce::Point<int> at(slot * w12 + w12 / 2, strip->getHeight() / 2);
         const juce::var what = juce::String("chord:") + juce::String(numeral) + "|" + juce::String(chord.name());
         juce::DragAndDropTarget::SourceDetails details(what, nullptr, at);
@@ -3943,7 +3943,60 @@ void chord_builder_checks(MainWindow& window, const juce::File& dir)
     const auto built = ex->render_build();
     check(built && built->chords.size() == 4 && built->end == session.data().meter.bar_start(5),
           "the build renders bar by bar (4 chords, bars 1-4)");
+    // Divisions: bar 2 in four; a chord dropped in its third cell; Fill and the notes.
+    ex->set_divisions(1, 4);
+    ex->set_cell(1, 2, ex->key_chord(3), "IV");
+    pump(60);
+    check(ex->divisions(1) == 4 && ex->cell(1, 0) && ex->cell(1, 2) && !ex->cell(1, 1),
+          "a bar divides into cells (up to 16): the chord already there keeps the first, another goes in the third");
+    const auto divided = ex->render_build();
+    const auto& meter = session.data().meter;
+    const Ticks bar2 = meter.bar_start(2), q = (meter.bar_start(3) - bar2) / 4;
+    bool at_half = false;
+    if (divided)
+        for (const auto& rc : divided->chords) at_half = at_half || rc.start == bar2 + 2 * q;
+    check(divided && divided->chords.size() == 5 && at_half, "the third quarter of bar 2 plays its own chord");
+    // A cell's notes, edited: one moved, one deleted, one added.
+    auto cnotes = ex->cell_notes(0, 0);
+    check(cnotes.size() >= 3, "a cell knows the notes it plays (" + juce::String(static_cast<int>(cnotes.size())) + ")");
+    if (cnotes.size() >= 3) {
+        cnotes[0] -= 12;            // the bass an octave down
+        cnotes.erase(cnotes.begin() + 1);  // one taken out
+        cnotes.push_back(84);       // one added
+        ex->set_cell_notes(0, 0, cnotes);
+        pump(60);
+        auto played = ex->render_build();
+        std::vector<int> first;
+        if (played && !played->chords.empty()) first = played->chords.front().voicing.notes;
+        std::sort(cnotes.begin(), cnotes.end());
+        check(first == cnotes, "edited notes are what the chord plays");
+    }
+    ex->edit_cell(0, 0);
+    pump(200);
+    auto* editor = find_by_id(*juce::TopLevelWindow::getActiveTopLevelWindow(), "chord_cell_editor");
+    if (!editor)
+        for (int i = 0; i < juce::Desktop::getInstance().getNumComponents() && !editor; ++i)
+            editor = find_by_id(*juce::Desktop::getInstance().getComponent(i), "chord_cell_editor");
+    check(editor != nullptr && editor->isShowing(), "clicking a cell opens its editor: the chord symbol and its notes");
+    if (editor) {
+        shoot(*editor->getTopLevelComponent(), dir, "chord-cell-editor");
+        if (auto* box = editor->findParentComponentOfClass<juce::CallOutBox>()) box->dismiss();
+        pump(100);
+    }
+    // More bars, scrolled; the zoom bottom right.
+    const int bars = ex->bar_count();
+    ex->add_bars(4);
+    pump(60);
+    auto* view = dynamic_cast<juce::Viewport*>(find_by_id(*ex, "chord_build_view"));
+    const int narrow_w = strip->getWidth();
+    ex->set_build_zoom(2.0, 1.6);
+    pump(60);
+    check(ex->bar_count() == bars + 4 && view && strip->getWidth() > view->getWidth() && strip->getWidth() > narrow_w &&
+              find_by_id(*ex, "chord_zoom_width") && find_by_id(*ex, "chord_zoom_height") &&
+              find_by_id(*ex, "chord_zoom_height")->getRight() > ex->getWidth() - 40,
+          "more bars scroll sideways; W and H zoom it, bottom right");
     shoot(*w, dir, "chord-builder");
+    ex->set_build_zoom(1.0, 1.0);
     // Send: a new Harmony track gets the notation, with the chord symbols.
     const auto before = session.data().tracks.size();
     ex->press_send();

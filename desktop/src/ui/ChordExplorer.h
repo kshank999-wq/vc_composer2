@@ -25,24 +25,53 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
 
-    // --- The build strip: up to twelve bars, a chord each, dragged in from
-    // the key's chords, the borrowed chords or a progression's cards. An
-    // empty bar after a chord holds it. Audition and Send use the build
-    // while "My Build" is chosen (dropping a chord chooses it).
-    static constexpr int kBuildBars = 12;
+    // --- Your progression: bars (twelve to start, as many as you add), each
+    // divided into 1-16 cells that hold a chord. Chords are dragged in from
+    // the key's chords, the borrowed chords or a progression's cards, or
+    // typed in a cell's editor, where its notes can be moved, added or
+    // deleted. An empty cell holds the chord before it. Audition and Send
+    // use the build while "My Build" is chosen (dropping a chord chooses it).
+    static constexpr int kBuildBars = 12;      ///< Bars to start with.
+    static constexpr int kMaxDivisions = 16;
     struct BuildChord {
         theory::Chord chord;
         std::string numeral;
+        std::vector<int> notes;  ///< Its notes as edited; empty: voiced with the rest.
     };
-    /// Puts a chord in bar `slot` (0-based) of the build.
-    void set_build_chord(int slot, const theory::Chord& chord, const std::string& numeral);
-    /// Puts a chord in the build's first empty bar; false when all twelve are full.
+    struct BuildBar {
+        int divisions = 1;
+        std::vector<std::optional<BuildChord>> cells = std::vector<std::optional<BuildChord>>(1);
+    };
+    int bar_count() const noexcept { return static_cast<int>(bars_.size()); }
+    void add_bars(int n);
+    /// Removes the last bar (never below one).
+    void remove_last_bar();
+    /// Divides a bar into `n` cells (1-16); chords keep their place where it still exists.
+    void set_divisions(int bar, int n);
+    int divisions(int bar) const { return bars_[static_cast<std::size_t>(bar)].divisions; }
+    void set_cell(int bar, int cell, const theory::Chord& chord, const std::string& numeral);
+    void clear_cell(int bar, int cell);
+    const std::optional<BuildChord>& cell(int bar, int cell) const
+    {
+        return bars_[static_cast<std::size_t>(bar)].cells[static_cast<std::size_t>(cell)];
+    }
+    /// A cell's notes as edited (empty: back to voiced with the rest).
+    void set_cell_notes(int bar, int cell, std::vector<int> notes);
+    /// The notes a cell plays now (as edited, or as voiced).
+    std::vector<int> cell_notes(int bar, int cell) const;
+    /// Opens a cell's editor (chord symbol, notes).
+    void edit_cell(int bar, int cell);
+    /// Puts a chord in bar `slot` (0-based), first cell.
+    void set_build_chord(int slot, const theory::Chord& chord, const std::string& numeral) { set_cell(slot, 0, chord, numeral); }
+    /// Puts a chord in the first empty cell (adding a bar when all are full).
     bool add_to_build(const theory::Chord& chord, const std::string& numeral);
     void clear_build_chord(int slot);
     void clear_build();
-    /// Copies the chosen progression's chords into the build, a bar each.
+    /// Copies the chosen progression's chords into the build, each bar divided as its chords fall.
     void fill_build_from_progression();
-    const std::optional<BuildChord>& build_chord(int slot) const { return build_[static_cast<std::size_t>(slot)]; }
+    const std::optional<BuildChord>& build_chord(int slot) const { return cell(slot, 0); }
+    /// The build's zoom: bar width and strip height, 1 = normal.
+    void set_build_zoom(double width, double height);
     /// Audition and Send use the build (true) or the chosen progression.
     void use_build(bool build);
     bool using_build() const noexcept { return use_build_; }
@@ -54,11 +83,16 @@ public:
     const theory::Chord& key_chord(int i) const;
     juce::ComboBox& borrow_box() { return borrow_from_; }
     void press_send() { send(); }
+    /// The project bar the build's first bar lands on (the Start bar).
+    int first_bar() const;
+    /// Plays these notes as a chord (nothing is written).
+    void audition_notes(const std::vector<int>& notes);
 
 private:
     class MatrixButton;
     class Cards;
     class BuildStrip;
+    class CellEditor;
 
     int getNumRows() override;
     void paintListBoxItem(int row, juce::Graphics&, int width, int height, bool selected) override;
@@ -98,9 +132,17 @@ private:
     juce::ComboBox borrow_from_;  ///< Where the borrowed chords come from (as in the Circle of Fifths).
     theory::BorrowSource borrow_source_ = theory::BorrowSource::Parallel;
     std::vector<std::unique_ptr<MatrixButton>> borrowed_;
-    std::array<std::optional<BuildChord>, kBuildBars> build_;
+    std::vector<BuildBar> bars_ = std::vector<BuildBar>(kBuildBars);
     std::unique_ptr<BuildStrip> strip_;
+    juce::Viewport strip_view_;
     juce::TextButton use_preset_{"Preset"}, use_build_key_{"My Build"}, fill_{"Fill from Preset"}, clear_{"Clear"};
+    juce::TextButton add_bars_{"+ 4 Bars"}, remove_bar_{"- Bar"};
+    juce::Slider zoom_w_, zoom_h_;
+    juce::Label zoom_w_caption_, zoom_h_caption_;
+    double zoom_width_ = 1.0, zoom_height_ = 1.0;
+    /// Rendered chord i came from (bar, cell): for the editor's voiced notes.
+    std::vector<std::pair<int, int>> build_cells_;
+    int strip_height() const;
     bool use_build_ = false;
     std::unique_ptr<Cards> cards_;
     juce::Label chord_info_;
