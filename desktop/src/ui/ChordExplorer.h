@@ -13,6 +13,7 @@
 
 #include "ui/AppContext.h"
 #include "ui/Dialogs.h"
+#include "vcc/theory/KeyReference.h"
 
 namespace vcc::desktop {
 
@@ -51,6 +52,7 @@ public:
     int borrowed_count() const noexcept { return static_cast<int>(borrowed_.size()); }
     const theory::Chord& borrowed_chord(int i) const;
     const theory::Chord& key_chord(int i) const;
+    juce::ComboBox& borrow_box() { return borrow_from_; }
     void press_send() { send(); }
 
 private:
@@ -93,6 +95,8 @@ private:
     juce::TextButton triads_{"Triads"}, sevenths_{"7ths"}, ninths_{"9ths"};
     std::vector<std::unique_ptr<MatrixButton>> matrix_;
     juce::Label borrowed_caption_;
+    juce::ComboBox borrow_from_;  ///< Where the borrowed chords come from (as in the Circle of Fifths).
+    theory::BorrowSource borrow_source_ = theory::BorrowSource::Parallel;
     std::vector<std::unique_ptr<MatrixButton>> borrowed_;
     std::array<std::optional<BuildChord>, kBuildBars> build_;
     std::unique_ptr<BuildStrip> strip_;

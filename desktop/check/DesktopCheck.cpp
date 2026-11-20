@@ -3903,6 +3903,23 @@ void chord_builder_checks(MainWindow& window, const juce::File& dir)
     check(ex->getWidth() >= 1200 && ex->getHeight() >= 840, "the Chord Explorer is bigger (" + juce::String(ex->getWidth()) + " x " +
                                                                  juce::String(ex->getHeight()) + ")");
     check(ex->borrowed_count() >= 4, "borrowed chords sit under the key's (" + juce::String(ex->borrowed_count()) + ")");
+    {
+        // Borrow from: the modes, as in the Circle of Fifths, beside the label.
+        auto& box = ex->borrow_box();
+        const int parallel = ex->borrowed_count();
+        juce::StringArray items;
+        for (int i = 0; i < box.getNumItems(); ++i) items.add(box.getItemText(i));
+        box.setSelectedItemIndex(items.indexOf("From Lydian"), juce::sendNotificationSync);
+        pump(60);
+        const int lydian = ex->borrowed_count();
+        const bool sharp_four = lydian > 0 && ex->borrowed_chord(0).name().find('#') != std::string::npos;
+        box.setSelectedItemIndex(0, juce::sendNotificationSync);
+        pump(60);
+        check(box.isShowing() && box.getNumItems() >= 8 && items.contains("From Dorian") && lydian > 0 && lydian != parallel &&
+                  ex->borrowed_count() == parallel,
+              "Borrow from picks the mode the borrowed chords come from (" + items.joinIntoString(", ") + "; Lydian lends " +
+                  juce::String(lydian) + (sharp_four ? ", a sharp" : "") + ")");
+    }
     auto* strip = find_by_id(*ex, "chord_build_strip");
     auto* target = dynamic_cast<juce::DragAndDropTarget*>(strip);
     check(strip && strip->isShowing() && target, "the twelve-bar build strip is there, above Audition, Stop and Send");

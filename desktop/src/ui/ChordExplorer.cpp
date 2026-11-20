@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "ui/Theme.h"
+#include "ui/hw/HwTheme.h"
 #include "vcc/theory/KeyReference.h"
 
 namespace vcc::desktop {
@@ -466,6 +467,23 @@ ChordExplorer::ChordExplorer(AppContext& c) : context_(c), target_(c, "New Harmo
     borrowed_caption_.setFont(juce::FontOptions(11.5f, juce::Font::bold));
     borrowed_caption_.setColour(juce::Label::textColourId, colours::text_dim);
     addAndMakeVisible(borrowed_caption_);
+    borrow_from_.setTitle("Borrow from");
+    borrow_from_.setComponentID("chord_borrow_from");
+    borrow_from_.setTooltip("Where the borrowed chords come from: the parallel key (with the Neapolitan), or another mode "
+                            "on the same tonic");
+    {
+        const int saved = hw::ui_settings().getIntValue("chord_explorer_borrow_from", 0);
+        const auto& sources = theory::borrow_sources();
+        if (saved >= 0 && saved < static_cast<int>(sources.size())) borrow_source_ = sources[static_cast<std::size_t>(saved)];
+    }
+    borrow_from_.onChange = [this] {
+        const int i = borrow_from_.getSelectedItemIndex();
+        if (i < 0) return;
+        borrow_source_ = theory::borrow_sources()[static_cast<std::size_t>(i)];
+        hw::ui_settings().setValue("chord_explorer_borrow_from", i);
+        rebuild_matrix();
+    };
+    addAndMakeVisible(borrow_from_);
 
     // The build strip and its keys.
     strip_ = std::make_unique<BuildStrip>(*this);
@@ -613,7 +631,11 @@ void ChordExplorer::resized()
     }
     right.removeFromTop(8);
     // Borrowed chords (modal mixture), under the key's.
-    borrowed_caption_.setBounds(right.removeFromTop(20));
+    {
+        auto cap = right.removeFromTop(24);
+        borrowed_caption_.setBounds(cap.removeFromLeft(330));
+        borrow_from_.setBounds(cap.removeFromLeft(270).reduced(0, 1));
+    }
     auto brow = right.removeFromTop(50);
     const int bn = std::max(1, static_cast<int>(borrowed_.size()));
     const int bbw = std::min(bw, (brow.getWidth() - gap * (bn - 1)) / bn);
@@ -736,7 +758,20 @@ void ChordExplorer::rebuild_matrix()
     // Borrowed from the parallel key (and the Neapolitan): triads, or sevenths
     // for 7ths and 9ths.
     const auto ref = theory::key_reference(k);
-    const auto& borrowed = chord_size_ == 3 ? ref.borrowed_triads : ref.borrowed_sevenths;
+    const bool minor_home = theory::is_minor_family(ref.key.mode);
+    {
+        borrow_from_.clear(juce::dontSendNotification);
+        int n = 0;
+        for (auto src : theory::borrow_sources())
+            borrow_from_.addItem("From " + juce::String(theory::borrow_source_name(src, minor_home)) +
+                                     (src == theory::BorrowSource::Parallel ? " + Neapolitan" : ""),
+                                 ++n);
+        const auto& sources = theory::borrow_sources();
+        const auto it = std::find(sources.begin(), sources.end(), borrow_source_);
+        borrow_from_.setSelectedItemIndex(it == sources.end() ? 0 : static_cast<int>(it - sources.begin()),
+                                          juce::dontSendNotification);
+    }
+    const auto borrowed = theory::borrowed_chords(ref, borrow_source_, chord_size_ > 3);
     for (auto& b : borrowed_) removeChildComponent(b.get());
     borrowed_.clear();
     for (const auto& bc : borrowed) {
@@ -753,7 +788,8 @@ void ChordExplorer::rebuild_matrix()
         addAndMakeVisible(*raw);
         borrowed_.push_back(std::move(b));
     }
-    borrowed_caption_.setText("BORROWED CHORDS  -  from " + utf8(ref.parallel.name()) + " and the Neapolitan (drag into the build)",
+    borrowed_caption_.setText(borrowed.empty() ? juce::String("BORROWED CHORDS  -  this mode adds none to the key")
+                                               : juce::String("BORROWED CHORDS  -  drag into the build"),
                               juce::dontSendNotification);
     resized();
 }
