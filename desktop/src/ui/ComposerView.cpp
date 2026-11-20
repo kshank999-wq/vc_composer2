@@ -35,15 +35,27 @@ public:
     bool held() const noexcept { return held_; }
     void paint(juce::Graphics& g) override
     {
+        // Green, as a play key is, so it is seen at once; brighter while held.
+        const juce::Colour green(0xff2fae5a);
         auto r = getLocalBounds().toFloat().reduced(1.0f);
-        g.setColour(held_ ? colours::accent : colours::panel.brighter(0.15f));
-        g.fillRoundedRectangle(r, 4.0f);
-        g.setColour(held_ ? colours::background : colours::text);
+        g.setColour(juce::Colours::black.withAlpha(0.35f));
+        g.fillRoundedRectangle(r.translated(0.0f, 1.5f), 5.0f);
+        g.setColour(held_ ? green.brighter(0.45f) : green);
+        g.fillRoundedRectangle(r, 5.0f);
+        g.setColour(green.darker(0.5f));
+        g.drawRoundedRectangle(r.reduced(0.5f), 5.0f, 1.0f);
+        auto inner = r.reduced(5.0f, 3.0f);
+        auto icon = inner.removeFromLeft(inner.getHeight());
+        g.setColour(juce::Colours::white);
         juce::Path tri;
-        const auto c = r.getCentre();
-        const float h = r.getHeight() * 0.42f;
-        tri.addTriangle(c.x - h * 0.45f, c.y - h * 0.5f, c.x - h * 0.45f, c.y + h * 0.5f, c.x + h * 0.55f, c.y);
+        const auto c = icon.getCentre();
+        const float h = icon.getHeight() * 0.8f;
+        tri.addTriangle(c.x - h * 0.4f, c.y - h * 0.5f, c.x - h * 0.4f, c.y + h * 0.5f, c.x + h * 0.5f, c.y);
         g.fillPath(tri);
+        if (inner.getWidth() > 20.0f) {
+            g.setFont(hw::fonts::silk(9.0f, 0.06f, true));
+            g.drawText(held_ ? "PLAYING" : "HOLD", inner, juce::Justification::centred, false);
+        }
     }
     void mouseDown(const juce::MouseEvent&) override
     {
@@ -234,11 +246,13 @@ public:
         header_.setBounds(r.removeFromLeft(composer_ui::TrackHeader::kWidth));
         {
             auto side = r.removeFromRight(22);
-            play_.setBounds(side.removeFromTop(24).reduced(1, 2));
             room_.setBounds(side.reduced(4, 4));
         }
         view_.setBounds(r.withTrimmedBottom(1));
         phrases_.setBounds(view_.getBounds());
+        // Hold to hear: top left of the staff, over the music, where it is seen.
+        play_.setBounds(view_.getX() + 6, 4, 78, 26);
+        play_.toFront(false);
     }
 
     void mouseDown(const juce::MouseEvent& e) override

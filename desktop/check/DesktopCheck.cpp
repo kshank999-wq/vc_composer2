@@ -9180,6 +9180,9 @@ void view_tools_checks(MainWindow& window, const juce::File& dir)
         auto* lane_parent = composer.lane(2).getParentComponent();
         auto* hold = lane_parent ? lane_parent->findChildWithID("lane_quick_play") : nullptr;
         check(hold != nullptr && hold->isShowing(), "each staff has a quick playback key");
+        if (hold)
+            check(hold->getX() <= composer.lane(2).getX() + 12 && hold->getY() <= 8 && hold->getWidth() >= 60,
+                  "the hold-to-play key sits at the top left of the staff, large and green");
         ctx.engine.stop();
         ctx.engine.locate(6 * kTicksPerQuarter);
         if (hold) {
