@@ -9221,9 +9221,13 @@ void view_tools_checks(MainWindow& window, const juce::File& dir)
         const float bar_before = lane.x_of_tick(4 * kTicksPerQuarter) - lane.x_of_tick(0);
         const int height_before = lane.getHeight();
         if (zw) zw->setValue(composer.zoom_width() * 2.0, juce::sendNotificationSync);
+        pump(100);
+        const float bar_wide = lane.x_of_tick(4 * kTicksPerQuarter) - lane.x_of_tick(0);
         if (zh) zh->setValue(composer.zoom_height() * 1.5, juce::sendNotificationSync);
         pump(100);
         const float bar_after = lane.x_of_tick(4 * kTicksPerQuarter) - lane.x_of_tick(0);
+        check(std::abs(bar_after - bar_wide) <= 2.0f, "H only makes the staves taller: the bars keep their width (" +
+                                                          juce::String(bar_wide, 0) + " -> " + juce::String(bar_after, 0) + " px)");
         check(bar_after > bar_before * 1.8f && lane.getHeight() > height_before,
               "W widens the bars, H enlarges the staves (bar " + juce::String(bar_before, 0) + " -> " + juce::String(bar_after, 0) +
                   " px, lane " + juce::String(height_before) + " -> " + juce::String(lane.getHeight()) + " px)");

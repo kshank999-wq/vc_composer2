@@ -314,10 +314,16 @@ ComposerView::ComposerView(AppContext& context) : context_(context)
     zoom_h_.setRange(4.0, 16.0);
     zoom_w_.setDoubleClickReturnValue(true, kSpacesPerQuarter);
     zoom_h_.setDoubleClickReturnValue(true, kSpaceAt100);
-    zoom_w_.setValue(spaces_per_quarter_, juce::dontSendNotification);
+    zoom_w_.setValue(spaces_per_quarter_ * pixels_per_space_ / kSpaceAt100, juce::dontSendNotification);
     zoom_h_.setValue(pixels_per_space_, juce::dontSendNotification);
-    zoom_w_.onValueChange = [this] { set_zoom(pixels_per_space_, zoom_w_.getValue()); };
-    zoom_h_.onValueChange = [this] { set_zoom(zoom_h_.getValue(), spaces_per_quarter_); };
+    // W is the music's width on screen (a beat's pixels, at 100% height); H only the
+    // staves' size: changing H keeps a beat as wide as it was.
+    zoom_w_.onValueChange = [this] { set_zoom(pixels_per_space_, zoom_w_.getValue() * kSpaceAt100 / pixels_per_space_); };
+    zoom_h_.onValueChange = [this] {
+        const double beat_px = spaces_per_quarter_ * pixels_per_space_;
+        const double h = juce::jlimit(4.0, 16.0, zoom_h_.getValue());
+        set_zoom(h, beat_px / h);
+    };
     for (auto* l : {&zoom_w_label_, &zoom_h_label_}) {
         l->setColour(juce::Label::textColourId, colours::text_dim);
         l->setFont(hw::fonts::ui(10.5f));
@@ -687,9 +693,9 @@ void ComposerView::set_lane_room(const std::string& track_id, double spaces)
 void ComposerView::set_zoom(double pixels_per_space, double spaces_per_quarter)
 {
     pixels_per_space_ = juce::jlimit(4.0, 16.0, pixels_per_space);
-    spaces_per_quarter_ = juce::jlimit(1.5, 14.0, spaces_per_quarter);
+    spaces_per_quarter_ = juce::jlimit(0.5, 40.0, spaces_per_quarter);
     zoom_h_.setValue(pixels_per_space_, juce::dontSendNotification);
-    zoom_w_.setValue(spaces_per_quarter_, juce::dontSendNotification);
+    zoom_w_.setValue(spaces_per_quarter_ * pixels_per_space_ / kSpaceAt100, juce::dontSendNotification);
     apply_view_settings();
     resized();
     ruler_->repaint();
@@ -697,7 +703,9 @@ void ComposerView::set_zoom(double pixels_per_space, double spaces_per_quarter)
 
 void ComposerView::zoom(bool larger)
 {
+    const double beat_px = spaces_per_quarter_ * pixels_per_space_;
     pixels_per_space_ = juce::jlimit(4.0, 16.0, pixels_per_space_ * (larger ? 1.15 : 1.0 / 1.15));
+    spaces_per_quarter_ = juce::jlimit(0.5, 40.0, beat_px / pixels_per_space_);  // height only
     zoom_h_.setValue(pixels_per_space_, juce::dontSendNotification);
     apply_view_settings();
     resized();

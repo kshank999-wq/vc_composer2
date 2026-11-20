@@ -57,7 +57,8 @@ public:
     /// quarter note) - the H and W sliders at the bottom right.
     void set_zoom(double pixels_per_space, double spaces_per_quarter);
     double zoom_height() const noexcept { return pixels_per_space_; }
-    double zoom_width() const noexcept { return spaces_per_quarter_; }
+    /// The W slider's value: a beat's width on screen, at 100% height.
+    double zoom_width() const noexcept { return spaces_per_quarter_ * pixels_per_space_ / kSpaceAt100; }
     /// A staff's own room above and below (its slider at the lane's right edge).
     double lane_room(const std::string& track_id) const;
     void set_lane_room(const std::string& track_id, double spaces);
