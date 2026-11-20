@@ -444,6 +444,7 @@ public:
         bool mute_effects = false;
     };
     void set_render_override(std::optional<RenderOverride> override_settings);
+    const std::optional<RenderOverride>& render_override() const noexcept { return render_override_; }
     /// Print to audio (render-only, offline): only this track is rendered,
     /// from its MIDI alone (its clips are left out), and the output is its
     /// instrument's signal - before the channel strip, or after the strip's

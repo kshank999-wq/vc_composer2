@@ -7,6 +7,7 @@
 #include "audio/ChannelDsp.h"
 #include "audio/DynamicEq.h"
 #include "ui/console/MixActions.h"
+#include "ui/SteadyWindow.h"
 #include "ui/hw/HwControls.h"
 #include "vcc/project/Automation.h"
 
@@ -1485,6 +1486,7 @@ public:
         retitle();
         fit();
         setVisible(true);
+        use_steady_renderer(*this);
     }
     ~RackWindow() override { clearContentComponent(); }
 

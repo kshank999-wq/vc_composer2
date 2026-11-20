@@ -64,7 +64,9 @@ public:
     void set_lane_room(const std::string& track_id, double spaces);
     /// Quick playback (each staff's hold key): this staff alone from where
     /// the view starts while held; on release the playhead comes back.
-    void quick_play_start(const std::string& track_id);
+    /// Hold-to-hear from where the view starts: the track alone, or with
+    /// `whole_score` every unmuted instrument.
+    void quick_play_start(const std::string& track_id, bool whole_score = false);
     void quick_play_stop();
     bool quick_playing() const noexcept { return quick_playing_; }
     /// Hear each note as it is placed (the Entry group's Hear key); remembered.

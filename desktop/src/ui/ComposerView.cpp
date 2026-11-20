@@ -28,15 +28,18 @@ using composer::Command;
 // --- Strip: one track's row: header, lane, phrase blocks ------------------------------------
 
 namespace {
-/// Quick playback's key: press and hold to hear, let go to stop.
+/// Quick playback's keys: press and hold to hear, let go to stop. SOLO
+/// (green) plays the staff alone, SCORE (blue) the whole score.
 class HoldPlayButton final : public juce::Component, public juce::SettableTooltipClient {
 public:
+    HoldPlayButton(juce::Colour colour, juce::String label) : colour_(colour), label_(std::move(label)) {}
     std::function<void()> on_press, on_release;
     bool held() const noexcept { return held_; }
+    const juce::String& label() const noexcept { return label_; }
     void paint(juce::Graphics& g) override
     {
-        // Green, as a play key is, so it is seen at once; brighter while held.
-        const juce::Colour green(0xff2fae5a);
+        // Coloured, as a play key is, so it is seen at once; brighter while held.
+        const juce::Colour green = colour_;
         auto r = getLocalBounds().toFloat().reduced(1.0f);
         g.setColour(juce::Colours::black.withAlpha(0.35f));
         g.fillRoundedRectangle(r.translated(0.0f, 1.5f), 5.0f);
@@ -52,9 +55,9 @@ public:
         const float h = icon.getHeight() * 0.8f;
         tri.addTriangle(c.x - h * 0.4f, c.y - h * 0.5f, c.x - h * 0.4f, c.y + h * 0.5f, c.x + h * 0.5f, c.y);
         g.fillPath(tri);
-        if (inner.getWidth() > 20.0f) {
-            g.setFont(hw::fonts::silk(9.0f, 0.06f, true));
-            g.drawText(held_ ? "PLAYING" : "HOLD", inner, juce::Justification::centred, false);
+        if (inner.getWidth() > 16.0f) {
+            g.setFont(hw::fonts::silk(8.5f, 0.06f, true));
+            g.drawText(label_, inner, juce::Justification::centred, false);
         }
     }
     void mouseDown(const juce::MouseEvent&) override
@@ -72,6 +75,8 @@ public:
     }
 
 private:
+    juce::Colour colour_;
+    juce::String label_;
     bool held_ = false;
 };
 }  // namespace
@@ -121,15 +126,22 @@ public:
         room_.setTitle("Staff room");
         room_.onValueChange = [this] { owner_.set_lane_room(track_id_, room_.getValue()); };
         addAndMakeVisible(room_);
-        // Quick playback: hold to hear this staff alone, from the start of
-        // what is shown; let go and the playhead is back where it was.
+        // Quick playback: hold SOLO to hear this staff alone, SCORE to hear
+        // every unmuted instrument, from the start of what is shown; let go
+        // and the playhead is back where it was.
         play_.setComponentID("lane_quick_play");
-        play_.setTooltip("Quick playback: hold to hear this staff alone from where the view starts; let go to come back");
-        play_.on_press = [this] { owner_.quick_play_start(track_id_); };
+        play_.setTooltip("Solo: hold to hear this staff alone from where the view starts; let go to come back");
+        play_.on_press = [this] { owner_.quick_play_start(track_id_, false); };
         play_.on_release = [this] { owner_.quick_play_stop(); };
         addAndMakeVisible(play_);
+        score_.setComponentID("lane_quick_play_score");
+        score_.setTooltip("Score: hold to hear the whole score (every unmuted instrument) from where the view starts; let go to come back");
+        score_.on_press = [this] { owner_.quick_play_start(track_id_, true); };
+        score_.on_release = [this] { owner_.quick_play_stop(); };
+        addAndMakeVisible(score_);
     }
     juce::Component& quick_play_button() noexcept { return play_; }
+    juce::Component& score_play_button() noexcept { return score_; }
     juce::Slider& room_slider() noexcept { return room_; }
 
     const std::string& track_id() const noexcept { return track_id_; }
@@ -251,8 +263,10 @@ public:
         view_.setBounds(r.withTrimmedBottom(1));
         phrases_.setBounds(view_.getBounds());
         // Hold to hear: top left of the staff, over the music, where it is seen.
-        play_.setBounds(view_.getX() + 6, 4, 78, 26);
+        play_.setBounds(view_.getX() + 6, 4, 58, 22);
+        score_.setBounds(play_.getRight() + 4, 4, 62, 22);
         play_.toFront(false);
+        score_.toFront(false);
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -269,7 +283,7 @@ private:
     composer_ui::PhraseLayer phrases_;
     notation::Score shown_;
     juce::Slider room_;
-    HoldPlayButton play_;
+    HoldPlayButton play_{juce::Colour(0xff2fae5a), "SOLO"}, score_{juce::Colour(0xff3a7bd5), "SCORE"};
 };
 
 // --- ComposerView -----------------------------------------------------------------------------
@@ -629,7 +643,7 @@ void ComposerView::discard_uncommitted()
     repaint();
 }
 
-void ComposerView::quick_play_start(const std::string& track_id)
+void ComposerView::quick_play_start(const std::string& track_id, bool whole_score)
 {
     auto& engine = context_.engine;
     if (quick_playing_) return;
@@ -637,16 +651,20 @@ void ComposerView::quick_play_start(const std::string& track_id)
     quick_return_ = engine.position();
     quick_was_playing_ = engine.playing();
     if (quick_was_playing_) engine.stop();
-    // This staff alone (render-only: the project's solo switches are untouched).
-    PlaybackEngine::RenderOverride solo;
-    solo.solo = {track_id};
-    engine.set_render_override(solo);
+    // This staff alone (render-only: the project's solo switches are
+    // untouched), or the whole score as the mixer has it (muted tracks stay out).
+    if (!whole_score) {
+        PlaybackEngine::RenderOverride solo;
+        solo.solo = {track_id};
+        engine.set_render_override(solo);
+    } else {
+        engine.set_render_override(std::nullopt);
+    }
     engine.locate(std::max<Ticks>(0, origin_));
     engine.play();
-    context_.status("Quick playback: " +
-                    juce::String(context_.session.data().find_track(track_id) ? context_.session.data().find_track(track_id)->name
-                                                                              : std::string()) +
-                    " alone - let go to come back");
+    const auto* t = context_.session.data().find_track(track_id);
+    context_.status(whole_score ? juce::String("Quick playback: the whole score - let go to come back")
+                                : "Quick playback: " + juce::String(t ? t->name : std::string()) + " alone - let go to come back");
 }
 
 void ComposerView::quick_play_stop()

@@ -3,6 +3,7 @@
 #include "ui/MainComponent.h"
 
 #include "ui/console/RackGear.h"
+#include "ui/SteadyWindow.h"
 
 #include "ui/composer/CircleOfFifths.h"
 #include "ui/console/RoutingCanvas.h"
@@ -499,7 +500,7 @@ MainComponent::MainComponent(AppContext& context)
 MainComponent::~MainComponent()
 {
     if (deck_window_) {
-        // The window holds the deck (a member here): let go of it first.
+        // The window's host holds the deck (a member here): let go of it first.
         deck_window_->clearContentComponent();
         deck_window_.reset();
     }
@@ -937,6 +938,23 @@ void MainComponent::show_bottom_mixer(bool mixer)
 }
 
 namespace {
+/// Holds the deck in its window: an opaque background under it, so nothing
+/// of the window shows through while parts of the mixer repaint.
+class DeckHost final : public juce::Component {
+public:
+    explicit DeckHost(juce::Component& deck) : deck_(deck)
+    {
+        setOpaque(true);
+        addAndMakeVisible(deck_);
+    }
+    ~DeckHost() override { removeChildComponent(&deck_); }
+    void paint(juce::Graphics& g) override { g.fillAll(hw::tok::chassis); }
+    void resized() override { deck_.setBounds(getLocalBounds()); }
+
+private:
+    juce::Component& deck_;
+};
+
 /// The mixer deck's own window: closing it docks the mixer again.
 class DeckWindow final : public juce::DocumentWindow {
 public:
@@ -972,18 +990,28 @@ void MainComponent::set_mixer_popped(bool popped)
         removeChildComponent(&mixer_deck_);
         mixer_deck_.set_floating(true);
         mixer_deck_.setVisible(true);
-        window->setContentNonOwned(&mixer_deck_, false);
-        // Where it was left (another screen, say), else a good size here.
+        window->setContentOwned(new DeckHost(mixer_deck_), false);
+        // Big enough for every strip in full - inserts, pan, a long fader -
+        // as wide as the strips need, within the screen.
+        const auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
+        const int strips_w = 32 + mixer_deck_.strip_count() * (shell::MixerDeck::kStripFull + 4) + shell::MixerDeck::kMasterStripFull + 16;
+        const int want_w = std::clamp(strips_w, 720, area.getWidth() * 95 / 100);
+        const int want_h = std::min(kPoppedMixerHeight, area.getHeight() * 90 / 100);
+        window->setResizeLimits(560, std::min(kPoppedMixerMinHeight, want_h), 10000, 10000);
+        // Where it was left (another screen, say), else centred here.
         const auto saved = hw::ui_settings().getValue("mixer_deck_window");
-        if (saved.isEmpty() || !window->restoreWindowStateFromString(saved)) window->centreWithSize(1200, 560);
+        if (saved.isEmpty() || !window->restoreWindowStateFromString(saved)) window->centreWithSize(want_w, want_h);
+        if (window->getHeight() < want_h * 9 / 10)
+            window->setSize(window->getWidth(), want_h);  // left too short: everything shows again
         window->setVisible(true);
+        use_steady_renderer(*window);
         window->toFront(true);
         deck_window_ = std::move(window);
         context_.status("Mixer in its own window - drag it to another screen; Dock (or closing it) brings it back");
     } else {
         hw::ui_settings().setValue("mixer_deck_window", deck_window_->getWindowStateAsString());
         hw::ui_settings().saveIfNeeded();
-        deck_window_->clearContentComponent();
+        deck_window_->clearContentComponent();  // the host lets go of the deck
         deck_window_.reset();
         mixer_deck_.set_floating(false);
         addChildComponent(mixer_deck_);

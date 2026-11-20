@@ -269,6 +269,8 @@ private:
     std::unique_ptr<MixerWindow> mixer_;
     /// The mixer deck popped out (it holds mixer_deck_, not owning it).
     std::unique_ptr<juce::DocumentWindow> deck_window_;
+    /// The popped-out mixer's height: every strip's inserts, pan and a long fader.
+    static constexpr int kPoppedMixerHeight = 680, kPoppedMixerMinHeight = 520;
     std::map<std::string, std::unique_ptr<PluginWindow>> plugin_windows_;
     std::unique_ptr<juce::FileChooser> chooser_;
     std::unique_ptr<juce::DocumentWindow> gallery_window_;

@@ -6368,6 +6368,21 @@ void rack_gear_checks(MainWindow& window, const juce::File& dir)
 void mixer_popout_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
+    // A few strips with gear in them.
+    auto& session = window.context().session;
+    window.context().engine.stop();
+    session.new_empty();
+    for (const char* name : {"Strings", "Brass", "Choir"}) {
+        const auto id = session.add_audio_track(name, false);
+        session.update_track_mix(id, "gear", [](project::Track& t) {
+            for (const char* k : {"eq", "compressor", "dyneq"}) {
+                project::InsertSlot slot;
+                slot.kind = k;
+                slot.suggestion = false;
+                t.inserts.push_back(slot);
+            }
+        });
+    }
     main.show_workspace(MainComponent::Workspace::Producer);
     main.show_bottom_mixer(true);
     pump(120);
@@ -6375,11 +6390,25 @@ void mixer_popout_checks(MainWindow& window, const juce::File& dir)
     deck.pop_out_key().triggerClick();
     pump(250);
     auto* w = main.mixer_deck_window();
-    const bool out = main.mixer_popped() && w && w->isVisible() && w->getContentComponent() == &deck && deck.isVisible() &&
+    const bool out = main.mixer_popped() && w && w->isVisible() && w->getContentComponent() != nullptr &&
+                     deck.getParentComponent() == w->getContentComponent() && w->getContentComponent()->isOpaque() && deck.isVisible() &&
                      deck.floating() && deck.display_key().isVisible() && main.keyboard().isVisible() &&
                      deck.pop_out_key().getButtonText() == "Dock";
-    check(out, "Pop out puts the mixer in its own window (the keyboard takes the bottom deck)");
+    check(out, "Pop out puts the mixer in its own window, on an opaque background (the keyboard takes the bottom deck)");
     if (!w) return;
+    // Big enough that every strip shows in full: the insert stack, pan, the fader.
+    {
+        bool full = deck.strip_count() > 0;
+        juce::String sizes;
+        for (int i = 0; i < deck.strip_count(); ++i) {
+            auto& st = deck.strip(i);
+            const auto ins = st.inserts().getBounds();
+            full = full && st.isShowing() && ins.getHeight() >= 80 && st.getHeight() >= 480 && ins.getBottom() < st.fader().getY();
+            if (i == 0) sizes = juce::String(st.getHeight()) + " px strips, inserts " + juce::String(ins.getHeight()) + " px";
+        }
+        check(full && w->getHeight() >= 600,
+              "it opens big enough for every strip in full - inserts, pan, fader (" + w->getBounds().toString() + ", " + sizes + ")");
+    }
     w->setBounds(140, 90, 1100, 520);
     pump(150);
     check(deck.strip_count() == 0 || deck.strip(0).getWidth() == shell::MixerDeck::kStripFull,
@@ -9725,22 +9754,39 @@ void view_tools_checks(MainWindow& window, const juce::File& dir)
         auto& composer = main.composer();
         auto* lane_parent = composer.lane(2).getParentComponent();
         auto* hold = lane_parent ? lane_parent->findChildWithID("lane_quick_play") : nullptr;
-        check(hold != nullptr && hold->isShowing(), "each staff has a quick playback key");
-        if (hold)
-            check(hold->getX() <= composer.lane(2).getX() + 12 && hold->getY() <= 8 && hold->getWidth() >= 60,
-                  "the hold-to-play key sits at the top left of the staff, large and green");
+        auto* score_hold = lane_parent ? lane_parent->findChildWithID("lane_quick_play_score") : nullptr;
+        check(hold != nullptr && hold->isShowing() && score_hold != nullptr && score_hold->isShowing(),
+              "each staff has two quick playback keys, SOLO and SCORE");
+        if (hold && score_hold)
+            check(hold->getX() <= composer.lane(2).getX() + 12 && hold->getY() <= 8 && hold->getWidth() < 64 &&
+                      score_hold->getX() > hold->getRight() && score_hold->getX() - hold->getRight() < 10 &&
+                      score_hold->getY() == hold->getY(),
+                  "SOLO (green) sits at the top left of the staff, SCORE (blue) right beside it");
         ctx.engine.stop();
         ctx.engine.locate(6 * kTicksPerQuarter);
         if (hold) {
             const auto c = hold->getLocalBounds().getCentre().toFloat();
             hold->mouseDown(mouse_event(*hold, c, c, false));
             pump(100);
-            check(composer.quick_playing() && ctx.engine.playing(), "held: it plays (that staff alone)");
+            check(composer.quick_playing() && ctx.engine.playing() && ctx.engine.render_override() &&
+                      ctx.engine.render_override()->solo.size() == 1,
+                  "SOLO held: it plays that staff alone");
             shoot(window, dir, "102-quick-playback", true);
             hold->mouseUp(mouse_event(*hold, c, c, false));
             pump(100);
             check(!composer.quick_playing() && !ctx.engine.playing() && ctx.engine.position() == 6 * kTicksPerQuarter,
                   "let go: it stops and the playhead is back where it was");
+        }
+        if (score_hold) {
+            const auto c = score_hold->getLocalBounds().getCentre().toFloat();
+            score_hold->mouseDown(mouse_event(*score_hold, c, c, false));
+            pump(100);
+            check(composer.quick_playing() && ctx.engine.playing() && !ctx.engine.render_override(),
+                  "SCORE held: it plays the whole score (every unmuted instrument)");
+            score_hold->mouseUp(mouse_event(*score_hold, c, c, false));
+            pump(100);
+            check(!composer.quick_playing() && !ctx.engine.playing() && ctx.engine.position() == 6 * kTicksPerQuarter,
+                  "SCORE let go: it stops and the playhead is back where it was");
         }
     }
     // Hear: notes sound as they are placed (a key, remembered).
