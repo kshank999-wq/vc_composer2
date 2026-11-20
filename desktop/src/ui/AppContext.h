@@ -42,6 +42,9 @@ struct AppContext {
     /// Stores every hosted plug-in's current state in the project (before a
     /// package copies it; set by the main window).
     std::function<void()> capture_plugin_states;
+    /// Return to start: the playhead to 0 and every view (Composer, Producer,
+    /// Score) back to the beginning.
+    std::function<void()> go_to_start;
     /// Opens the Comments window on a comment (empty: just the window).
     std::function<void(const std::string& comment_id)> show_comment;
     /// The library browser's library (Main Spec §10; owned by the main window).

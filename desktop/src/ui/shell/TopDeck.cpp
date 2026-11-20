@@ -141,7 +141,10 @@ TopDeck::TopDeck(AppContext& context) : context_(context)
     transport_[6]->setComponentID("transport_loop");
     transport_[6]->onClick = [this] { context_.commands.invokeDirectly(cmd::toggleLoop, true); };
     auto& engine = context_.engine;
-    transport_[0]->onClick = [this] { context_.engine.locate(0); };
+    transport_[0]->onClick = [this] {
+        if (context_.go_to_start) context_.go_to_start();
+        else context_.engine.locate(0);
+    };
     transport_[1]->onClick = [this] {
         const auto& m = context_.session.data().meter;
         const Ticks at = context_.engine.position();

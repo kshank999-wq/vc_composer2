@@ -520,6 +520,12 @@ MainComponent::MainComponent(AppContext& context)
                             ": their memory is given back; Unfreeze reloads them");
     };
     context_.show_instrument_usage = [this] { show_instrument_usage(context_); };
+    context_.go_to_start = [this] {
+        context_.engine.locate(0);
+        composer_.set_origin(0);
+        sequencer_.scroll_to_start();
+        page_view_.scroll_to_start();
+    };
     collab::Controller::get().ask_conflicts = ask_conflicts;
     collab::Controller::get().attach(context_);
     // A little after start-up, quietly: is there a newer build on vc-composer.com?
@@ -732,6 +738,7 @@ MainComponent::~MainComponent()
     context_.freeze_progress = nullptr;
     context_.cancel_freeze = nullptr;
     context_.show_instrument_usage = nullptr;
+    context_.go_to_start = nullptr;
     collab::Controller::get().detach();
     collab::Controller::get().ask_conflicts = nullptr;
 }
@@ -2749,7 +2756,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::undo: s.undo(); break;
         case cmd::redo: s.redo(); break;
         case cmd::play: context_.engine.toggle_play(); break;
-        case cmd::rewind: context_.engine.locate(0); break;
+        case cmd::rewind: context_.go_to_start(); break;
         case cmd::toggleMetronome: context_.engine.set_metronome(!context_.engine.metronome()); break;
         case cmd::toggleRecord: toggle_record(); break;
         case cmd::togglePunch: set_punch(!punch_); break;

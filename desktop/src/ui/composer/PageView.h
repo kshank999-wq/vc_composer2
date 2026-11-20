@@ -23,6 +23,13 @@ public:
     /// Lays the score out again now (otherwise it happens a moment after an edit).
     void relayout();
     void set_playhead(Ticks tick);
+    /// Back to the first page (Return to Start).
+    void scroll_to_start()
+    {
+        scroll_y_ = 0;
+        vbar_.setCurrentRangeStart(0.0, juce::dontSendNotification);
+        repaint();
+    }
     /// Zoom in or out a step (the zoom keys, Cmd/Ctrl +/-).
     void zoom(bool larger);
     double zoom_factor() const noexcept { return zoom_; }

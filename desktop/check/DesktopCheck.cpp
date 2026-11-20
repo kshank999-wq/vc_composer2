@@ -6221,6 +6221,28 @@ void cursor_start_checks(MainWindow& window, const juce::File& dir)
     }
 }
 
+/// Return to Start: the playhead and every view back to the beginning.
+void return_to_start_checks(MainWindow& window, const juce::File&)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    ctx.engine.stop();
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(100);
+    const Ticks far = ctx.session.data().meter.bar_start(20);
+    ctx.engine.locate(far);
+    main.composer().set_origin(far);
+    main.sequencer().reveal(far);
+    pump(100);
+    const bool moved = main.composer().origin() > 0 && main.sequencer().view_start() > 0.0;
+    ctx.commands.invokeDirectly(cmd::rewind, false);
+    pump(100);
+    check(moved && ctx.engine.position() == 0 && main.composer().origin() == 0 && main.sequencer().view_start() <= 0.0,
+          "Return to Start brings the playhead and every view back to bar 1 (Composer " +
+              juce::String(static_cast<int>(main.composer().origin())) + ", Producer " +
+              juce::String(main.sequencer().view_start(), 0) + ")");
+}
+
 void staff_tools_checks(MainWindow& window, const juce::File& dir)
 {
     using composer::Command;
@@ -11869,6 +11891,7 @@ int main(int argc, char** argv)
                 {"ostinato_library_checks", ostinato_library_checks},
                 {"box_select_checks", box_select_checks},
                 {"cursor_start_checks", cursor_start_checks},
+                {"return_to_start_checks", return_to_start_checks},
                 {"account_checks", account_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
@@ -12497,6 +12520,10 @@ int main(int argc, char** argv)
         ostinato_library_checks(window, dir);
         section("box_select_checks");
         box_select_checks(window, dir);
+        section("cursor_start_checks");
+        cursor_start_checks(window, dir);
+        section("return_to_start_checks");
+        return_to_start_checks(window, dir);
         section("sidechain_checks");
         sidechain_checks(window, dir);
         section("page_view_checks");

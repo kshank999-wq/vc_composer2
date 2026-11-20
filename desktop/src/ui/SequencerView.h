@@ -24,6 +24,8 @@ public:
     void visibilityChanged() override;
     /// Scrolls so `tick` is in view (a jog or shuttle moved the playhead).
     void reveal(Ticks tick);
+    /// Scrolls back to the beginning (Return to Start).
+    void scroll_to_start();
     /// Scrolls the track lanes so a track is in view.
     void reveal_track(const std::string& track_id);
 

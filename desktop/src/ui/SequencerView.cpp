@@ -5432,6 +5432,14 @@ void SequencerView::reveal_track(const std::string& track_id)
     impl_->lanes.repaint();
 }
 
+void SequencerView::scroll_to_start()
+{
+    impl_->deferred.flush();
+    impl_->model.set_view_start(0.0);
+    impl_->lanes.repaint();
+    repaint();
+}
+
 void SequencerView::reveal(Ticks tick)
 {
     impl_->deferred.flush();
