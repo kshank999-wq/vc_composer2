@@ -41,7 +41,7 @@ constexpr int kRuler = 34;
 constexpr int kLaneHeight = 72;   ///< An instrument or MIDI track, collapsed.
 constexpr int kAudioRow = 84;     ///< An audio track.
 constexpr int kExpandedRow = 272; ///< An instrument track expanded: piano roll and velocity inline.
-constexpr int kLaneTrack = 64;    ///< An instrument track's own audio lane, shown (Audio or Both) as a track of its own under it.
+constexpr int kLaneTrack = 72;    ///< An instrument track's own audio lane, shown (Audio or Both) as a track of its own: as tall as the MIDI.
 constexpr int kHeaderTop = 52;    ///< Header rows 1-2; an expanded row's piano roll starts under them.
 constexpr int kRollInset = kHeader - 62;  ///< The inline piano roll leaves the header's left part to it.
 constexpr int kMinRow = 48;
@@ -348,20 +348,27 @@ struct Model final : AutomationTimeline {
     std::function<void(const std::string& track, bool freeze)> print_track;
 
     bool has_audio_lane(const LaneView& l) const { return !l.audio && !l.bus && !l.reference; }
-    bool is_expanded(const LaneView& l) const { return has_audio_lane(l) && expanded == l.id; }
+    /// The track's MIDI part shows on MIDI and Both; on Audio only its audio lane does.
+    bool shows_midi(const LaneView& l) const { return !has_audio_lane(l) || l.playback != "audio"; }
+    bool is_expanded(const LaneView& l) const { return has_audio_lane(l) && expanded == l.id && shows_midi(l); }
     /// The height slider (bottom right): every row taller or shorter.
     double height_zoom = 1.0;
     /// The instrument track's audio lane under it: shown (as a track of its
     /// own) while the track plays its audio or both; hidden on MIDI.
     bool shows_audio_lane(const LaneView& l) const { return has_audio_lane(l) && l.playback != "midi"; }
+    /// Its height (dragged by its bottom edge, kept as id + "#lane").
     int lane_height(const LaneView& l) const
     {
-        return shows_audio_lane(l) ? std::max(40, static_cast<int>(std::lround(kLaneTrack * height_zoom))) : 0;
+        if (!shows_audio_lane(l)) return 0;
+        int h = kLaneTrack;
+        if (auto it = heights.find(l.id + "#lane"); it != heights.end()) h = it->second;
+        return std::max(kMinRow, static_cast<int>(std::lround(h * height_zoom)));
     }
     /// The track's own part of its row (the MIDI, or the piano roll expanded).
     int midi_height(const LaneView& l) const
     {
         if (l.bus) return kBusHeight;
+        if (!shows_midi(l)) return 0;
         const std::string key = is_expanded(l) ? l.id + "#x" : l.id;
         int h = is_expanded(l) ? kExpandedRow : l.audio ? kAudioRow : kLaneHeight;
         if (auto it = heights.find(key); it != heights.end()) h = it->second;
@@ -1249,6 +1256,20 @@ public:
             if (y + own >= 0 && y <= h) {
                 if (l.bus) paint_bus(g, l, juce::Rectangle<int>(0, y, w - kScroll, own), timeline);
                 else paint_lane(g, l, juce::Rectangle<int>(0, y, w - kScroll, own), timeline, l.id == selected);
+                if (!l.bus && l.id == selected) {
+                    // The selected track, clearly: bars along its top and bottom
+                    // (header and timeline, as the Composer marks a staff) and a tint.
+                    const auto r = juce::Rectangle<int>(0, y, w - kScroll, own);
+                    const auto led = hw::Theme::get().led();
+                    g.setColour(led.withAlpha(0.07f));
+                    g.fillRect(r.withLeft(kHeader));
+                    g.setColour(led);
+                    g.fillRect(r.withHeight(3));
+                    g.fillRect(r.withTop(r.getBottom() - 3));
+                    g.setColour(led.withAlpha(0.35f));
+                    g.fillRect(r.withY(r.getY() + 3).withHeight(1));
+                    g.fillRect(r.withY(r.getBottom() - 4).withHeight(1));
+                }
             }
             y += rh;
         }
@@ -1349,12 +1370,15 @@ public:
         resize_track_.clear();
         // The bottom edge of a header resizes its row.
         if (e.x < kHeader && !e.mods.isPopupMenu())
-            if (const auto* l = resize_edge_at(e.getPosition())) {
-                resize_track_ = l->id;
-                resize_key_ = m_.is_expanded(*l) ? l->id + "#x" : l->id;
-                resize_start_ = m_.midi_height(*l);
-                resize_min_ = m_.min_height(*l);
-                return;
+            {
+                bool lane = false;
+                if (const auto* l = resize_edge_at(e.getPosition(), &lane)) {
+                    resize_track_ = l->id;
+                    resize_key_ = lane ? l->id + "#lane" : m_.is_expanded(*l) ? l->id + "#x" : l->id;
+                    resize_start_ = lane ? m_.lane_height(*l) : m_.midi_height(*l);
+                    resize_min_ = lane ? kMinRow : m_.min_height(*l);
+                    return;
+                }
             }
         const Hit hit = hit_at(e.y);
         if (!hit.lane) {
@@ -1940,14 +1964,25 @@ public:
 private:
     enum class Drag { None, Move, TrimLeft, TrimRight, FadeIn, FadeOut, Gain, Comp, Band, Select };
 
-    /// The track whose header's bottom edge is under `p`, or null.
-    const LaneView* resize_edge_at(juce::Point<int> p) const
+    /// The track whose header's bottom edge is under `p`, or null. Of an
+    /// instrument track showing both parts, the edge between them sizes its
+    /// MIDI and the row's bottom its audio lane (`lane` says which).
+    const LaneView* resize_edge_at(juce::Point<int> p, bool* lane = nullptr) const
     {
         int top = -scroll_y_;
         for (const auto& l : m_.lanes) {
             if (!l.bus) {
+                const int midi_bottom = top + m_.midi_height(l);
                 const int bottom = top + m_.base_height(l);
-                if (p.y >= bottom - 4 && p.y <= bottom) return &l;
+                const bool has_lane = m_.lane_height(l) > 0;
+                if (p.y >= bottom - 4 && p.y <= bottom) {
+                    if (lane) *lane = has_lane;
+                    return &l;
+                }
+                if (has_lane && m_.midi_height(l) > 0 && p.y >= midi_bottom - 4 && p.y <= midi_bottom) {
+                    if (lane) *lane = false;
+                    return &l;
+                }
             }
             top += m_.row_height(l);
         }
@@ -1955,11 +1990,23 @@ private:
     }
 
     /// A click on a header's keys. True when it hit one.
+    struct HeaderParts;
+    struct LaneParts;
     bool header_click(const LaneView& l, juce::Rectangle<int> row, juce::Point<int> pt)
     {
         auto& session = m_.ctx.session;
-        const auto p = header_parts(l, row);
         const std::string id = l.id;
+        if (!l.bus)
+            if (const auto lp = lane_parts(l, row); lp.area.contains(pt)) {
+                const char* values[] = {"midi", "audio", "both"};
+                for (std::size_t i = 0; i < 3; ++i)
+                    if (lp.source[i].contains(pt)) {
+                        session.set_playback(id, values[i]);
+                        return true;
+                    }
+                return lane_click(l, lp, pt);
+            }
+        const auto p = header_parts(l, row);
         if (p.chevron.contains(pt)) {
             m_.set_expanded(m_.is_expanded(l) ? std::string() : id);
             return true;
@@ -1969,8 +2016,15 @@ private:
             return true;
         }
         if (l.bus) return false;
-        // The audio lane's own header.
-        if (const auto lp = lane_parts(l, row); lp.area.contains(pt)) {
+        return main_header_click(l, p, pt);
+    }
+
+    /// A click on the audio lane's own header.
+    bool lane_click(const LaneView& l, const LaneParts& lp, juce::Point<int> pt)
+    {
+        auto& session = m_.ctx.session;
+        const std::string id = l.id;
+        {
             if (lp.rec.contains(pt)) {
                 // Records the track's own instrument onto this lane (a print):
                 // nothing to route, it is wired to the track.
@@ -1994,6 +2048,12 @@ private:
             session.select_track(id);
             return true;
         }
+    }
+
+    bool main_header_click(const LaneView& l, const HeaderParts& p, juce::Point<int> pt)
+    {
+        auto& session = m_.ctx.session;
+        const std::string id = l.id;
         if (p.rec.contains(pt)) {
             // The track's own R records MIDI (the lane's R prints audio).
             const bool on = l.armed && l.record_source != "print";
@@ -2494,6 +2554,8 @@ private:
     /// of its own, wired to the track's instrument.
     struct LaneParts {
         juce::Rectangle<int> area, tag, name, link, rec, solo, mute, out;
+        /// On Audio (the MIDI part hidden), the lane carries MIDI | Audio | Both.
+        std::array<juce::Rectangle<int>, 3> source;
     };
     LaneParts lane_parts(const LaneView& l, juce::Rectangle<int> row) const
     {
@@ -2507,8 +2569,16 @@ private:
         p.rec = {26, y + 30, 22, 18};
         p.solo = {51, y + 30, 22, 18};
         p.mute = {76, y + 30, 22, 18};
-        p.out = {101, y + 30, kHeader - 109, 18};
-        if (h >= 60) p.link = {26, y + 50, kHeader - 34, 11};
+        if (!m_.shows_midi(l)) {
+            // Alone: the track's choices are here, and room for its automation key.
+            p.out = {152, y + 30, kHeader - 160, 18};
+            for (int i = 0; i < 3; ++i) p.source[static_cast<std::size_t>(i)] = {26 + i * 40, y + kHeaderTop, 38, 16};
+            if (h >= 86) p.link = {26, y + 72, kHeader - 34, 11};
+            else p.link = {148, y + kHeaderTop + 2, kHeader - 154, 12};
+        } else {
+            p.out = {101, y + 30, kHeader - 109, 18};
+            if (h >= 60) p.link = {26, y + 50, kHeader - 34, 11};
+        }
         return p;
     }
 
@@ -2582,6 +2652,12 @@ private:
         if (selected) {
             g.setColour(hw::Theme::get().led().withAlpha(0.7f));
             g.drawRect(row.withWidth(kHeader).withTrimmedLeft(5), 1);
+        }
+        if (!l.bus && !m_.shows_midi(l)) {
+            // Audio only: the audio lane is the row, with its own header.
+            paint_lane_header(g, l, row);
+            paint_automation_button(g, l, row, m_.show_automation.count(l.id) > 0);
+            return;
         }
         const auto p = header_parts(l, row);
         // Chevron: expand or collapse the piano roll.
@@ -2728,8 +2804,11 @@ private:
         hw::paint::lcd_window(g, p.out.toFloat());
         hw::paint::lcd_text(g, l.output.isEmpty() ? juce::String("OUT") : l.output, p.out.toFloat().reduced(4.0f, 0.0f), 9.0f,
                             juce::Justification::centredLeft);
+        const char* names[] = {"MIDI", "Audio", "Both"};
+        const char* values[] = {"midi", "audio", "both"};
+        for (std::size_t i = 0; i < 3; ++i) key(g, p.source[i], names[i], l.playback == values[i]);
         if (!p.link.isEmpty())
-            hw::paint::silk(g, "IN: " + l.name.toUpperCase() + " INSTRUMENT  (LINKED)",
+            hw::paint::silk(g, p.link.getWidth() < 120 ? juce::String("LINKED") : "IN: " + l.name.toUpperCase() + " INSTRUMENT  (LINKED)",
                             p.link.toFloat(), 8.5f, juce::Justification::centredLeft, tc.withAlpha(0.85f));
     }
 

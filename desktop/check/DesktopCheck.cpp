@@ -6758,6 +6758,7 @@ void section_zoom_checks(MainWindow& window, const juce::File& dir)
 /// track's instrument onto it, its own S and M), and what the engine plays.
 void audio_lane_track_checks(MainWindow& window, const juce::File& dir)
 {
+    constexpr int kHeaderTopForChecks = 52;  // the header's third row (MIDI | Audio | Both)
     auto& main = window.main();
     auto& ctx = window.context();
     auto& session = ctx.session;
@@ -6802,10 +6803,50 @@ void audio_lane_track_checks(MainWindow& window, const juce::File& dir)
             x.lane_mute = false;
             x.record_armed = false;
         });
+        pump(80);
+        check(both_row == 2 * midi_row, "on Both the MIDI and the audio lane are the same height (" + juce::String(midi_row) + " + " +
+                                            juce::String(both_row - midi_row) + " px)");
+        // Each part resizes by its own bottom edge.
+        auto drag_edge = [&](int y, int dy) {
+            const juce::Point<float> from(100.0f, static_cast<float>(y - 2)), to(100.0f, static_cast<float>(y - 2 + dy));
+            lanes->mouseDown(mouse_event(*lanes, from, from, false));
+            lanes->mouseDrag(mouse_event(*lanes, to, from, true));
+            lanes->mouseUp(mouse_event(*lanes, to, from, true));
+            pump(60);
+        };
+        drag_edge(both_row, 30);  // the lane's bottom
+        const int after_lane = seq.row_height(strings);
+        drag_edge(midi_row, 20);  // between the MIDI and the lane
+        const int after_midi = seq.row_height(strings);
+        check(after_lane == both_row + 30 && after_midi == after_lane + 20,
+              "the audio lane and the MIDI each resize by their own bottom edge (" + juce::String(both_row) + " -> " +
+                  juce::String(after_lane) + " -> " + juce::String(after_midi) + " px)");
+        // Audio: the lane alone, with the track's MIDI | Audio | Both keys on it.
+        session.set_playback(strings, "audio");
+        pump(100);
+        const int audio_row = seq.row_height(strings);
+        check(audio_row == after_lane - midi_row, "on Audio only the audio lane shows (" + juce::String(audio_row) + " px, the MIDI hidden)");
+        shoot(main, dir, "36h-audio-only");
+        click(26 + 19, kHeaderTopForChecks + 8);  // the lane's MIDI key
+        check(session.data().find_track(strings)->playback == "midi" && seq.row_height(strings) == midi_row + 20,
+              "the lane's MIDI key goes back to the MIDI alone (" + juce::String(seq.row_height(strings)) + " px)");
+        // The selected track: bars along its top and bottom, across the timeline.
+        session.select_track(strings);
+        pump(120);
+        const auto shot = lanes->createComponentSnapshot(lanes->getLocalBounds());
+        const auto led = hw::Theme::get().led();
+        const auto top_px = shot.getPixelAt(400, 1), bottom_px = shot.getPixelAt(400, seq.row_height(strings) - 2);
+        auto near = [&](juce::Colour c) {
+            return std::abs(c.getRed() - led.getRed()) < 40 && std::abs(c.getGreen() - led.getGreen()) < 40 &&
+                   std::abs(c.getBlue() - led.getBlue()) < 40;
+        };
+        check(near(top_px) && near(bottom_px), "the selected track is marked along its top and bottom, header to timeline");
+        shoot(main, dir, "36i-selected-track");
     } else {
         check(false, "the Producer lanes are there");
     }
-    // What plays: the same tone on the lane and on Vox.
+    // What plays: the same tone on the lane and on Vox (the track on Both).
+    session.set_playback(strings, "both");
     const auto file = dir.getChildFile("Audio Files").getChildFile("lane-tone.wav");
     file.getParentDirectory().createDirectory();
     file.deleteFile();
