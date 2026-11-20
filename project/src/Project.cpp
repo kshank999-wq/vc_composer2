@@ -1347,6 +1347,15 @@ json::Value Project::to_json() const
         o.set("title_italic", si.title_italic);
         o.set("title_caps", si.title_caps);
         o.set("muted_leave_score", si.muted_leave_score);
+        o.set("show_title", si.show_title);
+        o.set("show_subtitle", si.show_subtitle);
+        o.set("show_composer", si.show_composer);
+        o.set("show_arranger", si.show_arranger);
+        o.set("show_lyricist", si.show_lyricist);
+        o.set("show_date", si.show_date);
+        o.set("show_revision", si.show_revision);
+        o.set("show_copyright", si.show_copyright);
+        o.set("show_tempo_text", si.show_tempo_text);
         root.set("score_info", std::move(o));
     }
     json::Array reels, scenes;
@@ -1719,6 +1728,15 @@ std::optional<Project> Project::from_json(const json::Value& input, std::string*
         si.title_italic = sj->get_bool("title_italic", false);
         si.title_caps = sj->get_bool("title_caps", false);
         si.muted_leave_score = sj->get_bool("muted_leave_score", false);
+        si.show_title = sj->get_bool("show_title", true);
+        si.show_subtitle = sj->get_bool("show_subtitle", true);
+        si.show_composer = sj->get_bool("show_composer", true);
+        si.show_arranger = sj->get_bool("show_arranger", true);
+        si.show_lyricist = sj->get_bool("show_lyricist", true);
+        si.show_date = sj->get_bool("show_date", true);
+        si.show_revision = sj->get_bool("show_revision", true);
+        si.show_copyright = sj->get_bool("show_copyright", true);
+        si.show_tempo_text = sj->get_bool("show_tempo_text", true);
     }
     for (const auto& j : doc.get("reels") ? doc.get("reels")->as_array() : json::Array{}) {
         Reel r{j.get_string("id"), j.get_string("name")};

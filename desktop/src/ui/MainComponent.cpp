@@ -2587,7 +2587,7 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.setInfo("Built-in Sounds...", "The piano and General MIDI orchestra: download, status, credits", "Studio", 0);
             break;
         case cmd::scoreInfo:
-            info.setInfo("Score Info...", "The score's title (styled), composer, date, version and the rest of its head", "File", 0);
+            info.setInfo("Sheet Info...", "The score's title (styled), composer, date, version and the other credits, and which of them print", "File", 0);
             break;
         case cmd::soundAssignments:
             info.setInfo("Sound Assignments...", "Your sound for each instrument and articulation, used in every template and new track",

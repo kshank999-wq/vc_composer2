@@ -51,6 +51,10 @@ public:
     hw::Keycap& hide_key() { return hide_; }
     hw::Keycap& order_key() { return order_; }
     hw::Keycap& landscape_key() { return landscape_; }
+    /// Sheet Info: the title, composer and other credits, and which print.
+    hw::Keycap& sheet_info_key() { return sheet_info_; }
+    /// The heading at the top of the first page (a click there opens Sheet Info).
+    bool title_at(juce::Point<float> p) const;
     /// Pages side by side (2) when the view is wide, else one under another (1).
     int columns() const noexcept;
 
@@ -79,7 +83,7 @@ private:
     juce::ScrollBar vbar_{true};
     FullScoreSettings settings_;
     hw::Keycap paper_{"Paper"}, concert_{"Concert pitch", true}, bars_{"Bars"}, hide_{"Hide empty", true},
-        order_{"Orchestral order", true}, landscape_{"Landscape", true};
+        order_{"Orchestral order", true}, landscape_{"Landscape", true}, sheet_info_{"Sheet Info"};
     void refresh_keys();
     int bar_top() const noexcept { return 34; }
 };

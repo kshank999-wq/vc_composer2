@@ -486,6 +486,10 @@ struct ScoreInfo {
     bool title_caps = false;
     /// Muting an instrument takes it out of the score (and its part) until unmuted.
     bool muted_leave_score = false;
+    /// Sheet Info: which credits print (each keeps its text when hidden).
+    bool show_title = true, show_subtitle = true, show_composer = true, show_arranger = true,
+         show_lyricist = true, show_date = true, show_revision = true, show_copyright = true,
+         show_tempo_text = true;
 };
 
 /// Spec §14 hierarchy: Production -> Reel/Episode -> Scene -> Cue.

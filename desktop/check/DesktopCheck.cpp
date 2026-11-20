@@ -5097,8 +5097,8 @@ void track_header_checks(MainWindow& window, const juce::File& dir)
     {
         show_score_info(window.context());
         pump(120);
-        auto* info_window = find_dialog("Score Info");
-        check(info_window != nullptr && info_window->isOnDesktop(), "File > Score Info opens its window");
+        auto* info_window = find_dialog("Sheet Info");
+        check(info_window != nullptr && info_window->isOnDesktop(), "File > Sheet Info opens its window");
         if (info_window) shoot(*info_window, dir, "score-info");
         auto si = session.score_info();
         si.title = "Night Train";
@@ -5112,6 +5112,27 @@ void track_header_checks(MainWindow& window, const juce::File& dir)
         check(po.title == "Night Train" && po.composer == "A. Composer" && po.head.title_italic &&
                   po.head.info_line == "19 November 2026  -  Version 3" && po.head.tempo_bpm > 0.0,
               "the score's head takes the title (styled), composer, date and version, and the tempo from the music");
+        // The show switches: a hidden credit keeps its text but does not print.
+        si = session.score_info();
+        si.show_composer = false;
+        si.show_revision = false;
+        session.set_score_info(si);
+        engraving::PrintOptions hidden;
+        apply_score_info(window.context(), hidden);
+        const bool kept = session.score_info().composer == "A. Composer";
+        si.show_composer = si.show_revision = true;
+        session.set_score_info(si);
+        check(hidden.composer.empty() && hidden.head.info_line == "19 November 2026" && hidden.title == "Night Train" && kept,
+              "Sheet Info: a credit switched off is kept but not printed (composer and version hidden)");
+        int switches = 0;
+        if (info_window)
+            for (const char* id : {"sheet_show_title", "sheet_show_composer", "sheet_show_copyright", "sheet_show_tempo_text"})
+                if (info_window->findChildWithID(id) == nullptr) {
+                    if (auto* panel = info_window->findChildWithID("score_info"))
+                        switches += panel->findChildWithID(id) != nullptr;
+                } else
+                    ++switches;
+        check(switches == 4, "Sheet Info has a show switch beside each credit (" + juce::String(switches) + " of 4 found)");
         if (auto* w = dynamic_cast<juce::DocumentWindow*>(info_window)) w->closeButtonPressed();
         pump(60);
     }
@@ -11476,6 +11497,42 @@ void page_view_checks(MainWindow& window, const juce::File& dir)
               "the full-score PDF prints landscape too (" + juce::String(mw, 0) + " x " + juce::String(mh, 0) + " pt, " +
                   juce::String(printed) + " pages)");
         pv.set_settings(original);
+    }
+
+    // Sheet Info: the key beside Landscape, and a click on the title, open it.
+    {
+        auto close_info = [] {
+            if (auto* w = dynamic_cast<juce::DocumentWindow*>(find_dialog("Sheet Info"))) w->closeButtonPressed();
+            pump(60);
+        };
+        close_info();
+        const bool beside = pv.sheet_info_key().isShowing() && pv.sheet_info_key().getX() > pv.landscape_key().getRight() &&
+                            pv.sheet_info_key().getX() - pv.landscape_key().getRight() < 20;
+        pv.sheet_info_key().triggerClick();
+        pump(120);
+        const bool by_key = find_dialog("Sheet Info") != nullptr;
+        close_info();
+        pv.scroll_to_start();
+        const auto r = pv.page_rect(0);
+        juce::Point<float> title_point;
+        bool title_found = false;
+        for (float y = r.getY() + 4.0f; y < r.getBottom() && !title_found; y += 2.0f)
+            if (pv.title_at({r.getCentreX(), y})) {
+                title_point = {r.getCentreX(), y + 6.0f};
+                title_found = pv.title_at(title_point);
+            }
+        bool by_title = false;
+        if (title_found) {
+            pv.mouseDown(mouse_event(pv, title_point, title_point, false));
+            pump(120);
+            by_title = find_dialog("Sheet Info") != nullptr;
+        }
+        const auto music = pv.layout() && !pv.layout()->laid.pages.empty() && !pv.layout()->laid.pages[0].systems.empty();
+        const bool music_not_title = !music || !pv.title_at({r.getCentreX(), r.getBottom() - 10.0f});
+        shoot(main, dir, "36f-sheet-info");
+        close_info();
+        check(beside && by_key && by_title && music_not_title,
+              "Score view: the Sheet Info key sits beside Landscape and opens it; so does a click on the title (not on the music)");
     }
 
     // It follows edits: a new track appears as another part.

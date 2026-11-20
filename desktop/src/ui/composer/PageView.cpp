@@ -74,6 +74,12 @@ PageView::PageView(AppContext& context) : context_(context)
         set_settings(s);
     };
     addAndMakeVisible(landscape_);
+    sheet_info_.setComponentID("sheet_info_key");
+    sheet_info_.setTooltip("Sheet Info: title, composer and other credits, and which of them print (or click the title)");
+    sheet_info_.set_legend_size(10.0f);
+    sheet_info_.setWantsKeyboardFocus(false);
+    sheet_info_.onClick = [this] { show_score_info(context_); };
+    addAndMakeVisible(sheet_info_);
     order_.onClick = [this] {
         auto s = settings_;
         s.score_order = order_.getToggleState();
@@ -275,7 +281,7 @@ void PageView::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions(10.5f));
     g.drawText(juce::String(layout_->parts) + " parts  -  " + juce::String(page_count()) + (page_count() == 1 ? " page" : " pages") +
                    "  -  " + juce::String(juce::roundToInt(zoom_ * 100.0)) + "%",
-               juce::Rectangle<int>(landscape_.getRight() + 12, 0, getWidth() - kScroll - landscape_.getRight() - 20, bar_top()),
+               juce::Rectangle<int>(sheet_info_.getRight() + 12, 0, getWidth() - kScroll - sheet_info_.getRight() - 20, bar_top()),
                juce::Justification::centredRight);
 }
 
@@ -294,6 +300,8 @@ void PageView::resized()
     order_.setBounds(bar.removeFromLeft(128));
     bar.removeFromLeft(6);
     landscape_.setBounds(bar.removeFromLeft(96));
+    bar.removeFromLeft(6);
+    sheet_info_.setBounds(bar.removeFromLeft(96));
     update_scroll();
 }
 
@@ -322,9 +330,24 @@ void PageView::zoom(bool larger)
     repaint();
 }
 
+bool PageView::title_at(juce::Point<float> p) const
+{
+    if (!layout_ || page_count() == 0) return false;
+    const auto r = page_rect(0);
+    if (!r.contains(p)) return false;
+    const auto& page = layout_->laid.pages.front();
+    if (page.systems.empty()) return true;
+    const double y = (p.y - r.getY()) / px_per_space() + page.layout.extent.y;
+    return y < page.systems.front().top_y - 1.0;
+}
+
 void PageView::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
+    if (title_at(e.position)) {
+        show_score_info(context_);
+        return;
+    }
     const int bar = bar_at(e.position);
     if (bar <= 0) return;
     context_.engine.locate(context_.session.data().meter.bar_start(bar));

@@ -51,12 +51,12 @@ struct FullScoreSettings {
 FullScoreSettings saved_full_score_settings();
 void save_full_score_settings(const FullScoreSettings& settings);
 
-/// The printed head from Score > Score Info: the title (styled), composer,
+/// The printed head from Score > Sheet Info: the title (styled), composer,
 /// words, arranger, date and revision, the tempo from the music, copyright.
 /// A part keeps its instrument name as the subtitle.
 void apply_score_info(const AppContext& context, engraving::PrintOptions& options);
 void apply_score_info(const AppContext& context, engraving::ScoreOptions& options);
-/// Score > Score Info...: the window to type it in.
+/// Score > Sheet Info...: the window to type it in.
 void show_score_info(AppContext& context);
 
 /// The full score on pages, as it prints: the Page view draws these, the

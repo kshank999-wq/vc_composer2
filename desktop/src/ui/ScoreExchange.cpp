@@ -411,19 +411,21 @@ template <typename Options>
 void fill_head(const AppContext& c, Options& o)
 {
     const auto si = c.session.score_info();
-    o.title = si.title_caps ? upper(si.title) : si.title;
-    if (!si.subtitle.empty() && o.subtitle.empty()) o.subtitle = si.subtitle;
-    o.composer = si.composer;
+    auto shown = [](bool on, const std::string& text) { return on ? text : std::string(); };
+    o.title = shown(si.show_title, si.title_caps ? upper(si.title) : si.title);
+    if (!si.show_subtitle) o.subtitle.clear();
+    else if (!si.subtitle.empty() && o.subtitle.empty()) o.subtitle = si.subtitle;
+    o.composer = shown(si.show_composer, si.composer);
     o.title_size *= std::clamp(si.title_scale, 0.5, 3.0);
     o.head.title_bold = si.title_bold;
     o.head.title_italic = si.title_italic;
-    o.head.lyricist = si.lyricist;
-    o.head.arranger = si.arranger;
-    std::string info = si.date;
-    if (!si.revision.empty()) info += (info.empty() ? "" : "  -  ") + si.revision;
+    o.head.lyricist = shown(si.show_lyricist, si.lyricist);
+    o.head.arranger = shown(si.show_arranger, si.arranger);
+    std::string info = shown(si.show_date, si.date);
+    if (si.show_revision && !si.revision.empty()) info += (info.empty() ? "" : "  -  ") + si.revision;
     o.head.info_line = info;
-    o.head.copyright = si.copyright;
-    o.head.tempo_text = si.tempo_text;
+    o.head.copyright = shown(si.show_copyright, si.copyright);
+    o.head.tempo_text = shown(si.show_tempo_text, si.tempo_text);
     o.head.tempo_bpm = si.show_tempo ? c.session.data().tempo.bpm_at(0) : 0.0;
 }
 
@@ -434,7 +436,7 @@ void apply_score_info(const AppContext& context, engraving::ScoreOptions& option
 {
     fill_head(context, options);
     // The full score's own subtitle is the score info's when there is one.
-    if (const auto si = context.session.score_info(); !si.subtitle.empty()) options.subtitle = si.subtitle;
+    if (const auto si = context.session.score_info(); !si.subtitle.empty() && si.show_subtitle) options.subtitle = si.subtitle;
 }
 
 namespace {
@@ -445,7 +447,17 @@ public:
     {
         setComponentID("score_info");
         const auto si = c.session.score_info();
-        auto field = [this](juce::TextEditor& e, const juce::String& label, const std::string& value, const juce::String& hint) {
+        auto field = [this](juce::TextEditor& e, const juce::String& label, const std::string& value, const juce::String& hint,
+                            bool shown) {
+            // The switch: does this line print?
+            auto sw = std::make_unique<juce::ToggleButton>();
+            sw->setTitle("Show " + label);
+            sw->setTooltip("Show the " + label.toLowerCase() + " on the score");
+            sw->setComponentID("sheet_show_" + label.toLowerCase().replaceCharacter(' ', '_'));
+            sw->setToggleState(shown, juce::dontSendNotification);
+            sw->onClick = [this] { refresh_shown(); };
+            addAndMakeVisible(*sw);
+            shows_.push_back(std::move(sw));
             auto l = std::make_unique<juce::Label>(juce::String(), label);
             l->setColour(juce::Label::textColourId, colours::text_dim);
             l->setJustificationType(juce::Justification::centredRight);
@@ -460,15 +472,16 @@ public:
         };
         // A date to start from: today, as a score would carry it.
         const std::string date = si.date.empty() ? juce::Time::getCurrentTime().formatted("%d %B %Y").toStdString() : si.date;
-        field(title_, "Title", si.title, "The score's title");
-        field(subtitle_, "Subtitle", si.subtitle, "for orchestra / from the film ...");
-        field(composer_, "Composer", si.composer, "Music by ...");
-        field(arranger_, "Arranger", si.arranger, "Orch. / Arr. ...");
-        field(lyricist_, "Words", si.lyricist, "Words by ...");
-        field(date_, "Date", date, "19 November 2026");
-        field(revision_, "Version", si.revision, "Version 3 / Rev. 2");
-        field(copyright_, "Copyright", si.copyright, "(c) 2026 ...");
-        field(tempo_text_, "Tempo text", si.tempo_text, "Allegro / Slowly, with tension");
+        field(title_, "Title", si.title, "The score's title", si.show_title);
+        field(subtitle_, "Subtitle", si.subtitle, "for orchestra / from the film ...", si.show_subtitle);
+        field(composer_, "Composer", si.composer, "Music by ...", si.show_composer);
+        field(arranger_, "Arranger", si.arranger, "Orch. / Arr. ...", si.show_arranger);
+        field(lyricist_, "Words", si.lyricist, "Words by ...", si.show_lyricist);
+        field(date_, "Date", date, "19 November 2026", si.show_date);
+        field(revision_, "Version", si.revision, "Version 3 / Rev. 2", si.show_revision);
+        field(copyright_, "Copyright", si.copyright, "(c) 2026 ...", si.show_copyright);
+        field(tempo_text_, "Tempo text", si.tempo_text, "Allegro / Slowly, with tension", si.show_tempo_text);
+        refresh_shown();
         show_tempo_.setButtonText("Metronome mark from the music");
         show_tempo_.setToggleState(si.show_tempo, juce::dontSendNotification);
         muted_.setButtonText("Muted instruments leave the score");
@@ -498,7 +511,7 @@ public:
         const auto& d = c.session.data();
         auto_info_ = "From the music: tempo " + juce::String(d.tempo.bpm_at(0), 0) + " BPM  -  key " + juce::String(d.key) +
                      "  -  meter " + juce::String(d.meter.at_bar(1).to_string());
-        setSize(560, 590);
+        setSize(560, 600);
     }
 
     void apply()
@@ -519,14 +532,20 @@ public:
         si.title_caps = caps_.getToggleState();
         si.title_scale = size_.getValue();
         si.muted_leave_score = muted_.getToggleState();
+        bool* flags[] = {&si.show_title, &si.show_subtitle, &si.show_composer, &si.show_arranger, &si.show_lyricist,
+                         &si.show_date, &si.show_revision, &si.show_copyright, &si.show_tempo_text};
+        for (std::size_t i = 0; i < shows_.size() && i < std::size(flags); ++i) *flags[i] = shows_[i]->getToggleState();
         context_.session.set_score_info(si);
-        context_.status("Score info set: " + title_.getText());
+        context_.status("Sheet info set: " + title_.getText());
         close();
     }
 
     void paint(juce::Graphics& g) override
     {
         g.fillAll(colours::background);
+        g.setColour(colours::text_dim);
+        g.setFont(juce::FontOptions(10.0f));
+        g.drawText("Show", show_header_, juce::Justification::centred);
         // The title as it will print.
         auto r = preview_area_.toFloat();
         g.setColour(juce::Colours::white);
@@ -535,15 +554,16 @@ public:
         int style = juce::Font::plain;
         if (bold_.getToggleState()) style |= juce::Font::bold;
         if (italic_.getToggleState()) style |= juce::Font::italic;
-        auto text = title_.getText();
+        auto text = shown(0) ? title_.getText() : juce::String();
         if (caps_.getToggleState()) text = text.toUpperCase();
         g.setFont(juce::FontOptions(static_cast<float>(16.0 * size_.getValue()), style));
         g.drawFittedText(text, preview_area_.reduced(8, 4).removeFromTop(preview_area_.getHeight() * 2 / 3),
                          juce::Justification::centred, 1);
         g.setFont(juce::FontOptions(11.0f));
-        g.drawText(composer_.getText(), preview_area_.reduced(8, 4), juce::Justification::bottomRight);
-        g.drawText(date_.getText() + (revision_.getText().isEmpty() ? "" : "  -  " + revision_.getText()),
-                   preview_area_.reduced(8, 4), juce::Justification::topLeft);
+        if (shown(2)) g.drawText(composer_.getText(), preview_area_.reduced(8, 4), juce::Justification::bottomRight);
+        juce::String info = shown(5) ? date_.getText() : juce::String();
+        if (shown(6) && revision_.getText().isNotEmpty()) info += (info.isEmpty() ? "" : "  -  ") + revision_.getText();
+        g.drawText(info, preview_area_.reduced(8, 4), juce::Justification::topLeft);
         g.setColour(colours::text_dim);
         g.setFont(juce::FontOptions(11.0f));
         g.drawText(auto_info_, auto_area_, juce::Justification::centredLeft);
@@ -553,10 +573,11 @@ public:
     {
         auto r = getLocalBounds().reduced(14);
         preview_area_ = r.removeFromTop(80);
-        r.removeFromTop(8);
+        show_header_ = r.removeFromTop(14).removeFromLeft(36);
         for (std::size_t i = 0; i < fields_.size(); ++i) {
             auto row = r.removeFromTop(28);
-            labels_[i]->setBounds(row.removeFromLeft(90));
+            shows_[i]->setBounds(row.removeFromLeft(36).reduced(4, 2));
+            labels_[i]->setBounds(row.removeFromLeft(80));
             row.removeFromLeft(6);
             fields_[i]->setBounds(row.reduced(0, 2));
             r.removeFromTop(2);
@@ -577,8 +598,17 @@ public:
     }
 
     juce::TextEditor title_, subtitle_, composer_, arranger_, lyricist_, date_, revision_, copyright_, tempo_text_;
+    /// The show switches, one per field (title first).
+    std::vector<std::unique_ptr<juce::ToggleButton>> shows_;
 
 private:
+    bool shown(std::size_t i) const { return i < shows_.size() && shows_[i]->getToggleState(); }
+    /// A hidden line's field is dimmed (its text is kept).
+    void refresh_shown()
+    {
+        for (std::size_t i = 0; i < shows_.size() && i < fields_.size(); ++i) fields_[i]->setAlpha(shown(i) ? 1.0f : 0.45f);
+        repaint();
+    }
     void close()
     {
         if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed();
@@ -589,7 +619,7 @@ private:
     juce::ToggleButton show_tempo_, bold_, italic_, caps_, muted_;
     juce::Slider size_;
     juce::TextButton ok_{"Set"}, cancel_{"Cancel"};
-    juce::Rectangle<int> preview_area_, auto_area_;
+    juce::Rectangle<int> preview_area_, auto_area_, show_header_;
     juce::String auto_info_;
 };
 
@@ -603,7 +633,7 @@ juce::Component::SafePointer<dialogs::ToolWindow>& score_info_window()
 
 void show_score_info(AppContext& context)
 {
-    dialogs::show_tool(score_info_window(), "Score Info", 560, 560, [&context] { return new ScoreInfoPanel(context); });
+    dialogs::show_tool(score_info_window(), "Sheet Info", 560, 590, [&context] { return new ScoreInfoPanel(context); });
 }
 
 }  // namespace vcc::desktop
