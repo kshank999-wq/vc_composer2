@@ -3,6 +3,7 @@
 #include "ui/MainComponent.h"
 
 #include "ui/console/RackGear.h"
+#include "ui/console/SectionZoom.h"
 #include "ui/SteadyWindow.h"
 
 #include "ui/composer/CircleOfFifths.h"
@@ -516,6 +517,7 @@ MainComponent::~MainComponent()
     context_.engine.on_recording_finished = nullptr;
     plugin_windows_.clear();
     console::close_racks();
+    console::close_section_zooms();
     context_.show_insert_window = nullptr;
     context_.capture_plugin_states = nullptr;
     context_.show_comment = nullptr;

@@ -1368,6 +1368,7 @@ public:
     /// Follows the document: new units when the inserts changed, else new values.
     void refresh()
     {
+        getProperties().set("capacity", capacity_);
         if (signature() != signature_) rebuild();
         else
             for (auto& u : units_) u->refresh();
@@ -1385,9 +1386,9 @@ public:
             for (float y = 6.0f; y < rail.getBottom(); y += static_cast<float>(kOneU) / 3.0f)
                 g.fillRect(juce::Rectangle<float>(7.0f, 7.0f).withCentre({rail.getCentreX(), y}));
         }
-        // The empty bay.
-        if (!bay_.isEmpty()) {
-            const auto r = bay_.toFloat();
+        // The empty bays: one for each slot not yet filled.
+        for (const auto& bay : bays_) {
+            const auto r = bay.toFloat();
             paint_plate(g, r, juce::Colour(0xff1b1d20));
             paint_ears(g, r, juce::Colour(0xff1b1d20));
             g.setColour(juce::Colours::black.withAlpha(0.6f));
@@ -1396,11 +1397,25 @@ public:
             hw::paint::silk(g, "+ ADD UNIT", r.withTrimmedRight(static_cast<float>(kEar) + 12.0f).withTrimmedLeft(r.getWidth() - 160.0f),
                             11.0f, juce::Justification::centredRight, hw::tok::text_bright);
         }
+        // Under them: a key to make the rack bigger (another empty bay).
+        if (!expand_.isEmpty()) {
+            const auto r = expand_.toFloat();
+            hw::paint::keycap(g, r.reduced(0.0f, 2.0f), false);
+            hw::paint::silk(g, juce::String(juce::CharPointer_UTF8("\xe2\x96\xbc  EXPAND RACK  -  ADD A BAY")), r, 10.0f,
+                            juce::Justification::centred, hw::tok::text_bright);
+        }
     }
 
     void mouseUp(const juce::MouseEvent& e) override
     {
-        if (!bay_.contains(e.getPosition()) || e.mouseWasDraggedSinceMouseDown()) return;
+        if (e.mouseWasDraggedSinceMouseDown()) return;
+        if (expand_.contains(e.getPosition())) {
+            expand();
+            return;
+        }
+        bool on_bay = false;
+        for (const auto& bay : bays_) on_bay = on_bay || bay.contains(e.getPosition());
+        if (!on_bay) return;
         const auto* list = inserts_of(context_, owner_);
         show_insert_menu(context_, owner_, list ? static_cast<int>(list->size()) : 0, *this);
     }
@@ -1412,14 +1427,16 @@ public:
             u->setBounds(0, y, getWidth(), u->getHeight());
             y += u->getHeight();
         }
-        bay_ = has_bay_ ? juce::Rectangle<int>(0, y + 4, getWidth(), kOneU / 2) : juce::Rectangle<int>();
+        bays_.clear();
+        for (int i = 0; i < free_bays_; ++i) bays_.emplace_back(0, y + 4 + i * (kOneU / 2 + 4), getWidth(), kOneU / 2);
+        expand_ = {kEar, y + 4 + free_bays_ * (kOneU / 2 + 4) + 2, getWidth() - 2 * kEar, kExpand};
     }
 
     int content_height() const
     {
         int h = 0;
         for (auto& u : units_) h += u->getHeight();
-        return h + (has_bay_ ? kOneU / 2 + 8 : 4);
+        return h + free_bays_ * (kOneU / 2 + 4) + 8 + kExpand + 4;
     }
 
 private:
@@ -1443,7 +1460,9 @@ private:
             else units_.push_back(std::make_unique<GearUnit>(context_, owner_, i, slot));
             addAndMakeVisible(*units_.back());
         }
-        has_bay_ = n < 5;
+        capacity_ = std::max(capacity_, n);
+        free_bays_ = std::max(0, capacity_ - n);
+        getProperties().set("bays", free_bays_);
         setSize(kRackWidth, content_height());
         resized();
         repaint();
@@ -1467,8 +1486,22 @@ private:
     std::string owner_;
     std::vector<std::unique_ptr<RackUnit>> units_;
     std::string signature_;
-    bool has_bay_ = false;
-    juce::Rectangle<int> bay_;
+    int free_bays_ = 0;
+    int capacity_ = 5;  ///< Bays in the rack: five to start, more when expanded.
+    std::vector<juce::Rectangle<int>> bays_;
+    juce::Rectangle<int> expand_;
+    static constexpr int kExpand = 24;
+
+public:
+    /// The rack grew (the window fits it).
+    std::function<void()> on_grew;
+    /// Adds an empty bay at the bottom, for more gear.
+    void expand()
+    {
+        ++capacity_;
+        rebuild();
+        if (on_grew) on_grew();
+    }
 };
 
 class RackWindow final : public juce::DocumentWindow {
@@ -1483,6 +1516,11 @@ public:
         viewport_.setScrollBarsShown(true, false);
         viewport_.setScrollBarThickness(10);
         setContentNonOwned(&viewport_, false);
+        content_.on_grew = [this] {
+            fit();
+            // Show the new bay.
+            viewport_.setViewPosition(0, std::max(0, content_.getHeight() - viewport_.getHeight()));
+        };
         retitle();
         fit();
         setVisible(true);

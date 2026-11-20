@@ -1,4 +1,5 @@
 #include "ui/console/ConsoleStrip.h"
+#include "ui/console/SectionZoom.h"
 
 #include <algorithm>
 #include <map>
@@ -217,6 +218,12 @@ struct Strip::Panel final : juce::Component {
         else strip.layout_bottom();
     }
     void mouseDown(const juce::MouseEvent& e) override { strip.panel_mouse_down(e.getEventRelativeTo(this)); }
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        // The titles are keys: the pointing hand over them.
+        setMouseCursor(top && strip.heading_at(e.getPosition()) >= 0 ? juce::MouseCursor::PointingHandCursor
+                                                                    : juce::MouseCursor::NormalCursor);
+    }
     Strip& strip;
     bool top;
 };
@@ -1168,8 +1175,14 @@ void Strip::paint_top(juce::Graphics& g, juce::Rectangle<int> bounds)
     if (number_ > 0 && is_track())
         print_text(g, juce::String(number_), {14.0f, 3.5f, w - 28.0f, 9.0f}, 8.0f, juce::Justification::centred, paint::print_dim);
     for (const auto& p : placed_) {
+        // The title is a key: a raised plate behind it (click to enlarge).
+        const auto key = juce::Rectangle<float>(4.0f, static_cast<float>(p.y) + 1.0f, w - 8.0f, 10.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.07f));
+        g.fillRoundedRectangle(key, 2.5f);
+        g.setColour(juce::Colours::black.withAlpha(0.45f));
+        g.drawRoundedRectangle(key.reduced(0.5f), 2.5f, 0.8f);
         print_heading(g, section_title(p.section), {2.0f, static_cast<float>(p.y) + 1.0f, w - 4.0f, 10.0f},
-                      paint::print.withAlpha(0.9f));
+                      paint::print.withAlpha(0.95f));
         const float bottom = static_cast<float>(p.y + p.height);
         g.setColour(juce::Colours::black.withAlpha(0.5f));
         g.fillRect(0.0f, bottom - 1.0f, w, 1.0f);
@@ -1242,8 +1255,30 @@ void Strip::paint_bottom(juce::Graphics& g, juce::Rectangle<int> bounds)
     g.fillRect(w - 1.0f, 0.0f, 1.0f, r.getHeight());
 }
 
+int Strip::heading_at(juce::Point<int> p) const
+{
+    for (const auto& pl : placed_)
+        if (p.y >= pl.y && p.y < pl.y + kHeading) return static_cast<int>(pl.section);
+    return -1;
+}
+
+juce::Rectangle<int> Strip::heading_rect(Section s) const
+{
+    for (const auto& pl : placed_)
+        if (pl.section == s) return {0, pl.y, top_ ? top_->getWidth() : layout_.strip_width(), kHeading};
+    return {};
+}
+
 void Strip::panel_mouse_down(const juce::MouseEvent& e)
 {
+    if (e.eventComponent == top_.get() && !e.mods.isPopupMenu()) {
+        if (const int s = heading_at(e.getPosition()); s >= 0) {
+            const auto section = static_cast<Section>(s);
+            if (on_heading) on_heading(section);
+            else toggle_section_zoom(context_, kind_, id_, section, fx_buses_, number_);
+            return;
+        }
+    }
     if (is_track()) context_.session.select_track(id_);
     if (e.mods.isPopupMenu()) show_name_menu();
 }

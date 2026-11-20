@@ -6,6 +6,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -59,6 +60,14 @@ public:
 
     juce::Component& top() noexcept;
     juce::Component& bottom() noexcept;
+    /// A section's title was clicked (the titles are keys). Unset: the
+    /// section opens enlarged in a floating window, or closes when open
+    /// (SectionZoom.h); the inserts open the rack of gear.
+    std::function<void(Section)> on_heading;
+    /// A section's title on the top panel (empty when it is not shown).
+    juce::Rectangle<int> heading_rect(Section s) const;
+    const std::vector<FxBus>& fx_buses() const noexcept { return fx_buses_; }
+    int number() const noexcept { return number_; }
     /// The fader's throw on screen (the check measures proportions with it).
     juce::Rectangle<int> fader_bounds() const;
     Kind kind() const noexcept { return kind_; }
@@ -107,6 +116,8 @@ private:
     void layout_top();
     void layout_bottom();
     void panel_mouse_down(const juce::MouseEvent& e);
+    /// The section whose title is at `p` on the top panel, or -1.
+    int heading_at(juce::Point<int> p) const;
     juce::Colour panel_colour() const;
 
     void setup_controls();

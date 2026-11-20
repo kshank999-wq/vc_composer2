@@ -49,6 +49,7 @@
 #include "ui/hw/HwGallery.h"
 #include "ui/console/MixActions.h"
 #include "ui/console/RackGear.h"
+#include "ui/console/SectionZoom.h"
 #include "audio/DynamicEq.h"
 #include "audio/ChannelDsp.h"
 #include "ui/console/ConsoleStrip.h"
@@ -6618,6 +6619,127 @@ void dyneq_checks(MainWindow& window, const juce::File& dir)
     pump(60);
 }
 
+/// Full-screen mixer: a section's title opens it enlarged in a floating
+/// window (live controls), again puts it back; INSERTS opens the rack.
+void section_zoom_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto track = session.add_audio_track("Cello Solo", false);
+    session.update_track_mix(track, "gear", [](project::Track& t) {
+        project::InsertSlot slot;
+        slot.kind = "compressor";
+        slot.suggestion = false;
+        t.inserts.push_back(slot);
+    });
+    main.set_mixer_full(true);
+    pump(300);
+    auto* full = main.full_console();
+    auto* strip = full ? full->view().strip_for(track) : nullptr;
+    if (!strip) {
+        check(false, "the full-screen mixer has the track's strip");
+        return;
+    }
+    auto click_title = [&](console::Section sec) {
+        auto& top = strip->top();
+        const auto r = strip->heading_rect(sec);
+        const auto c = r.getCentre().toFloat();
+        top.mouseDown(mouse_event(top, c, c, false));
+        top.mouseUp(mouse_event(top, c, c, false));
+        pump(200);
+    };
+    const auto eq_title = strip->heading_rect(console::Section::Eq);
+    click_title(console::Section::Eq);
+    auto* zoom = console::section_zoom_window(track, console::Section::Eq);
+    auto* content = zoom ? zoom->getContentComponent() : nullptr;
+    check(!eq_title.isEmpty() && zoom && zoom->isVisible() && content && content->getWidth() >= 3 * strip->top().getWidth() - 2,
+          "clicking EQUALISER on a strip opens it three times the size in a floating window (" +
+              (content ? juce::String(content->getWidth()) + " x " + juce::String(content->getHeight()) : juce::String("none")) + ")");
+    if (zoom && content) {
+        shoot(*zoom, dir, "35c-mixer-section-zoom");
+        // Its knobs are the strip's own: turning one changes the track.
+        std::vector<console::Knob*> knobs;
+        std::function<void(juce::Component&)> walk = [&](juce::Component& c) {
+            if (auto* kn = dynamic_cast<console::Knob*>(&c); kn && kn->isVisible()) knobs.push_back(kn);
+            for (auto* k : c.getChildren()) walk(*k);
+        };
+        walk(*content);
+        const auto before = session.data().find_track(track)->strip;
+        if (!knobs.empty()) {
+            // A turn of the first knob (the high band's gain), as the mouse makes one.
+            auto* k = knobs.front();
+            if (k->on_start) k->on_start();
+            if (k->on_change) k->on_change(k->value() + 6.0);
+            if (k->on_end) k->on_end();
+        }
+        pump(100);
+        const auto after = session.data().find_track(track)->strip;
+        const bool changed = !(after.hf.gain_db == before.hf.gain_db && after.hf.freq == before.hf.freq && after.hmf.gain_db == before.hmf.gain_db &&
+                               after.hmf.freq == before.hmf.freq && after.lmf.gain_db == before.lmf.gain_db && after.lf.gain_db == before.lf.gain_db &&
+                               after.lf.freq == before.lf.freq && after.hmf.q == before.hmf.q && after.lmf.freq == before.lmf.freq &&
+                               after.lmf.q == before.lmf.q);
+        check(knobs.size() >= 8 && changed, "the enlarged EQ's knobs work the track's EQ (" + juce::String(static_cast<int>(knobs.size())) + " knobs)");
+    }
+    click_title(console::Section::Eq);
+    check(console::section_zoom_window(track, console::Section::Eq) == nullptr, "clicking the title again puts it back into the mixer");
+    // INSERTS: the rack, with an ADD UNIT bay for every empty slot.
+    click_title(console::Section::Inserts);
+    auto* rack = console::rack_window(track);
+    juce::Component* rack_content = nullptr;
+    if (rack) {
+        std::function<juce::Component*(juce::Component&)> find = [&](juce::Component& c) -> juce::Component* {
+            if (c.getComponentID() == "rack_content") return &c;
+            for (auto* k : c.getChildren())
+                if (auto* f = find(*k)) return f;
+            return nullptr;
+        };
+        rack_content = find(*rack);
+    }
+    const int bays = rack_content ? static_cast<int>(rack_content->getProperties()["bays"]) : -1;
+    check(rack && rack->isVisible() && bays == 4, "clicking INSERTS opens the strip's rack, an ADD UNIT bay for each of the 4 empty slots (" +
+                                                       juce::String(bays) + ")");
+    if (rack) shoot(*rack, dir, "35d-mixer-inserts-rack");
+    // EXPAND RACK adds a bay at the bottom; the rack holds more than five units.
+    if (rack_content) {
+        const int h_before = rack_content->getHeight();
+        const auto expand_at = juce::Point<float>(static_cast<float>(rack_content->getWidth() / 2),
+                                                  static_cast<float>(rack_content->getHeight() - 14));
+        rack_content->mouseDown(mouse_event(*rack_content, expand_at, expand_at, false));
+        rack_content->mouseUp(mouse_event(*rack_content, expand_at, expand_at, false));
+        pump(100);
+        const int bays_now = static_cast<int>(rack_content->getProperties()["bays"]);
+        check(bays_now == 5 && rack_content->getHeight() > h_before,
+              "EXPAND RACK adds another empty bay at the bottom (" + juce::String(bays_now) + " empty bays)");
+        session.update_track_mix(track, "more gear", [](project::Track& t) {
+            for (const char* k : {"eq", "gate", "delay", "reverb", "limiter"}) {
+                project::InsertSlot slot;
+                slot.kind = k;
+                slot.suggestion = false;
+                t.inserts.push_back(slot);
+            }
+        });
+        console::show_rack(ctx, track, 5);
+        pump(200);
+        std::function<juce::Component*(juce::Component&, const juce::String&)> by_id = [&](juce::Component& c, const juce::String& id) -> juce::Component* {
+            if (c.getComponentID() == id) return &c;
+            for (auto* k : c.getChildren())
+                if (auto* f = by_id(*k, id)) return f;
+            return nullptr;
+        };
+        auto* sixth = rack ? by_id(*rack, "gear_5") : nullptr;
+        check(sixth != nullptr && sixth->getTitle() == "VC Limiter" && static_cast<int>(rack_content->getProperties()["bays"]) == 0,
+              "a sixth unit fills the added bay (VC Limiter, insert 6)");
+        if (rack) shoot(*rack, dir, "35e-rack-expanded");
+    }
+    click_title(console::Section::Inserts);
+    check(rack && !rack->isVisible(), "clicking INSERTS again puts the rack away");
+    main.set_mixer_full(false);
+    pump(100);
+}
+
 void slur_tie_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -12432,6 +12554,7 @@ int main(int argc, char** argv)
                 {"slur_tie_checks", slur_tie_checks},
                 {"rack_gear_checks", rack_gear_checks},
                 {"dyneq_checks", dyneq_checks},
+                {"section_zoom_checks", section_zoom_checks},
                 {"producer_track_checks", producer_track_checks},
                 {"mixer_popout_checks", mixer_popout_checks},
                 {"account_checks", account_checks}};
@@ -13072,6 +13195,8 @@ int main(int argc, char** argv)
         rack_gear_checks(window, dir);
         section("dyneq_checks");
         dyneq_checks(window, dir);
+        section("section_zoom_checks");
+        section_zoom_checks(window, dir);
         section("mixer_popout_checks");
         mixer_popout_checks(window, dir);
         section("sidechain_checks");
