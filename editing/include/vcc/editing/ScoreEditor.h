@@ -259,6 +259,16 @@ public:
     EditResult add_hairpin(std::size_t staff, notation::Ticks start, notation::Ticks end, notation::HairpinKind kind,
                            int quiet = -1);
     EditResult start_slur();
+    /// A slur from one note to another (picked in either order): from the
+    /// earlier's start to the later's, on the earlier's staff and voice.
+    EditResult add_slur_between(notation::EventId first, notation::EventId second);
+    /// Ties one note to another of the same pitch that follows it.
+    EditResult tie_notes(notation::EventId first, notation::EventId second);
+    /// Which marking a click removes.
+    enum class MarkingKind { Any, Dynamic, Hairpin, Slur, Tie };
+    /// Removes the marking of that kind nearest `tick` on the staff (a slur
+    /// or hairpin under it; a tie leaving a note there). One undo step.
+    EditResult remove_marking_of(MarkingKind kind, std::size_t staff_index, notation::Ticks tick, notation::Ticks tolerance);
 
     /// Lengthens or shortens the span started most recently, by the entry
     /// duration. This is how spec 5.3's "hairpins that can be stretched

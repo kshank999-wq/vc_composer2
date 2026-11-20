@@ -730,6 +730,7 @@ void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* 
     }
     if (!editor_ || strip.track_id() != editing_track_) return;
     if (id != notation::kInvalidEventId) {
+        if (pick_note(id)) return;
         handle(editor_->select_and_follow(id));
         return;
     }
@@ -817,11 +818,12 @@ void ComposerView::marking_clicked(Strip& strip, std::size_t staff, Ticks tick)
     context_.session.select_track(strip.track_id());
     if (!editor_ || strip.track_id() != editing_track_) return;
     juce::PopupMenu m;
-    m.addSectionHeader("Marking");
+    const auto role = strip.view().last_marking_role();
+    const int kind = role == engraving::ItemRole::Slur ? 3 : role == engraving::ItemRole::Tie ? 4 : 0;
+    m.addSectionHeader(kind == 3 ? "Slur" : kind == 4 ? "Tie" : "Marking");
     juce::Component::SafePointer<ComposerView> self(this);
-    m.addItem("Remove", [self, staff, tick] {
-        if (self && self->editor_)
-            self->handle(self->editor_->remove_marking_near(staff, tick, notation::kTicksPerQuarter / 2));
+    m.addItem(kind == 3 ? "Remove Slur" : kind == 4 ? "Remove Tie" : "Remove", [self, kind, staff, tick] {
+        if (self) self->remove_marking_kind(kind, staff, tick);
     });
     if (marking_menu_hook) {
         marking_menu_hook(staff, tick);  // the checks choose without a menu
@@ -977,6 +979,25 @@ void ComposerView::handle(const editing::EditResult& result)
 
 void ComposerView::perform(Command command)
 {
+    // Slur and Tie: across the notes selected, or by picking - the first note, then the second.
+    if ((command == Command::StartSlur || command == Command::ToggleTie) && editor_) {
+        std::vector<const notation::ScoreNote*> sel;
+        for (auto id : editor_->selection())
+            if (const auto* n = working_.find_note(id); n && !n->is_rest) sel.push_back(n);
+        std::sort(sel.begin(), sel.end(), [](auto* a, auto* b) { return a->start_tick < b->start_tick; });
+        const bool slur = command == Command::StartSlur;
+        if (sel.size() >= 2 && (slur || sel.size() == 2)) {
+            handle(slur ? editor_->add_slur_between(sel.front()->id, sel.back()->id)
+                        : editor_->tie_notes(sel.front()->id, sel.back()->id));
+            return;
+        }
+        pick_span_ = slur ? 1 : 2;
+        pick_first_ = sel.size() == 1 ? sel.front()->id : notation::kInvalidEventId;
+        context_.status(juce::String(slur ? "Slur" : "Tie") +
+                        (pick_first_ == notation::kInvalidEventId ? ": click the first note, then the second (Esc cancels)"
+                                                                    : ": now click the note it goes to (Esc cancels)"));
+        return;
+    }
     switch (command) {
         case Command::Undo: context_.session.undo(); return;
         case Command::Redo: context_.session.redo(); return;
@@ -1639,6 +1660,12 @@ void ComposerView::ask_for_input(Command command)
 bool ComposerView::keyPressed(const juce::KeyPress& key)
 {
     note_activity();
+    if (key == juce::KeyPress::escapeKey && pick_span_ != 0) {
+        pick_span_ = 0;
+        pick_first_ = notation::kInvalidEventId;
+        context_.status("Cancelled");
+        return true;
+    }
     if (key == juce::KeyPress::escapeKey && hairpin_drawing_ != 0) {
         set_hairpin_drawing(0);
         return true;
@@ -1917,6 +1944,35 @@ Ticks ComposerView::snap_entry_tick(Ticks raw, std::size_t staff) const
         if (under - d >= 0 && !taken(under - d)) return start + (under - d) * grid;
     }
     return start + under * grid;
+}
+
+// --- Slurs and ties by picking -----------------------------------------------------------------------
+
+bool ComposerView::pick_note(notation::EventId id)
+{
+    if (pick_span_ == 0 || !editor_) return false;
+    const auto* n = working_.find_note(id);
+    if (!n || n->is_rest) return true;  // a rest is not a note to join
+    if (pick_first_ == notation::kInvalidEventId) {
+        pick_first_ = id;
+        handle(editor_->select_and_follow(id));
+        context_.status(juce::String(pick_span_ == 1 ? "Slur" : "Tie") + ": now click the note it goes to");
+        return true;
+    }
+    const auto first = pick_first_;
+    const bool slur = pick_span_ == 1;
+    pick_span_ = 0;
+    pick_first_ = notation::kInvalidEventId;
+    handle(slur ? editor_->add_slur_between(first, id) : editor_->tie_notes(first, id));
+    return true;
+}
+
+void ComposerView::remove_marking_kind(int kind, std::size_t staff, Ticks tick)
+{
+    if (!editor_) return;
+    using K = editing::ScoreEditor::MarkingKind;
+    const K k = kind == 3 ? K::Slur : kind == 4 ? K::Tie : K::Any;
+    handle(editor_->remove_marking_of(k, staff, tick, notation::kTicksPerQuarter / 2));
 }
 
 }  // namespace vcc::desktop

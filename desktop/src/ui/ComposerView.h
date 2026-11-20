@@ -96,6 +96,10 @@ public:
     /// blank bar starts on beat 1; a slot already holding a note gives way
     /// to the nearest empty one.
     Ticks snap_entry_tick(Ticks raw, std::size_t staff) const;
+    /// Slur (1) or Tie (2) waiting for its notes to be clicked: the first, then the second.
+    int picking_span() const noexcept { return pick_span_; }
+    /// The checks: removes the slur or tie at a place, as its click menu does.
+    void remove_marking_kind(int kind, std::size_t staff, Ticks tick);
     /// The checks: answers the Send to Track dialog (the track to send to).
     std::function<std::string()> send_target_hook;
     /// The editor's cursor (value, dots, rest, voice), when a track is being written on.
@@ -214,6 +218,11 @@ private:
     bool quick_playing_ = false, quick_was_playing_ = false, hear_entry_ = true;
     /// The quiet level of new hairpins (the numbers under < and >), remembered.
     int cresc_level_ = 20, dim_level_ = 20;
+    /// Slur or tie by picking: 0 none, 1 slur, 2 tie; the first note picked.
+    int pick_span_ = 0;
+    notation::EventId pick_first_ = notation::kInvalidEventId;
+    /// A note clicked while picking a slur's or tie's notes. True when it took the click.
+    bool pick_note(notation::EventId id);
     Ticks quick_return_ = 0;
     void sound_note(int midi);
     juce::Slider zoom_w_, zoom_h_;

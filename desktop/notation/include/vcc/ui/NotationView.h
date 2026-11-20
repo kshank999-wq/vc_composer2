@@ -136,6 +136,8 @@ public:
     /// A dynamic or hairpin was clicked: its staff and the tick under the
     /// click (markings belong to no note, so they are found by place).
     std::function<void(std::size_t staff_index, notation::Ticks tick)> on_marking_clicked;
+    /// What the last marking click hit: a dynamic, hairpin, slur or tie.
+    engraving::ItemRole last_marking_role() const noexcept { return marking_role_; }
 
     /// Drawing a hairpin: while set (1 crescendo, 2 diminuendo; 0 off), a
     /// press on the staff marks where it starts and a drag stretches it to
@@ -222,6 +224,7 @@ private:
 
     std::vector<notation::EventId> selection_;
     bool box_select_ = false, boxing_ = false, rests_as_staff_ = false;
+    engraving::ItemRole marking_role_ = engraving::ItemRole::Dynamic;
     engraving::InsertionPoint box_click_;
 
     notation::Ticks playhead_tick_ = 0;

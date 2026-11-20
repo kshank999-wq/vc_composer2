@@ -87,6 +87,18 @@ HitResult hit_test(const LayoutResult& layout, const Point& point, double tolera
         consider(item.bounds.expanded(tolerance), item.role, item.source_id);
     for (const LineItem& item : layout.display_list.lines)
         consider(bounds_of(item, tolerance), item.role, item.source_id);
+    // Slurs and ties: near any point along the curve (not its whole box,
+    // which would swallow the notes under it).
+    for (const CurveItem& item : layout.display_list.curves) {
+        for (int i = 0; i <= 16; ++i) {
+            const double t = i / 16.0, u = 1.0 - t;
+            const double x = u * u * u * item.start.x + 3 * u * u * t * item.control_one.x + 3 * u * t * t * item.control_two.x +
+                             t * t * t * item.end.x;
+            const double y = u * u * u * item.start.y + 3 * u * u * t * item.control_one.y + 3 * u * t * t * item.control_two.y +
+                             t * t * t * item.end.y;
+            consider(Rect{x - 0.35, y - 0.35, 0.7, 0.7}.expanded(tolerance), item.role, item.source_id);
+        }
+    }
     for (const QuadItem& item : layout.display_list.quads) {
         Rect bounds{item.corners[0].x, item.corners[0].y, 0.0, 0.0};
         for (const Point& corner : item.corners)

@@ -1327,6 +1327,105 @@ EditResult ScoreEditor::start_slur()
     return applied("Started a slur");
 }
 
+EditResult ScoreEditor::add_slur_between(notation::EventId first, notation::EventId second)
+{
+    const notation::ScoreNote* a = score_->find_note(first);
+    const notation::ScoreNote* b = score_->find_note(second);
+    if (a == nullptr || b == nullptr || first == second) return refused("Pick two different notes");
+    if (b->start_tick < a->start_tick) std::swap(a, b);
+    const std::size_t staff = score_->staff_index_of(a->id);
+    if (staff != score_->staff_index_of(b->id)) return refused("A slur joins notes on one staff");
+    notation::Slur slur;
+    slur.start_tick = a->start_tick;
+    slur.end_tick = b->end_tick();  // a slur covers the notes that start before its end
+    slur.voice = a->voice;
+    slur.staff = static_cast<std::uint8_t>(std::min<std::size_t>(staff, 255));
+    if (!slur.is_valid()) return refused("Those notes are at the same time: a slur joins one note to a later one");
+    EditStep step;
+    step.target = EditStep::Target::Slur;
+    step.has_after = true;
+    step.slur_after = slur;
+    history_.begin("Slur", cursor_);
+    if (!apply_step(*score_, step, true)) {
+        history_.abandon();
+        return refused("The slur was rejected by the score");
+    }
+    history_.record(step);
+    history_.commit(cursor_);
+    return applied("Slurred");
+}
+
+EditResult ScoreEditor::tie_notes(notation::EventId first, notation::EventId second)
+{
+    const notation::ScoreNote* a = score_->find_note(first);
+    const notation::ScoreNote* b = score_->find_note(second);
+    if (a == nullptr || b == nullptr || first == second || a->is_rest || b->is_rest) return refused("Pick two notes to tie");
+    if (b->start_tick < a->start_tick) std::swap(a, b);
+    if (notation::midi_note_number(a->pitch) != notation::midi_note_number(b->pitch))
+        return refused("A tie joins two notes of the same pitch (use a slur for different notes)");
+    if (b->start_tick != a->end_tick()) return refused("A tie joins a note to the one right after it");
+    notation::ScoreNote updated = *a;
+    if (updated.tied_to_next) return nothing("Those notes are already tied");
+    updated.tied_to_next = true;
+    history_.begin("Tie", cursor_);
+    if (!modify_recorded(*a, updated)) {
+        history_.abandon();
+        return refused("The tie could not be made");
+    }
+    history_.commit(cursor_);
+    return applied("Tied");
+}
+
+EditResult ScoreEditor::remove_marking_of(MarkingKind kind, std::size_t staff_index, notation::Ticks tick, notation::Ticks tolerance)
+{
+    if (kind == MarkingKind::Any || kind == MarkingKind::Dynamic || kind == MarkingKind::Hairpin) {
+        if (kind == MarkingKind::Any) {
+            auto r = remove_marking_near(staff_index, tick, tolerance);
+            if (r.status == EditStatus::Applied) return r;
+        } else {
+            return remove_marking_near(staff_index, tick, tolerance);
+        }
+    }
+    const auto staff = static_cast<std::uint8_t>(std::min<std::size_t>(staff_index, 255));
+    if (kind == MarkingKind::Slur || kind == MarkingKind::Any) {
+        const notation::Slur* found = nullptr;
+        for (const auto& sl : score_->slurs())
+            if (sl.staff == staff && tick >= sl.start_tick - tolerance && tick <= sl.end_tick + tolerance &&
+                (found == nullptr || sl.end_tick - sl.start_tick < found->end_tick - found->start_tick))
+                found = &sl;
+        if (found != nullptr) {
+            EditStep step;
+            step.target = EditStep::Target::Slur;
+            step.had_before = true;
+            step.slur_before = *found;
+            history_.begin("Remove slur", cursor_);
+            if (!apply_step(*score_, step, true)) {
+                history_.abandon();
+                return refused("The slur could not be removed");
+            }
+            history_.record(step);
+            history_.commit(cursor_);
+            return applied("Slur removed");
+        }
+        if (kind == MarkingKind::Slur) return nothing("No slur there");
+    }
+    // A tie: the note it leaves, under the click.
+    const notation::ScoreNote* tied = nullptr;
+    if (staff_index < score_->staff_count())
+        for (const auto& n : score_->notes(staff_index))
+            if (n.tied_to_next && tick >= n.start_tick - tolerance && tick <= n.end_tick() + tolerance) tied = &n;
+    if (tied == nullptr) return nothing("No tie there");
+    notation::ScoreNote updated = *tied;
+    updated.tied_to_next = false;
+    history_.begin("Remove tie", cursor_);
+    if (!modify_recorded(*tied, updated)) {
+        history_.abandon();
+        return refused("The tie could not be removed");
+    }
+    history_.commit(cursor_);
+    return applied("Tie removed");
+}
+
 bool ScoreEditor::has_active_span() const noexcept
 {
     return active_span_.kind != ActiveSpan::Kind::None;

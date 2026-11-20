@@ -1231,3 +1231,37 @@ VCC_TEST(selecting_a_note_by_pointer_takes_the_cursor_to_its_staff_and_voice)
 }
 
 VCC_TEST_MAIN("editing/Entry")
+
+VCC_TEST(a_slur_joins_two_picked_notes_and_a_click_on_it_removes_it)
+{
+    notation::Score score;
+    ScoreEditor editor(score);
+    const auto a = editor.insert_pitch(pitch_of(notation::Step::C, 4)).new_event;
+    const auto b = editor.insert_pitch(pitch_of(notation::Step::E, 4)).new_event;
+    const auto c = editor.insert_pitch(pitch_of(notation::Step::G, 4)).new_event;
+    // Picked last first: still from the earlier note to the later one, between them.
+    VCC_CHECK(editor.add_slur_between(c, a).succeeded());
+    VCC_CHECK_EQ(score.slurs().size(), std::size_t{1});
+    VCC_CHECK_EQ(score.slurs().front().start_tick, notation::Ticks{0});
+    VCC_CHECK_EQ(score.slurs().front().end_tick, 3 * kQuarter);
+    // A click on it (anywhere along it) takes it away; undo brings it back.
+    VCC_CHECK(editor.remove_marking_of(ScoreEditor::MarkingKind::Slur, 0, kQuarter, kQuarter / 2).succeeded());
+    VCC_CHECK(score.slurs().empty());
+    VCC_CHECK(editor.undo().succeeded());
+    VCC_CHECK_EQ(score.slurs().size(), std::size_t{1});
+    (void)b;
+}
+
+VCC_TEST(a_tie_joins_a_note_to_the_same_pitch_after_it_and_can_be_removed)
+{
+    notation::Score score;
+    ScoreEditor editor(score);
+    const auto a = editor.insert_pitch(pitch_of(notation::Step::D, 4)).new_event;
+    const auto b = editor.insert_pitch(pitch_of(notation::Step::D, 4)).new_event;
+    const auto c = editor.insert_pitch(pitch_of(notation::Step::F, 4)).new_event;
+    VCC_CHECK(!editor.tie_notes(b, c).succeeded());  // different pitches: refused
+    VCC_CHECK(editor.tie_notes(b, a).succeeded());   // picked in either order
+    VCC_CHECK(score.find_note(a)->tied_to_next);
+    VCC_CHECK(editor.remove_marking_of(ScoreEditor::MarkingKind::Tie, 0, kQuarter / 2, kQuarter / 2).succeeded());
+    VCC_CHECK(!score.find_note(a)->tied_to_next);
+}

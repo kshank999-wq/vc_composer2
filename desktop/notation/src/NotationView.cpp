@@ -371,6 +371,14 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
     engraving::HitResult hit = engraving::hit_test(layout_, point);
     if (rests_as_staff_ && hit.id != notation::kInvalidEventId && !event.mods.isPopupMenu())
         if (const auto* n = score_->find_note(hit.id); n && n->is_rest) hit = engraving::HitResult{};  // write over it
+    // A slur or tie clicked: its menu (Remove), even when it carries its note's id.
+    if (hit.hit && (hit.role == engraving::ItemRole::Slur || hit.role == engraving::ItemRole::Tie) && on_marking_clicked) {
+        marking_role_ = hit.role;
+        pressed_ = notation::kInvalidEventId;
+        const auto at = engraving::insertion_point_at(layout_, *score_, timeline_, point, 0);
+        on_marking_clicked(at.valid ? at.staff_index : 0, tick_at_x(static_cast<float>(event.x)));
+        return;
+    }
     if (hit.id != notation::kInvalidEventId && event.mods.isPopupMenu() && on_event_menu) {
         pressed_ = notation::kInvalidEventId;
         on_event_menu(hit.id);
@@ -386,8 +394,11 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
         return;
     }
     pressed_ = notation::kInvalidEventId;
-    if (hit.hit && (hit.role == engraving::ItemRole::Dynamic || hit.role == engraving::ItemRole::Hairpin) &&
+    if (hit.hit &&
+        (hit.role == engraving::ItemRole::Dynamic || hit.role == engraving::ItemRole::Hairpin ||
+         hit.role == engraving::ItemRole::Slur || hit.role == engraving::ItemRole::Tie) &&
         on_marking_clicked) {
+        marking_role_ = hit.role;
         const auto at = engraving::insertion_point_at(layout_, *score_, timeline_, point, 0);
         on_marking_clicked(at.valid ? at.staff_index : 0, tick_at_x(static_cast<float>(event.x)));
         return;

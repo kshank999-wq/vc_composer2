@@ -6227,6 +6227,94 @@ void cursor_start_checks(MainWindow& window, const juce::File& dir)
     }
 }
 
+/// Slurs and ties by picking two notes; a click on either takes it away.
+void slur_tie_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    session.new_empty();
+    const auto fl = session.add_track("Flute", "woodwinds.flute");
+    {
+        notation::Score sc = session.data().find_track(fl)->active_version()->score;
+        int i = 0;
+        for (int midi : {72, 74, 74, 76})
+            sc.insert_chord(0, (i++) * kTicksPerQuarter, notation::quarter(), {notation::spell_midi_note(midi, {})});
+        session.commit_score(fl, sc, "Write");
+    }
+    main.show_workspace(MainComponent::Workspace::Composer);
+    session.select_track(fl);
+    pump(200);
+    auto& composer = main.composer();
+    composer.set_note_entry(false);
+    pump(60);
+    auto ids = [&] {
+        std::vector<notation::EventId> out;
+        for (const auto& n : session.data().find_track(fl)->active_version()->score.notes(0))
+            if (!n.is_rest) out.push_back(n.id);
+        return out;
+    };
+    auto& view = composer.lane(0);
+    session.select_notes(fl, {});
+    pump(60);
+    // Slur: the key, then the first note, then the third.
+    composer.perform(composer::Command::StartSlur);
+    const bool picking = composer.picking_span() == 1;
+    auto n = ids();
+    if (view.on_event_clicked) {
+        view.on_event_clicked(n[0]);
+        view.on_event_clicked(n[2]);
+    }
+    pump(120);
+    const auto& slurs = session.data().find_track(fl)->active_version()->score.slurs();
+    check(picking && slurs.size() == 1 && slurs[0].start_tick == 0 && slurs[0].end_tick == 3 * kTicksPerQuarter,
+          "Slur: click the first note, then the second - it joins them (not the empty space after them)");
+    shoot(main, dir, "slur-picked");
+    // Tie: the two Ds.
+    session.select_notes(fl, {});
+    pump(60);
+    composer.perform(composer::Command::ToggleTie);
+    n = ids();
+    if (view.on_event_clicked) {
+        view.on_event_clicked(n[1]);
+        view.on_event_clicked(n[2]);
+    }
+    pump(120);
+    bool tied = false;
+    for (const auto& note : session.data().find_track(fl)->active_version()->score.notes(0))
+        tied = tied || (note.tied_to_next && note.start_tick == kTicksPerQuarter);
+    check(tied, "Tie: click the first note, then the one after it (same pitch) - they are tied");
+    // A click on the slur's curve offers to remove it.
+    {
+        bool asked = false;
+        int kind_seen = -1;
+        composer.marking_menu_hook = [&](std::size_t, Ticks) {
+            asked = true;
+            kind_seen = static_cast<int>(view.last_marking_role());
+        };
+        // Along the arc between the first and third notes: scan up from the heads.
+        for (const float frac : {0.5f, 0.35f, 0.65f}) {
+            const float x = view.x_of_tick(0) + (view.x_of_tick(2 * kTicksPerQuarter) - view.x_of_tick(0)) * frac + 4.0f;
+            for (float y = view.y_of_staff_position(0, 6.0); y > 2.0f && !asked; y -= 1.0f) {
+                const juce::Point<float> at(x, y);
+                view.mouseDown(mouse_event(view, at, at, false));
+                view.mouseUp(mouse_event(view, at, at, false));
+            }
+            if (asked) break;
+        }
+        composer.marking_menu_hook = nullptr;
+        check(asked && kind_seen == static_cast<int>(engraving::ItemRole::Slur), "the slur can be clicked: it offers Remove Slur");
+    }
+    composer.remove_marking_kind(3, 0, kTicksPerQuarter);
+    composer.remove_marking_kind(4, 0, kTicksPerQuarter + kTicksPerQuarter / 2);
+    pump(120);
+    bool any_tie = false;
+    for (const auto& note : session.data().find_track(fl)->active_version()->score.notes(0)) any_tie = any_tie || note.tied_to_next;
+    check(session.data().find_track(fl)->active_version()->score.slurs().empty() && !any_tie,
+          "Remove Slur and Remove Tie take them away (the notes stay)");
+}
+
 /// Return to Start: the playhead and every view back to the beginning.
 void return_to_start_checks(MainWindow& window, const juce::File&)
 {
@@ -11898,6 +11986,7 @@ int main(int argc, char** argv)
                 {"box_select_checks", box_select_checks},
                 {"cursor_start_checks", cursor_start_checks},
                 {"return_to_start_checks", return_to_start_checks},
+                {"slur_tie_checks", slur_tie_checks},
                 {"account_checks", account_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");
@@ -12530,6 +12619,8 @@ int main(int argc, char** argv)
         cursor_start_checks(window, dir);
         section("return_to_start_checks");
         return_to_start_checks(window, dir);
+        section("slur_tie_checks");
+        slur_tie_checks(window, dir);
         section("sidechain_checks");
         sidechain_checks(window, dir);
         section("page_view_checks");
