@@ -154,6 +154,9 @@ public:
     /// and letting go reports the notes inside it (`add`: Shift was held, to
     /// add them to the selection). A click without a drag is still a click.
     void set_box_select(bool on) { box_select_ = on; }
+    /// Writing: a click on a rest is a click on the staff there (a note
+    /// goes in its place), not a selection of the rest.
+    void set_rests_as_staff(bool on) { rests_as_staff_ = on; }
     std::function<void(std::vector<notation::EventId> ids, bool add)> on_box_selected;
     /// The notes whose heads touch this area (view coordinates).
     std::vector<notation::EventId> notes_in(juce::Rectangle<float> area);
@@ -218,7 +221,7 @@ private:
     const MusicFont* music_font_ = nullptr;
 
     std::vector<notation::EventId> selection_;
-    bool box_select_ = false, boxing_ = false;
+    bool box_select_ = false, boxing_ = false, rests_as_staff_ = false;
     engraving::InsertionPoint box_click_;
 
     notation::Ticks playhead_tick_ = 0;

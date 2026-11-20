@@ -530,6 +530,8 @@ void ComposerView::apply_view_settings()
         // Writing: the quill is the pointer over the staff that writes.
         // Select mode: a drag on empty staff draws a box that selects the notes in it.
         view.set_box_select(!note_entry_ && !chord_mode_);
+        // Writing: a click on a rest puts the note there (it is not a rest to select).
+        view.set_rests_as_staff(note_entry_ || chord_mode_);
         view.set_idle_cursor(note_entry_ && !chord_mode_ && s->track_id() == editing_track_
                                  ? composer_ui::IconKey::quill_cursor()
                                  : juce::MouseCursor(juce::MouseCursor::NormalCursor));
@@ -723,7 +725,8 @@ void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* 
     }
     if (point && point->valid) {
         editing::EditCursor c = editor_->cursor();
-        c.tick = point->tick;
+        // Not chord mode's free placement: the hidden grid of the note value.
+        c.tick = chord_mode_ ? point->tick : snap_entry_tick(point->tick, point->staff_index);
         c.staff_index = point->staff_index;
         editor_->set_cursor(c);
         if (chord_mode_) {
@@ -819,13 +822,10 @@ void ComposerView::marking_clicked(Strip& strip, std::size_t staff, Ticks tick)
 
 void ComposerView::note_released(Strip& strip, notation::EventId id)
 {
-    // Note entry: a note clicked again (not dragged) is taken away - no
-    // need to reach for Delete after a wrong note.
-    if (!editor_ || strip.track_id() != editing_track_ || !note_entry_ || chord_mode_) return;
-    const auto* n = working_.find_note(id);
-    if (n == nullptr || n->is_rest) return;
-    editor_->set_selection({id});
-    handle(editor_->delete_selection());
+    // A note clicked (not dragged) stays: it is selected, never erased by a
+    // click - Delete, Backspace or the right-click menu take notes away.
+    (void)strip;
+    (void)id;
 }
 
 void ComposerView::note_dragged(Strip& strip, notation::EventId id, const engraving::InsertionPoint& from,
@@ -1863,6 +1863,39 @@ void ComposerView::ask_send_selected_notes()
     o.useNativeTitleBar = false;
     o.resizable = false;
     o.launchAsync();
+}
+
+// --- The hidden entry grid ------------------------------------------------------------------------
+
+Ticks ComposerView::snap_entry_tick(Ticks raw, std::size_t staff) const
+{
+    if (!editor_ || staff >= working_.staff_count()) return raw;
+    const auto& cur = editor_->cursor();
+    Ticks grid = cur.duration.is_valid() ? cur.duration.ticks() : kTicksPerQuarter;
+    if (grid <= 0) grid = kTicksPerQuarter;
+    const auto bar = working_.measure_at(std::max<Ticks>(0, raw));
+    const Ticks start = bar.start_tick, length = bar.length_ticks > 0 ? bar.length_ticks : 4 * kTicksPerQuarter;
+    grid = std::min(grid, length);
+    const int slots = std::max<int>(1, static_cast<int>(length / grid));
+    // What is written in this bar (rests are room to write in).
+    bool blank = true;
+    auto taken = [&](int slot) {
+        const Ticks a = start + slot * grid, b = a + grid;
+        for (const auto& n : working_.notes(staff))
+            if (!n.is_rest && !n.grace && n.voice == cur.voice && n.start_tick < b && n.end_tick() > a) return true;
+        return false;
+    };
+    for (const auto& n : working_.notes(staff))
+        if (!n.is_rest && n.start_tick < start + length && n.end_tick() > start) blank = false;
+    if (blank) return start;  // a blank bar: beat 1
+    const int under = std::clamp(static_cast<int>((raw - start) / grid), 0, slots - 1);
+    if (!taken(under)) return start + under * grid;
+    // The nearest empty slot (later first on a tie); none empty: the one clicked.
+    for (int d = 1; d < slots; ++d) {
+        if (under + d < slots && !taken(under + d)) return start + (under + d) * grid;
+        if (under - d >= 0 && !taken(under - d)) return start + (under - d) * grid;
+    }
+    return start + under * grid;
 }
 
 }  // namespace vcc::desktop

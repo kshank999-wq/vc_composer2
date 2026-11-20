@@ -4454,18 +4454,18 @@ void chord_mode_checks(MainWindow& window, const juce::File& dir)
         engraving::InsertionPoint p;
         p.valid = true;
         p.staff_index = 0;
-        p.tick = 5 * Q;
+        p.tick = 5 * Q;  // in a blank bar 2: the note goes on its beat 1
         p.pitch = notation::Pitch{notation::Step::A, 4, 0};
         composer.set_chord_mode(false);
         if (composer.lane(0).on_staff_clicked) composer.lane(0).on_staff_clicked(p);  // a plain A4
         pump(50);
         composer.set_chord_mode(true);
     }
-    const bool had_a = notes_at(piano, 5 * Q) == "A4";
+    const bool had_a = notes_at(piano, 4 * Q) == "A4";
     const auto selected = composer.selected_notes().size();
     palette.replace_key().triggerClick();
     pump(50);
-    const auto replaced = notes_at(piano, 5 * Q);
+    const auto replaced = notes_at(piano, 4 * Q);
     check(had_a && selected == 1 && replaced == "C4 E4 G4" && session.undo_label() == "Enter chord C",
           "Replace sel. puts the chord in place of the selected note, as one step (" + replaced + ")");
 
@@ -6170,6 +6170,55 @@ void box_select_checks(MainWindow& window, const juce::File& dir)
     for (const auto& n : session.data().find_track(vln)->active_version()->score.notes(0)) left += n.is_rest ? 0 : 1;
     check(boxed == 4 && left == 0, "Delete removes the boxed notes (" + juce::String(static_cast<int>(boxed)) + " boxed, " +
                                      juce::String(left) + " left)");
+}
+
+/// The yellow entry cursor is where the next note goes: on beat 1 when a
+/// track is chosen or a bar's start is clicked, and drawn where that note lands.
+void cursor_start_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    ctx.engine.locate(0);
+    session.new_empty();
+    const auto fl = session.add_track("Flute", "woodwinds.flute");
+    main.show_workspace(MainComponent::Workspace::Composer);
+    session.select_track(fl);
+    pump(200);
+    auto& composer = main.composer();
+    composer.set_note_entry(true);
+    pump(80);
+    auto& view = composer.lane(0);
+    const auto start = composer.cursor();
+    check(start && start->tick == 0, "a chosen track's cursor starts on beat 1 of bar 1");
+    // A click just after the time signature: the note goes on beat 1, and
+    // the cursor waits after it for the next.
+    const float x0 = view.x_of_tick(0);
+    const float y = view.y_of_staff_position(0, 4.0);
+    view.mouseDown(mouse_event(view, {x0 + 2.0f, y}, {x0 + 2.0f, y}, false));
+    view.mouseUp(mouse_event(view, {x0 + 2.0f, y}, {x0 + 2.0f, y}, false));
+    pump(150);
+    Ticks first = -1;
+    for (const auto& n : session.data().find_track(fl)->active_version()->score.notes(0))
+        if (!n.is_rest && first < 0) first = n.start_tick;
+    const auto after = composer.cursor();
+    check(first == 0 && after && after->tick == kTicksPerQuarter,
+          "a click at the start of the bar writes on beat 1; the yellow cursor then marks where the next note goes");
+    shoot(main, dir, "cursor-start");
+    // Four quarters typed in: a bar of them, for the picture.
+    for (char k : {'d', 'e', 'f'}) composer.keyPressed(juce::KeyPress(k));
+    pump(150);
+    {
+        auto img = view.createComponentSnapshot(view.getLocalBounds().withWidth(std::min(view.getWidth(), 420)), true, 2.0f);
+        juce::PNGImageFormat png;
+        juce::FileOutputStream out(dir.getChildFile("cursor-bar.png"));
+        if (out.openedOk()) {
+            out.setPosition(0);
+            out.truncate();
+            png.writeImageToStream(img, out);
+        }
+    }
 }
 
 void staff_tools_checks(MainWindow& window, const juce::File& dir)
@@ -8754,15 +8803,31 @@ void note_mouse_checks(MainWindow& window, const juce::File& dir)
     auto placed = notes();
     check(placed.size() == 1, "a click on the staff places a note (" + juce::String(static_cast<int>(placed.size())) + ")");
     if (placed.size() != 1) return;
-    // ...goes away when it is clicked again.
+    // ...and stays when it is clicked again: a click never erases a note.
     auto head = view->notehead_bounds(placed[0].id);
     check(!head.isEmpty(), "its head is on screen");
     click(head.getCentre());
-    check(notes().empty(), "clicking the placed note again takes it away");
+    check(notes().size() == 1, "clicking a placed note again keeps it (no accidental erasing)");
     shoot(main, dir, "89-note-clicked-away", true);
+    // A click on a rest writes the note there, at the rest's beat.
+    {
+        const auto* t = session.data().find_track(track);
+        const notation::ScoreNote* rest = nullptr;
+        for (const auto& n : t->active_version()->score.notes(0))
+            if (n.is_rest && n.start_tick >= 2 * notation::kTicksPerQuarter && (!rest || n.start_tick < rest->start_tick)) rest = &n;
+        if (rest) {
+            const auto at = rest->start_tick;
+            const auto rb = view->notehead_bounds(rest->id);
+            click(rb.isEmpty() ? juce::Point<float>(view->x_of_tick(at) + 2.0f, y) : juce::Point<float>(rb.getCentreX(), y));
+            bool there = false;
+            for (const auto& n : notes()) there = there || n.start_tick == at;
+            check(there, "a click on a rest places the note at the rest's beat (not after it)");
+            session.undo();
+            pump(80);
+        }
+    }
 
-    // Dragged: later in time and higher in pitch.
-    click({x, y});
+    // Dragged: later in time and higher in pitch (the note already there).
     placed = notes();
     if (placed.size() != 1) {
         check(false, "a note to drag");
@@ -8854,9 +8919,12 @@ void note_mouse_checks(MainWindow& window, const juce::File& dir)
             asked = true;
             composer.remove_marking(staff, tick);
         };
+        Ticks mark_tick = notation::kTicksPerQuarter;
+        if (const auto* t = session.data().find_track(track); t && !t->active_version()->score.dynamics().empty())
+            mark_tick = t->active_version()->score.dynamics().front().tick;
         for (double p = -3.0; p > -16.0 && !asked; p -= 0.5) {
             for (const double dx : {0.0, 4.0, 8.0}) {
-                const juce::Point<float> at(view->x_of_tick(notation::kTicksPerQuarter) + static_cast<float>(dx),
+                const juce::Point<float> at(view->x_of_tick(mark_tick) + static_cast<float>(dx),
                                             view->y_of_staff_position(0, p));
                 view->mouseDown(mouse_event(*view, at, at, false));
                 view->mouseUp(mouse_event(*view, at, at, false));
@@ -11796,6 +11864,7 @@ int main(int argc, char** argv)
                 {"chord_builder_checks", chord_builder_checks},
                 {"ostinato_library_checks", ostinato_library_checks},
                 {"box_select_checks", box_select_checks},
+                {"cursor_start_checks", cursor_start_checks},
                 {"account_checks", account_checks}};
             juce::StringArray wanted;
             wanted.addTokens(only, ",", "");

@@ -54,8 +54,18 @@ public:
     notation::Ticks origin_tick() const noexcept { return origin_tick_; }
     void set_origin_tick(notation::Ticks tick) noexcept { origin_tick_ = tick; }
 
-    /// x in staff spaces for a tick, relative to the view origin.
+    /// x in staff spaces for a tick, relative to the view origin. Includes
+    /// the lead: where a note on that tick is drawn.
     double x_for_tick(notation::Ticks tick) const noexcept;
+
+    /// Lead-in, in staff spaces: everything placed on a tick (notes, rests,
+    /// markings, the cursor) sits this far after it, so the first note of a
+    /// bar does not touch the barline; barlines stay on the tick
+    /// (`x_for_barline`). 0 by default (printing spaces bars itself).
+    void set_lead(double spaces) noexcept { lead_ = spaces; }
+    double lead() const noexcept { return lead_; }
+    /// Where a barline at this tick is drawn: the tick itself, before the lead.
+    double x_for_barline(notation::Ticks tick) const noexcept { return x_for_tick(tick) - lead_; }
 
     /// The inverse, for hit testing and for placing the edit cursor.
     notation::Ticks tick_for_x(double x) const noexcept;
@@ -90,6 +100,7 @@ public:
 private:
     double staff_spaces_per_quarter_ = kDefaultSpacesPerQuarter;
     notation::Ticks origin_tick_ = 0;
+    double lead_ = 0.0;
 };
 
 /// One tick mark on the bar/beat ruler (spec 4.3).

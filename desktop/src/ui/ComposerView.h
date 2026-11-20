@@ -90,6 +90,11 @@ public:
     int send_selected_notes(const std::string& target_track);
     /// The Send to Track dialog: a list of tracks, then Send.
     void ask_send_selected_notes();
+    /// The hidden entry grid: where a click at `raw` on `staff` writes. The
+    /// grid is the selected note value counted from the bar's start; a
+    /// blank bar starts on beat 1; a slot already holding a note gives way
+    /// to the nearest empty one.
+    Ticks snap_entry_tick(Ticks raw, std::size_t staff) const;
     /// The checks: answers the Send to Track dialog (the track to send to).
     std::function<std::string()> send_target_hook;
     /// The editor's cursor (value, dots, rest, voice), when a track is being written on.

@@ -17,14 +17,14 @@ double TimelineMap::x_for_tick(notation::Ticks tick) const noexcept
 {
     const double quarters = static_cast<double>(tick - origin_tick_)
                           / static_cast<double>(notation::kTicksPerQuarter);
-    return quarters * staff_spaces_per_quarter_;
+    return quarters * staff_spaces_per_quarter_ + lead_;
 }
 
 notation::Ticks TimelineMap::tick_for_x(double x) const noexcept
 {
     if (!(staff_spaces_per_quarter_ > 0.0))
         return origin_tick_;
-    const double quarters = x / staff_spaces_per_quarter_;
+    const double quarters = (x - lead_) / staff_spaces_per_quarter_;
     return origin_tick_
          + static_cast<notation::Ticks>(std::llround(quarters * notation::kTicksPerQuarter));
 }

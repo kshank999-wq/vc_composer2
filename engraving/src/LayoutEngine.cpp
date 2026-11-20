@@ -621,7 +621,7 @@ void LayoutEngine::layout_barlines(const notation::Score& score, const TimelineM
             measure = score.measure_at(measure.end_tick());
             continue;
         }
-        double x = timeline.x_for_tick(measure.start_tick);
+        double x = timeline.x_for_barline(measure.start_tick);
         const auto edge = grace_edges.find(measure.start_tick);
         if (edge != grace_edges.end())
             x = std::min(x, edge->second - kGraceGap);
@@ -658,9 +658,9 @@ void LayoutEngine::layout_barlines(const notation::Score& score, const TimelineM
     for (const notation::RepeatSection& r : score.repeats()) {
         const notation::Ticks start = score.measure_start_tick(r.start_bar);
         const notation::Ticks end = score.measure(r.end_bar).end_tick();
-        if (start == from_tick) thick_thin(timeline.x_for_tick(start) - kStartRepeatWidth + 0.3, true, true);
-        else if (start > from_tick && start < to_tick) thick_thin(timeline.x_for_tick(start), true, true);
-        if (end > from_tick && end <= to_tick) thick_thin(timeline.x_for_tick(end), false, false);
+        if (start == from_tick) thick_thin(timeline.x_for_barline(start) - kStartRepeatWidth + 0.3, true, true);
+        else if (start > from_tick && start < to_tick) thick_thin(timeline.x_for_barline(start), true, true);
+        if (end > from_tick && end <= to_tick) thick_thin(timeline.x_for_barline(end), false, false);
         // The endings: "1." over the last bars of the passage, "2." over as
         // many after it.
         if (r.ending_bars <= 0) continue;
@@ -669,8 +669,8 @@ void LayoutEngine::layout_barlines(const notation::Score& score, const TimelineM
             const notation::Ticks a = score.measure_start_tick(first_bar);
             const notation::Ticks b = score.measure(first_bar + r.ending_bars - 1).end_tick();
             if (b <= from_tick || a >= to_tick) return;
-            const double x0 = timeline.x_for_tick(std::max(a, from_tick)) + 0.3;
-            const double x1 = timeline.x_for_tick(std::min(b, to_tick)) - 0.3;
+            const double x0 = timeline.x_for_barline(std::max(a, from_tick)) + 0.3;
+            const double x1 = timeline.x_for_barline(std::min(b, to_tick)) - 0.3;
             LineItem over;
             over.from = Point{x0, bracket_y};
             over.to = Point{x1, bracket_y};
@@ -2737,7 +2737,7 @@ LayoutResult LayoutEngine::layout(const notation::Score& score, const TimelineMa
             header_width += kStartRepeatWidth;
             break;
         }
-    const double music_x = timeline.x_for_tick(from_tick);
+    const double music_x = timeline.x_for_barline(from_tick);  // the header ends at the first barline
     const double left_x = music_x - header_width;
     const double right_x = timeline.x_for_tick(to_tick);
 

@@ -18,6 +18,9 @@ NotationView::NotationView()
 {
     setOpaque(true);
     settings_.pixels_per_staff_space = 10.0;
+    // Notes sit a little after their beat, so a bar's first note does not
+    // touch its barline (the cursor and clicks follow the same mapping).
+    timeline_.set_lead(1.2);
 }
 
 NotationView::~NotationView() = default;
@@ -365,7 +368,9 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
         return;
     }
 
-    const engraving::HitResult hit = engraving::hit_test(layout_, point);
+    engraving::HitResult hit = engraving::hit_test(layout_, point);
+    if (rests_as_staff_ && hit.id != notation::kInvalidEventId && !event.mods.isPopupMenu())
+        if (const auto* n = score_->find_note(hit.id); n && n->is_rest) hit = engraving::HitResult{};  // write over it
     if (hit.id != notation::kInvalidEventId && event.mods.isPopupMenu() && on_event_menu) {
         pressed_ = notation::kInvalidEventId;
         on_event_menu(hit.id);
