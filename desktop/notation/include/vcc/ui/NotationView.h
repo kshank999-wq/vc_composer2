@@ -67,6 +67,9 @@ public:
     std::function<void(bool larger)> on_zoom_requested;
 
     void set_horizontal_zoom(double staff_spaces_per_quarter);
+    /// Room between a barline and the first note after it, in staff spaces.
+    void set_lead(double staff_spaces);
+    double lead() const noexcept { return timeline_.lead(); }
     double horizontal_zoom() const noexcept { return timeline_.staff_spaces_per_quarter(); }
 
     /// Vertical zoom: pixels per staff space.

@@ -404,7 +404,7 @@ engraving::LayoutOptions ComposerView::lane_layout() const
     o.margin_above = 6.0;
     o.margin_below = 5.4;
     o.staff_gap = 6.9;
-    o.header_width = 46.0 / kSpaceAt100;
+    o.header_width = clef_zone_px_ / pixels_per_space_;
     return o;
 }
 
@@ -576,6 +576,7 @@ void ComposerView::apply_view_settings()
         }
         view.set_vertical_zoom(pixels_per_space_);
         view.set_horizontal_zoom(spaces_per_quarter_);
+        view.set_lead(kLeadPx / pixels_per_space_);  // the same on screen at any H
         view.set_origin_tick(origin_);
         view.score_changed();
     }
@@ -585,24 +586,28 @@ void ComposerView::apply_view_settings()
 
 void ComposerView::align_clef_zones()
 {
-    // A key signature widens a lane's clef zone past the spec's 46 px; every
-    // lane takes the widest, so bars line up from track to track.
-    const double base = lane_layout().header_width;
-    double widest = base;
+    // The clef zone (clef, key, time) is one width on screen at every
+    // staff size, so H never slides the music sideways: it is as wide as
+    // the widest lane's clef, key and time need at the largest H, and never
+    // narrower than the spec's 46 px. Every lane takes the same width, so
+    // bars line up from track to track.
+    double needed = 0.0;  // staff spaces
     for (auto& s : strips_) {
         auto& v = s->view();
         if (v.getWidth() <= 0 || v.score() == nullptr) continue;
         auto o = v.layout_options();
-        if (std::abs(o.header_width - base) > 1e-6) {
-            o.header_width = base;
+        if (std::abs(o.header_width) > 1e-9) {
+            o.header_width = 0.0;
             v.set_layout_options(o);
         }
-        widest = std::max(widest, static_cast<double>(v.x_of_tick(v.origin_tick())) / pixels_per_space_);
+        needed = std::max(needed, static_cast<double>(v.x_of_tick(v.origin_tick())) / pixels_per_space_ - v.lead());
     }
+    clef_zone_px_ = std::max(46.0, std::ceil(needed * kMaxSpacePx));
+    const double width = clef_zone_px_ / pixels_per_space_;
     for (auto& s : strips_) {
         auto o = s->view().layout_options();
-        if (std::abs(o.header_width - widest) > 1e-6) {
-            o.header_width = widest;
+        if (std::abs(o.header_width - width) > 1e-6) {
+            o.header_width = width;
             s->view().set_layout_options(o);
         }
     }

@@ -49,6 +49,13 @@ void NotationView::set_horizontal_zoom(double staff_spaces_per_quarter)
     score_changed();
 }
 
+void NotationView::set_lead(double staff_spaces)
+{
+    if (std::abs(timeline_.lead() - staff_spaces) < 1e-9) return;
+    timeline_.set_lead(staff_spaces);
+    score_changed();
+}
+
 void NotationView::set_vertical_zoom(double pixels_per_staff_space)
 {
     // Clamped for the same reason the horizontal zoom is: a zoom control

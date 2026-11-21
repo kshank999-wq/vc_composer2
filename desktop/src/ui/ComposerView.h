@@ -214,6 +214,9 @@ private:
     std::uint64_t generation_ = 0;
     /// The spec's 100%: a 7 px staff space and a 120 px bar of 4/4.
     static constexpr double kSpaceAt100 = 7.0;
+    static constexpr double kMaxSpacePx = 16.0;    ///< The H slider's top.
+    static constexpr double kLeadPx = 1.2 * kSpaceAt100;  ///< Barline to first note, on screen.
+    double clef_zone_px_ = 46.0;  ///< The clef zone's width on screen, the same at every H.
     static constexpr double kSpacesPerQuarter = 30.0 / 7.0;
     double spaces_per_quarter_ = kSpacesPerQuarter;  ///< Horizontal zoom (the W slider).
     std::map<std::string, double> lane_room_;          ///< Per staff: extra room above and below, in staff spaces.

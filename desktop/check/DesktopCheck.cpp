@@ -10280,11 +10280,28 @@ void view_tools_checks(MainWindow& window, const juce::File& dir)
         if (zw) zw->setValue(composer.zoom_width() * 2.0, juce::sendNotificationSync);
         pump(100);
         const float bar_wide = lane.x_of_tick(4 * kTicksPerQuarter) - lane.x_of_tick(0);
+        const float bar3_wide = lane.x_of_tick(8 * kTicksPerQuarter), first_wide = lane.x_of_tick(0);
         if (zh) zh->setValue(composer.zoom_height() * 1.5, juce::sendNotificationSync);
         pump(100);
         const float bar_after = lane.x_of_tick(4 * kTicksPerQuarter) - lane.x_of_tick(0);
         check(std::abs(bar_after - bar_wide) <= 2.0f, "H only makes the staves taller: the bars keep their width (" +
                                                           juce::String(bar_wide, 0) + " -> " + juce::String(bar_after, 0) + " px)");
+        // Nor does the music slide: the first note and bar 3 stay where they were, H up or down.
+        const float bar3_up = lane.x_of_tick(8 * kTicksPerQuarter), first_up = lane.x_of_tick(0);
+        if (zh) zh->setValue(zh->getMinimum(), juce::sendNotificationSync);
+        pump(100);
+        const float bar3_down = lane.x_of_tick(8 * kTicksPerQuarter), first_down = lane.x_of_tick(0);
+        if (zh) zh->setValue(zh->getMaximum(), juce::sendNotificationSync);
+        pump(100);
+        const float bar3_max = lane.x_of_tick(8 * kTicksPerQuarter);
+        check(std::abs(bar3_up - bar3_wide) <= 2.0f && std::abs(bar3_down - bar3_wide) <= 2.0f &&
+                  std::abs(bar3_max - bar3_wide) <= 2.0f && std::abs(first_up - first_wide) <= 2.0f &&
+                  std::abs(first_down - first_wide) <= 2.0f,
+              "H never slides the music sideways: bar 3 at " + juce::String(bar3_wide, 0) + " px stays at " +
+                  juce::String(bar3_up, 0) + ", " + juce::String(bar3_down, 0) + " and " + juce::String(bar3_max, 0) +
+                  " px (smallest and largest H)");
+        if (zh) zh->setValue(10.5, juce::sendNotificationSync);
+        pump(100);
         check(bar_after > bar_before * 1.8f && lane.getHeight() > height_before,
               "W widens the bars, H enlarges the staves (bar " + juce::String(bar_before, 0) + " -> " + juce::String(bar_after, 0) +
                   " px, lane " + juce::String(height_before) + " -> " + juce::String(lane.getHeight()) + " px)");
