@@ -10574,8 +10574,18 @@ void updater_checks(MainWindow& window, const juce::File& dir)
 #if JUCE_WINDOWS
     check(plan.contains("/SILENT") && plan.contains("/UPDATE"), "Windows runs the signed installer quietly, then the new version");
 #else
-    check(plan.joinIntoString("\n").contains("hdiutil attach") && plan.joinIntoString("\n").contains("ditto"),
-          "macOS swaps the app from the disk image once this copy has quit");
+    check(plan.joinIntoString("\n").contains("hdiutil attach") && plan.joinIntoString("\n").contains("ditto") &&
+              plan.joinIntoString("\n").contains("install-update.log") && plan.joinIntoString("\n").contains("FAILED"),
+          "macOS swaps the app from the disk image once this copy has quit, logging each step");
+    {
+        // Written as the shell reads it: a "\r" ends every line otherwise, and the script stops at once.
+        const auto script = dir.getChildFile("install-update-plan.sh");
+        Updater::write_script(script, plan.joinIntoString("\n") + "\n");
+        juce::MemoryBlock bytes;
+        script.loadFileAsData(bytes);
+        const bool unix_ends = bytes.getSize() > 0 && !bytes.toString().containsChar('\r');
+        check(unix_ends, "the install script is written with Unix line ends, so the Mac's shell runs it");
+    }
 #endif
 
     // "Install updates automatically": on by default; a download is remembered

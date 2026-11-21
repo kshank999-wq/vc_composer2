@@ -169,38 +169,70 @@ namespace {
 juce::File app_bundle() { return juce::File::getSpecialLocation(juce::File::currentApplicationFile); }
 
 /// The macOS replacement script: waits for this copy to quit, swaps the app
-/// from the disk image, then opens it. Falls back to opening the disk image.
-juce::String mac_script(const juce::File& dmg, const juce::File& app, int pid)
+/// for the one on the disk image, then opens it. Every step goes to
+/// install-update.log beside the download; if any step fails, the old app is
+/// put back and the disk image is opened in the Finder, so there is always a
+/// way on (drag VC Composer to Applications).
+juce::String mac_script(const juce::File& dmg, const juce::File& app, int pid, const juce::File& log)
 {
     auto q = [](const juce::String& s) { return "'" + s.replace("'", "'\\''") + "'"; };
     juce::String s;
     s << "#!/bin/sh\n"
       << "# VC Composer update: replaces the app once it has quit.\n"
-      << "while kill -0 " << pid << " 2>/dev/null; do sleep 0.5; done\n"
-      << "MNT=$(mktemp -d)\n"
-      << "if ! hdiutil attach -nobrowse -readonly -noautoopen -mountpoint \"$MNT\" " << q(dmg.getFullPathName()) << " >/dev/null; then\n"
-      << "  open " << q(dmg.getFullPathName()) << "; exit 1\n"
-      << "fi\n"
-      << "SRC=\"$MNT/" << app.getFileName() << "\"\n"
-      << "if [ -d \"$SRC\" ] && ditto \"$SRC\" " << q(app.getFullPathName() + ".new") << "; then\n"
-      << "  rm -rf " << q(app.getFullPathName()) << " && mv " << q(app.getFullPathName() + ".new") << " " << q(app.getFullPathName()) << "\n"
-      << "  hdiutil detach \"$MNT\" -quiet\n"
-      << "  open " << q(app.getFullPathName()) << "\n"
-      << "else\n"
-      << "  rm -rf " << q(app.getFullPathName() + ".new") << "\n"
-      << "  hdiutil detach \"$MNT\" -quiet\n"
-      << "  open " << q(dmg.getFullPathName()) << "\n"
-      << "fi\n";
+      << "APP=" << q(app.getFullPathName()) << "\n"
+      << "DMG=" << q(dmg.getFullPathName()) << "\n"
+      << "exec >>" << q(log.getFullPathName()) << " 2>&1 </dev/null\n"
+      << "echo \"=== $(date) installing $DMG over $APP\"\n"
+      << "MNT=\"\"; NEW=\"$APP.new\"; OLD=\"$APP.old\"\n"
+      << "fail() {\n"
+      << "  echo \"FAILED: $1\"\n"
+      << "  [ -d \"$OLD\" ] && [ ! -d \"$APP\" ] && mv \"$OLD\" \"$APP\"\n"
+      << "  [ -n \"$MNT\" ] && hdiutil detach \"$MNT\" -quiet -force\n"
+      << "  rm -rf \"$NEW\"\n"
+      << "  open \"$DMG\"\n"
+      << "  exit 1\n"
+      << "}\n"
+      << "i=0\n"
+      << "while kill -0 " << pid << " 2>/dev/null; do\n"
+      << "  sleep 0.5; i=$((i+1))\n"
+      << "  [ $i -gt 240 ] && fail \"VC Composer did not quit\"\n"
+      << "done\n"
+      << "echo \"VC Composer has quit\"\n"
+      << "MNT=$(mktemp -d /tmp/vcc-update.XXXXXX) || fail \"no temporary folder\"\n"
+      << "hdiutil attach -nobrowse -readonly -noautoopen -mountpoint \"$MNT\" \"$DMG\" || fail \"the disk image would not open\"\n"
+      << "SRC=\"\"\n"
+      << "for a in \"$MNT\"/*.app; do [ -d \"$a\" ] && SRC=\"$a\" && break; done\n"
+      << "[ -n \"$SRC\" ] || fail \"no app on the disk image\"\n"
+      << "rm -rf \"$NEW\" \"$OLD\"\n"
+      << "ditto \"$SRC\" \"$NEW\" || fail \"could not copy the new version\"\n"
+      << "xattr -dr com.apple.quarantine \"$NEW\" 2>/dev/null\n"
+      << "mv \"$APP\" \"$OLD\" || fail \"could not move the old version aside\"\n"
+      << "mv \"$NEW\" \"$APP\" || fail \"could not put the new version in place\"\n"
+      << "rm -rf \"$OLD\"\n"
+      << "hdiutil detach \"$MNT\" -quiet || hdiutil detach \"$MNT\" -quiet -force\n"
+      << "rmdir \"$MNT\" 2>/dev/null\n"
+      << "echo \"installed; opening the new version\"\n"
+      << "open \"$APP\" || fail \"the new version would not open\"\n"
+      << "echo \"done\"\n";
     return s;
 }
 
 }  // namespace
 
+bool Updater::write_script(const juce::File& file, const juce::String& text)
+{
+    // Unix line ends: juce's replaceWithText writes "\r\n" by default, and a
+    // shell script with them stops at its first line (so no update went in).
+    return file.replaceWithText(text, false, false, "\n") && file.setExecutePermission(true);
+}
+
+juce::File Updater::install_log() const { return folder().getChildFile("install-update.log"); }
+
 juce::StringArray Updater::install_plan(const juce::File& file) const
 {
     if (Account::platform() == "windows")
         return {file.getFullPathName(), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/UPDATE"};
-    return juce::StringArray::fromLines(mac_script(file, app_bundle(), 0));
+    return juce::StringArray::fromLines(mac_script(file, app_bundle(), 0, install_log()));
 }
 
 juce::String Updater::install(const juce::File& file)
@@ -219,10 +251,14 @@ juce::String Updater::install(const juce::File& file)
         return "VC Composer's folder cannot be written here, so the disk image is open: drag VC Composer to Applications and replace it";
     }
     const auto script = folder().getChildFile("install-update.sh");
-    if (!script.replaceWithText(mac_script(file, app, static_cast<int>(getpid())))) return "Could not prepare the update";
+    if (!write_script(script, mac_script(file, app, static_cast<int>(getpid()), install_log())))
+        return "Could not prepare the update";
+    // Detached from this process (its own session, its parent gone at once),
+    // so it lives on after VC Composer quits.
     juce::ChildProcess launcher;
-    const juce::StringArray args{"/bin/sh", "-c", "nohup /bin/sh '" + script.getFullPathName() + "' >/dev/null 2>&1 &"};
-    if (!launcher.start(args)) return "The update could not be started";
+    const juce::StringArray args{"/bin/sh", "-c",
+                                 "( trap '' HUP; exec /bin/sh \"$0\" ) </dev/null >/dev/null 2>&1 &", script.getFullPathName()};
+    if (!launcher.start(args, 0)) return "The update could not be started";
     launcher.waitForProcessToFinish(5000);
     return {};
 #else

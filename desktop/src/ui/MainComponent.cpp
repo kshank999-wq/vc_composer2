@@ -341,7 +341,10 @@ MainComponent::MainComponent(AppContext& context)
         });
         // One downloaded last time goes in first, before any work starts.
         juce::Timer::callAfterDelay(2500, [self, idle] {
-            if (self != nullptr) install_ready_update(self->context_, idle);
+            if (self == nullptr) return;
+            // The last update first: if it did not go in, say so (and do not retry on its own).
+            if (report_update_attempt(self->context_)) return;
+            install_ready_update(self->context_, idle);
         });
         juce::Timer::callAfterDelay(20000, [self, ask, idle] {
             if (self == nullptr) return;

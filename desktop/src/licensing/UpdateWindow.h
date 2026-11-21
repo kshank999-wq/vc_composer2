@@ -59,6 +59,15 @@ void auto_update(AppContext& context, std::function<bool()> before_quit, std::fu
 /// At start-up: installs an update downloaded earlier (and quits) when the
 /// setting is on and `idle`. True if it did.
 bool install_ready_update(AppContext& context, std::function<bool()> idle);
+/// Installs `file` (version `version`) and quits; false, with the reason in
+/// the status line, if it could not start. The next start reports the result.
+bool install_now(AppContext& context, const juce::File& file, const juce::String& version);
+/// Remembers a downloaded update for the next start.
+void remember_ready_update(const juce::File& file, const juce::String& version);
+/// At start: whether the last update went in. If it did not, says why (from
+/// the install log) and offers the disk image, and stops installing it on its
+/// own. True when it showed that.
+bool report_update_attempt(AppContext& context);
 /// The version downloaded and waiting to install, or empty.
 juce::String ready_update_version();
 bool install_updates_automatically();

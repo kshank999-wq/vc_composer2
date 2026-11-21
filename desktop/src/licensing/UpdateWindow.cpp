@@ -124,16 +124,18 @@ void UpdatePanel::download(bool then_install, std::function<void()> done)
             progress_.setVisible(false);
             status_.setText(result->message, juce::dontSendNotification);
             update_buttons();
-            if (result->ok) file_ = result->file;
+            const juce::String version(offer_ ? offer_->version : std::string());
+            if (result->ok) {
+                file_ = result->file;
+                // Kept for the next start too, should it not go in now.
+                remember_ready_update(result->file, version);
+            }
             if (result->ok && then_install) {
                 // Unsaved work is asked about first; the installer then takes over.
                 if (before_quit_ && !before_quit_()) {
-                    status_.setText("Not installed: downloaded and ready for when you are", juce::dontSendNotification);
-                } else if (const auto error = Updater::get().install(result->file); error.isNotEmpty()) {
-                    status_.setText(error, juce::dontSendNotification);
-                } else {
-                    context_.status("Installing VC Composer " + juce::String(offer_ ? offer_->version : std::string()) + "...");
-                    juce::JUCEApplicationBase::quit();
+                    status_.setText("Not installed yet: it installs the next time VC Composer starts", juce::dontSendNotification);
+                } else if (!install_now(context_, result->file, version)) {
+                    status_.setText("The update could not start: see the status line", juce::dontSendNotification);
                 }
             }
             if (done) done();
@@ -186,6 +188,8 @@ namespace {
 constexpr const char* kAutoInstall = "updates_install_automatically";
 constexpr const char* kReadyFile = "update_ready_file";
 constexpr const char* kReadyVersion = "update_ready_version";
+constexpr const char* kTriedVersion = "update_tried_version";
+constexpr const char* kTriedFile = "update_tried_file";
 
 void forget_ready_update()
 {
@@ -194,7 +198,15 @@ void forget_ready_update()
     hw::ui_settings().saveIfNeeded();
 }
 
-/// Installs `file` and quits. False (with the reason in the status line) if it could not start.
+}  // namespace
+
+void remember_ready_update(const juce::File& file, const juce::String& version)
+{
+    hw::ui_settings().setValue(kReadyFile, file.getFullPathName());
+    hw::ui_settings().setValue(kReadyVersion, version);
+    hw::ui_settings().saveIfNeeded();
+}
+
 bool install_now(AppContext& ctx, const juce::File& file, const juce::String& version)
 {
     if (const auto error = Updater::get().install(file); error.isNotEmpty()) {
@@ -202,11 +214,60 @@ bool install_now(AppContext& ctx, const juce::File& file, const juce::String& ve
         return false;
     }
     forget_ready_update();
+    // The next start says whether it went in (and, if not, why).
+    hw::ui_settings().setValue(kTriedVersion, version);
+    hw::ui_settings().setValue(kTriedFile, file.getFullPathName());
+    hw::ui_settings().saveIfNeeded();
     ctx.status("Installing VC Composer " + version + "...");
     juce::JUCEApplicationBase::quit();
     return true;
 }
-}  // namespace
+
+bool report_update_attempt(AppContext& context)
+{
+    const auto version = hw::ui_settings().getValue(kTriedVersion);
+    if (version.isEmpty()) return false;
+    const juce::File dmg(hw::ui_settings().getValue(kTriedFile));
+    hw::ui_settings().removeValue(kTriedVersion);
+    hw::ui_settings().removeValue(kTriedFile);
+    hw::ui_settings().saveIfNeeded();
+    if (!licensing::is_newer(version.toStdString(), Updater::current_version().toStdString())) {
+        context.status("VC Composer is updated to " + Updater::current_version());
+        return false;
+    }
+    // It did not go in. Never try again on its own (that could loop); say
+    // why, and offer the disk image to install by hand.
+    forget_ready_update();
+    juce::String why;
+    const auto log = Updater::get().install_log();
+    if (log.existsAsFile()) {
+        juce::StringArray lines;
+        lines.addLines(log.loadFileAsString());
+        for (int i = lines.size(); --i >= 0;)
+            if (lines[i].startsWith("FAILED: ")) {
+                why = lines[i].fromFirstOccurrenceOf("FAILED: ", false, false);
+                break;
+            }
+    }
+    juce::String text = "The update to VC Composer " + version + " did not install";
+    text += why.isNotEmpty() ? " (" + why + ")." : ".";
+    text += "\n\nTo install it by hand, open the disk image and drag VC Composer to your Applications folder, replacing the old one.";
+    if (log.existsAsFile()) text += "\n\nWhat happened is written in " + log.getFullPathName();
+    const bool have_dmg = dmg.existsAsFile();
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(juce::MessageBoxIconType::WarningIcon)
+            .withTitle("Update not installed")
+            .withMessage(text)
+            .withButton(have_dmg ? "Open the Disk Image" : "Download from vc-composer.com")
+            .withButton("Later"),
+        [dmg, have_dmg](int r) {
+            if (r != 1) return;
+            if (have_dmg) dmg.startAsProcess();
+            else juce::URL("https://vc-composer.com/download").launchInDefaultBrowser();
+        });
+    return true;
+}
 
 bool install_updates_automatically() { return hw::ui_settings().getBoolValue(kAutoInstall, true); }
 

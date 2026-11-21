@@ -60,6 +60,10 @@ public:
     /// What installing `file` would run (Windows: the installer and its
     /// switches; macOS: the replacement script's lines). For the desktop check.
     juce::StringArray install_plan(const juce::File& file) const;
+    /// Where the macOS install script writes what it did (each step, and why it stopped).
+    juce::File install_log() const;
+    /// Writes a shell script as a shell reads it: Unix line ends, executable.
+    static bool write_script(const juce::File& file, const juce::String& text);
     /// Starts the install. Empty on success: the caller then quits the app.
     /// Otherwise why not (and, on macOS, the disk image was opened instead).
     juce::String install(const juce::File& file);
