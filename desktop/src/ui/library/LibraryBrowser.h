@@ -48,6 +48,22 @@ public:
     /// The libraries this computer has (a player installed and the library
     /// found), as (catalog id, name).
     std::vector<std::pair<std::string, std::string>> installed_libraries() const;
+
+    // --- Library locations -------------------------------------------------------------------
+    /// The places to scan: every connected drive (on a Mac each volume, the
+    /// start-up disk's Users/Shared and your home; on Windows each drive
+    /// letter), and any folder you added.
+    std::vector<library::ScanRoot> scan_roots() const;
+    /// Scans in the background; `done` (on the message thread) gets how many
+    /// libraries were found and how many are new. They are kept at once.
+    void scan_drives(std::function<void(int found, int added)> done);
+    bool scanning() const noexcept { return scanning_; }
+    /// At start: scans once if never scanned; else checks every library is
+    /// where it was and, for the missing, looks for them again and asks
+    /// whether each place found is right (drive letters and names change).
+    void check_locations_at_start();
+    /// The same, asked for now (also when nothing is missing: says so).
+    void recheck_locations(bool quiet);
     /// A saved sound for an entry, made if it is not one (a catalog patch or a
     /// plug-in: its plug-in, for this instrument and articulation). Returns
     /// its id, or empty when nothing here can play it.
@@ -63,6 +79,8 @@ private:
     AppContext& context_;
     library::Library lib_;
     juce::File file_;
+    bool scanning_ = false;
+    std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };
 
 /// The Library tab.

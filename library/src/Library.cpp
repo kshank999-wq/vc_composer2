@@ -229,6 +229,195 @@ std::vector<std::string> Library::detect()
     return found;
 }
 
+// --- Library locations ----------------------------------------------------------------------
+
+namespace {
+
+bool skipped_folder(const std::string& lower_name, int depth)
+{
+    if (lower_name.empty() || lower_name[0] == '.' || lower_name[0] == '$') return true;
+    static const std::set<std::string> anywhere{"node_modules", "__macosx", "system volume information", "temporary items"};
+    if (anywhere.count(lower_name)) return true;
+    if (depth > 0) return false;
+    static const std::set<std::string> at_top{"system", "private", "bin", "sbin", "usr", "etc", "var", "dev", "cores",
+                                              "windows", "program files", "program files (x86)", "programdata",
+                                              "recovery", "boot", "proc", "sys", "snap"};
+    return at_top.count(lower_name) > 0;
+}
+
+bool is_eastwest_parent(const std::string& lower_name)
+{
+    return lower_name == "eastwest" || lower_name == "east west" || lower_name == "eastwest libraries" ||
+           lower_name == "east west libraries";
+}
+
+std::string generic(const fs::path& p)
+{
+    auto s = p.generic_u8string();
+    return std::string(s.begin(), s.end());
+}
+
+}  // namespace
+
+std::string Library::catalog_match(const std::string& folder_name) const
+{
+    const auto name = lower(folder_name);
+    for (const auto& lib : libraries_)
+        for (const auto& f : lib.folder_names)
+            if (!f.empty() && name.find(f) != std::string::npos) return lib.id;
+    return {};
+}
+
+std::vector<LibraryLocation> Library::scan(const std::vector<ScanRoot>& roots, int max_depth) const
+{
+    std::vector<LibraryLocation> out;
+    std::set<std::string> seen;
+    for (const auto& root : roots) {
+        std::error_code ec;
+        const fs::path base = fs::u8path(root.path);
+        if (!fs::is_directory(base, ec)) continue;
+        fs::recursive_directory_iterator it(base, fs::directory_options::skip_permission_denied, ec), end;
+        for (; !ec && it != end; it.increment(ec)) {
+            std::error_code e2;
+            if (it->is_symlink(e2) || !it->is_directory(e2)) {
+                if (it->is_symlink(e2) && it->is_directory(e2)) it.disable_recursion_pending();
+                continue;
+            }
+            const auto& path = it->path();
+            const std::string raw = path.filename().u8string();
+            const std::string name = lower(raw);
+            if (skipped_folder(name, it.depth())) {
+                it.disable_recursion_pending();
+                continue;
+            }
+            const std::string parent = lower(path.parent_path().filename().u8string());
+            std::string vendor;
+            if (name.rfind("ew ", 0) == 0 || is_eastwest_parent(parent)) {
+                vendor = "EastWest";
+            } else {
+                // A Kontakt library: a .nicnt file right inside.
+                std::error_code e3;
+                for (fs::directory_iterator f(path, fs::directory_options::skip_permission_denied, e3), fe; !e3 && f != fe;
+                     f.increment(e3))
+                    if (lower(f->path().extension().u8string()) == ".nicnt") {
+                        vendor = "Kontakt library";
+                        break;
+                    }
+                if (vendor.empty()) {
+                    const auto id = catalog_match(raw);
+                    if (!id.empty())
+                        for (const auto& lib : libraries_)
+                            if (lib.id == id) vendor = lib.provider;
+                }
+            }
+            if (!vendor.empty() && !is_eastwest_parent(name)) {
+                LibraryLocation l;
+                l.name = raw;
+                l.vendor = vendor;
+                l.path = generic(path);
+                l.volume = root.volume;
+                l.relative = generic(path.lexically_relative(base));
+                l.catalog_id = catalog_match(raw);
+                if (seen.insert(l.path).second) out.push_back(std::move(l));
+                it.disable_recursion_pending();  // never inside a library
+                continue;
+            }
+            if (it.depth() + 1 >= max_depth) it.disable_recursion_pending();
+        }
+    }
+    return out;
+}
+
+int Library::add_locations(const std::vector<LibraryLocation>& found)
+{
+    int added = 0;
+    for (const auto& f : found) {
+        auto it = std::find_if(locations_.begin(), locations_.end(), [&](const LibraryLocation& l) { return l.path == f.path; });
+        if (it == locations_.end()) {
+            locations_.push_back(f);
+            ++added;
+        } else {
+            *it = f;
+        }
+        if (!f.catalog_id.empty()) detected_.insert(f.catalog_id);
+    }
+    std::sort(locations_.begin(), locations_.end(), [](const LibraryLocation& a, const LibraryLocation& b) {
+        return a.vendor != b.vendor ? a.vendor < b.vendor : lower(a.name) < lower(b.name);
+    });
+    return added;
+}
+
+std::vector<std::string> Library::check_locations()
+{
+    std::vector<std::string> missing;
+    for (auto& l : locations_) {
+        std::error_code ec;
+        l.present = fs::is_directory(fs::u8path(l.path), ec);
+        if (!l.present) missing.push_back(l.name);
+        else if (!l.catalog_id.empty()) detected_.insert(l.catalog_id);
+    }
+    return missing;
+}
+
+std::vector<Relocation> Library::find_moved(const std::vector<ScanRoot>& roots, int max_depth) const
+{
+    std::vector<Relocation> out;
+    std::vector<LibraryLocation> found;  // scanned once, only if needed
+    bool scanned = false;
+    for (std::size_t i = 0; i < locations_.size(); ++i) {
+        const auto& l = locations_[i];
+        if (l.present) continue;
+        Relocation r;
+        r.index = i;
+        r.name = l.name;
+        r.from = l.path;
+        // The same path inside another drive: a drive renamed, or a new letter.
+        for (const auto& root : roots) {
+            if (l.relative.empty()) break;
+            std::error_code ec;
+            const auto candidate = fs::u8path(root.path) / fs::u8path(l.relative);
+            if (fs::is_directory(candidate, ec) && generic(candidate) != l.path) {
+                r.to = generic(candidate);
+                r.volume = root.volume;
+                r.same_place = true;
+                break;
+            }
+        }
+        // Else a folder of the same name anywhere.
+        if (r.to.empty()) {
+            if (!scanned) {
+                found = scan(roots, max_depth);
+                scanned = true;
+            }
+            for (const auto& f : found)
+                if (lower(f.name) == lower(l.name) && f.path != l.path) {
+                    r.to = f.path;
+                    r.volume = f.volume;
+                    break;
+                }
+        }
+        if (!r.to.empty()) out.push_back(std::move(r));
+    }
+    return out;
+}
+
+void Library::apply_relocation(const Relocation& r)
+{
+    if (r.index >= locations_.size()) return;
+    auto& l = locations_[r.index];
+    if (l.path != r.from) return;
+    l.path = r.to;
+    l.volume = r.volume;
+    l.present = true;
+    if (!l.catalog_id.empty()) detected_.insert(l.catalog_id);
+}
+
+void Library::remove_location(const std::string& path)
+{
+    locations_.erase(std::remove_if(locations_.begin(), locations_.end(), [&](const LibraryLocation& l) { return l.path == path; }),
+                     locations_.end());
+}
+
 // --- Saved patches --------------------------------------------------------------------------
 
 std::string Library::add_patch(UserPatch patch)
@@ -298,6 +487,19 @@ json::Value Library::user_json() const
     for (const auto& [k, t] : tags_) tags.set(k, strings(t));
     o.set("tags", std::move(tags));
     o.set("folders", strings(folders_));
+    json::Value locs = json::Value::make_array();
+    for (const auto& l : locations_) {
+        json::Value j = json::Value::make_object();
+        j.set("name", l.name);
+        j.set("vendor", l.vendor);
+        j.set("path", l.path);
+        j.set("volume", l.volume);
+        j.set("relative", l.relative);
+        j.set("catalog", l.catalog_id);
+        locs.push_back(std::move(j));
+    }
+    o.set("locations", std::move(locs));
+    o.set("scanned", scanned_);
     o.set("next_id", next_id_);
     json::Value as = json::Value::make_array();
     for (const auto& a : assignments_) {
@@ -336,6 +538,19 @@ void Library::load_user(const json::Value& doc)
     if (const auto* t = doc.get("tags"))
         for (const auto& k : t->keys()) tags_.emplace_back(k, (*t).get_string_array(k));
     folders_ = doc.get_string_array("folders");
+    locations_.clear();
+    if (const auto* locs = doc.get("locations"))
+        for (const auto& j : locs->as_array()) {
+            LibraryLocation l;
+            l.name = j.get_string("name");
+            l.vendor = j.get_string("vendor");
+            l.path = j.get_string("path");
+            l.volume = j.get_string("volume");
+            l.relative = j.get_string("relative");
+            l.catalog_id = j.get_string("catalog");
+            if (!l.path.empty()) locations_.push_back(std::move(l));
+        }
+    scanned_ = doc.get_bool("scanned", false);
     next_id_ = static_cast<int>(doc.get_int("next_id", 1));
     assignments_.clear();
     if (const auto* as = doc.get("assignments"))

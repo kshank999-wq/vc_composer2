@@ -56,6 +56,7 @@
 #include "ui/console/ConsoleView.h"
 #include "ui/ScoreTools.h"
 #include "ui/TrackPanel.h"
+#include "ui/library/SoundSetup.h"
 #include "ui/composer/CircleOfFifths.h"
 #include "ui/console/RoutingCanvas.h"
 #include "ui/surface/ControlSurface.h"
@@ -7169,6 +7170,110 @@ void marketing_shots(MainWindow& window, const juce::File& dir)
     pump(200);
 }
 
+/// Sound Setup: a big window for your own libraries - pick the player, its
+/// window opens, name the sound and save it; the Libraries page keeps where
+/// each library is on your drives.
+void sound_setup_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    auto* service = ctx.library;
+    if (!service) {
+        check(false, "the main window owns a library");
+        return;
+    }
+    const auto folder = dir.getChildFile("sound-setup-check");
+    folder.deleteRecursively();
+    folder.createDirectory();
+    service->set_file(folder.getChildFile("Library.json"));
+    const auto instrument = scan(ctx, VCC_TEST_PLUGIN);
+    service->refresh();
+    session.new_empty();
+    const auto vln = session.add_track("Violins I", "strings.violins_1");
+    session.add_track("Celli", "strings.celli");
+    session.select_track(vln);
+    pump(100);
+
+    ctx.commands.invokeDirectly(cmd::soundSetup, true);
+    pump(300);
+    auto* panel = sound_setup_panel();
+    auto* win = panel ? panel->findParentComponentOfClass<juce::DocumentWindow>() : nullptr;
+    check(panel != nullptr && win != nullptr && win->isVisible() && win->getWidth() >= 1100 && win->getHeight() >= 700 &&
+              win->isResizable() && (win->getDesktopWindowStyleFlags() & juce::ComponentPeer::windowHasMaximiseButton) != 0,
+          "Window > Sound Setup opens a big window that resizes and maximises (" + juce::String(win ? win->getWidth() : 0) + " x " +
+              juce::String(win ? win->getHeight() : 0) + ")");
+    if (!panel || !instrument) return;
+    check(panel->tracks().size() == 2u && panel->track() == vln, "it lists the instrument tracks, the selected one shown");
+    const bool listed = std::any_of(panel->players().begin(), panel->players().end(),
+                                    [&](const auto& p) { return p.second == instrument->identifier; });
+    check(listed, "the players list the instrument plug-ins scanned (" + juce::String(static_cast<int>(panel->players().size())) + ")");
+
+    // 1-2: the player goes on the track and its window opens.
+    const auto said = panel->load_player(instrument->identifier);
+    const bool opened = wait_for([&] {
+        auto* w = find_dialog(juce::String(instrument->name));
+        return w != nullptr && w->isVisible();
+    }, 5000);
+    const auto* t = session.data().find_track(vln);
+    check(t && t->instrument_plugin.identifier == instrument->identifier && opened,
+          "Load Player puts it on the track and opens its own window: " + said);
+    if (auto* pw = find_dialog(juce::String(instrument->name)))
+        check(pw->isAlwaysOnTop() == juce::Process::isForegroundProcess(), "the player's window floats over VC Composer's own");
+    shoot(*win, dir, "120-sound-setup", true);
+
+    // 3: named, for pizzicato, used everywhere.
+    const auto saved = panel->save_sound("Violins I - Pizzicato (Hollywood)", "pizzicato", true);
+    const auto& patches = service->lib().patches();
+    const auto* assigned = service->lib().assigned("strings.violins_1", "pizzicato");
+    check(patches.size() == 1u && patches[0].display == "Violins I - Pizzicato (Hollywood)" && patches[0].articulations.size() == 1u &&
+              patches[0].articulations[0] == "pizzicato" && assigned && assigned->id == patches[0].id,
+          "Save Sound keeps it by its name, for pizzicato, for every Violins I track: " + saved);
+    check(panel->saved_for_track().size() == 1u, "the saved sound is listed for this instrument");
+    // Put back on another track from the list.
+    const auto vln2 = session.add_track("Violins I (div)", "strings.violins_1");
+    session.set_instrument_plugin(vln2, {});
+    panel->show_track(vln2);
+    const auto used = panel->use_saved(patches[0].id);
+    const auto* t2 = session.data().find_track(vln2);
+    check(t2 && t2->instrument_plugin.identifier == instrument->identifier && t2->assignment.patch_id == patches[0].id,
+          "Put on Track gives another track the saved sound: " + used);
+    for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
+        if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window && w != win) w->setVisible(false);
+
+    // The Libraries page: drives scanned, each library's place kept.
+    const auto drives = folder.getChildFile("Volumes");
+    drives.getChildFile("EASTWEST1/EastWest/EW Hollywood Strings Diamond").createDirectory();
+    drives.getChildFile("EASTWEST1/EastWest/EW Hollywood Brass Diamond").createDirectory();
+    drives.getChildFile("EASTWEST2/EW Forbidden Planet").createDirectory();
+    service->lib().library_folders().push_back(drives.getChildFile("EASTWEST1").getFullPathName().toStdString());
+    service->lib().library_folders().push_back(drives.getChildFile("EASTWEST2").getFullPathName().toStdString());
+    panel->show_libraries(true);
+    int found = -1;
+    service->scan_drives([&](int f, int) { found = f; });
+    wait_for([&] { return found >= 0; }, 20000);
+    const auto& locs = service->lib().locations();
+    const bool strings_found = std::any_of(locs.begin(), locs.end(), [](const auto& l) {
+        return l.name == "EW Hollywood Strings Diamond" && l.vendor == "EastWest" && l.volume == "EASTWEST1" && l.present;
+    });
+    check(found >= 3 && strings_found && service->file().loadFileAsString().contains("EW Forbidden Planet"),
+          "Scan All Drives finds the EastWest libraries on each drive and keeps their places (" + juce::String(found) + " found)");
+    pump(200);
+    shoot(*win, dir, "121-sound-setup-libraries", true);
+    // A drive renamed: missing, then found again in the same place.
+    drives.getChildFile("EASTWEST1").moveFileTo(drives.getChildFile("EASTWEST 1"));
+    service->lib().library_folders().push_back(drives.getChildFile("EASTWEST 1").getFullPathName().toStdString());
+    const auto missing = service->lib().check_locations();
+    const auto moved = service->lib().find_moved(service->scan_roots());
+    check(missing.size() == 2u && moved.size() == 2u && moved[0].same_place,
+          "a renamed drive's libraries are missing, then found in the same folder on it (" + juce::String(static_cast<int>(moved.size())) +
+              ") - and the composer is asked before anything changes");
+    panel->show_libraries(false);
+    win->closeButtonPressed();
+    pump(100);
+    session.new_empty();
+}
+
 void slur_tie_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -12963,6 +13068,8 @@ int main(int argc, char** argv)
         std::printf("%s: %d failure(s)\n", failures == 0 ? "PASSED" : "FAILED", failures);
         return failures == 0 ? 0 : 1;
     }
+    // The machine's drives are never scanned for libraries here (library_checks scans its own folders).
+    set_env("VCC_NO_LIBRARY_SCAN", "1");
     // The plug-in list and scan failures go to a throwaway settings folder,
     // never the user's own.
     const auto settings = dir.getChildFile("settings");
@@ -13003,6 +13110,7 @@ int main(int argc, char** argv)
                 {"piano_sketch_checks", piano_sketch_checks},
                 {"sound_assignment_checks", sound_assignment_checks},
                 {"library_checks", library_checks},
+                {"sound_setup_checks", sound_setup_checks},
                 {"articulation_checks", articulation_checks},
                 {"articulation_template_checks", articulation_template_checks},
                 {"usage_checks", usage_checks},
@@ -13728,6 +13836,8 @@ int main(int argc, char** argv)
         package_checks(window, dir);
         section("library_checks");
         library_checks(window, dir);
+        section("sound_setup_checks");
+        sound_setup_checks(window, dir);
         section("articulation_map_checks");
         articulation_map_checks(window, dir);
         section("wizard_checks");

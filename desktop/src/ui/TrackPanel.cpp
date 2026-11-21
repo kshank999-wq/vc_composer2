@@ -434,6 +434,11 @@ juce::PopupMenu TrackPanel::instrument_menu(AppContext& c, const std::string& id
     juce::PopupMenu instruments;
     const auto* t = c.session.data().find_track(id);
     if (!t) return instruments;
+    instruments.addItem("Sound Setup...  (your libraries: open the player, load, name, save)", [&c, id] {
+        c.session.select_track(id);
+        c.commands.invokeDirectly(cmd::soundSetup, true);
+    });
+    instruments.addSeparator();
     instruments.addItem(sounds::state() == sounds::State::Ready ? "Built-in sound (piano / General MIDI)" : "Built-in placeholder sound", true,
                         t->instrument_plugin.empty(), [&c, id] { c.session.set_instrument_plugin(id, {}); });
     instruments.addSeparator();

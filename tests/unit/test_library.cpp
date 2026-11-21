@@ -1,6 +1,7 @@
 // Library browser and discovery (Main Spec §10, §11).
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 
 #include "vcc/core/Files.h"
 #include "vcc/library/Library.h"
@@ -335,4 +336,78 @@ TEST_CASE("library: sound assignments - an instrument's articulation to a saved 
     CHECK(lib.assigned("strings.violins_1", "legato") == nullptr);
     lib.remove_patch(pid);
     CHECK(lib.assignments().empty());
+}
+
+TEST_CASE("library: locations - drives scanned for EastWest and Kontakt libraries, kept, and found again when a drive moves")
+{
+    const std::string root = std::string(VCC_TEST_TMP_DIR) + "/liblocations";
+    fs::remove_all(root);
+    // Two drives, as on the composer's Mac: EASTWEST1 and EASTWEST2.
+    const std::string d1 = root + "/Volumes/EASTWEST1", d2 = root + "/Volumes/EASTWEST2";
+    fs::create_directories(d1 + "/EastWest/EW Hollywood Strings Diamond/Instruments");
+    fs::create_directories(d1 + "/EastWest/EW Hollywood Brass Diamond");
+    fs::create_directories(d1 + "/EastWest/EW Forbidden Planet");
+    fs::create_directories(d2 + "/Libraries/EW Ra");
+    fs::create_directories(d2 + "/Libraries/Cinematic Piano/Instruments");
+    { std::ofstream(d2 + "/Libraries/Cinematic Piano/Cinematic Piano.nicnt") << "x"; }
+    fs::create_directories(d2 + "/.Spotlight-V100/EW Hidden");  // never looked into
+    fs::create_directories(d2 + "/Projects/Cue 1");               // not a library
+
+    auto lib = make();
+    const std::vector<library::ScanRoot> roots{{d1, "EASTWEST1"}, {d2, "EASTWEST2"}};
+    const auto found = lib.scan(roots);
+    auto named = [&](const std::vector<library::LibraryLocation>& v, const std::string& n) {
+        return std::find_if(v.begin(), v.end(), [&](const auto& l) { return l.name == n; });
+    };
+    CHECK_EQ(found.size(), std::size_t(5));
+    auto strings = named(found, "EW Hollywood Strings Diamond");
+    REQUIRE(strings != found.end());
+    CHECK_EQ(strings->vendor, std::string("EastWest"));
+    CHECK_EQ(strings->volume, std::string("EASTWEST1"));
+    CHECK_EQ(strings->relative, std::string("EastWest/EW Hollywood Strings Diamond"));
+    CHECK(named(found, "EW Ra") != found.end());
+    CHECK(named(found, "EW Forbidden Planet") != found.end());
+    auto piano = named(found, "Cinematic Piano");
+    REQUIRE(piano != found.end());
+    CHECK_EQ(piano->vendor, std::string("Kontakt library"));
+    CHECK(named(found, "EW Hidden") == found.end());
+    CHECK(named(found, "Instruments") == found.end());  // never inside a library
+
+    // Kept with the user's library, and reloaded.
+    CHECK_EQ(lib.add_locations(found), 5);
+    CHECK_EQ(lib.add_locations(found), 0);  // a second scan adds nothing new
+    lib.set_scanned(true);
+    auto again = make();
+    again.load_user(lib.user_json());
+    CHECK_EQ(again.locations().size(), std::size_t(5));
+    CHECK(again.scanned());
+    CHECK(again.check_locations().empty());
+
+    // The drive is renamed (EASTWEST1 -> EASTWEST 1): missing, then found in the same place.
+    fs::rename(d1, root + "/Volumes/EASTWEST 1");
+    const auto missing = again.check_locations();
+    CHECK_EQ(missing.size(), std::size_t(3));
+    const std::vector<library::ScanRoot> now{{root + "/Volumes/EASTWEST 1", "EASTWEST 1"}, {d2, "EASTWEST2"}};
+    auto moved = again.find_moved(now);
+    CHECK_EQ(moved.size(), std::size_t(3));
+    for (const auto& m : moved) {
+        CHECK(m.same_place);
+        CHECK_EQ(m.volume, std::string("EASTWEST 1"));
+        again.apply_relocation(m);
+    }
+    CHECK(again.check_locations().empty());
+
+    // A library moved to another folder: found by its name.
+    fs::create_directories(d2 + "/Moved");
+    fs::rename(d2 + "/Libraries/EW Ra", d2 + "/Moved/EW Ra");
+    CHECK_EQ(again.check_locations().size(), std::size_t(1));
+    moved = again.find_moved(now);
+    REQUIRE(moved.size() == 1);
+    CHECK(!moved[0].same_place);
+    CHECK(moved[0].to.find("/Moved/EW Ra") != std::string::npos);
+
+    // Unplugged: nothing to offer.
+    fs::remove_all(d2);
+    again.check_locations();
+    CHECK(again.find_moved({{root + "/Volumes/EASTWEST 1", "EASTWEST 1"}}).empty());
 }

@@ -110,6 +110,33 @@ struct Candidate {
     std::vector<std::string> missing_articulations;
 };
 
+/// A sample library found on a drive: EastWest's "EW ..." folders (Opus,
+/// PLAY), Kontakt libraries (a folder with a .nicnt), and the catalog's own
+/// folder names. Kept with the user's library, so VC Composer always knows
+/// where each one is, and says so when a drive is not there.
+struct LibraryLocation {
+    std::string name;        ///< The folder's name ("EW Hollywood Strings Diamond").
+    std::string vendor;      ///< "EastWest", "Kontakt library", or the catalog's provider.
+    std::string path;        ///< Where it is (absolute).
+    std::string volume;      ///< The drive it is on ("EASTWEST1", "E:").
+    std::string relative;    ///< Its path inside that drive ("EastWest/EW Hollywood Strings Diamond").
+    std::string catalog_id;  ///< The catalog library it is, when known.
+    bool present = true;     ///< There at the last check.
+};
+
+/// A place to scan: a drive (or a folder) and the drive's name.
+struct ScanRoot {
+    std::string path;
+    std::string volume;
+};
+
+/// A missing library found again: where it was, where it seems to be now.
+struct Relocation {
+    std::size_t index = 0;  ///< Into locations().
+    std::string name, from, to, volume;
+    bool same_place = false;  ///< The same path inside a drive whose name or letter changed.
+};
+
 class Library {
 public:
     explicit Library(const templates::InstrumentRegistry& instruments) : instruments_(&instruments) {}
@@ -130,6 +157,28 @@ public:
     /// catalog's folder names. Returns the libraries detected.
     std::vector<std::string> detect();
     void set_detected(std::set<std::string> library_ids) { detected_ = std::move(library_ids); }
+
+    // --- Library locations (kept with the user's library) ---------------------------------
+    /// Looks through drives for sample libraries, `max_depth` folders down
+    /// (never inside a library found, nor into system or hidden folders).
+    std::vector<LibraryLocation> scan(const std::vector<ScanRoot>& roots, int max_depth = 4) const;
+    /// Keeps what a scan found: new libraries are added, known ones updated
+    /// (by path). Returns how many are new.
+    int add_locations(const std::vector<LibraryLocation>& found);
+    const std::vector<LibraryLocation>& locations() const noexcept { return locations_; }
+    /// Checks each saved library is where it was. Returns the names missing.
+    std::vector<std::string> check_locations();
+    /// For each missing library, where it might be now: the same path inside
+    /// another drive first (a renamed drive, a new drive letter), then a
+    /// folder of the same name. Nothing is changed until applied.
+    std::vector<Relocation> find_moved(const std::vector<ScanRoot>& roots, int max_depth = 4) const;
+    /// Accepts a relocation (the composer said it is right).
+    void apply_relocation(const Relocation& r);
+    /// Forgets a library (by path).
+    void remove_location(const std::string& path);
+    /// Whether the drives were ever scanned.
+    bool scanned() const noexcept { return scanned_; }
+    void set_scanned(bool on) noexcept { scanned_ = on; }
     bool detected(const std::string& library_id) const { return detected_.count(library_id) > 0; }
 
     // --- Saved patches, favorites, tags (the user's) --------------------------------------
@@ -196,6 +245,9 @@ private:
     std::vector<InstalledPlugin> installed_;
     std::vector<std::string> folders_;
     std::set<std::string> detected_;
+    std::vector<LibraryLocation> locations_;
+    bool scanned_ = false;
+    std::string catalog_match(const std::string& folder_name) const;
     std::vector<UserPatch> patches_;
     std::set<std::string> favorites_;
     std::vector<Assignment> assignments_;

@@ -47,7 +47,11 @@ LibraryService::LibraryService(AppContext& context) : context_(context), lib_(co
     context_.plugins.known().addChangeListener(this);  // a scan found or lost plug-ins
 }
 
-LibraryService::~LibraryService() { context_.plugins.known().removeChangeListener(this); }
+LibraryService::~LibraryService()
+{
+    *alive_ = false;
+    context_.plugins.known().removeChangeListener(this);
+}
 
 juce::File LibraryService::file() const { return file_; }
 
@@ -215,6 +219,148 @@ juce::String LibraryService::assign(const library::Entry& e, const std::string& 
             context_.session.set_articulation_map(track_id, p->articulation_map);
     if (open_window && context_.show_plugin_window) context_.show_plugin_window(track_id);
     return "Assigned " + juce::String(e.display) + " to " + juce::String(t->name);
+}
+
+std::vector<library::ScanRoot> LibraryService::scan_roots() const
+{
+    std::vector<library::ScanRoot> roots;
+    auto add = [&](const juce::File& f, const juce::String& volume) {
+        if (!f.isDirectory()) return;
+        for (const auto& r : roots)
+            if (r.path == f.getFullPathName().toStdString()) return;
+        roots.push_back({f.getFullPathName().toStdString(), volume.toStdString()});
+    };
+#if JUCE_MAC
+    // Every volume; the start-up disk (a link to "/") by its shared and home folders.
+    for (const auto& v : juce::File("/Volumes").findChildFiles(juce::File::findDirectories, false)) {
+        if (v.isSymbolicLink() && v.getLinkedTarget().getFullPathName() == "/") continue;
+        add(v, v.getFileName());
+    }
+    add(juce::File("/Users/Shared"), "Macintosh HD");
+    add(juce::File("/Library/Application Support"), "Macintosh HD");
+    add(juce::File::getSpecialLocation(juce::File::userHomeDirectory), "Macintosh HD");
+#elif JUCE_WINDOWS
+    juce::Array<juce::File> drives;
+    juce::File::findFileSystemRoots(drives);
+    for (const auto& d : drives) {
+        const auto label = d.getVolumeLabel();
+        const auto letter = d.getFullPathName().upToFirstOccurrenceOf(":", true, false);
+        add(d, label.isNotEmpty() ? label + " (" + letter + ")" : letter);
+    }
+#else
+    add(juce::File::getSpecialLocation(juce::File::userHomeDirectory), "Home");
+    for (const auto* base : {"/mnt", "/media"})
+        for (const auto& v : juce::File(base).findChildFiles(juce::File::findDirectories, false)) add(v, v.getFileName());
+#endif
+    for (const auto& f : lib_.library_folders()) {
+        const juce::File folder{juce::String(f)};
+        add(folder, folder.getFileName());
+    }
+    return roots;
+}
+
+void LibraryService::scan_drives(std::function<void(int, int)> done)
+{
+    if (scanning_) return;
+    scanning_ = true;
+    sendChangeMessage();
+    const auto roots = scan_roots();
+    auto copy = std::make_shared<library::Library>(lib_);
+    juce::Thread::launch([this, alive = alive_, roots, copy, done = std::move(done)] {
+        auto found = std::make_shared<std::vector<library::LibraryLocation>>(copy->scan(roots));
+        juce::MessageManager::callAsync([this, alive, found, done] {
+            if (!*alive) return;
+            scanning_ = false;
+            const int added = lib_.add_locations(*found);
+            lib_.set_scanned(true);
+            lib_.check_locations();
+            changed();
+            if (done) done(static_cast<int>(found->size()), added);
+        });
+    });
+}
+
+void LibraryService::check_locations_at_start()
+{
+    if (!lib_.scanned()) {
+        // The first time: find the libraries on every drive, quietly.
+        scan_drives([this](int found, int) {
+            if (context_.status && found > 0)
+                context_.status("Found " + juce::String(found) + " sample libraries on your drives (Window > Sound Setup > Libraries)");
+        });
+        return;
+    }
+    recheck_locations(true);
+}
+
+void LibraryService::recheck_locations(bool quiet)
+{
+    const auto missing = lib_.check_locations();
+    changed();
+    if (missing.empty()) {
+        if (!quiet && context_.status) context_.status("Every library is where it was");
+        return;
+    }
+    // Look for them again (a drive renamed, a new drive letter), off the message thread.
+    const auto roots = scan_roots();
+    auto copy = std::make_shared<library::Library>(lib_);
+    juce::Thread::launch([this, alive = alive_, roots, copy, missing] {
+        auto moved = std::make_shared<std::vector<library::Relocation>>(copy->find_moved(roots));
+        juce::MessageManager::callAsync([this, alive, moved, missing] {
+            if (!*alive) return;
+            std::set<std::string> found_names;
+            for (const auto& m : *moved) found_names.insert(m.name);
+            if (!moved->empty()) {
+                juce::String text = "These libraries are not where they were, but were found here:\n\n";
+                int shown = 0;
+                for (const auto& m : *moved) {
+                    if (shown++ == 12) {
+                        text << "...and " << juce::String(static_cast<int>(moved->size()) - 12) << " more\n";
+                        break;
+                    }
+                    text << juce::String(m.name) << "\n    was: " << juce::String(m.from) << "\n    now: " << juce::String(m.to)
+                         << (m.same_place ? "  (same folder, the drive's name or letter changed)" : "") << "\n";
+                }
+                text << "\nIs this correct?";
+                juce::AlertWindow::showAsync(juce::MessageBoxOptions()
+                                                 .withIconType(juce::MessageBoxIconType::QuestionIcon)
+                                                 .withTitle("Libraries found in a new place")
+                                                 .withMessage(text)
+                                                 .withButton("Yes, Use These Places")
+                                                 .withButton("No"),
+                                             [this, alive, moved](int r) {
+                                                 if (!*alive || r != 1) return;
+                                                 for (const auto& m : *moved) lib_.apply_relocation(m);
+                                                 lib_.check_locations();
+                                                 changed();
+                                                 if (context_.status)
+                                                     context_.status("Updated where " + juce::String(static_cast<int>(moved->size())) +
+                                                                     " libraries are");
+                                             });
+            }
+            std::vector<std::string> lost;
+            for (const auto& n : missing)
+                if (!found_names.count(n)) lost.push_back(n);
+            if (!lost.empty()) {
+                juce::String text = "VC Composer cannot find these libraries (is a drive disconnected?):\n\n";
+                for (std::size_t i = 0; i < lost.size() && i < 12; ++i) text << juce::String(lost[i]) << "\n";
+                if (lost.size() > 12) text << "...and " << juce::String(static_cast<int>(lost.size()) - 12) << " more\n";
+                text << "\nConnect the drive and press Scan Again, or show VC Composer where they are now.";
+                juce::AlertWindow::showAsync(juce::MessageBoxOptions()
+                                                 .withIconType(juce::MessageBoxIconType::WarningIcon)
+                                                 .withTitle("Libraries not found")
+                                                 .withMessage(text)
+                                                 .withButton("Scan Again")
+                                                 .withButton("Locate...")
+                                                 .withButton("Later"),
+                                             [this, alive](int r) {
+                                                 if (!*alive) return;
+                                                 if (r == 1) recheck_locations(false);
+                                                 if (r == 2) context_.commands.invokeDirectly(cmd::soundSetup, true);
+                                             });
+            }
+        });
+    });
 }
 
 std::vector<std::pair<std::string, std::string>> LibraryService::installed_libraries() const

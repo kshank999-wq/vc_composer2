@@ -28,6 +28,7 @@
 #include "ui/console/MixTools.h"
 #include "ui/library/ArticulationMapWindow.h"
 #include "ui/library/LibraryBrowser.h"
+#include "ui/library/SoundSetup.h"
 #include "vcc/theory/Chord.h"
 
 #include "ui/hw/HwGallery.h"
@@ -63,7 +64,7 @@ namespace vcc::desktop {
 
 // --- Plug-in windows --------------------------------------------------------------------------
 
-class MainComponent::PluginWindow final : public juce::DocumentWindow {
+class MainComponent::PluginWindow final : public juce::DocumentWindow, private juce::Timer {
 public:
     /// An instrument's window (`slot` < 0) or an effect insert's.
     PluginWindow(AppContext& c, std::string owner_id, int slot, juce::AudioPluginInstance& instance)
@@ -78,6 +79,19 @@ public:
         setResizable(editor->isResizable(), false);
         centreWithSize(getWidth(), getHeight());
         setVisible(true);
+        // Floats over VC Composer's own windows (as a plug-in window does in
+        // any DAW) while VC Composer is in front; steps back for other apps.
+        setAlwaysOnTop(juce::Process::isForegroundProcess());
+        startTimer(400);
+    }
+
+    void timerCallback() override
+    {
+        const bool front = juce::Process::isForegroundProcess();
+        if (isAlwaysOnTop() != front) {
+            setAlwaysOnTop(front);
+            if (front && isVisible() && !isMinimised()) toFront(false);
+        }
     }
 
     ~PluginWindow() override
@@ -338,6 +352,13 @@ MainComponent::MainComponent(AppContext& context)
         auto ask = [self] { return self != nullptr && self->confirm_discard(); };
         set_after_sign_in([self, ask, idle] {
             if (self != nullptr) auto_update(self->context_, ask, idle);
+        });
+        // Sample libraries: found on the drives the first time; afterwards,
+        // each checked where it was (and looked for again if a drive moved).
+        juce::Timer::callAfterDelay(6000, [self] {
+            if (self == nullptr || self->context_.library == nullptr) return;
+            if (juce::SystemStats::getEnvironmentVariable("VCC_NO_LIBRARY_SCAN", {}).isNotEmpty()) return;
+            self->context_.library->check_locations_at_start();
         });
         // One downloaded last time goes in first, before any work starts.
         juce::Timer::callAfterDelay(2500, [self, idle] {
@@ -2251,7 +2272,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                 cmd::unfreezeTrack, cmd::rerenderTrack, cmd::expandArticulations, cmd::consolidateArticulations,
                 cmd::instrumentUsage, cmd::sharedProjects, cmd::shareProject, cmd::syncShared, cmd::lockPart, cmd::unlockPart,
                 cmd::checkUpdates, cmd::toggleDock, cmd::toggleWorkView, cmd::saveLayout, cmd::midiSetup, cmd::mixerController, cmd::scoreView, cmd::trackList, cmd::hearEntry,
-                cmd::builtinSounds, cmd::credits, cmd::toggleInspector, cmd::libraryWindow, cmd::soundAssignments, cmd::scoreInfo});
+                cmd::builtinSounds, cmd::credits, cmd::toggleInspector, cmd::libraryWindow, cmd::soundAssignments, cmd::scoreInfo, cmd::soundSetup});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -2484,6 +2505,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             break;
         case cmd::scoreInfo:
             info.setInfo("Sheet Info...", "The score's title (styled), composer, date, version and the other credits, and which of them print", "File", 0);
+            break;
+        case cmd::soundSetup:
+            info.setInfo("Sound Setup...", "Put your own libraries (EastWest Opus or PLAY, Kontakt...) on the tracks: open the player, load a sound, name it, save it",
+                         "Window", 0);
+            info.addDefaultKeypress('k', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
             break;
         case cmd::soundAssignments:
             info.setInfo("Sound Assignments...", "Your sound for each instrument and articulation, used in every template and new track",
@@ -2834,6 +2860,7 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::toggleInspector: set_inspector_shown(!inspector_shown()); break;
         case cmd::libraryWindow: set_library_shown(!library_shown()); break;
         case cmd::soundAssignments: show_sound_assignments(context_); break;
+        case cmd::soundSetup: show_sound_setup(context_); break;
         case cmd::scoreInfo: show_score_info(context_); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;
         case cmd::reloadCrashedPlugins: {
@@ -3007,6 +3034,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             m.addSeparator();
             m.addCommandItem(c, cmd::toggleInspector);
             m.addCommandItem(c, cmd::libraryWindow);
+            m.addCommandItem(c, cmd::soundSetup);
             m.addCommandItem(c, cmd::soundAssignments);
             m.addCommandItem(c, cmd::trackList);
             m.addSeparator();
