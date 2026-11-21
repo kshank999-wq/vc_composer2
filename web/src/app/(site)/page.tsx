@@ -1,6 +1,13 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import stackedLogo from '../../../public/brand/logo-stacked.png';
+import chordsShot from '../../../public/screens/chords.webp';
+import composerShot from '../../../public/screens/composer.webp';
+import mixerShot from '../../../public/screens/mixer.webp';
+import producerRollShot from '../../../public/screens/producer-roll.webp';
+import rackShot from '../../../public/screens/rack.webp';
+import scoreShot from '../../../public/screens/score.webp';
+import vcEqShot from '../../../public/screens/vc-eq.webp';
 
 /**
  * The front page.
@@ -10,7 +17,8 @@ import stackedLogo from '../../../public/brand/logo-stacked.png';
  * order (docs/05) in the main repository. Nothing on the roadmap's "not yet"
  * list appears (collaboration has its own page), there are no testimonials,
  * and no prices: the price lives in
- * Stripe and is shown on the buying page.
+ * Stripe and is shown on the buying page. The screenshots are the app as it
+ * is, never mocked up.
  *
  * The five headlines under "Built for the full orchestral session" are the
  * Memory Management spec's (§11), each checked against what shipped (docs/05,
@@ -146,60 +154,111 @@ const FEATURES: ReadonlyArray<{ title: string; lede: string; points: string[]; w
   },
 ];
 
-/** A decorative staff, drawn inline: no external images on this site. */
-function StaffArt() {
-  const lines = [0, 1, 2, 3, 4];
-  const notes = [
-    { x: 150, y: 70, warm: false },
-    { x: 230, y: 60, warm: false },
-    { x: 310, y: 50, warm: true },
-    { x: 390, y: 65, warm: false },
-    { x: 520, y: 75, warm: false },
-    { x: 600, y: 55, warm: true },
-    { x: 680, y: 45, warm: false },
-    { x: 760, y: 60, warm: false },
-    { x: 890, y: 70, warm: false },
-    { x: 970, y: 50, warm: true },
-  ];
+type Screen = typeof composerShot;
+
+/**
+ * The screenshots are the app itself, captured at 2x by the desktop check's
+ * marketing_shots section (desktop/check/DesktopCheck.cpp) from one demo
+ * cue, "Night Train - Main Title": re-run it to refresh them.
+ */
+function Shot({ src, alt, priority = false, sizes }: { src: Screen; alt: string; priority?: boolean; sizes?: string }) {
   return (
-    <svg className="staff-art" viewBox="0 0 1100 160" role="img" aria-label="A bar of music on a staff above a row of mixer meters">
-      {lines.map((line) => (
-        <line key={line} x1="40" x2="1060" y1={40 + line * 10} y2={40 + line * 10} stroke="#4b443a" strokeWidth="1.2" />
-      ))}
-      {[460, 830, 1060].map((x) => (
-        <line key={x} x1={x} x2={x} y1="40" y2="80" stroke="#4b443a" strokeWidth="1.5" />
-      ))}
-      {notes.map((note) => (
-        <g key={note.x}>
-          <ellipse
-            cx={note.x}
-            cy={note.y}
-            rx="7.5"
-            ry="5.5"
-            fill={note.warm ? '#ebc46a' : '#ede7da'}
-            transform={`rotate(-20 ${note.x} ${note.y})`}
-          />
-          <line x1={note.x + 6.5} x2={note.x + 6.5} y1={note.y} y2={note.y - 32} stroke={note.warm ? '#ebc46a' : '#ede7da'} strokeWidth="1.6" />
-        </g>
-      ))}
-      {Array.from({ length: 34 }, (_, at) => {
-        const height = 8 + ((at * 37) % 29);
-        return (
-          <rect
-            key={at}
-            x={60 + at * 29.5}
-            y={150 - height}
-            width="18"
-            height={height}
-            rx="2"
-            fill={at % 7 === 3 ? '#b52a2a' : '#d6a743'}
-            opacity={0.35 + ((at * 13) % 10) / 20}
-          />
-        );
-      })}
-    </svg>
+    <figure className="shot">
+      <Image src={src} alt={alt} priority={priority} sizes={sizes ?? '(max-width: 1120px) 100vw, 1120px'} placeholder="empty" />
+    </figure>
   );
 }
+
+const VIEWS: ReadonlyArray<{ name: string; tag: string; lede: string; points: string[]; shot: Screen; alt: string }> = [
+  {
+    name: 'VC Composer',
+    tag: 'Write',
+    lede: 'Write on staves, one per instrument, with the keyboard or the mouse, and hear your libraries play it back. Switch to Score view to see the full score as it prints.',
+    points: [
+      'A track header per staff: record, solo, mute, volume, pan, instrument, MIDI in and out',
+      'Solo plays one staff on its own; Score plays everything that is unmuted',
+      'Page view in orchestral order, empty staves hidden, concert or transposed pitch',
+      'The same engraving makes the PDF parts and the full score',
+    ],
+    shot: scoreShot,
+    alt: 'Score view: two pages of the full score, woodwinds, brass, timpani, harp and strings in orchestral order',
+  },
+  {
+    name: 'VC Producer',
+    tag: 'Produce',
+    lede: 'The same project as MIDI and audio. Every staff is already a playing track; open one and the notes you wrote are there in the piano roll, with their velocities.',
+    points: [
+      'Every instrument track carries its own audio lane, with its own record, solo and mute: MIDI, Audio or Both',
+      'Recording an audio lane records that instrument, already wired in',
+      'Edit how a note plays and choose: apply it to the score, or keep it as a Producer override',
+      'A compact mixer under the tracks, with the inserts on every strip',
+    ],
+    shot: producerRollShot,
+    alt: 'The Producer view: Violins I open in the piano roll with velocities, its printed audio lane beneath, the strings below, and a 21-strip compact mixer',
+  },
+];
+
+const TOUR: ReadonlyArray<{ eyebrow: string; title: string; body: string; points: string[]; shot: Screen; alt: string; narrow?: boolean }> = [
+  {
+    eyebrow: 'Mixer',
+    title: 'A large-format console in its own window',
+    body:
+      'The full mixer floats in a window of its own, so it can live on a second screen. Click a section title (Input, Filters, ' +
+      'Equaliser, Dynamics, Inserts) to open it large and work on it, and click again to put it back.',
+    points: [
+      'Input trim and phase, high- and low-pass filters, four-band EQ, compressor and gate on every strip',
+      'Group buses, FX buses and the master, with automation modes on every channel',
+      'A compact deck docks under the Producer tracks when you only need faders',
+    ],
+    shot: mixerShot,
+    alt: 'The channel console: fifteen orchestral channels with EQ, dynamics, pan and faders, the Woodwinds and Brass group buses, and the master',
+  },
+  {
+    eyebrow: 'Rack gear',
+    title: 'Inserts that look like the gear they are',
+    body:
+      'Open a strip’s inserts and they appear as rack-mount units, with real knobs and meters. Empty spaces read “Add unit”: ' +
+      'click one to load another plug-in or piece of built-in gear, and expand the rack a bay at a time when you need more.',
+    points: [
+      'VC EQ, VC Compressor, VC Reverb, saturation and more, built in',
+      'Your own VST3 and Audio Unit effects in the same rack',
+      'Every knob can be automated',
+    ],
+    shot: rackShot,
+    alt: 'A rack of VC gear: VC EQ, VC Compressor with a VU meter and VC Reverb, and an empty bay to add another unit',
+    narrow: true,
+  },
+  {
+    eyebrow: 'VC EQ',
+    title: 'A parallel dynamic equaliser, built in',
+    body:
+      'Four bands that never fight each other: each is a low shelf, a bell or a high shelf, and any of them can turn dynamic, ' +
+      'cutting only when its own frequencies get loud. A real-time analyser shows what goes in and what comes out.',
+    points: [
+      'Per-band threshold, ratio, attack and release, and a solo to hear one band alone',
+      'Automatic gain compensation keeps the level where it was while you shape the tone',
+      'External sidechain: let another track or bus trigger the dynamic bands',
+      'High- and low-pass filters from 12 to 48 dB per octave',
+    ],
+    shot: vcEqShot,
+    alt: 'VC EQ: the analyser with the input and output spectrum and the curve through four band nodes, and the band, filter and output controls',
+    narrow: true,
+  },
+  {
+    eyebrow: 'Chord Explorer',
+    title: 'Build a progression, then send it as notation',
+    body:
+      'The key’s chords sit on top with their Roman numerals, and the borrowed chords from a mode you pick sit beneath. Drag ' +
+      'them into a twelve-bar build, divide a bar, edit any chord’s notes, audition it, and send it to a staff.',
+    points: [
+      'Dozens of progressions to start from: pop, classical, jazz, blues, cinematic',
+      'Two-hand voicings with voice leading',
+      'Send one voice to a track, or spread all five over the strings, woodwinds, brass or choir',
+    ],
+    shot: chordsShot,
+    alt: 'The Chord Explorer in D minor: diatonic and borrowed chords, the Romantic / cinematic progression, and an eight-bar build of i VI III VII i iv VI V',
+  },
+];
 
 export default function HomePage() {
   return (
@@ -231,7 +290,11 @@ export default function HomePage() {
             sizes="(max-width: 720px) 300px, 380px"
           />
         </div>
-        <StaffArt />
+        <Shot
+          src={composerShot}
+          priority
+          alt="VC Composer with a fifteen-instrument orchestral cue in D minor: strings and woodwinds on their own staves, each with its track controls"
+        />
       </section>
 
       <section aria-label="In numbers">
@@ -252,6 +315,52 @@ export default function HomePage() {
             <strong>2 platforms</strong>
             <span>Windows and macOS, one licence covering both</span>
           </div>
+        </div>
+      </section>
+
+      <section id="views" aria-labelledby="views-title">
+        <span className="eyebrow">Two views, one project</span>
+        <h2 id="views-title">VC Composer and VC Producer</h2>
+        <p className="lede">
+          Write in Composer, produce in Producer. They are two views of the same tracks, so a note written on a staff is already
+          playing in Producer, and switching keeps the playhead and the selection.
+        </p>
+        {VIEWS.map((view) => (
+          <article key={view.name} className="showcase">
+            <div className="showcase-text">
+              <span className="showcase-tag">{view.tag}</span>
+              <h3>{view.name}</h3>
+              <p>{view.lede}</p>
+              <ul>
+                {view.points.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+            </div>
+            <Shot src={view.shot} alt={view.alt} />
+          </article>
+        ))}
+      </section>
+
+      <section id="tour" aria-labelledby="tour-title">
+        <span className="eyebrow">A closer look</span>
+        <h2 id="tour-title">From the first note to the final mix</h2>
+        <div className="tour">
+          {TOUR.map((stop, at) => (
+            <article key={stop.title} className={`tour-stop${at % 2 ? ' flip' : ''}${stop.narrow ? ' narrow' : ''}`}>
+              <div className="tour-text">
+                <span className="eyebrow">{stop.eyebrow}</span>
+                <h3>{stop.title}</h3>
+                <p>{stop.body}</p>
+                <ul>
+                  {stop.points.map((point) => (
+                    <li key={point}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+              <Shot src={stop.shot} alt={stop.alt} sizes="(max-width: 900px) 100vw, 640px" />
+            </article>
+          ))}
         </div>
       </section>
 

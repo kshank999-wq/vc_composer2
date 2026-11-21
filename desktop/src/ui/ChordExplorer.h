@@ -94,6 +94,8 @@ public:
     SendTo send_to() const noexcept { return send_to_; }
     /// The project bar the build's first bar lands on (the Start bar).
     int first_bar() const;
+    /// Chooses the listed progression with this name (false when none).
+    bool select_progression(const std::string& name);
     /// Plays these notes as a chord (nothing is written).
     void audition_notes(const std::vector<int>& notes);
 

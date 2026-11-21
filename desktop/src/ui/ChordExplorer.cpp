@@ -1087,6 +1087,17 @@ void ChordExplorer::filter()
     progression_changed();
 }
 
+bool ChordExplorer::select_progression(const std::string& name)
+{
+    for (std::size_t i = 0; i < shown_.size(); ++i)
+        if (shown_[i]->name == name) {
+            list_.selectRow(static_cast<int>(i));
+            list_.scrollToEnsureRowIsOnscreen(static_cast<int>(i));
+            return true;
+        }
+    return false;
+}
+
 const theory::Progression* ChordExplorer::chosen() const
 {
     const int row = list_.getSelectedRow();

@@ -6908,6 +6908,267 @@ void audio_lane_track_checks(MainWindow& window, const juce::File& dir)
     main.show_bottom_mixer(true);
 }
 
+/// Screenshots for the website (not a check: run with
+/// VCC_CHECK_ONLY=marketing_shots). A demo cue - eight bars in D minor on the
+/// full orchestral template - then each view at twice the screen's
+/// resolution into VCC_MARKETING_DIR (or <dir>/marketing).
+void marketing_shots(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& ctx = window.context();
+    auto& session = ctx.session;
+    ctx.engine.stop();
+    const auto env_dir = juce::SystemStats::getEnvironmentVariable("VCC_MARKETING_DIR", {});
+    const auto out = env_dir.isNotEmpty() ? juce::File(env_dir) : dir.getChildFile("marketing");
+    out.createDirectory();
+    auto snap = [&](juce::Component& c, const char* name) {
+        juce::Component::SafePointer<juce::Component> alive(&c);
+        pump(250);
+        if (!alive || alive->getWidth() <= 0) return;
+        const auto image = alive->createComponentSnapshot(alive->getLocalBounds(), true, 2.0f);
+        juce::FileOutputStream stream(out.getChildFile(juce::String(name) + ".png"));
+        if (stream.openedOk()) {
+            stream.setPosition(0);
+            stream.truncate();
+            juce::PNGImageFormat().writeImageToStream(image, stream);
+        }
+        std::fprintf(stderr, "marketing: %s %dx%d\n", name, image.getWidth(), image.getHeight());
+    };
+    window.setBounds(0, 0, 1920, 1200);
+    session.new_from_template("cinematic.orchestra.consolidated");
+    session.rename_project("Night Train - Main Title");
+    session.set_tempo(84.0);
+    session.set_key("D minor");
+    pump(200);
+    auto find = [&](const char* name) -> std::string {
+        for (const auto& t : session.data().tracks)
+            if (t.name == name) return t.id;
+        return {};
+    };
+    // The template's two sketch pianos stay empty in this cue: out of the shots.
+    for (const char* sketch : {"Sketch Piano Melody", "Sketch Piano Chords"})
+        if (const auto id = find(sketch); !id.empty()) session.remove_track(id);
+    constexpr Ticks Q = kTicksPerQuarter;
+    // (start in quarters, length in quarters, MIDI note as heard)
+    using Line = std::vector<std::tuple<double, double, int>>;
+    auto put = [&](const char* name, const Line& line, std::vector<project::ChordMark> symbols = {}) {
+        const auto id = find(name);
+        const auto* t = session.data().find_track(id);
+        if (!t) return;
+        std::vector<NoteEvent> notes;
+        for (const auto& [at, len, pitch] : line) {
+            NoteEvent n;
+            n.start = static_cast<Ticks>(at * Q);
+            n.duration = static_cast<Ticks>(len * Q);
+            n.pitch = pitch;
+            n.velocity = 84;
+            notes.push_back(n);
+        }
+        const auto events = session.written_events(*t, notes, 32 * Q);
+        session.write_events(id, events, symbols, project::CollisionPolicy::Replace, "Demo cue");
+    };
+    // Dm Bb F C | Dm Gm Bb A
+    const int roots[] = {2, 10, 5, 0, 2, 7, 10, 9};
+    const bool minor[] = {true, false, false, false, true, true, false, false};
+    const char* names[] = {"Dm", "Bb", "F", "C", "Dm", "Gm", "Bb", "A"};
+    Line basses, celli, violas, vln2, harp, clarinets, horns;
+    for (int b = 0; b < 8; ++b) {
+        const int r = roots[b], third = minor[b] ? 3 : 4;
+        const double at = b * 4.0;
+        basses.push_back({at, 4.0, 36 + r});
+        celli.push_back({at, 2.0, 48 + r});
+        celli.push_back({at + 2.0, 2.0, 48 + r + (r + 7 >= 12 ? -5 : 7)});
+        const int base = 55 + ((r - 7 + 12) % 12);  // the chord in the violas' middle register
+        const int fig[] = {base, base + 7, base + third + 12, base + 7};
+        for (int k = 0; k < 8; ++k) violas.push_back({at + k * 0.5, 0.5, fig[k % 4] > 72 ? fig[k % 4] - 12 : fig[k % 4]});
+        const int top = 62 + ((r + third - 2 + 12) % 12);
+        vln2.push_back({at, 2.0, top});
+        vln2.push_back({at + 2.0, 2.0, top + (third == 3 ? 4 : 3)});
+        clarinets.push_back({at, 4.0, 62 + ((r + 7 - 2 + 12) % 12)});
+        if (b >= 4) {
+            horns.push_back({at, 4.0, 53 + ((r - 5 + 12) % 12)});
+            horns.push_back({at, 4.0, 53 + ((r - 5 + 12) % 12) + 7});
+        }
+        if (b < 4)
+            for (int k = 0; k < 8; ++k) {
+                const int arp[] = {48 + r, 55 + r, 60 + r, 60 + r + third + 12};
+                harp.push_back({at + k * 0.5, 0.5, arp[k % 4] > 84 ? arp[k % 4] - 12 : arp[k % 4]});
+            }
+    }
+    const Line melody = {{0, 1, 69}, {1, 1, 74}, {2, 1, 77}, {3, 0.5, 76}, {3.5, 0.5, 74},
+                         {4, 2, 77}, {6, 1, 74}, {7, 1, 70},
+                         {8, 1, 72}, {9, 1, 77}, {10, 2, 81},
+                         {12, 1.5, 79}, {13.5, 0.5, 77}, {14, 1, 76}, {15, 1, 72},
+                         {16, 2, 74}, {18, 1, 77}, {19, 1, 81},
+                         {20, 2, 82}, {22, 1, 81}, {23, 1, 79},
+                         {24, 1, 77}, {25, 1, 74}, {26, 1, 70}, {27, 1, 74},
+                         {28, 2, 73}, {30, 1, 76}, {31, 1, 81}};
+    std::vector<project::ChordMark> symbols;
+    for (int b = 0; b < 8; ++b) symbols.push_back({static_cast<Ticks>(b * 4 * Q), names[b]});
+    put("Violins I", melody, symbols);
+    Line flute;
+    for (const auto& [at, len, p] : melody)
+        if (at >= 16) flute.push_back({at, len, p + 12});
+    put("Flutes", flute);
+    put("Violins II", vln2);
+    put("Violas", violas);
+    put("Celli", celli);
+    put("Basses", basses);
+    put("Clarinets", clarinets);
+    put("Horns", horns);
+    put("Harp", harp);
+    put("Timpani", {{0, 1, 38}, {2, 1, 45}, {15, 1, 45}, {16, 1, 38}, {18, 1, 45}, {28, 1, 45}, {30, 1, 45}});
+    put("Trumpets", {{24, 1, 74}, {25, 1, 77}, {26, 2, 81}, {28, 4, 81}});
+    // Gear on a few strips, and a printed take on the violins' audio lane.
+    auto gear = [&](const char* name, std::initializer_list<const char*> kinds) {
+        session.update_track_mix(find(name), "gear", [&](project::Track& t) {
+            for (const char* k : kinds) {
+                project::InsertSlot slot;
+                slot.kind = k;
+                slot.suggestion = false;
+                t.inserts.push_back(slot);
+            }
+        });
+    };
+    gear("Violins I", {"dyneq", "compressor", "reverb"});
+    gear("Violins II", {"eq", "compressor"});
+    gear("Celli", {"eq", "dyneq"});
+    gear("Horns", {"eq", "reverb"});
+    gear("Basses", {"eq"});
+    session.update_track_mix(find("Violins I"), "eq", [](project::Track& t) {
+        auto& p = t.inserts[0].params;
+        p["b1_type"] = 0;
+        p["b1_gain_db"] = -3.0;
+        p["b2_freq"] = 420;
+        p["b2_gain_db"] = -4.5;
+        p["b2_q"] = 1.6;
+        p["b2_dyn"] = 1;
+        p["b3_freq"] = 3200;
+        p["b3_gain_db"] = 3.5;
+        p["b4_type"] = 2;
+        p["b4_freq"] = 9000;
+        p["b4_gain_db"] = 2.5;
+        p["hp_on"] = 1;
+        p["hp_freq"] = 90;
+    });
+    const auto take = dir.getChildFile("Audio Files").getChildFile("violins-take.wav");
+    take.getParentDirectory().createDirectory();
+    take.deleteFile();
+    {
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(take);
+        auto writer = juce::WavAudioFormat().createWriterFor(
+            stream, juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(2).withBitsPerSample(24));
+        const double secs = 32.0 * 60.0 / 84.0;
+        juce::AudioBuffer<float> wave(2, static_cast<int>(48000 * secs));
+        juce::Random rnd(7);
+        for (int i = 0; i < wave.getNumSamples(); ++i) {
+            const double t = i / 48000.0, beat = t * 84.0 / 60.0;
+            const float env = static_cast<float>(0.25 + 0.2 * std::sin(beat * juce::MathConstants<double>::pi / 2.0)) *
+                              static_cast<float>(0.6 + 0.4 * std::exp(-std::fmod(beat, 1.0) * 3.0));
+            float v = 0.0f;
+            for (int h = 1; h <= 5; ++h)
+                v += static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * 293.66 * h * t) / h);
+            v = env * (0.5f * v + 0.08f * (rnd.nextFloat() - 0.5f));
+            wave.setSample(0, i, v);
+            wave.setSample(1, i, v * 0.92f);
+        }
+        if (writer) writer->writeFromAudioSampleBuffer(wave, 0, wave.getNumSamples());
+    }
+    project::AudioClip clip;
+    clip.file = take.getFullPathName().toStdString();
+    clip.name = "Violins I - print";
+    clip.length = 32.0 * 60.0 / 84.0;
+    clip.channels = 2;
+    clip.file_sample_rate = 48000.0;
+    session.add_audio_clips({{find("Violins I"), clip}}, "Print");
+    session.set_playback(find("Violins I"), "both");
+    ctx.engine.locate(9 * Q);
+    pump(300);
+
+    // Composer: the score, staff by staff - the strings and winds, the
+    // keyboard deck tucked away so the staves have the height.
+    main.show_workspace(MainComponent::Workspace::Composer);
+    session.select_track({});
+    main.set_dock_hidden(true);
+    main.set_work_view(true);
+    window.setBounds(0, 0, 1920, 1440);  // tall enough for seven staves
+    main.composer().set_zoom(4.6, 6.5);
+    main.composer().set_origin(0);
+    ctx.status("Night Train - Main Title: 15 instruments, D minor, 84 BPM");
+    pump(400);
+    snap(main, "composer");
+    main.set_work_view(false);
+    main.set_dock_hidden(false);
+    window.setBounds(0, 0, 1920, 1200);
+    // Producer: the tracks, the MIDI and the audio lane, the compact mixer.
+    main.show_workspace(MainComponent::Workspace::Producer);
+    main.show_bottom_mixer(true);
+    session.select_track(find("Violins I"));
+    main.sequencer().set_expanded_track({});
+    ctx.status("Night Train - Main Title: 15 instruments, D minor, 84 BPM");
+    pump(400);
+    snap(main, "producer");
+    // The same with Violins I's piano roll open.
+    main.sequencer().set_expanded_track(find("Violins I"));
+    pump(400);
+    snap(main, "producer-roll");
+    main.sequencer().set_expanded_track({});
+    // The mixer window, the rack, the dynamic EQ.
+    main.show_console_window();
+    if (auto* full = main.full_console()) {
+        if (auto* w = dynamic_cast<juce::DocumentWindow*>(full->getTopLevelComponent())) w->setBounds(0, 0, 1920, 1080);
+        pump(400);
+        snap(*full, "mixer");
+    }
+    main.set_mixer_full(false, false);
+    ctx.engine.rebuild_now();
+    if (auto* proc = dynamic_cast<DynamicEqInsert*>(ctx.engine.insert_processor(find("Violins I"), 0))) {
+        juce::Random rnd(3);
+        for (int b = 0; b < 60; ++b) {
+            std::vector<float> l(512), r(512);
+            for (int i = 0; i < 512; ++i) {
+                const double t = (b * 512 + i) / 48000.0;
+                float v = 0.0f;
+                for (int h = 1; h <= 12; ++h) v += static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * 146.83 * h * t) / (h * 1.4));
+                l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] = 0.18f * v + 0.05f * (rnd.nextFloat() - 0.5f);
+            }
+            proc->process(l.data(), r.data(), 512);
+        }
+    }
+    console::show_rack(ctx, find("Violins I"), 0);
+    pump(400);
+    if (auto* rack = console::rack_window(find("Violins I"))) {
+        rack->setSize(rack->getWidth(), 4 * 96 + 96 + 96 + 60);
+        pump(300);
+        snap(*rack, "rack");
+        if (auto* dw = dynamic_cast<juce::DocumentWindow*>(rack)) dw->closeButtonPressed();
+    }
+    // The score on pages.
+    main.show_workspace(MainComponent::Workspace::Composer);
+    main.set_page_view(true);
+    pump(600);
+    snap(main, "score");
+    main.set_page_view(false);
+    // Chord Explorer.
+    show_chord_explorer(ctx);
+    pump(500);
+    if (auto* w = find_dialog("Chord Explorer")) {
+        if (auto* ex = dynamic_cast<juce::DocumentWindow*>(w) ? dynamic_cast<ChordExplorer*>(static_cast<juce::DocumentWindow*>(w)->getContentComponent()) : nullptr) {
+            ex->select_progression("Romantic / cinematic");
+            // The cue's own progression in the build: i VI III VII i iv VI V.
+            const int degrees[] = {0, 5, 2, 6, 0, 3, 5};
+            const char* numerals[] = {"i", "VI", "III", "VII", "i", "iv", "VI"};
+            for (int b = 0; b < 7; ++b) ex->set_build_chord(b, ex->key_chord(degrees[b]), numerals[b]);
+            ex->set_build_chord(7, ex->borrowed_chord(5), "V");
+            ex->use_build(true);
+        }
+        pump(400);
+        snap(*w, "chords");
+    }
+    if (auto* dw = dynamic_cast<juce::DocumentWindow*>(find_dialog("Chord Explorer"))) dw->closeButtonPressed();
+    pump(200);
+}
+
 void slur_tie_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -12722,6 +12983,7 @@ int main(int argc, char** argv)
                 {"slur_tie_checks", slur_tie_checks},
                 {"rack_gear_checks", rack_gear_checks},
                 {"dyneq_checks", dyneq_checks},
+                {"marketing_shots", marketing_shots},
                 {"mix_checks", mix_checks},
                 {"section_zoom_checks", section_zoom_checks},
                 {"audio_lane_track_checks", audio_lane_track_checks},

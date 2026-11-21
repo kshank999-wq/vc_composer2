@@ -511,15 +511,6 @@ a:focus-visible {
   max-width: 720px;
 }
 
-.staff-art {
-  width: 100%;
-  max-width: 1120px;
-  height: auto;
-  display: block;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
-}
 
 .feature-grid {
   display: grid;
@@ -927,4 +918,128 @@ a:focus-visible {
 
 .link-button:hover {
   text-decoration: underline;
+}
+
+/* -------------------------------------------------------------- screenshots */
+
+.shot {
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(214, 167, 67, 0.08);
+}
+
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.home-hero .shot {
+  margin-top: 8px;
+}
+
+.showcase {
+  display: grid;
+  gap: 20px;
+  margin: 40px 0 0;
+}
+
+.showcase-text {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 8px 40px;
+  align-items: start;
+}
+
+.showcase-text h3 {
+  font-size: 1.75rem;
+  margin: 0;
+  grid-column: 1;
+}
+
+.showcase-text p {
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.showcase-text ul {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.showcase-text li {
+  margin: 4px 0;
+}
+
+.showcase-tag {
+  grid-column: 1;
+  justify-self: start;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.tour {
+  display: grid;
+  gap: 56px;
+  margin-top: 32px;
+}
+
+.tour-stop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr);
+  gap: 32px;
+  align-items: center;
+}
+
+.tour-stop.narrow {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+}
+
+.tour-stop.flip .tour-text {
+  order: 2;
+}
+
+.tour-text p {
+  color: var(--muted);
+}
+
+.tour-text ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.tour-text li {
+  margin: 4px 0;
+}
+
+@media (max-width: 900px) {
+  .showcase-text,
+  .tour-stop,
+  .tour-stop.narrow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .showcase-text ul {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .tour-stop.flip .tour-text {
+    order: 0;
+  }
 }
