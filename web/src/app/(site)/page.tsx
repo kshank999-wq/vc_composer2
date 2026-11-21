@@ -267,11 +267,18 @@ export default function HomePage() {
         <div className="home-hero-top">
           <div>
             <span className="eyebrow">For film, TV and game composers</span>
-            <h1>VC Composer, a notation-first scoring workstation.</h1>
+            <h1>VC Composer, the notation‑first DAW.</h1>
             <p>
               Write on staves and hear your sample libraries play it. Edit the mirrored MIDI, mix on a hardware-style
               console, score to picture with timecode, hits and cues, run a director review, and export the parts, the
               MusicXML, the MIDI and the stems. One desktop application, on Windows and macOS. Not a plug-in.
+            </p>
+            {/* Finale is no longer made (MakeMusic ended it in 2024); its writers
+                need somewhere to go, and the note-value keys follow Finale's
+                (FEATURES, "Notation first"). From Ken. */}
+            <p>
+              <strong>Coming from Finale?</strong> Finale is no longer made. VC Composer’s note-entry keys follow
+              Finale’s and Sibelius’s, so your hands already know the way.
             </p>
             <div className="actions">
               <Link href="/download" className="button">
