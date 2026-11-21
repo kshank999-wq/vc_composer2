@@ -22,6 +22,10 @@ public:
     /// The instruments a track can play: built-in, virtual instruments by
     /// maker, the instrument window, the library, a scan.
     static juce::PopupMenu instrument_menu(AppContext& context, const std::string& track_id);
+    /// A track's instrument slot clicked: its plug-in's window when one is
+    /// assigned (to move to another screen and play), otherwise the menu to
+    /// assign one, shown at `target`.
+    static void open_instrument(AppContext& context, const std::string& track_id, juce::Component* target);
     /// The instrument range report (Add-On spec §4): the notes outside each
     /// track's range (one track, or every track when `track_id` is empty),
     /// with Move into range. Non-modal; returns the text it shows.

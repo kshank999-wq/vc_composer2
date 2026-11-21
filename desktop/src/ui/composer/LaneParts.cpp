@@ -1,3 +1,5 @@
+#include <utility>
+
 #include "ui/composer/LaneParts.h"
 #include "ui/composer/TransposePopover.h"
 
@@ -27,11 +29,13 @@ TrackHeader::TrackHeader(AppContext& context, std::string track_id) : context_(c
     instrument_.set_legend_size(9.0f);
     instrument_.setComponentID("track_instrument");
     instrument_.setWantsKeyboardFocus(false);
+    // Assigned: a click opens the plug-in's window (to move to another
+    // screen and play); right-click, or a click with none assigned, the menu.
     instrument_.onClick = [this] {
-        context_.session.select_track(track_);
-        TrackPanel::instrument_menu(context_, track_)
-            .showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&instrument_));
+        if (std::exchange(instrument_menu_shown_, false)) return;  // a right-click showed the menu
+        TrackPanel::open_instrument(context_, track_, &instrument_);
     };
+    instrument_.addMouseListener(this, false);
     for (auto* k : {&midi_in_, &midi_out_}) {
         k->set_legend_size(8.5f);
         k->setWantsKeyboardFocus(false);
@@ -165,7 +169,7 @@ void TrackHeader::refresh()
         instrument_.setToggleState(!t->instrument_plugin.empty(), juce::dontSendNotification);
         instrument_.setTooltip(t->instrument_plugin.empty() ? juce::String("Instrument: the built-in sound. Click to assign a virtual instrument")
                                                             : "Instrument: " + juce::String(t->instrument_plugin.vendor) + " " +
-                                                                  juce::String(t->instrument_plugin.name) + ". Click to change");
+                                                                  juce::String(t->instrument_plugin.name) + ". Click to open its window; right-click to change");
         // The versions list: each version, then what can be done.
         versions_.clear(juce::dontSendNotification);
         int active = 0;
@@ -275,6 +279,13 @@ void TrackHeader::resized()
 void TrackHeader::mouseDown(const juce::MouseEvent& e)
 {
     context_.session.select_track(track_);
+    if (e.eventComponent == &instrument_) {
+        if (e.mods.isPopupMenu()) {
+            instrument_menu_shown_ = true;
+            TrackPanel::instrument_menu(context_, track_).showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&instrument_));
+        }
+        return;
+    }
     if (e.mods.isPopupMenu()) show_menu();
 }
 

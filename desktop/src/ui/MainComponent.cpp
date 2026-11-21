@@ -68,7 +68,8 @@ public:
     /// An instrument's window (`slot` < 0) or an effect insert's.
     PluginWindow(AppContext& c, std::string owner_id, int slot, juce::AudioPluginInstance& instance)
         : juce::DocumentWindow(instance.getName(), colours::background, juce::DocumentWindow::closeButton),
-          context_(c), owner_id_(std::move(owner_id)), slot_(slot), instance_(instance)
+          context_(c), owner_id_(std::move(owner_id)), slot_(slot), instance_(instance),
+          keepalive_(c.engine.plugin_keepalive(owner_id_, slot))
     {
         setUsingNativeTitleBar(true);
         juce::AudioProcessorEditor* editor = instance.hasEditor() ? instance.createEditorIfNeeded() : nullptr;
@@ -79,7 +80,11 @@ public:
         setVisible(true);
     }
 
-    ~PluginWindow() override { store(); }
+    ~PluginWindow() override
+    {
+        store();
+        clearContentComponent();  // the editor goes while its plug-in is still here
+    }
 
     /// The plug-in's settings go into the project (no undo step).
     void store()
@@ -104,6 +109,7 @@ private:
     std::string owner_id_;
     int slot_;
     juce::AudioPluginInstance& instance_;
+    std::shared_ptr<void> keepalive_;  ///< Declared last: released after the editor is gone.
 };
 
 // --- Main component -----------------------------------------------------------------------------
@@ -397,6 +403,14 @@ MainComponent::MainComponent(AppContext& context)
     context_.show_insert_window = [this](const std::string& owner, int slot) { show_insert_window(owner, slot); };
     context_.capture_plugin_states = [this] { capture_plugin_states(); };
     context_.show_comment = [this](const std::string& id) { review::show_comments(context_, id); };
+    context_.assign_from_libraries = [this](const std::string& prefer) {
+        if (!context_.library) return;
+        context_.library->refresh();
+        context_.status(context_.library->assign_from_libraries(prefer));
+    };
+    context_.installed_libraries = [this] {
+        return context_.library ? context_.library->installed_libraries() : std::vector<std::pair<std::string, std::string>>{};
+    };
     context_.show_library_for_track = [this] {
         set_library_shown(true);
         tracks_.library().set_view(LibraryBrowser::View::ForTrack);
@@ -522,6 +536,8 @@ MainComponent::~MainComponent()
     context_.capture_plugin_states = nullptr;
     context_.show_comment = nullptr;
     context_.show_library_for_track = nullptr;
+    context_.assign_from_libraries = nullptr;
+    context_.installed_libraries = nullptr;
     context_.freeze_tracks = nullptr;
     context_.track_state = nullptr;
     context_.freeze_progress = nullptr;
@@ -1669,9 +1685,30 @@ juce::PopupMenu MainComponent::mixer_display_menu()
 
 void MainComponent::show_plugin_window(const std::string& id)
 {
+    show_plugin_window_when_loaded(id, 0);
+}
+
+void MainComponent::show_plugin_window_when_loaded(const std::string& id, int attempt)
+{
     auto* instance = context_.engine.plugin_for(id);
     if (!instance) {
-        context_.status("This track is played by the built-in placeholder; load an instrument plug-in first");
+        const auto* t = context_.session.data().find_track(id);
+        if (!t || t->instrument_plugin.empty()) {
+            context_.status("This track is played by the built-in sound; assign an instrument plug-in first");
+            return;
+        }
+        // Just assigned: the plug-in is still loading (a large library can
+        // take a while). Open its window the moment it is ready.
+        constexpr int kTries = 240, kEveryMs = 250;  // up to a minute
+        if (attempt >= kTries) {
+            context_.status(juce::String(t->instrument_plugin.name) + " has not loaded yet: check it in Tools > Plug-ins...");
+            return;
+        }
+        if (attempt == 0) context_.status("Loading " + juce::String(t->instrument_plugin.name) + "...");
+        juce::Component::SafePointer<MainComponent> self(this);
+        juce::Timer::callAfterDelay(kEveryMs, [self, id, attempt] {
+            if (self) self->show_plugin_window_when_loaded(id, attempt + 1);
+        });
         return;
     }
     auto& w = plugin_windows_["instrument:" + id];

@@ -8355,6 +8355,36 @@ void library_checks(MainWindow& window, const juce::File& dir)
     } else {
         check(false, "a template with horns exists");
     }
+    // Assign sounds to all tracks from my libraries: a horn track with the
+    // built-in sound gets the saved horn sound; a track with nothing here keeps its own.
+    session.new_empty();
+    const auto horns2 = session.add_track("Horns", "brass.horn_section");
+    const auto glock = session.add_track("Glockenspiel", "percussion.glockenspiel");
+    session.set_instrument_plugin(horns2, {});
+    pump(50);
+    check(ctx.assign_from_libraries != nullptr && ctx.installed_libraries != nullptr,
+          "the instrument menu can assign every track from the libraries here");
+    juce::String said;
+    const auto keep_status = ctx.status;
+    ctx.status = [&](const juce::String& m) { said = m; };
+    if (ctx.assign_from_libraries) ctx.assign_from_libraries({});
+    ctx.status = keep_status;
+    const auto* h2 = session.data().find_track(horns2);
+    const auto* gl = session.data().find_track(glock);
+    check(h2 && h2->instrument_plugin.identifier == instrument->identifier && gl && gl->instrument_plugin.empty() &&
+              said.startsWith("Assigned sounds to 1 of 2 tracks"),
+          "Assign sounds to all tracks gives Horns its saved sound and leaves what has none here: " + said);
+    // A track's instrument slot opens the plug-in's own window (to move to another screen).
+    for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
+        if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);
+    TrackPanel::open_instrument(ctx, horns2, nullptr);
+    const bool opened = wait_for([&] {
+        auto* w = find_dialog(juce::String(instrument->name));
+        return w != nullptr && w->isVisible();
+    }, 5000);
+    check(opened, "clicking an assigned instrument opens " + juce::String(instrument->name) + "'s window");
+    if (auto* w = dynamic_cast<juce::DocumentWindow*>(find_dialog(juce::String(instrument->name)))) w->closeButtonPressed();
+    pump(50);
     main.set_library_shown(false);
     session.new_empty();
 }

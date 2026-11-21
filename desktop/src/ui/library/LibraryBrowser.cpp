@@ -166,7 +166,7 @@ juce::String LibraryService::audition(const library::Entry& e)
                : "Auditioning " + juce::String(e.display) + " on the built-in placeholder";
 }
 
-juce::String LibraryService::assign(const library::Entry& e, const std::string& track_id)
+juce::String LibraryService::assign(const library::Entry& e, const std::string& track_id, bool open_window)
 {
     const auto* t = context_.session.data().find_track(track_id);
     if (!t) return "Select a track first";
@@ -213,8 +213,76 @@ juce::String LibraryService::assign(const library::Entry& e, const std::string& 
     if (e.kind == library::EntryKind::UserPatch)
         if (const auto* p = lib_.find_patch(e.key.substr(6)); p && p->articulation_map)
             context_.session.set_articulation_map(track_id, p->articulation_map);
-    if (e.kind != library::EntryKind::UserPatch && context_.show_plugin_window) context_.show_plugin_window(track_id);
+    if (open_window && context_.show_plugin_window) context_.show_plugin_window(track_id);
     return "Assigned " + juce::String(e.display) + " to " + juce::String(t->name);
+}
+
+std::vector<std::pair<std::string, std::string>> LibraryService::installed_libraries() const
+{
+    // A library is here when a player here loads it and it was found (or it is its own plug-in).
+    std::vector<std::pair<std::string, std::string>> out;
+    std::set<std::string> seen;
+    for (const auto& e : lib_.entries()) {
+        if (e.kind != library::EntryKind::CatalogPatch || !e.player_installed || !e.library_detected) continue;
+        const auto slash = e.key.find('/');
+        const std::string id = e.key.substr(8, slash == std::string::npos ? std::string::npos : slash - 8);  // after "catalog:"
+        if (seen.insert(id).second) out.emplace_back(id, e.provider + " " + e.library);
+    }
+    return out;
+}
+
+juce::String LibraryService::assign_from_libraries(const std::string& prefer_library)
+{
+    const auto& d = context_.session.data();
+    std::vector<std::string> ids;
+    for (const auto& t : d.tracks)
+        if (t.kind == project::TrackKind::Instrument && t.instrument_plugin.empty() && t.midi_output.empty() &&
+            !t.instrument_standard_id.empty())
+            ids.push_back(t.id);
+    if (ids.empty()) return "Every instrument track already has a plug-in of its own";
+    std::string preferred_name;
+    for (const auto& l : lib_.libraries())
+        if (l.id == prefer_library) preferred_name = l.name;
+    int assigned = 0, preferred = 0;
+    std::vector<juce::String> without;
+    for (const auto& id : ids) {
+        const auto* t = context_.session.data().find_track(id);
+        if (!t) continue;
+        const auto cands = lib_.candidates(t->instrument_standard_id, t->articulation_intents, t->fallback_instruments, 50);
+        // Only sounds that can play here, and never a guess from a plug-in's name.
+        const library::Candidate* best = nullptr;
+        for (const auto& c : cands) {
+            if (!c.entry.player_installed || c.entry.kind == library::EntryKind::Plugin) continue;
+            if (c.entry.kind == library::EntryKind::CatalogPatch && !c.entry.library_detected) continue;
+            const bool in_preferred = !prefer_library.empty() && c.entry.library == preferred_name;
+            if (!best) best = &c;
+            if (in_preferred) {
+                // The preferred library wins over another's patch, though a
+                // saved (verified) sound for this instrument still comes first.
+                if (best->entry.kind != library::EntryKind::UserPatch || c.entry.kind == library::EntryKind::UserPatch) best = &c;
+                break;
+            }
+        }
+        if (!best) {
+            without.push_back(juce::String(t->name));
+            continue;
+        }
+        const auto msg = assign(best->entry, id, false);
+        if (msg.startsWith("Assigned")) {
+            ++assigned;
+            if (!prefer_library.empty() && best->entry.library == preferred_name) ++preferred;
+        } else {
+            without.push_back(juce::String(t->name));
+        }
+    }
+    juce::String out = "Assigned sounds to " + juce::String(assigned) + " of " + juce::String(static_cast<int>(ids.size())) + " tracks";
+    if (!preferred_name.empty()) out += " (" + juce::String(preferred) + " from " + juce::String(preferred_name) + ")";
+    if (!without.empty())
+        out += "; nothing here for " + juce::String(static_cast<int>(without.size())) + " (" +
+               juce::StringArray(without.data(), static_cast<int>(without.size())).joinIntoString(", ").substring(0, 80) + ")";
+    if (assigned > 0)
+        out += ". Open a track's instrument to load its patch in the player, then Save sound so every template uses it";
+    return out;
 }
 
 std::string LibraryService::save_track_sound(const std::string& track_id, const std::string& display, juce::String& message)

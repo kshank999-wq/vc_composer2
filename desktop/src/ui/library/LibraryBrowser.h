@@ -38,7 +38,16 @@ public:
     juce::String audition(const library::Entry& e);
     /// Puts the entry's sound on a track, saying how the track's request was
     /// met. Returns what happened.
-    juce::String assign(const library::Entry& e, const std::string& track_id);
+    juce::String assign(const library::Entry& e, const std::string& track_id, bool open_window = true);
+    /// Gives every instrument track without a plug-in of its own the best
+    /// sound here for its instrument and articulations: saved sounds first,
+    /// then the catalog's patches a player here can load (EastWest Opus or
+    /// PLAY, Kontakt, SINE...), preferring `prefer_library` (a catalog id)
+    /// when given. Returns what happened, for the status line.
+    juce::String assign_from_libraries(const std::string& prefer_library);
+    /// The libraries this computer has (a player installed and the library
+    /// found), as (catalog id, name).
+    std::vector<std::pair<std::string, std::string>> installed_libraries() const;
     /// A saved sound for an entry, made if it is not one (a catalog patch or a
     /// plug-in: its plug-in, for this instrument and articulation). Returns
     /// its id, or empty when nothing here can play it.

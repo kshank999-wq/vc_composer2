@@ -70,6 +70,7 @@ public:
     void export_parts_pdf_dialog();
     void export_full_score_dialog();
     void show_plugin_window(const std::string& track_id);
+    void show_plugin_window_when_loaded(const std::string& track_id, int attempt);
     /// An insert's window: a hosted effect's editor, or a built-in processor's controls.
     void show_insert_window(const std::string& owner_id, int slot);
 

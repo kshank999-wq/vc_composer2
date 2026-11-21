@@ -2202,6 +2202,18 @@ juce::AudioPluginInstance* PlaybackEngine::insert_plugin(const std::string& stri
     return it == inserts_.end() ? nullptr : it->second->plugin();
 }
 
+std::shared_ptr<void> PlaybackEngine::plugin_keepalive(const std::string& owner_id, int slot) const
+{
+    if (slot < 0) {
+        auto it = instruments_.find(owner_id);
+        return it == instruments_.end() ? nullptr : std::shared_ptr<void>(it->second.instrument);
+    }
+    auto keys = insert_keys_.find(owner_id);
+    if (keys == insert_keys_.end() || slot >= static_cast<int>(keys->second.size())) return nullptr;
+    auto it = inserts_.find(keys->second[static_cast<std::size_t>(slot)]);
+    return it == inserts_.end() ? nullptr : std::shared_ptr<void>(it->second);
+}
+
 InsertProcessor* PlaybackEngine::insert_processor(const std::string& strip_id, int slot) const
 {
     auto keys = insert_keys_.find(strip_id);

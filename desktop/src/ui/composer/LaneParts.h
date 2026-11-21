@@ -45,6 +45,7 @@ public:
     const hw::Lcd& scribble() const { return scribble_; }
 
 private:
+    bool instrument_menu_shown_ = false;
     void show_menu();
     void show_midi_menu(bool input);
     void version_chosen();

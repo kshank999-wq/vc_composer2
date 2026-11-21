@@ -408,6 +408,10 @@ public:
     juce::String insert_status(const std::string& strip_id, int slot) const;
     /// The hosted effect in an insert slot (to open its editor or store its state).
     juce::AudioPluginInstance* insert_plugin(const std::string& strip_id, int slot) const;
+    /// Keeps a track's instrument (`slot` < 0) or an insert's plug-in alive
+    /// while held, so a plug-in window outlives a rebuild that drops it and
+    /// closes first (its editor talks to the plug-in as it goes).
+    std::shared_ptr<void> plugin_keepalive(const std::string& owner_id, int slot) const;
     /// The processor in an insert slot, or null (message thread; look it up
     /// each time - a rebuild replaces it). The rack reads its live meters.
     InsertProcessor* insert_processor(const std::string& strip_id, int slot) const;

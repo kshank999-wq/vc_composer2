@@ -3,6 +3,9 @@
 // only through Session, and redraw when Session tells them it changed.
 #pragma once
 
+#include <utility>
+#include <vector>
+
 #include <functional>
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -54,6 +57,12 @@ struct AppContext {
     /// Shows the library browser's candidates for the selected track (set
     /// by the main window).
     std::function<void()> show_library_for_track;
+    /// Gives every instrument track the best sound the libraries here have
+    /// for its instrument and articulations, preferring one library (its
+    /// catalog id) when given. Tracks with a plug-in of their own keep it.
+    std::function<void(const std::string& prefer_library)> assign_from_libraries;
+    /// The libraries found here, (catalog id, name), for the menu.
+    std::function<std::vector<std::pair<std::string, std::string>>()> installed_libraries;
     /// Freeze (Memory Management spec §5): prints the tracks through their
     /// inserts and plays the prints; with `unload`, then closes their
     /// instruments to give the memory back. Re-render is this again.

@@ -445,20 +445,54 @@ juce::PopupMenu TrackPanel::instrument_menu(AppContext& c, const std::string& id
         auto ref = c.plugins.ref_for(d);
         const bool current = ref.identifier == t->instrument_plugin.identifier;
         const auto maker = d.manufacturerName.isEmpty() ? juce::String("Other") : d.manufacturerName;
+        // Choosing one loads it and opens its window, as in any DAW.
         by_maker[maker].addItem(d.name + (d.pluginFormatName.isEmpty() ? juce::String() : "  (" + d.pluginFormatName + ")"), true,
-                                current, [&c, id, ref] { c.session.set_instrument_plugin(id, ref); });
+                                current, [&c, id, ref, current] {
+                                    if (!current) c.session.set_instrument_plugin(id, ref);
+                                    if (c.show_plugin_window) c.show_plugin_window(id);
+                                });
     }
     for (auto& [maker, menu] : by_maker) instruments.addSubMenu(maker, menu);
     instruments.addSeparator();
     instruments.addItem("Open instrument window", !t->instrument_plugin.empty(), false, [&c, id] {
         if (c.show_plugin_window) c.show_plugin_window(id);
     });
+    // Every track at once, from the libraries here (EastWest, Spitfire...).
+    {
+        juce::PopupMenu from;
+        from.addItem("Best match from all my libraries", [&c] {
+            if (c.assign_from_libraries) c.assign_from_libraries({});
+        });
+        if (c.installed_libraries) {
+            const auto libs = c.installed_libraries();
+            if (!libs.empty()) from.addSeparator();
+            for (const auto& [lib_id, name] : libs)
+                from.addItem("Prefer " + juce::String(name), [&c, lib = lib_id] {
+                    if (c.assign_from_libraries) c.assign_from_libraries(lib);
+                });
+        }
+        instruments.addSubMenu("Assign sounds to all tracks from my libraries", from);
+    }
     instruments.addItem("Library...", [&c, id] {
         c.session.select_track(id);
         if (c.show_library_for_track) c.show_library_for_track();
     });
     instruments.addItem("Scan for plug-ins...", [&c] { c.commands.invokeDirectly(cmd::scanPlugins, true); });
     return instruments;
+}
+
+void TrackPanel::open_instrument(AppContext& c, const std::string& id, juce::Component* target)
+{
+    const auto* t = c.session.data().find_track(id);
+    if (!t) return;
+    c.session.select_track(id);
+    if (!t->instrument_plugin.empty() && c.show_plugin_window) {
+        c.show_plugin_window(id);
+        return;
+    }
+    auto options = juce::PopupMenu::Options();
+    if (target) options = options.withTargetComponent(target);
+    instrument_menu(c, id).showMenuAsync(options);
 }
 
 void TrackPanel::show_track_menu(AppContext& c, const std::string& id)

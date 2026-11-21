@@ -1400,6 +1400,12 @@ public:
         m_.ctx.session.select_track(track);
         if (e.x < kHeader) {
             if (e.mods.isPopupMenu()) {
+                // Right-click the INST key: the instrument menu (assign, change, library).
+                if (hit.take == 0 && instrument_key_at(lane, hit.row, e.getPosition())) {
+                    TrackPanel::instrument_menu(m_.ctx, track).showMenuAsync(
+                        juce::PopupMenu::Options().withTargetScreenArea(juce::Rectangle<int>(e.getScreenX(), e.getScreenY(), 1, 1)));
+                    return;
+                }
                 TrackPanel::show_track_menu(m_.ctx, track);
                 return;
             }
@@ -2050,10 +2056,24 @@ private:
         }
     }
 
+    /// Whether `pt` is on an instrument track's INST key (its instrument slot).
+    bool instrument_key_at(const LaneView& l, juce::Rectangle<int> row, juce::Point<int> pt)
+    {
+        if (l.bus || l.audio || l.reference || l.midi_only) return false;
+        if (lane_parts(l, row).area.contains(pt)) return false;
+        return header_parts(l, row).tag.contains(pt);
+    }
+
     bool main_header_click(const LaneView& l, const HeaderParts& p, juce::Point<int> pt)
     {
         auto& session = m_.ctx.session;
         const std::string id = l.id;
+        // The INST key is the track's instrument slot: its plug-in's window
+        // when one is assigned, otherwise the menu to assign one.
+        if (!l.audio && !l.reference && !l.midi_only && p.tag.contains(pt)) {
+            TrackPanel::open_instrument(m_.ctx, id, this);
+            return true;
+        }
         if (p.rec.contains(pt)) {
             // The track's own R records MIDI (the lane's R prints audio).
             const bool on = l.armed && l.record_source != "print";
