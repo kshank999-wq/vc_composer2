@@ -2484,8 +2484,9 @@ void mix_checks(MainWindow& window, const juce::File& dir)
     pump(80);
     check(deck.isVisible() && main.edit_frame().stage_key(2).getToggleState(), "the Mix stage shows the mixer deck");
 
-    // Full screen: the deck's key brings up the console, laid out like a
-    // hardware console - every section above, the fader the bottom third.
+    // The deck's Mixer window key brings up the full console in a window of
+    // its own (never docked), laid out like hardware: the fader the bottom third.
+    check(deck.full_key().getButtonText() == "Mixer window", "the compact mixer's key reads Mixer window");
     deck.full_key().triggerClick();
     pump(150);
     auto* full = main.full_console();
@@ -2501,14 +2502,22 @@ void mix_checks(MainWindow& window, const juce::File& dir)
             measured = juce::String(fader) + " of " + juce::String(strip) + " px, " + juce::String(share * 100.0, 0) + "%";
         }
     }
-    check(main.mixer_full() && full && full->isVisible() && full->getY() < main.edit_frame().getY() && proportional,
-          "Full screen is the console in hardware proportions: the fader about a third of the strip (" + measured + ")");
-    shoot(main, dir, "35b-mixer-full");
+    const bool own_window = full && full->getTopLevelComponent() != &window && full->getTopLevelComponent()->isOnDesktop();
+    check(main.mixer_full() && full && full->isShowing() && own_window && proportional,
+          "the full mixer is a window of its own (free to move to another screen), in hardware proportions: the fader "
+          "about a third of the strip (" + measured + ")");
+    if (full) shoot(*full->getTopLevelComponent(), dir, "35b-mixer-window");
     if (full) full->view().compact_button().triggerClick();
     pump(100);
-    check(!main.mixer_full() && (!full || !full->isVisible()) && deck.isVisible() &&
-              deck.getHeight() == shell::MixerDeck::kHeight,
-          "COMPACT puts the mixer back in the bottom deck");
+    check(!main.mixer_full() && deck.isVisible() && deck.getHeight() == shell::MixerDeck::kHeight,
+          "its COMPACT key closes the window, the compact mixer in the bottom deck");
+    // Its own close button closes it too.
+    main.show_mixer();
+    pump(100);
+    if (auto* w = main.full_console() ? dynamic_cast<juce::DocumentWindow*>(main.full_console()->getTopLevelComponent()) : nullptr)
+        w->closeButtonPressed();
+    pump(100);
+    check(!main.mixer_full(), "the mixer window's close button closes it");
     // Cmd/Ctrl+M (the toolbar's Mixer key) from the Composer view, and back.
     main.show_workspace(MainComponent::Workspace::Composer);
     pump(50);
@@ -2518,7 +2527,7 @@ void mix_checks(MainWindow& window, const juce::File& dir)
     main.show_mixer();
     pump(80);
     check(opened && !main.mixer_full() && main.workspace() == MainComponent::Workspace::Composer,
-          "Cmd/Ctrl+M opens the full-screen mixer and closes it back to the view it came from");
+          "Cmd/Ctrl+M opens the mixer window and closes it; the view stays as it was");
     main.show_workspace(MainComponent::Workspace::Producer);
     main.show_bottom_mixer(true);
     pump(80);
@@ -9320,7 +9329,7 @@ void layout_checks(MainWindow& window, const juce::File& dir)
 
     main.apply_layout(*layouts::find("Mix"));
     pump(150);
-    check(main.mixer_full(), "the Mix layout: the mixer full screen");
+    check(main.mixer_full(), "the Mix layout: the mixer window open");
 
     // The mixer window on a chosen display, filling it.
     const auto displays = MainComponent::display_keys();
@@ -12713,6 +12722,7 @@ int main(int argc, char** argv)
                 {"slur_tie_checks", slur_tie_checks},
                 {"rack_gear_checks", rack_gear_checks},
                 {"dyneq_checks", dyneq_checks},
+                {"mix_checks", mix_checks},
                 {"section_zoom_checks", section_zoom_checks},
                 {"audio_lane_track_checks", audio_lane_track_checks},
                 {"producer_track_checks", producer_track_checks},

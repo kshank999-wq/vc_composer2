@@ -549,7 +549,6 @@ void MainComponent::resized()
     if (!deck_window_) mixer_deck_.setVisible(mixer_deck && !dock_hidden_);
     keyboard_.show_mixer_key(workspace_ == Workspace::Producer);
     auto& deck = mixer_deck ? static_cast<juce::Component&>(mixer_deck_) : keyboard_;
-    const auto below_top = r;  // for the full-screen mixer
     if (dock_hidden_) {
         // Hidden: a thin bar with the key that brings it back.
         auto bar = r.removeFromBottom(24);
@@ -565,16 +564,6 @@ void MainComponent::resized()
     r.removeFromTop(kGap);
     toolbar_.setBounds(r.removeFromTop(60));
     r.removeFromTop(kGap);
-    if (full_console_) {
-        // Full screen: the console (every section, hardware proportions)
-        // takes everything under the transport deck, over the toolbar, the
-        // edit window, the side panels and the bottom deck.
-        full_console_->setVisible(mixer_full_);
-        if (mixer_full_) {
-            full_console_->setBounds(below_top.withTrimmedTop(kGap));
-            full_console_->toFront(false);
-        }
-    }
 
     if (work_view_) {
         // Work view: no side panels; the edit window takes the width.
@@ -810,7 +799,7 @@ layouts::ViewLayout MainComponent::capture_layout() const
     l.bottom_mixer = bottom_mixer_;
     l.dock_hidden = dock_hidden_;
     l.work_view = work_view_;
-    l.mixer_full = mixer_full_;
+    l.mixer_full = false;  // the full mixer is the window (console_window)
     l.console_window = mixer_ != nullptr && mixer_->isVisible();
     l.console_display = console_display_;
     // The floating windows, open or not, and where.
@@ -837,8 +826,8 @@ void MainComponent::apply_layout(const layouts::ViewLayout& l)
     dock_hidden_ = l.dock_hidden;
     bottom_mixer_ = l.bottom_mixer;
     show_workspace(l.producer ? Workspace::Producer : Workspace::Composer);
-    if (l.mixer_full) set_mixer_full(true);
-    if (l.console_window) show_console_window(l.console_display);
+    // A layout's full mixer (older layouts say "mixer_full") is the mixer window.
+    if (l.console_window || l.mixer_full) show_console_window(l.console_display);
     else if (mixer_ != nullptr) mixer_->setVisible(false);
     if (l.has_windows) {
         // Each floating window opened or closed as saved, and put back where
@@ -1061,10 +1050,6 @@ void MainComponent::show_workspace(Workspace w)
     // One project, two views: the playhead, the selection and each view's
     // own zoom and scroll stay as they are.
     workspace_ = w;
-    if (mixer_full_) {  // choosing a view leaves the full-screen mixer
-        mixer_full_ = false;
-        if (full_console_) full_console_->setVisible(false);
-    }
     const bool producer = w == Workspace::Producer;
     composer_.setVisible(!producer && !page_mode_);
     page_view_.setVisible(!producer && page_mode_);
@@ -1603,30 +1588,25 @@ void MainComponent::show_control_gallery()
     gallery_window_->toFront(true);
 }
 
-void MainComponent::show_mixer() { set_mixer_full(!mixer_full_, false); }
+void MainComponent::show_mixer() { set_mixer_full(!mixer_full(), false); }
 
 void MainComponent::set_mixer_full(bool full, bool compact_after)
 {
-    if (full && !mixer_full_) before_mixer_ = workspace_;
-    mixer_full_ = full;
-    if (full && !full_console_) {
-        full_console_ = std::make_unique<MixerComponent>(context_);
-        addChildComponent(*full_console_);
-        full_console_->view().set_on_compact([this] { set_mixer_full(false); });
+    // The full mixer is never docked: it is a window of its own (move it to
+    // another screen; its close button closes it). Only the compact mixer
+    // sits in the bottom deck.
+    if (full) {
+        show_console_window();
+        context_.status("Mixer window - close it (or Cmd/Ctrl+M) to put it away; the compact mixer stays in the bottom deck");
+        return;
     }
-    if (!full) {
-        if (compact_after) {
-            // Compact: the mixer in the bottom deck, under the Producer view's tracks and piano roll.
-            if (workspace_ != Workspace::Producer) show_workspace(Workspace::Producer);
-            bottom_mixer_ = true;
-        } else if (workspace_ != before_mixer_) {
-            show_workspace(before_mixer_);  // closed with Cmd/Ctrl+M: back where it was opened
-        }
+    if (mixer_ != nullptr) mixer_->setVisible(false);
+    if (compact_after) {
+        // Compact: the mixer in the bottom deck, under the Producer view's tracks and piano roll.
+        if (workspace_ != Workspace::Producer) show_workspace(Workspace::Producer);
+        bottom_mixer_ = true;
+        resized();
     }
-    resized();
-    if (full && full_console_) full_console_->grabKeyboardFocus();
-    context_.status(full ? "Mixer full screen - Compact (or Cmd/Ctrl+M) returns to the bottom deck"
-                         : "Mixer in the bottom deck");
 }
 
 std::vector<std::pair<juce::String, juce::String>> MainComponent::display_keys()
@@ -1648,6 +1628,8 @@ void MainComponent::show_console_window(const juce::String& display)
     if (!mixer_) {
         mixer_ = std::make_unique<MixerWindow>(context_);
         dialogs::fit_to_screen(*mixer_, 1000, 460);
+        // Its Compact key puts it away, back to the mixer in the bottom deck.
+        mixer_->mixer().view().set_on_compact([this] { set_mixer_full(false); });
     }
     // Shown first: a first showing restores where it was left, and the chosen display then wins.
     mixer_->setVisible(true);

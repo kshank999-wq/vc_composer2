@@ -39,6 +39,11 @@ int main(int argc, char* argv[])
 
     // Plug-ins expect a message thread; this one never shows a window.
     juce::ScopedJuceInitialiser_GUI juce_runtime;
+#if JUCE_MAC
+    // A helper, not an app: no Dock icon (macOS otherwise gives it one that
+    // bounces for as long as it runs, beside VC Composer's).
+    juce::Process::setDockIconVisible(false);
+#endif
     juce::AudioPluginFormatManager formats;
     formats.addDefaultFormats();
     juce::AudioPluginFormat* format = nullptr;

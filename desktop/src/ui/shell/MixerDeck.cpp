@@ -210,7 +210,10 @@ MixerDeck::MixerDeck(AppContext& context) : hw::Panel({}, true), context_(contex
     };
     display_.setVisible(false);
     full_key_.setComponentID("mixer_full_key");
-    full_key_.setTooltip("Full screen mixer, or back to the compact mixer at the bottom (Cmd/Ctrl+M)");
+    full_key_.setTooltip("The full mixer, in a window of its own: move it to another screen; close it to put it away (Cmd/Ctrl+M)");
+    full_key_.setButtonText("Mixer window");
+    // One way to the full mixer (the window): no separate Console key.
+    console_.setVisible(false);
     full_key_.onClick = [this] {
         if (on_full) on_full(true);
     };
@@ -285,7 +288,7 @@ void MixerDeck::set_full(bool full)
 {
     if (full_ == full) return;
     full_ = full;
-    full_key_.setButtonText(full && !floating_ ? "Compact" : "Full screen");
+    full_key_.setButtonText("Mixer window");
     resized();
     repaint();
 }
@@ -299,7 +302,7 @@ void MixerDeck::set_floating(bool floating)
     full_key_.setVisible(!floating);
     display_.setVisible(floating);
     set_full(floating);
-    full_key_.setButtonText("Full screen");
+    full_key_.setButtonText("Mixer window");
     resized();
 }
 
@@ -311,8 +314,7 @@ void MixerDeck::resized()
         keyboard_.setBounds(header.removeFromRight(92));
         header.removeFromRight(6);
     }
-    console_.setBounds(header.removeFromRight(84));
-    header.removeFromRight(6);
+
     if (!floating_) {
         full_key_.setBounds(header.removeFromRight(100));
         header.removeFromRight(6);
@@ -339,7 +341,7 @@ void MixerDeck::resized()
 
 void MixerDeck::paintOverChildren(juce::Graphics& g)
 {
-    const juce::String title = floating_ ? "Mixer - own window" : full_ ? "Mixer - full screen" : "Mixer";
+    const juce::String title = floating_ ? "Mixer - own window" : "Mixer";
     hw::paint::silk(g, title, {30.0f, 5.0f, full_ ? 160.0f : 80.0f, 22.0f}, 11.0f);
     hw::paint::silk(g, juce::String(strips_.size()) + " strips + master", {full_ ? 190.0f : 100.0f, 5.0f, 160.0f, 22.0f}, 9.5f);
 }

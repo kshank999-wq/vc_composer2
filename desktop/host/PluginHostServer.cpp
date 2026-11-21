@@ -395,6 +395,12 @@ int main(int argc, char* argv[])
     juce::StringArray args;
     for (int i = 1; i < argc; ++i) args.add(juce::String::fromUTF8(argv[i]));
     juce::ScopedJuceInitialiser_GUI juce_runtime;
+#if JUCE_MAC
+    // A helper, not an app: no Dock icon of its own (macOS otherwise shows
+    // one that keeps bouncing beside VC Composer's). Plug-in windows it
+    // opens still show, as a UI element app's do.
+    juce::Process::setDockIconVisible(false);
+#endif
     host_log("started");
     Server server;
     // The app pings; without a ping for 8 s this process assumes the app has

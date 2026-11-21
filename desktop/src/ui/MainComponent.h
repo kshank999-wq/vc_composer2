@@ -119,7 +119,8 @@ public:
     /// long as it allows) or compact (the bottom deck). Cmd/Ctrl+M and the
     /// toolbar's Mixer key toggle it; the deck's own key switches size.
     void set_mixer_full(bool full, bool compact_after = true);
-    bool mixer_full() const noexcept { return mixer_full_; }
+    /// The full mixer: its own window, open or not.
+    bool mixer_full() const noexcept { return mixer_ != nullptr && mixer_->isVisible(); }
     /// The console window: every strip's EQ, dynamics, sends and inserts.
     /// On `display` (a key from display_keys(), e.g. a touch screen), filling
     /// it; empty: where it was. Remembered, and with "Open Mixer at Start-up"
@@ -130,7 +131,7 @@ public:
     juce::PopupMenu mixer_display_menu();
     const juce::String& console_display() const noexcept { return console_display_; }
     /// The full-screen mixer (the console, laid out like hardware), or null before it is first shown.
-    MixerComponent* full_console() noexcept { return full_console_.get(); }
+    MixerComponent* full_console() noexcept { return mixer_ != nullptr ? &mixer_->mixer() : nullptr; }
     /// The jog/shuttle and transport controller (Tools > Control Surfaces).
     surface_ui::ControlSurface& surface() noexcept { return *surface_; }
     /// The hardware mixer controller (Mackie Control), Studio > Mixer Controller.
@@ -231,7 +232,6 @@ private:
     PageView page_view_;
     bool page_mode_ = false;
     bool bottom_mixer_ = true;
-    bool mixer_full_ = false;
     bool dock_hidden_ = false;
     bool work_view_ = false;
     juce::String console_display_;
@@ -243,8 +243,6 @@ private:
     /// Where Open and Save As start: the project's folder, else the last one used.
     juce::File project_folder_for_dialogs() const;
     void save_layout_as();
-    std::unique_ptr<MixerComponent> full_console_;
-    Workspace before_mixer_ = Workspace::Producer;  ///< Where Cmd/Ctrl+M returns to.
     TrackPanel tracks_;
     bool was_playing_ = false;
     juce::StretchableLayoutManager layout_;

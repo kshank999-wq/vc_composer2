@@ -35,6 +35,8 @@ class MixerWindow final : public juce::DocumentWindow {
 public:
     explicit MixerWindow(AppContext& context);
     ~MixerWindow() override;
+    /// The console in the window.
+    MixerComponent& mixer() { return *static_cast<MixerComponent*>(getContentComponent()); }
     void closeButtonPressed() override;
     void visibilityChanged() override;
 
