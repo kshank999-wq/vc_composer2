@@ -171,6 +171,19 @@ InstrumentSoundsPage::InstrumentSoundsPage(AppContext& context)
         if (row < static_cast<int>(articulations_.size())) select_articulation(articulations_[static_cast<std::size_t>(row)]);
     };
 
+    saved_label_.setText("OR USE A SOUND YOU SAVED  (no need to open the player again)", juce::dontSendNotification);
+    heading(saved_label_, 13.0f, colours::accent_warm);
+    saved_.setTextWhenNothingSelected("Your saved sounds...");
+    saved_.setComponentID("sounds_saved");
+    saved_.onChange = [this] {
+        const int i = saved_.getSelectedId() - 1;
+        if (i >= 0 && i < static_cast<int>(saved_ids_.size())) {
+            status_.setText(use_saved(saved_ids_[static_cast<std::size_t>(i)]), juce::dontSendNotification);
+            saved_.setSelectedId(0, juce::dontSendNotification);
+        }
+    };
+    addAndMakeVisible(saved_label_);
+    addAndMakeVisible(saved_);
     for (auto* c : std::initializer_list<juce::Component*>{
              &instruments_title_, &search_, instruments_.get(), &add_instrument_, &artics_title_, artics_.get(), &add_articulation_,
              &title_, &subtitle_, &current_, &step1_, &choose_, &step2_, &hint_, &open_, &step3_, &name_label_, &name_, &fill_empty_,
@@ -338,6 +351,7 @@ void InstrumentSoundsPage::refresh_detail()
     const auto now = assigned_name(articulation_);
     current_.setText(now.isNotEmpty() ? "Now: " + now : juce::String("Now: the built-in sound"), juce::dontSendNotification);
     current_.setColour(juce::Label::textColourId, now.isNotEmpty() ? colours::exact : colours::text_dim);
+    refresh_saved();
     edit_.setEnabled(now.isNotEmpty());
     clear_.setEnabled(now.isNotEmpty());
     {
@@ -449,6 +463,51 @@ juce::String InstrumentSoundsPage::edit_assigned()
     if (context_.show_plugin_window) context_.show_plugin_window(PlaybackEngine::kSetupTrackId);
     refresh_detail();
     return "Loaded \"" + juce::String(p->display) + "\" with its settings: change it in the player, then Save Sound";
+}
+
+void InstrumentSoundsPage::refresh_saved()
+{
+    saved_.clear(juce::dontSendNotification);
+    saved_ids_.clear();
+    if (!context_.library) return;
+    const auto& patches = context_.library->lib().patches();
+    int id = 1;
+    bool mine = false;
+    for (const auto& p : patches)
+        if (p.instrument_id == instrument_) {
+            if (!mine) saved_.addSectionHeading("For " + instrument_name(instrument_));
+            mine = true;
+            saved_.addItem(juce::String(p.display), id++);
+            saved_ids_.push_back(p.id);
+        }
+    bool others = false;
+    for (const auto& p : patches)
+        if (p.instrument_id != instrument_) {
+            if (!others) saved_.addSectionHeading("Other instruments");
+            others = true;
+            saved_.addItem(juce::String(p.display) + "   (" + instrument_name(p.instrument_id) + ")", id++);
+            saved_ids_.push_back(p.id);
+        }
+    saved_.setEnabled(!saved_ids_.empty());
+    saved_.setTextWhenNothingSelected(saved_ids_.empty() ? "None saved yet" : "Your saved sounds...");
+}
+
+juce::String InstrumentSoundsPage::use_saved(const std::string& patch_id)
+{
+    if (!context_.library) return {};
+    auto& lib = context_.library->lib();
+    const auto* p = lib.find_patch(patch_id);
+    if (!p) return "That sound is gone";
+    lib.set_assignment(instrument_, articulation_, patch_id);
+    context_.library->changed();
+    std::vector<std::string> ids;
+    for (const auto& t : context_.session.data().tracks) ids.push_back(t.id);
+    const int applied = context_.session.apply_assigned_sounds(ids);
+    artics_->repaint();
+    instruments_->repaint();
+    refresh_detail();
+    return "\"" + juce::String(p->display) + "\" is now the default for " + suggested_name() +
+           (applied > 0 ? "; " + juce::String(applied) + " tracks in this project use it now" : juce::String());
 }
 
 void InstrumentSoundsPage::clear_assigned()
@@ -587,6 +646,9 @@ void InstrumentSoundsPage::resized()
     edit_.setBounds(keys.removeFromLeft(keys.getWidth() * 60 / 100).reduced(0, 2));
     keys.removeFromLeft(10);
     clear_.setBounds(keys.reduced(0, 2));
+    right.removeFromTop(18);
+    saved_label_.setBounds(right.removeFromTop(24));
+    saved_.setBounds(right.removeFromTop(36));
 }
 
 }  // namespace vcc::desktop

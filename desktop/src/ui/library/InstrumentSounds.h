@@ -45,6 +45,8 @@ public:
     juce::String edit_assigned();
     /// Clears the chosen articulation's sound.
     void clear_assigned();
+    /// Gives the chosen articulation a sound you saved before (patch id). Returns what happened.
+    juce::String use_saved(const std::string& patch_id);
     /// The sound now assigned to an articulation row, or empty.
     juce::String assigned_name(const std::string& articulation) const;
     /// Adds an instrument of your own, based on a registry instrument; shows it.
@@ -88,6 +90,10 @@ private:
     hw::Keycap choose_{"Choose Player"}, open_{"Open Player Window"}, save_{"Save Sound"}, edit_{"Edit Saved Sound"},
         clear_{"Clear"}, add_instrument_{"+ Instrument"}, add_articulation_{"+ Articulation"};
     juce::ToggleButton fill_empty_{"Also use it for this instrument's articulations that have no sound yet"};
+    juce::Label saved_label_;
+    juce::ComboBox saved_;  ///< Your saved sounds: this instrument's first.
+    std::vector<std::string> saved_ids_;
+    void refresh_saved();
 };
 
 }  // namespace vcc::desktop

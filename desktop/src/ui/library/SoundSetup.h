@@ -48,6 +48,8 @@ public:
     void show_page(int page);
     int page() const noexcept { return page_; }
     InstrumentSoundsPage& instruments_page() noexcept { return *instruments_page_; }
+    /// The Instruments page on a track's instrument and articulation.
+    void focus_track(const std::string& track_id);
     /// Points a missing library at a folder you chose. Returns what happened.
     juce::String locate(std::size_t index, const juce::File& folder);
 
@@ -80,7 +82,7 @@ private:
     std::unique_ptr<SavedList> saved_list_;
     juce::Label tracks_title_, track_title_, track_info_, step1_, step2_, step3_, step2_text_, saved_title_, status_;
     hw::Keycap load_{"Load Player"}, open_window_{"Open Player Window"}, save_{"Save Sound"}, use_saved_{"Put on Track"},
-        next_{"Next Track"}, prev_{"Previous Track"}, scan_{"Scan Plug-ins"}, full_{"Full Screen"};
+        next_{"Next Track"}, prev_{"Previous Track"}, scan_{"Scan Plug-ins"}, full_{"Full Screen"}, browse_{"Sound Browser"};
     juce::Label name_label_, artic_label_;
     juce::TextEditor name_;
     juce::ComboBox articulation_;

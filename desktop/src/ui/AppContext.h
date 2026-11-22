@@ -57,6 +57,8 @@ struct AppContext {
     /// Shows the library browser's candidates for the selected track (set
     /// by the main window).
     std::function<void()> show_library_for_track;
+    /// The catalog's sound browser (search, audition, favourites).
+    std::function<void()> show_sound_browser;
     /// Gives every instrument track the best sound the libraries here have
     /// for its instrument and articulations, preferring one library (its
     /// catalog id) when given. Tracks with a plug-in of their own keep it.

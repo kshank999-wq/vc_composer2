@@ -436,9 +436,11 @@ MainComponent::MainComponent(AppContext& context)
     context_.installed_libraries = [this] {
         return context_.library ? context_.library->installed_libraries() : std::vector<std::pair<std::string, std::string>>{};
     };
+    context_.show_sound_browser = [this] { set_library_shown(true); };
+    // A track's Library...: the Library on its instrument and articulation.
     context_.show_library_for_track = [this] {
-        set_library_shown(true);
-        tracks_.library().set_view(LibraryBrowser::View::ForTrack);
+        show_sound_setup(context_);
+        if (auto* p = sound_setup_panel()) p->focus_track(context_.session.selected_track());
     };
 
     listener_ = context_.session.add_listener([this](session::Change c) {
@@ -561,6 +563,7 @@ MainComponent::~MainComponent()
     context_.capture_plugin_states = nullptr;
     context_.show_comment = nullptr;
     context_.show_library_for_track = nullptr;
+    context_.show_sound_browser = nullptr;
     context_.assign_from_libraries = nullptr;
     context_.installed_libraries = nullptr;
     context_.freeze_tracks = nullptr;
@@ -2535,7 +2538,8 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             info.setInfo("Sheet Info...", "The score's title (styled), composer, date, version and the other credits, and which of them print", "File", 0);
             break;
         case cmd::soundSetup:
-            info.setInfo("Sound Setup...", "Put your own libraries (EastWest Opus or PLAY, Kontakt...) on the tracks: open the player, load a sound, name it, save it",
+            info.setInfo("Library (Instrument Sounds)...",
+                         "Put your own libraries (EastWest Opus or PLAY, Kontakt...) on the instruments: open the player, load a sound, name it, save it",
                          "Window", 0);
             info.addDefaultKeypress('k', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
             break;
@@ -2544,8 +2548,8 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
                          "Window", 0);
             break;
         case cmd::libraryWindow:
-            info.setInfo("Library", "Sounds, libraries and players: search, audition, assign - in a floating window", "Window", 0);
-            info.setTicked(library_shown());
+            info.setInfo("Library...", "Your instruments and their sounds: open Opus, PLAY or Kontakt, pick the patch, save it as the default",
+                         "Window", 0);
             info.addDefaultKeypress('l', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
             break;
         case cmd::toggleInspector:
@@ -2886,7 +2890,10 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::builtinSounds: show_sounds_window(); break;
         case cmd::credits: show_credits_window(); break;
         case cmd::toggleInspector: set_inspector_shown(!inspector_shown()); break;
-        case cmd::libraryWindow: set_library_shown(!library_shown()); break;
+        case cmd::libraryWindow:
+            show_sound_setup(context_);
+            if (auto* p = sound_setup_panel()) p->show_page(0);
+            break;
         case cmd::soundAssignments:
             // One place for sounds: Sound Setup's Instruments page.
             show_sound_setup(context_);
@@ -3066,8 +3073,6 @@ juce::PopupMenu MainComponent::getMenuForIndex(int, const juce::String& name)
             m.addSeparator();
             m.addCommandItem(c, cmd::toggleInspector);
             m.addCommandItem(c, cmd::libraryWindow);
-            m.addCommandItem(c, cmd::soundSetup);
-            m.addCommandItem(c, cmd::soundAssignments);
             m.addCommandItem(c, cmd::trackList);
             m.addSeparator();
             m.addCommandItem(c, cmd::account);

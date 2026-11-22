@@ -19,7 +19,7 @@ namespace {
 class SetupWindow final : public juce::DocumentWindow, private juce::DeletedAtShutdown {
 public:
     explicit SetupWindow(SoundSetupPanel* panel)
-        : juce::DocumentWindow("Sound Setup", colours::background, juce::DocumentWindow::allButtons)
+        : juce::DocumentWindow("Library", colours::background, juce::DocumentWindow::allButtons)
     {
         setUsingNativeTitleBar(true);
         setContentOwned(panel, false);
@@ -275,6 +275,14 @@ SoundSetupPanel::SoundSetupPanel(AppContext& context)
     sounds_tab_.onClick = [this] { show_page(1); };
     libraries_tab_.onClick = [this] { show_page(2); };
     instruments_tab_.setComponentID("setup_instruments_tab");
+    // The catalog browser (search every library's patches, audition, favourites).
+    browse_.set_legend_size(13.0f);
+    browse_.setWantsKeyboardFocus(false);
+    browse_.setTooltip("Search every library's patches, audition them, keep favourites");
+    browse_.onClick = [this] {
+        if (context_.show_sound_browser) context_.show_sound_browser();
+    };
+    addAndMakeVisible(browse_);
     instruments_tab_.set_legend_size(14.0f);
     instruments_tab_.setWantsKeyboardFocus(false);
     addAndMakeVisible(instruments_tab_);
@@ -400,6 +408,16 @@ SoundSetupPanel::~SoundSetupPanel()
 }
 
 void SoundSetupPanel::changeListenerCallback(juce::ChangeBroadcaster*) { refresh_libraries(); }
+
+void SoundSetupPanel::focus_track(const std::string& track_id)
+{
+    show_page(0);
+    const auto* t = context_.session.data().find_track(track_id);
+    if (!t || t->instrument_standard_id.empty()) return;
+    instruments_page_->show_instrument(t->instrument_standard_id);
+    if (!t->articulation_group.empty()) instruments_page_->select_articulation(t->articulation_group);
+    else if (t->articulation_intents.size() == 1) instruments_page_->select_articulation(t->articulation_intents.front());
+}
 
 void SoundSetupPanel::refresh_libraries()
 {
@@ -649,6 +667,8 @@ void SoundSetupPanel::resized()
             top.removeFromLeft(10);
         }
         full_.setBounds(top.removeFromRight(140));
+        top.removeFromRight(10);
+        browse_.setBounds(top.removeFromRight(160));
         r.removeFromTop(1);
     }
     if (page_ == 0) {

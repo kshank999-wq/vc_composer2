@@ -7298,9 +7298,35 @@ void sound_setup_checks(MainWindow& window, const juce::File& dir)
               std::find(page.articulations().begin(), page.articulations().end(), "flautando") != page.articulations().end() &&
               service->file().loadFileAsString().contains("Fab Four Guitar"),
           "+ Instrument and + Articulation add your own, kept with your library");
+    // A sound saved once goes on another articulation without the player.
+    page.show_instrument("strings.violins_1");
+    page.select_articulation("sustain");
+    const auto reuse = page.use_saved(legato ? legato->id : std::string());
+    check(service->lib().assigned("strings.violins_1", "sustain") == legato, "a saved sound is reused for another articulation: " + reuse);
     page.release_slot();
     pump(100);
     check(!ctx.engine.has_setup_instrument(), "closing the page lets the Sound Setup slot go");
+    // Window > Library is this window, on Instruments; a track's Library... opens on its instrument.
+    panel->show_page(2);
+    ctx.commands.invokeDirectly(cmd::libraryWindow, true);
+    pump(100);
+    check(panel->page() == 0 && win->getName() == "Library", "Window > Library opens the Library on its Instruments page");
+    const auto celli = session.add_track("Celli", "strings.celli");
+    session.select_track(celli);
+    if (ctx.show_library_for_track) ctx.show_library_for_track();
+    pump(100);
+    check(page.instrument() == "strings.celli", "a track's Library... opens it on the track's instrument");
+    // A template with Violins I builds with the saved violin sound, by itself.
+    std::string vtpl;
+    for (const auto* x : ctx.catalogs.templates->list())
+        for (const auto& tt : x->tracks)
+            if (tt.instrument_standard_id == "strings.violins_1" && vtpl.empty()) vtpl = x->template_id;
+    if (!vtpl.empty() && session.new_from_template(vtpl).ok) {
+        int with = 0;
+        for (const auto& tr : session.data().tracks)
+            if (tr.instrument_standard_id == "strings.violins_1" && tr.instrument_plugin.identifier == instrument->identifier) ++with;
+        check(with >= 1, "a template's Violins I comes up with your saved violin sound (" + juce::String(vtpl) + ")");
+    }
     for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
         if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window && w != win) w->setVisible(false);
 

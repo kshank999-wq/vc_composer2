@@ -434,9 +434,9 @@ juce::PopupMenu TrackPanel::instrument_menu(AppContext& c, const std::string& id
     juce::PopupMenu instruments;
     const auto* t = c.session.data().find_track(id);
     if (!t) return instruments;
-    instruments.addItem("Sound Setup...  (your libraries: open the player, load, name, save)", [&c, id] {
+    instruments.addItem("Library...  (this instrument's sound: open Opus, PLAY, Kontakt; pick, save)", [&c, id] {
         c.session.select_track(id);
-        c.commands.invokeDirectly(cmd::soundSetup, true);
+        if (c.show_library_for_track) c.show_library_for_track();
     });
     instruments.addSeparator();
     instruments.addItem(sounds::state() == sounds::State::Ready ? "Built-in sound (piano / General MIDI)" : "Built-in placeholder sound", true,
@@ -478,10 +478,6 @@ juce::PopupMenu TrackPanel::instrument_menu(AppContext& c, const std::string& id
         }
         instruments.addSubMenu("Assign sounds to all tracks from my libraries", from);
     }
-    instruments.addItem("Library...", [&c, id] {
-        c.session.select_track(id);
-        if (c.show_library_for_track) c.show_library_for_track();
-    });
     instruments.addItem("Scan for plug-ins...", [&c] { c.commands.invokeDirectly(cmd::scanPlugins, true); });
     return instruments;
 }
