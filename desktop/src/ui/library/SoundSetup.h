@@ -99,6 +99,8 @@ private:
 };
 
 void show_sound_setup(AppContext& context);
+/// Closes the Library window now (before the app's engine and session go).
+void close_sound_setup();
 SoundSetupPanel* sound_setup_panel();
 
 }  // namespace vcc::desktop

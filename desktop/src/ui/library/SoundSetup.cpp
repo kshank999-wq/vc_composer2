@@ -151,6 +151,8 @@ SoundSetupPanel::SoundSetupPanel(AppContext& context)
     for (auto* l : {&name_label_, &artic_label_}) style_text(*l);
     name_.setTextToShowWhenEmpty("Violins I - Pizzicato", colours::text_dim);
     name_.setFont(juce::FontOptions(15.0f));
+    name_.setTitle("Sound name");
+    articulation_.setTitle("What it plays");
     everywhere_.setToggleState(true, juce::dontSendNotification);
     everywhere_.setTooltip("Sound Assignments: new tracks and templates with this instrument and articulation get this sound by themselves");
 
@@ -766,5 +768,11 @@ void show_sound_setup(AppContext& context)
 }
 
 SoundSetupPanel* sound_setup_panel() { return panel_slot(); }
+
+void close_sound_setup()
+{
+    if (auto* w = window_slot().getComponent()) delete w;
+    window_slot() = nullptr;
+}
 
 }  // namespace vcc::desktop

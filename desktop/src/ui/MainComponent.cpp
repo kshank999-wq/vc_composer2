@@ -546,6 +546,8 @@ MainComponent::~MainComponent()
         deck_window_->clearContentComponent();
         deck_window_.reset();
     }
+    // The Library talks to the engine and the session: it goes while they are here.
+    close_sound_setup();
     // The Inspector window shows components this owns: it goes first.
     delete inspector_window_.getComponent();
     stopTimer();

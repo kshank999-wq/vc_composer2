@@ -175,6 +175,9 @@ InstrumentSoundsPage::InstrumentSoundsPage(AppContext& context)
     heading(saved_label_, 13.0f, colours::accent_warm);
     saved_.setTextWhenNothingSelected("Your saved sounds...");
     saved_.setComponentID("sounds_saved");
+    saved_.setTitle("Your saved sounds");
+    name_.setTitle("Sound name");
+    search_.setTitle("Search instruments");
     saved_.onChange = [this] {
         const int i = saved_.getSelectedId() - 1;
         if (i >= 0 && i < static_cast<int>(saved_ids_.size())) {
