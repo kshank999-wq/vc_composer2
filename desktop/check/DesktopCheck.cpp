@@ -7275,6 +7275,20 @@ void sound_setup_checks(MainWindow& window, const juce::File& dir)
         wait_for([&] { return plugin_window_open(ctx, PlaybackEngine::kSetupTrackId, juce::String(instrument->name)); }, 5000);
     check(slot_loaded && slot_window && session.data().find_track(PlaybackEngine::kSetupTrackId) == nullptr,
           "Choose Player loads it into the Sound Setup slot - no track, not in the project - and opens its window: " + loading);
+    // It is heard: a note on the on-screen keyboard (or a MIDI keyboard) comes out of the master.
+    {
+        Rig rig(ctx.engine);
+        const Measure quiet = rig.run(0.3);
+        ctx.engine.set_live_track(PlaybackEngine::kSetupTrackId);
+        ctx.engine.send_live(juce::MidiMessage::noteOn(1, 64, static_cast<juce::uint8>(100)));
+        const Measure sounding = rig.run(0.5);
+        ctx.engine.send_live(juce::MidiMessage::noteOff(1, 64));
+        rig.run(0.5);
+        check(sounding.peak > 0.01f && sounding.peak > quiet.peak * 4.0f,
+              "a note played in the Library sounds through the master (peak " + juce::String(sounding.peak, 3) + ", silence " +
+                  juce::String(quiet.peak, 4) + ")");
+        check(page.play_phrase().startsWith("Playing a phrase"), "Play Phrase plays the loaded sound without a MIDI keyboard");
+    }
     pump(200);
     shoot(*win, dir, "122-instrument-sounds", true);
     const auto before_patches = service->lib().patches().size();

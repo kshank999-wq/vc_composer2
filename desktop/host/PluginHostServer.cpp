@@ -12,6 +12,10 @@
 // block, runs it and signals it done. A control call that changes an
 // instance's processing (prepare, state) holds that instance's `lock`, and a
 // block arriving meanwhile is answered without processing (`busy`).
+#if defined(__APPLE__)
+#include <objc/message.h>
+#include <objc/runtime.h>
+#endif
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -429,6 +433,19 @@ int main(int argc, char* argv[])
         }
     });
 #if JUCE_MAC
+    // Tell macOS this process has finished launching, as [NSApp run] would.
+    // Without it the process stays "launching" for good: its Dock icon kept
+    // bouncing, and plug-ins whose windows wait for a launched app (menus,
+    // typing, their own licence and browser windows) stalled - Opus span.
+    {
+        using Send = void* (*)(void*, SEL);
+        void* app = reinterpret_cast<Send>(objc_msgSend)(reinterpret_cast<void*>(objc_getClass("NSApplication")),
+                                                          sel_registerName("sharedApplication"));
+        if (app != nullptr) {
+            reinterpret_cast<void (*)(void*, SEL)>(objc_msgSend)(app, sel_registerName("finishLaunching"));
+            host_log("finished launching");
+        }
+    }
     // Not [NSApp run] (what runDispatchLoop does): a helper with no bundle
     // never got as far as its first message that way on macOS. The run loop
     // is run directly, a slice at a time, which handles the same messages.

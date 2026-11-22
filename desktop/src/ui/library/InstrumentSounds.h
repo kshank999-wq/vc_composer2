@@ -11,12 +11,15 @@
 #include <string>
 #include <vector>
 
+#include <juce_audio_utils/juce_audio_utils.h>
+
 #include "ui/AppContext.h"
 #include "ui/hw/HwControls.h"
 
 namespace vcc::desktop {
 
-class InstrumentSoundsPage final : public juce::Component, private juce::ChangeListener {
+class InstrumentSoundsPage final : public juce::Component, private juce::ChangeListener, private juce::Timer,
+                                   private juce::MidiKeyboardState::Listener {
 public:
     explicit InstrumentSoundsPage(AppContext& context);
     ~InstrumentSoundsPage() override;
@@ -56,6 +59,10 @@ public:
     juce::String suggested_name() const;
     /// Closes the setup slot (the page going away).
     void release_slot();
+    /// Plays a short phrase in the instrument's range through the loaded player.
+    juce::String play_phrase();
+    /// The output the sound goes to ("MacBook Pro Speakers"), or why there is none.
+    juce::String output_text() const;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -90,6 +97,17 @@ private:
     hw::Keycap choose_{"Choose Player"}, open_{"Open Player Window"}, save_{"Save Sound"}, edit_{"Edit Saved Sound"},
         clear_{"Clear"}, add_instrument_{"+ Instrument"}, add_articulation_{"+ Articulation"};
     juce::ToggleButton fill_empty_{"Also use it for this instrument's articulations that have no sound yet"};
+    // Hearing it: an on-screen keyboard, a phrase, a level meter, where it goes.
+    void timerCallback() override;
+    void handleNoteOn(juce::MidiKeyboardState*, int channel, int note, float velocity) override;
+    void handleNoteOff(juce::MidiKeyboardState*, int channel, int note, float velocity) override;
+    void play_live(bool on, int note, float velocity);
+    juce::MidiKeyboardState keyboard_state_;
+    std::unique_ptr<juce::MidiKeyboardComponent> keyboard_;
+    hw::Keycap phrase_{"Play Phrase"}, audio_setup_{"Audio Setup"};
+    juce::Label listen_title_, output_;
+    float level_ = 0.0f;
+    juce::Rectangle<int> meter_area_;
     juce::Label saved_label_;
     juce::ComboBox saved_;  ///< Your saved sounds: this instrument's first.
     std::vector<std::string> saved_ids_;

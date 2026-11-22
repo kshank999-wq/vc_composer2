@@ -187,6 +187,26 @@ InstrumentSoundsPage::InstrumentSoundsPage(AppContext& context)
     };
     addAndMakeVisible(saved_label_);
     addAndMakeVisible(saved_);
+    // Hearing it, with or without a MIDI keyboard.
+    listen_title_.setText("LISTEN", juce::dontSendNotification);
+    heading(listen_title_, 13.0f, colours::accent_warm);
+    body(output_);
+    keyboard_ = std::make_unique<juce::MidiKeyboardComponent>(keyboard_state_, juce::MidiKeyboardComponent::horizontalKeyboard);
+    keyboard_->setTitle("Audition keyboard");
+    keyboard_->setAvailableRange(24, 108);
+    keyboard_->setLowestVisibleKey(36);
+    keyboard_state_.addListener(this);
+    phrase_.set_legend_size(14.0f);
+    phrase_.set_sublegend("hear the loaded sound");
+    phrase_.setComponentID("sounds_play_phrase");
+    phrase_.onClick = [this] { status_.setText(play_phrase(), juce::dontSendNotification); };
+    audio_setup_.set_legend_size(13.0f);
+    audio_setup_.set_sublegend("speakers, interface, outputs");
+    audio_setup_.onClick = [this] { context_.commands.invokeDirectly(cmd::audioSettings, true); };
+    for (auto* k : {&phrase_, &audio_setup_}) k->setWantsKeyboardFocus(false);
+    for (auto* c : std::initializer_list<juce::Component*>{&listen_title_, &output_, keyboard_.get(), &phrase_, &audio_setup_})
+        addAndMakeVisible(c);
+    startTimerHz(30);
     for (auto* c : std::initializer_list<juce::Component*>{
              &instruments_title_, &search_, instruments_.get(), &add_instrument_, &artics_title_, artics_.get(), &add_articulation_,
              &title_, &subtitle_, &current_, &step1_, &choose_, &step2_, &hint_, &open_, &step3_, &name_label_, &name_, &fill_empty_,
@@ -204,6 +224,8 @@ InstrumentSoundsPage::InstrumentSoundsPage(AppContext& context)
 
 InstrumentSoundsPage::~InstrumentSoundsPage()
 {
+    stopTimer();
+    keyboard_state_.removeListener(this);
     if (context_.library) context_.library->removeChangeListener(this);
     release_slot();
 }
@@ -214,6 +236,81 @@ void InstrumentSoundsPage::release_slot()
     context_.engine.set_setup_instrument({});
     context_.engine.set_live_track(context_.session.selected_track());
     loaded_player_.clear();
+}
+
+juce::String InstrumentSoundsPage::output_text() const
+{
+    auto* device = context_.engine.devices().getCurrentAudioDevice();
+    if (device == nullptr) return "No audio output is open: press Audio Setup and choose your speakers or interface";
+    const auto outs = device->getActiveOutputChannels().countNumberOfSetBits();
+    return "Sound goes to: " + device->getName() + " (" + device->getTypeName() + ", " + juce::String(outs) +
+           (outs == 1 ? " output" : " outputs") + "), through the master";
+}
+
+void InstrumentSoundsPage::play_live(bool on, int note, float velocity)
+{
+    if (!context_.engine.has_setup_instrument()) return;
+    context_.engine.set_live_track(PlaybackEngine::kSetupTrackId);
+    context_.engine.send_live(on ? juce::MidiMessage::noteOn(1, note, velocity) : juce::MidiMessage::noteOff(1, note));
+}
+
+void InstrumentSoundsPage::handleNoteOn(juce::MidiKeyboardState*, int, int note, float velocity)
+{
+    juce::Component::SafePointer<InstrumentSoundsPage> self(this);
+    juce::MessageManager::callAsync([self, note, velocity] {
+        if (self) self->play_live(true, note, velocity);
+    });
+}
+
+void InstrumentSoundsPage::handleNoteOff(juce::MidiKeyboardState*, int, int note, float)
+{
+    juce::Component::SafePointer<InstrumentSoundsPage> self(this);
+    juce::MessageManager::callAsync([self, note] {
+        if (self) self->play_live(false, note, 0.0f);
+    });
+}
+
+juce::String InstrumentSoundsPage::play_phrase()
+{
+    if (!context_.engine.has_setup_instrument()) return "Choose a player first (step 1): the phrase plays through it";
+    // A rising arpeggio and back, in the middle of the instrument's comfortable range.
+    int low = 48, high = 72;
+    const std::string base = [&] {
+        if (context_.library)
+            if (const auto* c = context_.library->lib().find_custom_instrument(instrument_)) return c->based_on;
+        return instrument_;
+    }();
+    if (const auto* d = context_.catalogs.instruments.find(base)) {
+        low = d->comfortable_low;
+        high = d->comfortable_high;
+        if (high <= low) {
+            low = d->range_low;
+            high = d->range_high;
+        }
+    }
+    const int root = juce::jlimit(low, std::max(low, high - 12), (low + high) / 2 - 6);
+    const int steps[] = {0, 4, 7, 12, 7, 4, 0};
+    juce::Component::SafePointer<InstrumentSoundsPage> self(this);
+    for (int i = 0; i < 7; ++i) {
+        const int note = juce::jlimit(0, 127, root + steps[i]);
+        const int at = i * 380, len = i == 6 ? 900 : 340;
+        juce::Timer::callAfterDelay(at, [self, note] {
+            if (self) self->play_live(true, note, 0.75f);
+        });
+        juce::Timer::callAfterDelay(at + len, [self, note] {
+            if (self) self->play_live(false, note, 0.0f);
+        });
+    }
+    return "Playing a phrase on " + suggested_name() + " - " + output_text();
+}
+
+void InstrumentSoundsPage::timerCallback()
+{
+    const float peak = context_.engine.has_setup_instrument() ? context_.engine.take_peak(PlaybackEngine::kSetupTrackId) : 0.0f;
+    level_ = std::max(peak, level_ * 0.86f);
+    const auto text = output_text();
+    if (output_.getText() != text) output_.setText(text, juce::dontSendNotification);
+    repaint(meter_area_);
 }
 
 void InstrumentSoundsPage::changeListenerCallback(juce::ChangeBroadcaster*)
@@ -602,11 +699,39 @@ void InstrumentSoundsPage::show_add_articulation()
 void InstrumentSoundsPage::paint(juce::Graphics& g)
 {
     g.fillAll(colours::background);
+    if (!meter_area_.isEmpty()) {
+        // The loaded player's level: green, amber near full, red at the top.
+        auto r = meter_area_.toFloat();
+        g.setColour(colours::panel);
+        g.fillRoundedRectangle(r, 3.0f);
+        const float lv = juce::jlimit(0.0f, 1.0f, level_);
+        auto fill = r.reduced(2.0f).withWidth((r.getWidth() - 4.0f) * lv);
+        g.setColour(lv > 0.95f ? colours::missing : lv > 0.7f ? colours::fallback : colours::exact);
+        g.fillRoundedRectangle(fill, 2.0f);
+        g.setColour(colours::outline);
+        g.drawRoundedRectangle(r, 3.0f, 1.0f);
+    }
 }
 
 void InstrumentSoundsPage::resized()
 {
     auto r = getLocalBounds();
+    // Listening, across the bottom: the keyboard, the phrase, the level, where it goes.
+    {
+        auto bottom = r.removeFromBottom(150).reduced(20, 8);
+        auto head = bottom.removeFromTop(24);
+        listen_title_.setBounds(head.removeFromLeft(90));
+        output_.setBounds(head);
+        bottom.removeFromTop(4);
+        auto keys = bottom.removeFromRight(juce::jmin(320, bottom.getWidth() / 3));
+        auto k1 = keys.removeFromTop(keys.getHeight() / 2);
+        phrase_.setBounds(k1.reduced(6, 2));
+        audio_setup_.setBounds(keys.reduced(6, 2));
+        meter_area_ = bottom.removeFromBottom(10);
+        bottom.removeFromBottom(4);
+        keyboard_->setBounds(bottom);
+        keyboard_->setKeyWidth(juce::jmax(12.0f, bottom.getWidth() / 52.0f));
+    }
     // Three columns that grow with the window: instruments, articulations, the sound.
     const int left_w = juce::jlimit(260, 420, getWidth() * 22 / 100);
     auto left = r.removeFromLeft(left_w).reduced(12, 8);
