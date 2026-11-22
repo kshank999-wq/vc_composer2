@@ -541,6 +541,7 @@ MainComponent::MainComponent(AppContext& context)
 
 MainComponent::~MainComponent()
 {
+    *alive_flag_ = false;
     if (deck_window_) {
         // The window's host holds the deck (a member here): let go of it first.
         deck_window_->clearContentComponent();
@@ -1132,8 +1133,74 @@ void MainComponent::refresh_tool_keys()
     if (auto* k = toolbar_.key("Hear")) k->setToggleState(composer_.hear_entry(), juce::dontSendNotification);
 }
 
+void MainComponent::watch_plugins()
+{
+    if (watching_.exchange(true)) return;
+    auto hosts = context_.engine.remote_hosts();
+    if (hosts.empty()) {
+        watching_ = false;
+        return;
+    }
+    std::vector<std::pair<std::shared_ptr<HostProcess>, juce::String>> probe;
+    for (const auto& h : hosts) {
+        juce::String owner;
+        if (h.owner_id == PlaybackEngine::kSetupTrackId) owner = "the Library";
+        else if (const auto* t = context_.session.data().find_track(h.owner_id)) owner = t->name;
+        else if (const auto* b = context_.session.data().find_bus(h.owner_id)) owner = b->name;
+        probe.emplace_back(h.process, h.plugin_name + (owner.isNotEmpty() ? " (" + owner + ")" : juce::String()));
+    }
+    juce::Component::SafePointer<MainComponent> self(this);
+    juce::Thread::launch([self, probe, alive = alive_flag_] {
+        std::vector<bool> answered;
+        for (const auto& [process, what] : probe) answered.push_back(process->answers(2500) || process->crashed());
+        juce::MessageManager::callAsync([self, probe, answered, alive] {
+            if (!*alive || self == nullptr) return;
+            self->watching_ = false;
+            for (std::size_t i = 0; i < probe.size(); ++i) {
+                auto* key = probe[i].first.get();
+                if (answered[i]) {
+                    self->silent_counts_.erase(key);
+                    continue;
+                }
+                // Silent twice running (about six seconds): ask, at most every 30 s.
+                if (++self->silent_counts_[key] < 2) continue;
+                const auto now = juce::Time::getMillisecondCounter();
+                if (auto it = self->asked_at_.find(key); it != self->asked_at_.end() && now - it->second < 30000) continue;
+                self->asked_at_[key] = now;
+                self->ask_frozen(probe[i].first, probe[i].second);
+            }
+        });
+    });
+}
+
+void MainComponent::ask_frozen(std::shared_ptr<HostProcess> process, const juce::String& what)
+{
+    juce::Component::SafePointer<MainComponent> self(this);
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(juce::MessageBoxIconType::WarningIcon)
+            .withTitle("A plug-in is not responding")
+            .withMessage(what + " is not responding. It may still be loading samples - large libraries can take a while.\n\n"
+                                "Force Quit stops only that plug-in's process (its window closes); it reloads with its last "
+                                "saved settings, and the rest of the project keeps playing.")
+            .withButton("Wait")
+            .withButton("Force Quit and Reload"),
+        [self, process](int r) {
+            if (self == nullptr || r != 0) return;  // 0: the second button
+            process->force_quit("stopped: it was not responding");
+            self->silent_counts_.erase(process.get());
+            const int n = self->context_.engine.reload_crashed_plugins();
+            self->context_.status("Force quit a frozen plug-in; reloaded " + juce::String(n) + " with their last settings");
+        });
+}
+
 void MainComponent::timerCallback()
 {
+    // The plug-in watchdog, every three seconds.
+    if (++watch_ticks_ >= 90) {
+        watch_ticks_ = 0;
+        watch_plugins();
+    }
     const Ticks tick = context_.engine.position();
     const bool playing = context_.engine.playing();
     // Save on transport stop (Main Spec §12): a saved project, changed, saves
@@ -2568,7 +2635,8 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
             break;
         case cmd::scanPlugins: info.setInfo("Plug-ins...", "", "Tools", 0); break;
         case cmd::reloadCrashedPlugins:
-            info.setInfo("Reload Crashed Plug-ins", "Starts crashed plug-ins again from their last state", "Tools", 0);
+            info.setInfo("Force Quit Frozen / Reload Crashed Plug-ins",
+                         "Stops plug-ins that are not responding and starts crashed or stopped ones again from their last state", "Tools", 0);
             break;
         case cmd::freezeTrack:
             info.setInfo("Freeze", "Print the selected track through its inserts and play the print; the instrument stays loaded",
@@ -2905,9 +2973,17 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::scoreInfo: show_score_info(context_); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;
         case cmd::reloadCrashedPlugins: {
+            // Frozen ones too: a process that does not answer within two seconds is stopped first.
+            int frozen = 0;
+            for (const auto& h : context_.engine.remote_hosts())
+                if (!h.process->crashed() && !h.process->answers(2000)) {
+                    h.process->force_quit("stopped: it was not responding");
+                    ++frozen;
+                }
             const int n = context_.engine.reload_crashed_plugins();
-            context_.status(n == 0 ? juce::String("No plug-in has crashed")
-                                   : "Reloaded " + juce::String(n) + " crashed plug-in" + (n == 1 ? "" : "s"));
+            context_.status(n == 0 ? juce::String("No plug-in has crashed or frozen")
+                                   : "Reloaded " + juce::String(n) + " plug-in" + (n == 1 ? "" : "s") +
+                                         (frozen > 0 ? " (" + juce::String(frozen) + " frozen, force quit)" : juce::String()));
             break;
         }
         case cmd::about: show_about(); break;

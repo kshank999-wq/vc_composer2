@@ -61,8 +61,13 @@ public:
     /// Its physical memory, as it reports it (a short control call; 0 when
     /// it does not answer). Call off the audio thread.
     std::uint64_t memory_bytes(int timeout_ms = 500);
+    /// Whether its message thread answers a short control call within the time.
+    bool answers(int timeout_ms);
     /// Marks the process dead (an instance found it hung) and stops it.
     void mark_crashed();
+    /// Stops a process that has stopped answering (the composer chose Force
+    /// Quit): its instances go silent and Reload brings them back.
+    void force_quit(const juce::String& why);
 
 private:
     friend class RemotePluginInstance;
@@ -99,6 +104,7 @@ public:
     int take_late_blocks() noexcept { return late_.exchange(0); }
     /// The process it runs in (shared with other instances in shared modes).
     const HostProcess& process() const noexcept { return *process_; }
+    std::shared_ptr<HostProcess> process_shared() const noexcept { return process_; }
 
     // juce::AudioPluginInstance
     const juce::String getName() const override;

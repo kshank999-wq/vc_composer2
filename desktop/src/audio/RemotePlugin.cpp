@@ -96,6 +96,16 @@ void HostProcess::mark_crashed()
     if (connection_) connection_->killWorkerProcess();
 }
 
+void HostProcess::force_quit(const juce::String& why)
+{
+    {
+        std::lock_guard<std::mutex> lock(pending_lock_);
+        if (reason_.isEmpty()) reason_ = why;
+    }
+    lost();
+    if (connection_) connection_->killWorkerProcess();
+}
+
 class RemotePluginInstance::Parameter final : public juce::HostedAudioProcessorParameter {
 public:
     Parameter(RemotePluginInstance& owner, int index) : owner_(owner), index_(index) {}
@@ -164,6 +174,13 @@ RemotePluginInstance::RemotePluginInstance(const BusesProperties& buses, juce::P
 {
     instance_ = process_->new_instance_id();
     ++process_->instances_;
+}
+
+bool HostProcess::answers(int timeout_ms)
+{
+    if (crashed()) return false;
+    juce::MemoryBlock reply;
+    return call(0, "memory", {}, reply, timeout_ms);
 }
 
 std::uint64_t HostProcess::memory_bytes(int timeout_ms)

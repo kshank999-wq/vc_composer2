@@ -418,6 +418,14 @@ public:
     /// plug-in (with its state, if any) to the master, and the MIDI keyboard
     /// plays it while it is the live track. An empty reference removes it.
     static constexpr const char* kSetupTrackId = "__sound_setup__";
+    /// The plug-in host processes in use, with a plug-in each carries and
+    /// what it is on (message thread): for telling a frozen one.
+    struct RemoteHost {
+        std::shared_ptr<class HostProcess> process;
+        juce::String plugin_name;
+        std::string owner_id;
+    };
+    std::vector<RemoteHost> remote_hosts() const;
     void set_setup_instrument(const project::PluginRef& plugin);
     bool has_setup_instrument() const noexcept { return setup_track_ != nullptr; }
     /// The processor in an insert slot, or null (message thread; look it up

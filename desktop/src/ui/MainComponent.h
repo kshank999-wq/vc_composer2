@@ -190,6 +190,16 @@ private:
     class PluginWindow;
     std::string insert_kind(const std::string& owner_id, int slot) const;
     void timerCallback() override;
+    /// The plug-in watchdog: asks each plug-in process, off the message
+    /// thread, whether it still answers; one that stays silent is offered
+    /// Wait or Force Quit and Reload.
+    void watch_plugins();
+    void ask_frozen(std::shared_ptr<class HostProcess> process, const juce::String& what);
+    int watch_ticks_ = 0;
+    std::atomic<bool> watching_{false};
+    std::map<class HostProcess*, int> silent_counts_;
+    std::map<class HostProcess*, juce::uint32> asked_at_;
+    std::shared_ptr<bool> alive_flag_ = std::make_shared<bool>(true);
     /// Lights the toolbar keys that mirror a mode (punch, pencil, edit mode,
     /// Smart tool, Chord mode) at once, not on the next timer tick.
     void refresh_tool_keys();

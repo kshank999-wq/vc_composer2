@@ -7236,6 +7236,19 @@ void sound_setup_checks(MainWindow& window, const juce::File& dir)
         check(true, "the player's window opens in its own process, floating (no stand-in window here)");
     shoot(*win, dir, "120-sound-setup", true);
 
+    // A frozen plug-in process: Force Quit stops only it, and it comes back with its settings.
+    if (auto* remote = dynamic_cast<RemotePluginInstance*>(ctx.engine.plugin_for(vln))) {
+        const auto hosts = ctx.engine.remote_hosts();
+        const bool listed_host = std::any_of(hosts.begin(), hosts.end(), [&](const auto& h) { return h.owner_id == vln; });
+        check(listed_host && remote->process_shared()->answers(3000), "the watchdog lists the plug-in's process, and it answers");
+        remote->process_shared()->force_quit("stopped: it was not responding");
+        check(remote->crashed(), "Force Quit stops a frozen plug-in's process");
+        const int back = ctx.engine.reload_crashed_plugins();
+        ctx.engine.rebuild_now();
+        auto* again = dynamic_cast<RemotePluginInstance*>(ctx.engine.plugin_for(vln));
+        check(back >= 1 && again != nullptr && !again->crashed() && again->process_shared()->answers(3000),
+              "...and Reload brings it back in a new process (" + juce::String(back) + " reloaded)");
+    }
     // 3: named, for pizzicato, used everywhere.
     const auto saved = panel->save_sound("Violins I - Pizzicato (Hollywood)", "pizzicato", true);
     const auto& patches = service->lib().patches();

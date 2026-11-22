@@ -1336,6 +1336,29 @@ std::shared_ptr<Instrument> PlaybackEngine::instrument_for(const project::Track&
     return slot.instrument;
 }
 
+std::vector<PlaybackEngine::RemoteHost> PlaybackEngine::remote_hosts() const
+{
+    std::vector<RemoteHost> out;
+    auto add = [&](juce::AudioPluginInstance* instance, const std::string& owner) {
+        auto* remote = dynamic_cast<RemotePluginInstance*>(instance);
+        if (remote == nullptr) return;
+        auto process = remote->process_shared();
+        if (!process || process->crashed()) return;
+        for (const auto& h : out)
+            if (h.process == process) return;
+        out.push_back({process, instance->getName(), owner});
+    };
+    for (const auto& [id, slot] : instruments_)
+        if (auto* pi = dynamic_cast<PluginInstrument*>(slot.instrument.get())) add(&pi->instance(), id);
+    for (const auto& [owner, keys] : insert_keys_)
+        for (const auto& key : keys) {
+            if (key.empty()) continue;
+            auto it = inserts_.find(key);
+            if (it != inserts_.end() && it->second) add(it->second->plugin(), owner);
+        }
+    return out;
+}
+
 std::vector<const project::Track*> PlaybackEngine::tracks_to_play() const
 {
     auto tracks = played_tracks(session_, export_mode_);
