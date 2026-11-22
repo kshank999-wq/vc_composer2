@@ -27,6 +27,7 @@
 #include "ui/ShortcutEditor.h"
 #include "ui/console/MixTools.h"
 #include "ui/library/ArticulationMapWindow.h"
+#include "audio/RemotePlugin.h"
 #include "ui/library/LibraryBrowser.h"
 #include "ui/library/SoundSetup.h"
 #include "vcc/theory/Chord.h"
@@ -1715,6 +1716,19 @@ void MainComponent::show_plugin_window(const std::string& id)
 void MainComponent::show_plugin_window_when_loaded(const std::string& id, int attempt)
 {
     auto* instance = context_.engine.plugin_for(id);
+    const bool setup_slot = id == PlaybackEngine::kSetupTrackId;
+    if (!instance && setup_slot && context_.engine.has_setup_instrument()) {
+        // The Sound Setup slot: wait for its player as for a track's.
+        if (attempt >= 240) {
+            context_.status("The player has not loaded yet: check it in Tools > Plug-ins...");
+            return;
+        }
+        juce::Component::SafePointer<MainComponent> self(this);
+        juce::Timer::callAfterDelay(250, [self, id, attempt] {
+            if (self) self->show_plugin_window_when_loaded(id, attempt + 1);
+        });
+        return;
+    }
     if (!instance) {
         const auto* t = context_.session.data().find_track(id);
         if (!t || t->instrument_plugin.empty()) {
@@ -1733,6 +1747,15 @@ void MainComponent::show_plugin_window_when_loaded(const std::string& id, int at
         juce::Timer::callAfterDelay(kEveryMs, [self, id, attempt] {
             if (self) self->show_plugin_window_when_loaded(id, attempt + 1);
         });
+        return;
+    }
+    // Out of process (the usual way): the plug-in's own window opens in its
+    // process, floating, named for the track - no stand-in window here.
+    if (auto* remote = dynamic_cast<RemotePluginInstance*>(instance)) {
+        const auto* tr = context_.session.data().find_track(id);
+        remote->set_editor_title(setup_slot ? "Sound Setup - " + instance->getName()
+                                            : (tr ? juce::String(tr->name) + " - " : juce::String()) + instance->getName());
+        if (!remote->show_editor(true)) context_.status(instance->getName() + "'s window did not open: is the plug-in still running?");
         return;
     }
     auto& w = plugin_windows_["instrument:" + id];
@@ -1765,6 +1788,11 @@ void MainComponent::show_insert_window(const std::string& owner, int slot)
         if (!instance) {
             const auto why = context_.engine.insert_status(owner, slot);
             context_.status(why.isNotEmpty() ? why : juce::String("That plug-in is not loaded"));
+            return;
+        }
+        if (auto* remote = dynamic_cast<RemotePluginInstance*>(instance)) {
+            remote->set_editor_title(instance->getName() + " - " + owner_name);
+            if (!remote->show_editor(true)) context_.status(instance->getName() + "'s window did not open");
             return;
         }
         auto& w = plugin_windows_["insert:" + key];
@@ -2859,7 +2887,11 @@ bool MainComponent::perform(const InvocationInfo& info)
         case cmd::credits: show_credits_window(); break;
         case cmd::toggleInspector: set_inspector_shown(!inspector_shown()); break;
         case cmd::libraryWindow: set_library_shown(!library_shown()); break;
-        case cmd::soundAssignments: show_sound_assignments(context_); break;
+        case cmd::soundAssignments:
+            // One place for sounds: Sound Setup's Instruments page.
+            show_sound_setup(context_);
+            if (auto* p = sound_setup_panel()) p->show_page(0);
+            break;
         case cmd::soundSetup: show_sound_setup(context_); break;
         case cmd::scoreInfo: show_score_info(context_); break;
         case cmd::scanPlugins: show_plugin_scanner(); break;

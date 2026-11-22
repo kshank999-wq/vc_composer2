@@ -1336,10 +1336,35 @@ std::shared_ptr<Instrument> PlaybackEngine::instrument_for(const project::Track&
     return slot.instrument;
 }
 
+std::vector<const project::Track*> PlaybackEngine::tracks_to_play() const
+{
+    auto tracks = played_tracks(session_, export_mode_);
+    if (setup_track_ && !export_mode_ && !render_override_) tracks.push_back(setup_track_.get());
+    return tracks;
+}
+
+void PlaybackEngine::set_setup_instrument(const project::PluginRef& plugin)
+{
+    if (plugin.empty()) {
+        if (!setup_track_) return;
+        setup_track_.reset();
+    } else {
+        if (!setup_track_) {
+            setup_track_ = std::make_unique<project::Track>();
+            setup_track_->id = kSetupTrackId;
+            setup_track_->name = "Sound Setup";
+            setup_track_->kind = project::TrackKind::Instrument;
+            setup_track_->playback = "midi";
+        }
+        setup_track_->instrument_plugin = plugin;
+    }
+    request_rebuild();
+}
+
 void PlaybackEngine::sync_processors()
 {
     const auto& d = session_.data();
-    const MixPlan plan = make_plan(d, played_tracks(session_, export_mode_), render_override_ ? &*render_override_ : nullptr);
+    const MixPlan plan = make_plan(d, tracks_to_play(), render_override_ ? &*render_override_ : nullptr);
     std::set<std::string> live_strips, live_inserts;
 
     auto strip_for = [&](const std::string& id) -> StripDsp& {
@@ -1420,7 +1445,7 @@ std::unique_ptr<PlaybackSnapshot> PlaybackEngine::build_snapshot()
     sync_processors();
     const auto& d = session_.data();
     const bool pdc_on = d.delay_compensation;
-    const MixPlan plan = make_plan(d, played_tracks(session_, export_mode_), render_override_ ? &*render_override_ : nullptr);
+    const MixPlan plan = make_plan(d, tracks_to_play(), render_override_ ? &*render_override_ : nullptr);
     auto snap = std::make_unique<PlaybackSnapshot>();
     std::map<std::string, std::shared_ptr<ClipStream>> live_streams;
     snap->sample_rate = sample_rate_;

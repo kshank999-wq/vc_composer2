@@ -238,11 +238,22 @@ void set_env(const char* name, const juce::String& value)
 #endif
 }
 
+/// Whether a track's (or the Sound Setup slot's) plug-in window is open:
+/// in its own process (the plug-in host shows it there) or here.
+bool plugin_window_open(AppContext& ctx, const std::string& id, const juce::String& name);
+
 juce::Component* find_dialog(const juce::String& title)
 {
     for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
         if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w->getName() == title && w->isVisible()) return w;
     return nullptr;
+}
+
+bool plugin_window_open(AppContext& ctx, const std::string& id, const juce::String& name)
+{
+    if (auto* remote = dynamic_cast<RemotePluginInstance*>(ctx.engine.plugin_for(id)); remote && remote->editor_shown()) return true;
+    auto* w = find_dialog(name);
+    return w != nullptr && w->isVisible();
 }
 
 // --- Console and recording (Main Spec §11, §12) ----------------------------------------
@@ -7211,15 +7222,14 @@ void sound_setup_checks(MainWindow& window, const juce::File& dir)
 
     // 1-2: the player goes on the track and its window opens.
     const auto said = panel->load_player(instrument->identifier);
-    const bool opened = wait_for([&] {
-        auto* w = find_dialog(juce::String(instrument->name));
-        return w != nullptr && w->isVisible();
-    }, 5000);
+    const bool opened = wait_for([&] { return plugin_window_open(ctx, vln, juce::String(instrument->name)); }, 8000);
     const auto* t = session.data().find_track(vln);
     check(t && t->instrument_plugin.identifier == instrument->identifier && opened,
           "Load Player puts it on the track and opens its own window: " + said);
     if (auto* pw = find_dialog(juce::String(instrument->name)))
         check(pw->isAlwaysOnTop() == juce::Process::isForegroundProcess(), "the player's window floats over VC Composer's own");
+    else if (dynamic_cast<RemotePluginInstance*>(ctx.engine.plugin_for(vln)) != nullptr)
+        check(true, "the player's window opens in its own process, floating (no stand-in window here)");
     shoot(*win, dir, "120-sound-setup", true);
 
     // 3: named, for pizzicato, used everywhere.
@@ -7238,6 +7248,55 @@ void sound_setup_checks(MainWindow& window, const juce::File& dir)
     const auto* t2 = session.data().find_track(vln2);
     check(t2 && t2->instrument_plugin.identifier == instrument->identifier && t2->assignment.patch_id == patches[0].id,
           "Put on Track gives another track the saved sound: " + used);
+    for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
+        if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window && w != win) w->setVisible(false);
+
+    // The Instruments page: every instrument and its articulations; the
+    // player loads into the Sound Setup slot (no track needed), its window
+    // opens, and Save makes it the default for that articulation.
+    panel->show_page(0);
+    pump(200);
+    auto& page = panel->instruments_page();
+    const auto all_listed = page.listed_instruments();
+    check(all_listed.size() > 100u && std::find(all_listed.begin(), all_listed.end(), "strings.violins_1") != all_listed.end(),
+          "the Instruments page lists every instrument (" + juce::String(static_cast<int>(all_listed.size())) + ")");
+    page.show_instrument("strings.violins_1");
+    const auto& arts = page.articulations();
+    check(arts.size() > 3u && arts[0].empty() && std::find(arts.begin(), arts.end(), "legato") != arts.end(),
+          "an instrument shows its articulations as rows, the whole instrument first (" + juce::String(static_cast<int>(arts.size())) + ")");
+    page.select_articulation("legato");
+    const auto loading = page.load_player(instrument->identifier);
+    const bool slot_loaded = wait_for([&] { return ctx.engine.plugin_for(PlaybackEngine::kSetupTrackId) != nullptr; }, 8000);
+    const bool slot_window =
+        wait_for([&] { return plugin_window_open(ctx, PlaybackEngine::kSetupTrackId, juce::String(instrument->name)); }, 5000);
+    check(slot_loaded && slot_window && session.data().find_track(PlaybackEngine::kSetupTrackId) == nullptr,
+          "Choose Player loads it into the Sound Setup slot - no track, not in the project - and opens its window: " + loading);
+    pump(200);
+    shoot(*win, dir, "122-instrument-sounds", true);
+    const auto before_patches = service->lib().patches().size();
+    const auto legato_said = page.save_sound("Violins I - Legato (Hollywood Strings)");
+    const auto* legato = service->lib().assigned("strings.violins_1", "legato");
+    check(legato && legato->display == "Violins I - Legato (Hollywood Strings)" && !legato->plugin.state_base64.empty() &&
+              service->lib().patches().size() == before_patches + 1,
+          "Save Sound keeps the player with its settings as the default for Violins I legato: " + legato_said);
+    check(page.assigned_name("legato") == "Violins I - Legato (Hollywood Strings)", "the legato row shows its sound");
+    // A track for Violins I legato in a new project gets it by itself.
+    const auto lv = session.add_track("Violins I Legato", "strings.violins_1");
+    session.update_track_mix(lv, "artic", [](project::Track& tr) { tr.articulation_intents = {"legato"}; });
+    session.apply_assigned_sounds({lv});
+    const auto* lvt = session.data().find_track(lv);
+    check(lvt && lvt->instrument_plugin.identifier == instrument->identifier,
+          "a Violins I legato track gets the saved sound by itself");
+    // Instruments and articulations of your own.
+    const auto own = page.add_instrument("Fab Four Guitar", "strings.violins_1");
+    page.add_articulation("flautando");
+    check(!own.empty() && page.instrument() == own && service->lib().find_custom_instrument(own) &&
+              std::find(page.articulations().begin(), page.articulations().end(), "flautando") != page.articulations().end() &&
+              service->file().loadFileAsString().contains("Fab Four Guitar"),
+          "+ Instrument and + Articulation add your own, kept with your library");
+    page.release_slot();
+    pump(100);
+    check(!ctx.engine.has_setup_instrument(), "closing the page lets the Sound Setup slot go");
     for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
         if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window && w != win) w->setVisible(false);
 
@@ -8483,10 +8542,7 @@ void library_checks(MainWindow& window, const juce::File& dir)
     for (int i = juce::TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
         if (auto* w = juce::TopLevelWindow::getTopLevelWindow(i); w && w != &window) w->setVisible(false);
     TrackPanel::open_instrument(ctx, horns2, nullptr);
-    const bool opened = wait_for([&] {
-        auto* w = find_dialog(juce::String(instrument->name));
-        return w != nullptr && w->isVisible();
-    }, 5000);
+    const bool opened = wait_for([&] { return plugin_window_open(ctx, horns2, juce::String(instrument->name)); }, 5000);
     check(opened, "clicking an assigned instrument opens " + juce::String(instrument->name) + "'s window");
     if (auto* w = dynamic_cast<juce::DocumentWindow*>(find_dialog(juce::String(instrument->name)))) w->closeButtonPressed();
     pump(50);

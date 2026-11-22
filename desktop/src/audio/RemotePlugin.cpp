@@ -326,8 +326,11 @@ bool RemotePluginInstance::show_editor(bool show)
 {
     juce::MemoryOutputStream out;
     out.writeBool(show);
+    out.writeString(editor_title_.isNotEmpty() ? editor_title_ : getName());
     juce::MemoryBlock reply;
-    return call("editor", out.getMemoryBlock(), reply, 10000);
+    const bool ok = call("editor", out.getMemoryBlock(), reply, 10000);
+    editor_shown_ = ok && show;
+    return ok;
 }
 
 juce::AudioProcessorEditor* RemotePluginInstance::createEditor()

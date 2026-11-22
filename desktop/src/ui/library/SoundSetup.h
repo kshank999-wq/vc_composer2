@@ -12,6 +12,7 @@
 
 #include "ui/AppContext.h"
 #include "ui/hw/HwControls.h"
+#include "ui/library/InstrumentSounds.h"
 
 namespace vcc::desktop {
 
@@ -41,8 +42,12 @@ public:
     juce::String suggested_name() const;
     juce::TextEditor& name_editor() noexcept { return name_; }
     /// The Libraries page (where each library is, scan, locate) or the Sounds page.
-    void show_libraries(bool on);
-    bool libraries_shown() const noexcept { return libraries_page_; }
+    void show_libraries(bool on) { show_page(on ? 2 : 1); }
+    bool libraries_shown() const noexcept { return page_ == 2; }
+    /// 0 Instruments (every instrument's sounds), 1 Tracks, 2 Libraries.
+    void show_page(int page);
+    int page() const noexcept { return page_; }
+    InstrumentSoundsPage& instruments_page() noexcept { return *instruments_page_; }
     /// Points a missing library at a folder you chose. Returns what happened.
     juce::String locate(std::size_t index, const juce::File& folder);
 
@@ -65,6 +70,7 @@ private:
     AppContext& context_;
     int listener_ = -1;
     int left_w_ = 320;
+    static constexpr int kTopBar = 64;
     std::string track_;
     std::vector<std::string> tracks_;
     std::vector<std::pair<juce::String, std::string>> players_;
@@ -80,8 +86,9 @@ private:
     juce::ComboBox articulation_;
     juce::ToggleButton everywhere_{"Use it for this instrument and articulation in every project"};
     // The Libraries page.
-    bool libraries_page_ = false;
-    hw::Keycap sounds_tab_{"Sounds", true}, libraries_tab_{"Libraries", true};
+    int page_ = 0;
+    hw::Keycap instruments_tab_{"Instruments", true}, sounds_tab_{"Tracks", true}, libraries_tab_{"Libraries", true};
+    std::unique_ptr<InstrumentSoundsPage> instruments_page_;
     class LibraryList;
     std::unique_ptr<LibraryList> library_list_;
     juce::Label libraries_title_, libraries_hint_;

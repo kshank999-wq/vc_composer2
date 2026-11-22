@@ -124,6 +124,16 @@ struct LibraryLocation {
     bool present = true;     ///< There at the last check.
 };
 
+/// An instrument the composer added ("Fab Four Guitar", "Hybrid Pulse"):
+/// it gets sounds like any other, and is written like the instrument it is
+/// based on (range, clef, transposition).
+struct CustomInstrument {
+    std::string id;        ///< "user.fab_four_guitar".
+    std::string name;
+    std::string family;    ///< As the registry's families ("strings", "guitars"...).
+    std::string based_on;  ///< A registry instrument id.
+};
+
 /// A place to scan: a drive (or a folder) and the drive's name.
 struct ScanRoot {
     std::string path;
@@ -158,10 +168,23 @@ public:
     std::vector<std::string> detect();
     void set_detected(std::set<std::string> library_ids) { detected_ = std::move(library_ids); }
 
+    // --- Instruments and articulations the composer added -----------------------------------
+    /// Adds an instrument; returns its id ("user.<name>", made unique).
+    std::string add_custom_instrument(const std::string& name, const std::string& family, const std::string& based_on);
+    bool remove_custom_instrument(const std::string& id);
+    const std::vector<CustomInstrument>& custom_instruments() const noexcept { return custom_; }
+    const CustomInstrument* find_custom_instrument(const std::string& id) const;
+    /// Articulations added to an instrument's list (beside those it has).
+    void add_articulation(const std::string& instrument_id, const std::string& articulation);
+    std::vector<std::string> added_articulations(const std::string& instrument_id) const;
+
     // --- Library locations (kept with the user's library) ---------------------------------
     /// Looks through drives for sample libraries, `max_depth` folders down
     /// (never inside a library found, nor into system or hidden folders).
-    std::vector<LibraryLocation> scan(const std::vector<ScanRoot>& roots, int max_depth = 4) const;
+    /// `unreadable` (optional) gets the roots that could not be opened (on a
+    /// Mac: a drive VC Composer has not been allowed to read).
+    std::vector<LibraryLocation> scan(const std::vector<ScanRoot>& roots, int max_depth = 6,
+                                      std::vector<std::string>* unreadable = nullptr) const;
     /// Keeps what a scan found: new libraries are added, known ones updated
     /// (by path). Returns how many are new.
     int add_locations(const std::vector<LibraryLocation>& found);
@@ -171,7 +194,7 @@ public:
     /// For each missing library, where it might be now: the same path inside
     /// another drive first (a renamed drive, a new drive letter), then a
     /// folder of the same name. Nothing is changed until applied.
-    std::vector<Relocation> find_moved(const std::vector<ScanRoot>& roots, int max_depth = 4) const;
+    std::vector<Relocation> find_moved(const std::vector<ScanRoot>& roots, int max_depth = 6) const;
     /// Accepts a relocation (the composer said it is right).
     void apply_relocation(const Relocation& r);
     /// Forgets a library (by path).
@@ -246,6 +269,8 @@ private:
     std::vector<std::string> folders_;
     std::set<std::string> detected_;
     std::vector<LibraryLocation> locations_;
+    std::vector<CustomInstrument> custom_;
+    std::vector<std::pair<std::string, std::string>> added_articulations_;  ///< (instrument, articulation).
     bool scanned_ = false;
     std::string catalog_match(const std::string& folder_name) const;
     std::vector<UserPatch> patches_;

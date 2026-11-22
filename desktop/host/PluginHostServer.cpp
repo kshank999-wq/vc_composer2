@@ -297,6 +297,7 @@ void Instance::handle(const juce::String& command, juce::MemoryInputStream& in, 
         shared_.get()->latency.store(plugin_->getLatencySamples());
     } else if (command == "editor") {
         const bool show = in.readBool();
+        const juce::String title = in.isExhausted() ? plugin_->getName() : in.readString();
         if (show) {
             if (!editor_window_) {
                 auto* editor = plugin_->hasEditor() ? plugin_->createEditorIfNeeded() : nullptr;
@@ -309,13 +310,19 @@ void Instance::handle(const juce::String& command, juce::MemoryInputStream& in, 
                     }
                     void closeButtonPressed() override { setVisible(false); }
                 };
-                editor_window_ = std::make_unique<Window>(plugin_->getName() + " (outside VC Composer)");
+                editor_window_ = std::make_unique<Window>(title);
                 editor_window_->setUsingNativeTitleBar(true);
                 editor_window_->setContentOwned(editor, true);
                 editor_window_->setResizable(editor->isResizable(), false);
                 editor_window_->centreWithSize(editor_window_->getWidth(), editor_window_->getHeight());
             }
+            editor_window_->setName(title);
+            // A floating plug-in window, as in any DAW: over VC Composer's
+            // windows, and brought forward even though this helper has no
+            // Dock icon (macOS otherwise leaves it behind the app).
+            editor_window_->setAlwaysOnTop(true);
             editor_window_->setVisible(true);
+            juce::Process::makeForegroundProcess();
             editor_window_->toFront(true);
         } else if (editor_window_) {
             editor_window_->setVisible(false);

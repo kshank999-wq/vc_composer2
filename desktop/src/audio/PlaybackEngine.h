@@ -412,6 +412,14 @@ public:
     /// while held, so a plug-in window outlives a rebuild that drops it and
     /// closes first (its editor talks to the plug-in as it goes).
     std::shared_ptr<void> plugin_keepalive(const std::string& owner_id, int slot) const;
+
+    // --- Sound Setup slot -------------------------------------------------------------
+    /// A channel outside the project for setting up sounds: it plays this
+    /// plug-in (with its state, if any) to the master, and the MIDI keyboard
+    /// plays it while it is the live track. An empty reference removes it.
+    static constexpr const char* kSetupTrackId = "__sound_setup__";
+    void set_setup_instrument(const project::PluginRef& plugin);
+    bool has_setup_instrument() const noexcept { return setup_track_ != nullptr; }
     /// The processor in an insert slot, or null (message thread; look it up
     /// each time - a rebuild replaces it). The rack reads its live meters.
     InsertProcessor* insert_processor(const std::string& strip_id, int slot) const;
@@ -592,6 +600,8 @@ private:
     double sample_rate_ = 48000.0;
     int block_size_ = 512;
 
+    std::unique_ptr<project::Track> setup_track_;  ///< The Sound Setup slot, outside the project.
+    std::vector<const project::Track*> tracks_to_play() const;
     std::map<std::string, InstrumentSlot> instruments_;  // message thread only
     std::map<std::string, std::shared_ptr<StripDsp>> strips_;                 // strip id -> processing, meters
     std::map<std::string, std::shared_ptr<InsertProcessor>> inserts_;         // strip/kind/plugin#n -> processor

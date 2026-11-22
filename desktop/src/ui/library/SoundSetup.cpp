@@ -269,13 +269,19 @@ SoundSetupPanel::SoundSetupPanel(AppContext& context)
         addAndMakeVisible(c);
 
     // The Libraries page.
-    sounds_tab_.setToggleState(true, juce::dontSendNotification);
-    sounds_tab_.onClick = [this] { show_libraries(false); };
-    libraries_tab_.onClick = [this] { show_libraries(true); };
+    instruments_page_ = std::make_unique<InstrumentSoundsPage>(context_);
+    addChildComponent(*instruments_page_);
+    instruments_tab_.onClick = [this] { show_page(0); };
+    sounds_tab_.onClick = [this] { show_page(1); };
+    libraries_tab_.onClick = [this] { show_page(2); };
+    instruments_tab_.setComponentID("setup_instruments_tab");
+    instruments_tab_.set_legend_size(14.0f);
+    instruments_tab_.setWantsKeyboardFocus(false);
+    addAndMakeVisible(instruments_tab_);
     sounds_tab_.setComponentID("setup_sounds_tab");
     libraries_tab_.setComponentID("setup_libraries_tab");
     for (auto* k : {&sounds_tab_, &libraries_tab_, &scan_drives_, &add_folder_, &locate_, &remove_, &recheck_}) {
-        k->set_legend_size(13.0f);
+        k->set_legend_size(k == &sounds_tab_ || k == &libraries_tab_ ? 14.0f : 13.0f);
         k->setWantsKeyboardFocus(false);
     }
     scan_drives_.set_sublegend("every connected drive");
@@ -383,6 +389,7 @@ SoundSetupPanel::SoundSetupPanel(AppContext& context)
     show_track(std::find(tracks_.begin(), tracks_.end(), selected) != tracks_.end() ? selected
                : tracks_.empty()                                                    ? std::string()
                                                                                     : tracks_.front());
+    show_page(0);
 }
 
 SoundSetupPanel::~SoundSetupPanel()
@@ -408,19 +415,22 @@ void SoundSetupPanel::refresh_libraries()
                              juce::dontSendNotification);
 }
 
-void SoundSetupPanel::show_libraries(bool on)
+void SoundSetupPanel::show_page(int page)
 {
-    libraries_page_ = on;
-    sounds_tab_.setToggleState(!on, juce::dontSendNotification);
-    libraries_tab_.setToggleState(on, juce::dontSendNotification);
+    page_ = juce::jlimit(0, 2, page);
+    instruments_tab_.setToggleState(page_ == 0, juce::dontSendNotification);
+    sounds_tab_.setToggleState(page_ == 1, juce::dontSendNotification);
+    libraries_tab_.setToggleState(page_ == 2, juce::dontSendNotification);
+    instruments_page_->setVisible(page_ == 0);
     for (auto* c : std::initializer_list<juce::Component*>{track_list_.get(), &tracks_title_, &track_title_, &track_info_, &step1_,
                                                           player_list_.get(), &load_, &scan_, &step2_, &step2_text_, &open_window_,
                                                           &step3_, &name_label_, &name_, &artic_label_, &articulation_, &everywhere_,
                                                           &save_, &saved_title_, saved_list_.get(), &use_saved_, &next_, &prev_})
-        c->setVisible(!on);
+        c->setVisible(page_ == 1);
     for (auto* c : std::initializer_list<juce::Component*>{library_list_.get(), &libraries_title_, &libraries_hint_, &scan_drives_,
                                                           &add_folder_, &locate_, &remove_, &recheck_})
-        c->setVisible(on);
+        c->setVisible(page_ == 2);
+    status_.setVisible(page_ != 0);
     refresh_libraries();
     resized();
     repaint();
@@ -616,30 +626,42 @@ void SoundSetupPanel::next_track(int step)
 void SoundSetupPanel::paint(juce::Graphics& g)
 {
     g.fillAll(colours::background);
-    if (libraries_page_) return;
     g.setColour(colours::panel);
-    g.fillRect(getLocalBounds().removeFromLeft(left_w_));
+    g.fillRect(getLocalBounds().removeFromTop(kTopBar));
     g.setColour(colours::outline);
-    g.drawVerticalLine(left_w_, 0.0f, static_cast<float>(getHeight()));
+    g.drawHorizontalLine(kTopBar, 0.0f, static_cast<float>(getWidth()));
+    if (page_ != 1) return;
+    g.setColour(colours::panel);
+    g.fillRect(getLocalBounds().withTrimmedTop(kTopBar + 1).removeFromLeft(left_w_));
+    g.setColour(colours::outline);
+    g.drawVerticalLine(left_w_, static_cast<float>(kTopBar), static_cast<float>(getHeight()));
 }
 
 void SoundSetupPanel::resized()
 {
     // Proportions that grow with the window (full screen, another display).
     auto r = getLocalBounds();
-    if (libraries_page_) {
+    // The tabs across the top, Full Screen at the right.
+    {
+        auto top = r.removeFromTop(kTopBar).reduced(14, 8);
+        for (auto* k : {&instruments_tab_, &sounds_tab_, &libraries_tab_}) {
+            k->setBounds(top.removeFromLeft(170).reduced(0, 0));
+            top.removeFromLeft(10);
+        }
+        full_.setBounds(top.removeFromRight(140));
+        r.removeFromTop(1);
+    }
+    if (page_ == 0) {
+        instruments_page_->setBounds(r);
+        return;
+    }
+    if (page_ == 2) {
         layout_libraries(r);
         return;
     }
     const int left_w = juce::jlimit(280, 460, getWidth() / 4);
     left_w_ = left_w;
     auto left = r.removeFromLeft(left_w).reduced(14);
-    {
-        auto tabs = left.removeFromTop(44);
-        sounds_tab_.setBounds(tabs.removeFromLeft(tabs.getWidth() / 2).reduced(0, 2).withTrimmedRight(4));
-        libraries_tab_.setBounds(tabs.reduced(0, 2).withTrimmedLeft(4));
-        left.removeFromTop(10);
-    }
     tracks_title_.setBounds(left.removeFromTop(26));
     auto nav = left.removeFromBottom(48);
     prev_.setBounds(nav.removeFromLeft(nav.getWidth() / 2).reduced(0, 2).withTrimmedRight(4));
@@ -649,7 +671,6 @@ void SoundSetupPanel::resized()
 
     r.reduce(24, 16);
     auto head = r.removeFromTop(40);
-    full_.setBounds(head.removeFromRight(130).reduced(0, 2));
     track_title_.setBounds(head);
     track_info_.setBounds(r.removeFromTop(24));
     status_.setBounds(r.removeFromBottom(30));
@@ -697,12 +718,6 @@ void SoundSetupPanel::resized()
 void SoundSetupPanel::layout_libraries(juce::Rectangle<int> r)
 {
     r.reduce(20, 14);
-    auto top = r.removeFromTop(44);
-    sounds_tab_.setBounds(top.removeFromLeft(150).reduced(0, 2));
-    top.removeFromLeft(8);
-    libraries_tab_.setBounds(top.removeFromLeft(150).reduced(0, 2));
-    full_.setBounds(top.removeFromRight(130).reduced(0, 2));
-    r.removeFromTop(12);
     libraries_title_.setBounds(r.removeFromTop(26));
     libraries_hint_.setBounds(r.removeFromTop(44));
     status_.setBounds(r.removeFromBottom(30));

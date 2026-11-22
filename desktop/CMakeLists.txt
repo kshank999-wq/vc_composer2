@@ -159,6 +159,9 @@ juce_add_gui_app(VCComposer2
     DOCUMENT_EXTENSIONS vcc vcc2
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "VC Composer records audio and MIDI input."
+    # macOS asks before an app reads external drives (sample libraries) or the
+    # user's folders; these say why.
+    PLIST_TO_MERGE "<plist><dict><key>NSRemovableVolumesUsageDescription</key><string>VC Composer looks for your sample libraries (EastWest, Kontakt...) on your drives and remembers where they are.</string><key>NSNetworkVolumesUsageDescription</key><string>VC Composer looks for your sample libraries on network drives too.</string><key>NSDocumentsFolderUsageDescription</key><string>VC Composer opens and saves your projects.</string><key>NSDownloadsFolderUsageDescription</key><string>VC Composer imports audio, MIDI and MusicXML you downloaded.</string><key>NSDesktopFolderUsageDescription</key><string>VC Composer opens and saves your projects.</string></dict></plist>"
     # The app icon (brand/icons): JUCE makes the macOS .icns and the Windows
     # .ico from these, the big one for the large sizes, the monogram for the small.
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/../brand/icons/VC-Composer-1024.png"

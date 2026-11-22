@@ -123,6 +123,10 @@ public:
 
     /// Shows or hides the plug-in's own window (in its process).
     bool show_editor(bool show);
+    /// The plug-in window's title ("Violins I - Opus"), as a DAW names it.
+    void set_editor_title(const juce::String& title) { editor_title_ = title; }
+    /// Whether its window was last asked to show, and did.
+    bool editor_shown() const noexcept { return editor_shown_; }
 
 private:
     class Parameter;
@@ -154,6 +158,8 @@ private:
     std::string last_state_;     ///< base64; what is saved if the process is gone
     juce::SpinLock param_lock_;  ///< Writers to the to-plug-in ring (audio + message thread).
     std::vector<Parameter*> params_;
+    bool editor_shown_ = false;
+    juce::String editor_title_;
 };
 
 }  // namespace vcc::desktop

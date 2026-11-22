@@ -229,6 +229,56 @@ std::vector<std::string> Library::detect()
     return found;
 }
 
+// --- Instruments and articulations the composer added ------------------------------------------
+
+std::string Library::add_custom_instrument(const std::string& name, const std::string& family, const std::string& based_on)
+{
+    std::string slug;
+    for (char c : lower(name)) {
+        if (std::isalnum(static_cast<unsigned char>(c))) slug += c;
+        else if (!slug.empty() && slug.back() != '_') slug += '_';
+    }
+    while (!slug.empty() && slug.back() == '_') slug.pop_back();
+    if (slug.empty()) slug = "instrument";
+    std::string id = "user." + slug;
+    for (int n = 2; find_custom_instrument(id); ++n) id = "user." + slug + "_" + std::to_string(n);
+    custom_.push_back({id, name, family, based_on});
+    return id;
+}
+
+bool Library::remove_custom_instrument(const std::string& id)
+{
+    const auto before = custom_.size();
+    custom_.erase(std::remove_if(custom_.begin(), custom_.end(), [&](const CustomInstrument& c) { return c.id == id; }), custom_.end());
+    if (custom_.size() == before) return false;
+    assignments_.erase(std::remove_if(assignments_.begin(), assignments_.end(), [&](const Assignment& a) { return a.instrument_id == id; }),
+                       assignments_.end());
+    return true;
+}
+
+const CustomInstrument* Library::find_custom_instrument(const std::string& id) const
+{
+    for (const auto& c : custom_)
+        if (c.id == id) return &c;
+    return nullptr;
+}
+
+void Library::add_articulation(const std::string& instrument_id, const std::string& articulation)
+{
+    if (articulation.empty()) return;
+    for (const auto& [i, a] : added_articulations_)
+        if (i == instrument_id && a == articulation) return;
+    added_articulations_.emplace_back(instrument_id, articulation);
+}
+
+std::vector<std::string> Library::added_articulations(const std::string& instrument_id) const
+{
+    std::vector<std::string> out;
+    for (const auto& [i, a] : added_articulations_)
+        if (i == instrument_id) out.push_back(a);
+    return out;
+}
+
 // --- Library locations ----------------------------------------------------------------------
 
 namespace {
@@ -268,7 +318,8 @@ std::string Library::catalog_match(const std::string& folder_name) const
     return {};
 }
 
-std::vector<LibraryLocation> Library::scan(const std::vector<ScanRoot>& roots, int max_depth) const
+std::vector<LibraryLocation> Library::scan(const std::vector<ScanRoot>& roots, int max_depth,
+                                           std::vector<std::string>* unreadable) const
 {
     std::vector<LibraryLocation> out;
     std::set<std::string> seen;
@@ -276,6 +327,14 @@ std::vector<LibraryLocation> Library::scan(const std::vector<ScanRoot>& roots, i
         std::error_code ec;
         const fs::path base = fs::u8path(root.path);
         if (!fs::is_directory(base, ec)) continue;
+        {
+            std::error_code open_ec;
+            fs::directory_iterator probe(base, open_ec);
+            if (open_ec) {
+                if (unreadable) unreadable->push_back(root.volume.empty() ? root.path : root.volume);
+                continue;
+            }
+        }
         fs::recursive_directory_iterator it(base, fs::directory_options::skip_permission_denied, ec), end;
         for (; !ec && it != end; it.increment(ec)) {
             std::error_code e2;
@@ -500,6 +559,24 @@ json::Value Library::user_json() const
     }
     o.set("locations", std::move(locs));
     o.set("scanned", scanned_);
+    json::Value cust = json::Value::make_array();
+    for (const auto& c : custom_) {
+        json::Value j = json::Value::make_object();
+        j.set("id", c.id);
+        j.set("name", c.name);
+        j.set("family", c.family);
+        j.set("based_on", c.based_on);
+        cust.push_back(std::move(j));
+    }
+    o.set("custom_instruments", std::move(cust));
+    json::Value arts = json::Value::make_array();
+    for (const auto& [i, a] : added_articulations_) {
+        json::Value j = json::Value::make_object();
+        j.set("instrument", i);
+        j.set("articulation", a);
+        arts.push_back(std::move(j));
+    }
+    o.set("added_articulations", std::move(arts));
     o.set("next_id", next_id_);
     json::Value as = json::Value::make_array();
     for (const auto& a : assignments_) {
@@ -551,6 +628,14 @@ void Library::load_user(const json::Value& doc)
             if (!l.path.empty()) locations_.push_back(std::move(l));
         }
     scanned_ = doc.get_bool("scanned", false);
+    custom_.clear();
+    if (const auto* cust = doc.get("custom_instruments"))
+        for (const auto& j : cust->as_array())
+            if (!j.get_string("id").empty())
+                custom_.push_back({j.get_string("id"), j.get_string("name"), j.get_string("family"), j.get_string("based_on")});
+    added_articulations_.clear();
+    if (const auto* arts = doc.get("added_articulations"))
+        for (const auto& j : arts->as_array()) add_articulation(j.get_string("instrument"), j.get_string("articulation"));
     next_id_ = static_cast<int>(doc.get_int("next_id", 1));
     assignments_.clear();
     if (const auto* as = doc.get("assignments"))

@@ -267,10 +267,30 @@ void LibraryService::scan_drives(std::function<void(int, int)> done)
     const auto roots = scan_roots();
     auto copy = std::make_shared<library::Library>(lib_);
     juce::Thread::launch([this, alive = alive_, roots, copy, done = std::move(done)] {
-        auto found = std::make_shared<std::vector<library::LibraryLocation>>(copy->scan(roots));
-        juce::MessageManager::callAsync([this, alive, found, done] {
+        auto unreadable = std::make_shared<std::vector<std::string>>();
+        auto found = std::make_shared<std::vector<library::LibraryLocation>>(copy->scan(roots, 6, unreadable.get()));
+        juce::MessageManager::callAsync([this, alive, found, unreadable, done] {
             if (!*alive) return;
             scanning_ = false;
+            unreadable_ = *unreadable;
+            if (!unreadable_.empty()) {
+                juce::String names;
+                for (const auto& n : unreadable_) names << (names.isEmpty() ? "" : ", ") << juce::String(n);
+                juce::AlertWindow::showAsync(
+                    juce::MessageBoxOptions()
+                        .withIconType(juce::MessageBoxIconType::WarningIcon)
+                        .withTitle("Some drives could not be read")
+                        .withMessage("VC Composer was not allowed to look on: " + names +
+#if JUCE_MAC
+                                     ".\n\nOpen System Settings > Privacy & Security > Files and Folders, turn on "
+                                     "\"Removable Volumes\" (and \"Network Volumes\") for VC Composer - or add it under "
+                                     "Full Disk Access - then press Scan All Drives again."
+#else
+                                     ".\n\nCheck the drive is connected and readable, then press Scan All Drives again."
+#endif
+                                     ),
+                    [](int) {});
+            }
             const int added = lib_.add_locations(*found);
             lib_.set_scanned(true);
             lib_.check_locations();
@@ -768,7 +788,7 @@ void LibraryBrowser::show_more_menu()
     juce::PopupMenu m;
     m.addItem("Put on Selected Track (double-click)", entry_at(list_.getSelectedRow()) != nullptr, false,
               [this] { put_on_track_selected(); });
-    m.addItem("Sound Assignments...", [this] { show_sound_assignments(context_); });
+    m.addItem("Sound Setup (every instrument's sounds)...", [this] { context_.commands.invokeDirectly(cmd::soundSetup, true); });
     m.addSeparator();
     m.addItem("Library folders...", [this] {
         const juce::Component::SafePointer<LibraryBrowser> safe(this);

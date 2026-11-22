@@ -57,6 +57,8 @@ public:
     /// Scans in the background; `done` (on the message thread) gets how many
     /// libraries were found and how many are new. They are kept at once.
     void scan_drives(std::function<void(int found, int added)> done);
+    /// The drives the last scan could not read (macOS privacy), by name.
+    const std::vector<std::string>& unreadable() const noexcept { return unreadable_; }
     bool scanning() const noexcept { return scanning_; }
     /// At start: scans once if never scanned; else checks every library is
     /// where it was and, for the missing, looks for them again and asks
@@ -80,6 +82,7 @@ private:
     library::Library lib_;
     juce::File file_;
     bool scanning_ = false;
+    std::vector<std::string> unreadable_;
     std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };
 

@@ -411,3 +411,27 @@ TEST_CASE("library: locations - drives scanned for EastWest and Kontakt librarie
     again.check_locations();
     CHECK(again.find_moved({{root + "/Volumes/EASTWEST 1", "EASTWEST 1"}}).empty());
 }
+
+TEST_CASE("library: instruments and articulations the composer adds are kept and get sounds")
+{
+    auto lib = make();
+    const auto id = lib.add_custom_instrument("Fab Four Guitar", "guitars", "guitars.electric_guitar");
+    CHECK_EQ(id, std::string("user.fab_four_guitar"));
+    CHECK_EQ(lib.add_custom_instrument("Fab Four Guitar", "guitars", "guitars.electric_guitar"), std::string("user.fab_four_guitar_2"));
+    lib.add_articulation("strings.violins_1", "flautando");
+    lib.add_articulation("strings.violins_1", "flautando");  // once
+    CHECK_EQ(lib.added_articulations("strings.violins_1").size(), std::size_t(1));
+    library::UserPatch p;
+    p.display = "Fab Four - Strat (Opus)";
+    p.instrument_id = id;
+    const auto pid = lib.add_patch(p);
+    lib.set_assignment(id, "", pid);
+    auto again = make();
+    again.load_user(lib.user_json());
+    REQUIRE(again.find_custom_instrument(id) != nullptr);
+    CHECK_EQ(again.find_custom_instrument(id)->based_on, std::string("guitars.electric_guitar"));
+    CHECK_EQ(again.added_articulations("strings.violins_1")[0], std::string("flautando"));
+    CHECK(again.assigned(id, "") != nullptr);
+    CHECK(again.remove_custom_instrument(id));
+    CHECK(again.assigned(id, "") == nullptr);  // its assignments go with it
+}
