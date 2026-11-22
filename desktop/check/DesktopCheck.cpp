@@ -1244,8 +1244,11 @@ void insert_window_checks(AppContext& ctx, const juce::File& dir)
     ctx.show_insert_window(track, 0);
     pump(400);
     auto* fx_window = find_dialog("VCC Test Effect - Dialogue");
-    check(fx_window != nullptr, "an effect insert's window opens from its slot (" +
-                                    juce::String(fx_window ? fx_window->getName() : juce::String("not found")) + ")");
+    auto* remote_fx = dynamic_cast<RemotePluginInstance*>(ctx.engine.insert_plugin(track, 0));
+    check(fx_window != nullptr || (remote_fx && remote_fx->editor_shown()),
+          "an effect insert's window opens from its slot (" +
+              juce::String(fx_window ? fx_window->getName() : remote_fx ? juce::String("in its own process") : juce::String("not found")) +
+              ")");
     if (fx_window) {
         fx_window->setSize(520, 220);
         pump(200);
@@ -1254,9 +1257,10 @@ void insert_window_checks(AppContext& ctx, const juce::File& dir)
     if (auto* p = ctx.engine.insert_plugin(track, 0)) p->getParameters()[1]->setValueNotifyingHost(0.25f);
     const auto before = session.data().find_track(track)->inserts[0].plugin.state_base64;
     if (auto* dw = dynamic_cast<juce::DocumentWindow*>(fx_window)) dw->closeButtonPressed();
+    else if (remote_fx) ctx.engine.capture_plugin_states();  // its window is in its own process: taken in when the project saves
     pump(100);
     const auto after = session.data().find_track(track)->inserts[0].plugin.state_base64;
-    check(!after.empty() && after != before, "closing the effect's window stores its settings in the project");
+    check(!after.empty() && after != before, "a change in the effect's window is kept in the project");
 
     // A built-in compressor: its unit in the strip's rack, knobs for its
     // controls, each turn one undo step.
