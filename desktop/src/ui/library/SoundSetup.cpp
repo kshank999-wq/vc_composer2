@@ -35,6 +35,18 @@ public:
     }
     void closeButtonPressed() override
     {
+        // A sound loaded in the player but not saved: ask first.
+        if (auto* panel = dynamic_cast<SoundSetupPanel*>(getContentComponent()); panel && panel->instruments_page().has_unsaved()) {
+            juce::Component::SafePointer<SetupWindow> self(this);
+            panel->instruments_page().confirm_leave([self] {
+                if (self != nullptr) self->close_now();
+            });
+            return;
+        }
+        close_now();
+    }
+    void close_now()
+    {
         if (!isFullScreen()) {
             hw::ui_settings().setValue("sound_setup_bounds", getBounds().toString());
             hw::ui_settings().saveIfNeeded();

@@ -59,6 +59,11 @@ public:
     juce::String suggested_name() const;
     /// Closes the setup slot (the page going away).
     void release_slot();
+    /// A player was loaded (or a sound opened to change) and not saved yet.
+    bool has_unsaved() const noexcept { return unsaved_; }
+    /// Asks whether to save an unsaved sound first (Save / Don't Save), then
+    /// runs `go`; runs it at once when nothing is unsaved.
+    void confirm_leave(std::function<void()> go);
     /// Plays a short phrase in the instrument's range through the loaded player.
     juce::String play_phrase();
     /// The output the sound goes to ("MacBook Pro Speakers"), or why there is none.
@@ -90,6 +95,7 @@ private:
     std::vector<Row> rows_;
     juce::String search_text_;
     std::string loaded_player_;  ///< Plug-in identifier in the setup slot.
+    bool unsaved_ = false;
     std::unique_ptr<List> instruments_, artics_;
     juce::TextEditor search_;
     juce::Label title_, subtitle_, current_, hint_, status_, name_label_, step1_, step2_, step3_, instruments_title_, artics_title_;

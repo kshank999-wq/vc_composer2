@@ -184,6 +184,9 @@ if(APPLE)
     # Hosting Audio Units shows their generic view (AUGenericView), which JUCE
     # links for GUI apps but not for console tools.
     target_link_libraries(vcc_plugin_scanner PRIVATE "-framework CoreAudioKit")
+    # An identity of its own (bundle ID, name), embedded in the executable.
+    target_link_options(vcc_plugin_scanner PRIVATE
+        "LINKER:-sectcreate,__TEXT,__info_plist,${CMAKE_CURRENT_SOURCE_DIR}/scanner/Info.plist")
 endif()
 add_dependencies(VCComposer2 vcc_plugin_scanner)
 add_custom_command(TARGET VCComposer2 POST_BUILD
@@ -208,6 +211,10 @@ if(APPLE)
     # Hosting Audio Units shows their generic view (AUGenericView), which JUCE
     # links for GUI apps but not for console tools.
     target_link_libraries(vcc_plugin_host PRIVATE "-framework CoreAudioKit")
+    # An identity of its own (bundle ID, name), embedded in the executable:
+    # copy protection inside plug-ins (PACE/iLok) checks the process hosting it.
+    target_link_options(vcc_plugin_host PRIVATE
+        "LINKER:-sectcreate,__TEXT,__info_plist,${CMAKE_CURRENT_SOURCE_DIR}/host/Info.plist")
 endif()
 add_dependencies(VCComposer2 vcc_plugin_host)
 add_custom_command(TARGET VCComposer2 POST_BUILD

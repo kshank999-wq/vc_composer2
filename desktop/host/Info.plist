@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Embedded in the helper executable (__TEXT,__info_plist) so macOS, and
+     copy protection inside plug-ins (PACE/iLok), see a named, identified
+     process rather than an anonymous binary. LSUIElement: no Dock icon. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.vccomposer.vccomposer2.pluginhost</string>
+    <key>CFBundleName</key>
+    <string>VC Composer Plug-in Host</string>
+    <key>CFBundleDisplayName</key>
+    <string>VC Composer Plug-in Host</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Plug-ins hosted by VC Composer can take audio input.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Plug-ins hosted by VC Composer load their sample libraries from your drives.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>Plug-ins hosted by VC Composer load their sample libraries from network drives.</string>
+</dict>
+</plist>

@@ -142,7 +142,9 @@ InstrumentSoundsPage::InstrumentSoundsPage(AppContext& context)
     instruments_->chosen = [this](int row) {
         if (row >= static_cast<int>(rows_.size())) return;
         if (rows_[static_cast<std::size_t>(row)].header) return;
-        show_instrument(rows_[static_cast<std::size_t>(row)].id);
+        const auto id = rows_[static_cast<std::size_t>(row)].id;
+        if (id == instrument_) return;
+        confirm_leave([this, id] { show_instrument(id); });
     };
 
     // Articulations, as cards.
@@ -168,7 +170,10 @@ InstrumentSoundsPage::InstrumentSoundsPage(AppContext& context)
                    h - 12, juce::Justification::centredRight, true);
     };
     artics_->chosen = [this](int row) {
-        if (row < static_cast<int>(articulations_.size())) select_articulation(articulations_[static_cast<std::size_t>(row)]);
+        if (row >= static_cast<int>(articulations_.size())) return;
+        const auto a = articulations_[static_cast<std::size_t>(row)];
+        if (a == articulation_) return;
+        confirm_leave([this, a] { select_articulation(a); });
     };
 
     saved_label_.setText("OR USE A SOUND YOU SAVED  (no need to open the player again)", juce::dontSendNotification);
@@ -228,6 +233,31 @@ InstrumentSoundsPage::~InstrumentSoundsPage()
     keyboard_state_.removeListener(this);
     if (context_.library) context_.library->removeChangeListener(this);
     release_slot();
+}
+
+void InstrumentSoundsPage::confirm_leave(std::function<void()> go)
+{
+    if (!unsaved_ || !context_.engine.has_setup_instrument()) {
+        unsaved_ = false;
+        if (go) go();
+        return;
+    }
+    juce::Component::SafePointer<InstrumentSoundsPage> self(this);
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(juce::MessageBoxIconType::QuestionIcon)
+            .withTitle("Save this sound?")
+            .withMessage("You loaded a sound in the player for " + suggested_name() +
+                         " but have not saved it. Closing the player's window does not keep it - Save Sound does.\n\n"
+                         "Save it as the sound for " + suggested_name() + "?")
+            .withButton("Save")
+            .withButton("Don't Save"),
+        [self, go](int r) {
+            if (self == nullptr) return;
+            if (r == 1) self->status_.setText(self->save_sound(self->name_.getText()), juce::dontSendNotification);
+            self->unsaved_ = false;
+            if (go) go();
+        });
 }
 
 void InstrumentSoundsPage::release_slot()
@@ -361,6 +391,19 @@ void InstrumentSoundsPage::rebuild_instruments()
         for (const auto& c : context_.library->lib().custom_instruments())
             if (wanted(c.name)) by_family[c.family.empty() ? "other" : c.family].emplace_back(juce::String(c.name) + "  (yours)", c.id);
     rows_.clear();
+    // The instruments this project's tracks use first: the ones their sounds are for.
+    {
+        std::vector<std::string> here;
+        for (const auto& t : context_.session.data().tracks)
+            if (t.kind == project::TrackKind::Instrument && !t.instrument_standard_id.empty() &&
+                std::find(here.begin(), here.end(), t.instrument_standard_id) == here.end() &&
+                wanted(instrument_name(t.instrument_standard_id)))
+                here.push_back(t.instrument_standard_id);
+        if (!here.empty()) {
+            rows_.push_back({true, {}, "In this project"});
+            for (const auto& id : here) rows_.push_back({false, id, instrument_name(id)});
+        }
+    }
     std::vector<std::string> order = templates::family_order();
     for (const auto& [f, _] : by_family)
         if (std::find(order.begin(), order.end(), f) == order.end()) order.push_back(f);
@@ -372,16 +415,24 @@ void InstrumentSoundsPage::rebuild_instruments()
     }
     instruments_->updateContent();
     for (std::size_t i = 0; i < rows_.size(); ++i)
-        if (!rows_[i].header && rows_[i].id == instrument_) instruments_->selectRow(static_cast<int>(i), true, true);
+        if (!rows_[i].header && rows_[i].id == instrument_) {
+            instruments_->selectRow(static_cast<int>(i), true, true);
+            break;
+        }
     instruments_->repaint();
 }
 
 void InstrumentSoundsPage::show_instrument(const std::string& instrument_id)
 {
     instrument_ = instrument_id;
-    for (std::size_t i = 0; i < rows_.size(); ++i)
-        if (!rows_[i].header && rows_[i].id == instrument_ && instruments_->getSelectedRow() != static_cast<int>(i))
-            instruments_->selectRow(static_cast<int>(i), true, true);
+    const int sel = instruments_->getSelectedRow();
+    const bool shown = sel >= 0 && sel < static_cast<int>(rows_.size()) && rows_[static_cast<std::size_t>(sel)].id == instrument_;
+    if (!shown)
+        for (std::size_t i = 0; i < rows_.size(); ++i)
+            if (!rows_[i].header && rows_[i].id == instrument_) {
+                instruments_->selectRow(static_cast<int>(i), true, true);
+                break;
+            }
     rebuild_articulations();
     select_articulation(articulations_.size() > 1 ? articulations_[1] : std::string());
 }
@@ -496,6 +547,7 @@ juce::String InstrumentSoundsPage::load_player(const std::string& identifier)
             context_.engine.set_setup_instrument(context_.plugins.ref_for(d));
             context_.engine.set_live_track(PlaybackEngine::kSetupTrackId);
             loaded_player_ = identifier;
+            unsaved_ = true;
             if (context_.show_plugin_window) context_.show_plugin_window(PlaybackEngine::kSetupTrackId);
             refresh_detail();
             return d.name + " is loading: its window opens in a moment. Load the patch for " + suggested_name() +
@@ -532,6 +584,7 @@ juce::String InstrumentSoundsPage::save_sound(const juce::String& name, bool fil
     p.validation = "verified";
     const auto id = lib.add_patch(p);
     lib.set_assignment(instrument_, articulation_, id);
+    unsaved_ = false;
     int filled = 0;
     if (fill_empty)
         for (const auto& a : articulations_)
@@ -560,6 +613,7 @@ juce::String InstrumentSoundsPage::edit_assigned()
     context_.engine.set_setup_instrument(p->plugin);  // with its settings
     context_.engine.set_live_track(PlaybackEngine::kSetupTrackId);
     loaded_player_ = p->plugin.identifier;
+    unsaved_ = true;
     if (context_.show_plugin_window) context_.show_plugin_window(PlaybackEngine::kSetupTrackId);
     refresh_detail();
     return "Loaded \"" + juce::String(p->display) + "\" with its settings: change it in the player, then Save Sound";
