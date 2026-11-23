@@ -165,6 +165,9 @@ public:
     void go_to_stage(int stage);
 
     ComposerView& composer() noexcept { return composer_; }
+    /// Keys nothing else took: in the Composer, its quick keys (note values,
+    /// the arrow and quill...) work wherever you last clicked.
+    bool keyPressed(const juce::KeyPress& key) override;
     /// The Composer view's Page view (the score on pages) or Track view.
     void set_page_view(bool page);
     bool page_view_shown() const noexcept { return page_mode_; }

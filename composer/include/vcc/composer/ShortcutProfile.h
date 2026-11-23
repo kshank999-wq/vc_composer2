@@ -424,6 +424,12 @@ enum class Command : std::uint16_t {
     /// Nest the tuplet being written inside one of its own ratio - a
     /// triplet inside a triplet - or take the nesting off again.
     ToggleNestedTuplet = 460,
+
+    // --- Tools ----------------------------------------------------------------
+    /// The arrow: a click selects (and drags) notes.
+    SelectTool = 470,
+    /// The quill: a click writes a note.
+    WriteTool = 471,
 };
 
 /// Stable name for the settings file and the shortcut editor.

@@ -313,6 +313,8 @@ public:
     /// replaced, as entry does.
     EditResult paste();
     const Clipboard& clipboard() const noexcept { return clipboard_; }
+    /// What paste puts in: notes copied in another track's editor, say.
+    void set_clipboard(Clipboard clipboard) { clipboard_ = std::move(clipboard); }
 
     /// Puts another score's music into this one at the cursor, as one undo
     /// step: the way a MIDI file is imported *into* a part rather than as

@@ -10530,6 +10530,86 @@ void ostinato_audition_checks(MainWindow& window, const juce::File& dir)
     ctx.session.new_empty();
 }
 
+/// Quick keys in the Composer: Option/Alt+A the arrow, Option/Alt+W (or W)
+/// the quill, 2-7 whole note to 32nd; they work with nothing focused; the
+/// staff tools never fold on their own; copy on one track, paste on another.
+void quick_keys_checks(MainWindow& window, const juce::File& dir)
+{
+    auto& main = window.main();
+    auto& session = window.context().session;
+    session.new_empty();
+    session.add_template("cinematic.orchestra.consolidated");
+    main.apply_layout(*layouts::find("Compose"));
+    main.show_workspace(MainComponent::Workspace::Composer);
+    pump(300);
+    auto& composer = main.composer();
+    std::vector<std::string> staffs;
+    for (const auto& t : session.data().tracks)
+        if (t.active_version() && t.active_version()->score.staff_count() > 0) staffs.push_back(t.id);
+    check(staffs.size() >= 2, "the template has staves to write on");
+    if (staffs.size() < 2) return;
+    session.select_track(staffs[0]);
+    pump(150);
+    // With nothing focused, keys go through the window.
+    if (auto* f = juce::Component::getCurrentlyFocusedComponent()) f->giveAwayKeyboardFocus();
+    const auto alt = juce::ModifierKeys::altModifier;
+    window.keyPressed(juce::KeyPress('w', alt, 0));
+    pump(30);
+    const bool quill = composer.note_entry();
+    window.keyPressed(juce::KeyPress('a', alt, 0));
+    pump(30);
+    const bool arrow = !composer.note_entry();
+    window.keyPressed(juce::KeyPress('w'));
+    pump(30);
+    const bool w_alone = composer.note_entry();
+    check(quill && arrow && w_alone, "Option/Alt+W picks the quill, Option/Alt+A the arrow, W alone the quill too");
+    auto value_after = [&](int digit) {
+        window.keyPressed(juce::KeyPress('0' + digit));
+        pump(300);
+        return composer.staff_tools().state().value;
+    };
+    auto value_of = [&](composer::Command c) {
+        composer.perform(c);
+        pump(300);
+        return composer.staff_tools().state().value;
+    };
+    const int k2 = value_after(2), k4 = value_after(4), k7 = value_after(7);
+    const int w = value_of(composer::Command::SelectDurationWhole), q = value_of(composer::Command::SelectDurationQuarter),
+              t = value_of(composer::Command::SelectDurationThirtySecond);
+    check(k2 == w && k4 == q && k7 == t, "number keys: 2 a whole note, 4 a quarter, 7 a 32nd (" + juce::String(k2) + ", " +
+                                             juce::String(k4) + ", " + juce::String(k7) + " / " + juce::String(w) + ", " +
+                                             juce::String(q) + ", " + juce::String(t) + ")");
+    // Three notes on the first track, copied, pasted on the second.
+    composer.perform(composer::Command::SelectDurationQuarter);
+    for (char c : {'c', 'd', 'e'}) window.keyPressed(juce::KeyPress(c));
+    pump(60);
+    auto pitched = [&](const std::string& id) {
+        int n = 0;
+        if (const auto* t = session.data().find_track(id))
+            for (std::size_t st = 0; st < t->active_version()->score.staff_count(); ++st)
+                for (const auto& note : t->active_version()->score.notes(st)) n += note.is_rest ? 0 : 1;
+        return n;
+    };
+    const int written = pitched(staffs[0]), before = pitched(staffs[1]);
+    composer.perform(composer::Command::SelectAll);
+    composer.perform(composer::Command::Copy);
+    pump(60);
+    session.select_track(staffs[1]);
+    pump(150);
+    composer.perform(composer::Command::Paste);
+    pump(100);
+    check(written == 3 && pitched(staffs[1]) == before + 3,
+          "notes copied on one track paste onto another (" + juce::String(pitched(staffs[1]) - before) + " of " +
+              juce::String(written) + ")");
+    // The staff tools stay up, untouched, until you fold them.
+    composer.set_staff_tools_collapsed(false);
+    pump(16500);
+    check(!composer.staff_tools_collapsed() && composer.staff_tools().isVisible(),
+          "the staff tools stay up when left alone (only their fold key folds them)");
+    shoot(window, dir, "quick-keys");
+    session.new_empty();
+}
+
 void view_tools_checks(MainWindow& window, const juce::File& dir)
 {
     auto& main = window.main();
@@ -13259,6 +13339,7 @@ int main(int argc, char** argv)
                 {"hardware_insert_checks", hardware_insert_checks},
                 {"ostinato_audition_checks", ostinato_audition_checks},
                 {"view_tools_checks", view_tools_checks},
+                {"quick_keys_checks", quick_keys_checks},
                 {"chord_mode_checks", chord_mode_checks},
                 {"chord_palette_checks", chord_palette_checks},
                 {"sound_pack_checks", sound_pack_checks},
@@ -14014,6 +14095,8 @@ int main(int argc, char** argv)
         ostinato_audition_checks(window, dir);
         section("view_tools_checks");
         view_tools_checks(window, dir);
+        section("quick_keys_checks");
+        quick_keys_checks(window, dir);
         section("resources_checks");
         resources_checks(window, dir);
         section("stress_checks");

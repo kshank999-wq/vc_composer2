@@ -18,6 +18,8 @@ class MainWindow final : public juce::DocumentWindow {
 public:
     /// `file` may be empty; then the template browser opens (New Project).
     explicit MainWindow(const juce::String& file, bool show_welcome = true);
+    /// Keys with nothing focused go to the main view (the Composer's quick keys).
+    bool keyPressed(const juce::KeyPress& key) override;
     ~MainWindow() override;
 
     void closeButtonPressed() override;

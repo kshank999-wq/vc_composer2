@@ -10,16 +10,21 @@ namespace {
 KeyStroke key(Key k, ModifierMask m = 0) { return KeyStroke{k, m}; }
 }  // namespace
 
-TEST_CASE("note values follow Finale and Sibelius: 5 is a quarter, 7 a whole")
+TEST_CASE("note values: 2 a whole note down to 7 a 32nd; Alt+A the arrow, Alt+W the quill")
 {
     for (const auto platform : {ShortcutPlatform::CommandKey, ShortcutPlatform::ControlKey}) {
         const auto p = make_composer2_profile(platform);
-        CHECK(p.command_for(key(Key::Digit7)) == Command::SelectDurationWhole);
-        CHECK(p.command_for(key(Key::Digit6)) == Command::SelectDurationHalf);
-        CHECK(p.command_for(key(Key::Digit5)) == Command::SelectDurationQuarter);
-        CHECK(p.command_for(key(Key::Digit4)) == Command::SelectDurationEighth);
-        CHECK(p.command_for(key(Key::Digit3)) == Command::SelectDurationSixteenth);
-        CHECK(p.command_for(key(Key::Digit2)) == Command::SelectDurationThirtySecond);
+        CHECK(p.command_for(key(Key::Digit2)) == Command::SelectDurationWhole);
+        CHECK(p.command_for(key(Key::Digit3)) == Command::SelectDurationHalf);
+        CHECK(p.command_for(key(Key::Digit4)) == Command::SelectDurationQuarter);
+        CHECK(p.command_for(key(Key::Digit5)) == Command::SelectDurationEighth);
+        CHECK(p.command_for(key(Key::Digit6)) == Command::SelectDurationSixteenth);
+        CHECK(p.command_for(key(Key::Digit7)) == Command::SelectDurationThirtySecond);
+        CHECK(p.command_for(key(Key::Digit1)) == Command::SelectDurationBreve);
+        CHECK(p.command_for(key(Key::A, to_mask(Modifier::Alt))) == Command::SelectTool);
+        CHECK(p.command_for(key(Key::W, to_mask(Modifier::Alt))) == Command::WriteTool);
+        CHECK(p.command_for(key(Key::A, combine(to_mask(Modifier::Alt), to_mask(Modifier::Shift)))) ==
+              Command::ArticulationAccent);
         CHECK(p.command_for(key(Key::Period)) == Command::ToggleDot);
         CHECK(p.command_for(key(Key::Slash)) == Command::ToggleTuplet);
         CHECK(p.command_for(key(Key::Digit0)) == Command::ToggleRest);

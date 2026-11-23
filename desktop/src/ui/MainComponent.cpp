@@ -3218,3 +3218,15 @@ void MainComponent::offer_new_part(const std::string& part_id)
 }
 
 }  // namespace vcc::desktop
+
+namespace vcc::desktop {
+
+bool MainComponent::keyPressed(const juce::KeyPress& key)
+{
+    if (workspace_ != Workspace::Composer || !composer_.isShowing()) return false;
+    // Typing in a text box stays there.
+    if (dynamic_cast<juce::TextEditor*>(juce::Component::getCurrentlyFocusedComponent()) != nullptr) return false;
+    return composer_.keyPressed(key);
+}
+
+}  // namespace vcc::desktop

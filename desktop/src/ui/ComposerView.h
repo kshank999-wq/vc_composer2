@@ -208,6 +208,7 @@ private:
     notation::Score working_;
     std::unique_ptr<editing::ScoreEditor> editor_;
     std::string editing_track_;
+    editing::Clipboard clipboard_;  ///< Shared by every track's editor.
     std::string editing_version_;
     bool note_entry_ = false;  ///< Select (the arrow) until Write (the quill) is chosen.
     int hairpin_drawing_ = 0;

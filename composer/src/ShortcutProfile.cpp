@@ -200,6 +200,8 @@ const CommandName kCommandNames[] = {
      "Tell an import's overlapping lines apart as voices"},
     {Command::ToggleNestedTuplet, "ToggleNestedTuplet",
      "Start or end a tuplet inside the tuplet being written"},
+    {Command::SelectTool, "SelectTool", "The arrow: click to select notes"},
+    {Command::WriteTool, "WriteTool", "The quill: click to write notes"},
 };
 
 }  // namespace
@@ -864,21 +866,22 @@ ShortcutProfile make_composer2_profile(ShortcutPlatform platform)
 {
     // The Edit window's own table (docs/spec/ui/SPEC.md, "Keyboard
     // shortcuts"), which follows the convention composers know from Finale
-    // and Sibelius: durations rising with the number, 5 the quarter.
+    // and Sibelius - except the durations, which get shorter as the number
+    // rises: 1 the breve, 2 the whole note, 4 the quarter, 7 the 32nd.
     ShortcutProfile profile("Composer 2");
     const ModifierMask primary = to_mask(primary_modifier(platform));
     const auto bind = [](ShortcutProfile& target, Command command, const KeyStroke& stroke) {
         target.bind_unchecked(command, stroke);
     };
 
-    bind(profile, Command::SelectDurationSixtyFourth, KeyStroke{Key::Digit1, 0});
-    bind(profile, Command::SelectDurationThirtySecond, KeyStroke{Key::Digit2, 0});
-    bind(profile, Command::SelectDurationSixteenth, KeyStroke{Key::Digit3, 0});
-    bind(profile, Command::SelectDurationEighth, KeyStroke{Key::Digit4, 0});
-    bind(profile, Command::SelectDurationQuarter, KeyStroke{Key::Digit5, 0});
-    bind(profile, Command::SelectDurationHalf, KeyStroke{Key::Digit6, 0});
-    bind(profile, Command::SelectDurationWhole, KeyStroke{Key::Digit7, 0});
-    bind(profile, Command::SelectDurationBreve, KeyStroke{Key::Digit8, 0});
+    bind(profile, Command::SelectDurationBreve, KeyStroke{Key::Digit1, 0});
+    bind(profile, Command::SelectDurationWhole, KeyStroke{Key::Digit2, 0});
+    bind(profile, Command::SelectDurationHalf, KeyStroke{Key::Digit3, 0});
+    bind(profile, Command::SelectDurationQuarter, KeyStroke{Key::Digit4, 0});
+    bind(profile, Command::SelectDurationEighth, KeyStroke{Key::Digit5, 0});
+    bind(profile, Command::SelectDurationSixteenth, KeyStroke{Key::Digit6, 0});
+    bind(profile, Command::SelectDurationThirtySecond, KeyStroke{Key::Digit7, 0});
+    bind(profile, Command::SelectDurationSixtyFourth, KeyStroke{Key::Digit8, 0});
 
     bind(profile, Command::ToggleDot, KeyStroke{Key::Period, 0});
     bind(profile, Command::ToggleDoubleDot, KeyStroke{Key::Period, to_mask(Modifier::Shift)});
@@ -898,7 +901,12 @@ ShortcutProfile make_composer2_profile(ShortcutPlatform platform)
     bind(profile, Command::AccidentalDoubleFlat, KeyStroke{Key::Minus, to_mask(Modifier::Shift)});
     bind(profile, Command::CycleEnharmonicSpelling, KeyStroke{Key::E, 0});
 
-    bind(profile, Command::ArticulationAccent, KeyStroke{Key::A, to_mask(Modifier::Alt)});
+    // Option/Alt+A is the arrow (below), so the accent takes Shift as well.
+    bind(profile, Command::ArticulationAccent,
+         KeyStroke{Key::A, combine(to_mask(Modifier::Alt), to_mask(Modifier::Shift))});
+    // The arrow and the quill: Option/Alt+A and Option/Alt+W.
+    bind(profile, Command::SelectTool, KeyStroke{Key::A, to_mask(Modifier::Alt)});
+    bind(profile, Command::WriteTool, KeyStroke{Key::W, to_mask(Modifier::Alt)});
     bind(profile, Command::ArticulationStaccato, KeyStroke{Key::S, to_mask(Modifier::Alt)});
     bind(profile, Command::ArticulationTenuto, KeyStroke{Key::T, to_mask(Modifier::Alt)});
     bind(profile, Command::ArticulationMarcato, KeyStroke{Key::M, to_mask(Modifier::Alt)});

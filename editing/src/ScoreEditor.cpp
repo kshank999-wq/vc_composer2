@@ -1981,6 +1981,8 @@ EditResult ScoreEditor::apply(composer::Command command)
         case Command::ToggleDoubleDot: return toggle_double_dot();
         case Command::ToggleTuplet:    return toggle_tuplet(notation::Tuplet{3, 2});
         case Command::ToggleNestedTuplet: return toggle_nested_tuplet();
+        case Command::SelectTool:
+        case Command::WriteTool: return nothing("The view switches tools");
         case Command::ToggleTie:       return toggle_tie();
         case Command::ToggleRest:      return toggle_rest_mode();
         case Command::ToggleGraceEntry: return toggle_grace_entry();

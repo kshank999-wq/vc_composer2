@@ -529,7 +529,10 @@ void ComposerView::reload_working_copy(bool new_editor)
     editing::EditCursor kept;
     if (editor_ && !new_editor) kept = editor_->cursor();
     working_ = v->score;
-    if (new_editor || !editor_) editor_ = std::make_unique<editing::ScoreEditor>(working_);
+    if (new_editor || !editor_) {
+        editor_ = std::make_unique<editing::ScoreEditor>(working_);
+        editor_->set_clipboard(clipboard_);  // copied on one track, pasted on another
+    }
     if (kept.staff_index >= working_.staff_count()) kept.staff_index = 0;
     editor_->set_cursor(kept);
     editing_track_ = t->id;
@@ -1025,6 +1028,8 @@ void ComposerView::perform(Command command)
             context_.engine.play();
             return;
         case Command::ToggleKeyboardEntryMode: set_note_entry(!note_entry_); return;
+        case Command::SelectTool: set_note_entry(false); return;
+        case Command::WriteTool: set_note_entry(true); return;
         case Command::ExportMidiFile: context_.commands.invokeDirectly(cmd::exportMidi, true); return;
         case Command::EditKeySignature:
         case Command::EditTimeSignature:
@@ -1094,13 +1099,19 @@ void ComposerView::perform(Command command)
             editor_->set_cursor(cur);
         }
     }
+    // One clipboard for every track: copy on the violins, paste on the piano.
+    if (command == Command::Paste) editor_->set_clipboard(clipboard_);
     handle(editor_->apply(command));
+    if ((command == Command::Copy || command == Command::Cut) && editor_ && !editor_->clipboard().empty()) {
+        clipboard_ = editor_->clipboard();
+        context_.status(juce::String(static_cast<int>(clipboard_.notes.size())) +
+                        " notes copied: click where they go on any track and press Cmd/Ctrl+V");
+    }
 }
 
 // --- Staff tools ---------------------------------------------------------------------------
 
 namespace {
-constexpr juce::uint32 kToolsIdleMs = 15000;  // fold after this long untouched
 
 juce::Rectangle<int> on_a_display(juce::Rectangle<int> r)
 {
@@ -1299,11 +1310,7 @@ composer_ui::StaffToolsState ComposerView::tools_state() const
 void ComposerView::update_staff_tools()
 {
     auto& tools = staff_tools();
-    // Folded after a while untouched (the next edit unfolds it).
-    if (!tools_collapsed_ && !tools_detached_ && juce::Time::getMillisecondCounter() - last_activity_ > kToolsIdleMs) {
-        tools_collapsed_ = true;
-        tools_auto_folded_ = true;
-    }
+    // Never folded on its own: only its fold key (or Cmd/Ctrl+Alt+T) folds it.
     const auto s = tools_state();
     auto same = [](const composer_ui::StaffToolsState& a, const composer_ui::StaffToolsState& b) {
         return a.editable == b.editable && a.has_selection == b.has_selection && a.pitched == b.pitched && a.value == b.value &&
@@ -1713,6 +1720,11 @@ bool ComposerView::keyPressed(const juce::KeyPress& key)
         return true;
     }
     const Command command = context_.shortcuts.command_for(stroke);
+    // W alone picks the quill too (unless your shortcuts give W to something else).
+    if (command == Command::None && stroke.key == composer::Key::W && stroke.modifiers == 0) {
+        perform(Command::WriteTool);
+        return true;
+    }
     if (command == Command::None) return false;
     perform(command);
     return true;

@@ -148,4 +148,9 @@ void MainWindow::open_file(const juce::File& file)
     if (main_->confirm_discard()) main_->open_file(file);
 }
 
+bool MainWindow::keyPressed(const juce::KeyPress& key)
+{
+    return (main_ && main_->keyPressed(key)) || juce::DocumentWindow::keyPressed(key);
+}
+
 }  // namespace vcc::desktop
