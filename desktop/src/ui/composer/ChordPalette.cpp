@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "ui/hw/HwTheme.h"
+#include "AppResources.h"
 
 namespace vcc::desktop::composer_ui {
 
@@ -178,6 +179,46 @@ ChordForStaves voice_chord_for_staves(const theory::Chord& chord, const ChordMod
 ChordPalette::ChordPalette(ChordModeState& state) : hw::Panel("Chord mode", false), state_(state)
 {
     setComponentID("chord_palette");
+    // The tools, as on the staff toolbar: the arrow selects, the quill writes chords.
+    arrow_.setComponentID("chord_tool_arrow");
+    arrow_.setTitle("Select (edit notes)");
+    arrow_.setTooltip("Select: click notes to select them, drag a box around them (Option/Alt+A)");
+    quill_.setComponentID("chord_tool_quill");
+    quill_.setTitle("Write chords");
+    quill_.setTooltip("Write: click the staff to write the chord (Option/Alt+W)");
+    arrow_.onClick = [this] {
+        if (on_tool) on_tool(false);
+    };
+    quill_.onClick = [this] {
+        if (on_tool) on_tool(true);
+    };
+    addAndMakeVisible(arrow_);
+    addAndMakeVisible(quill_);
+    {
+        using C = composer::Command;
+        const std::pair<C, const char*> keys[] = {{C::SelectDurationWhole, "\xee\xb2\xa2"}, {C::SelectDurationHalf, "\xee\xb2\xa3"},
+                                                  {C::SelectDurationQuarter, "\xee\xb2\xa5"}, {C::SelectDurationEighth, "\xee\xb2\xa7"},
+                                                  {C::SelectDurationSixteenth, "\xee\xb2\xa9"},
+                                                  {C::SelectDurationThirtySecond, "\xee\xb2\xab"}, {C::ToggleDot, "\xee\xb2\xb7"},
+                                                  {C::ToggleTuplet, nullptr}};
+        const char* tips[] = {"Whole note (2)", "Half note (3)", "Quarter note (4)", "Eighth note (5)", "Sixteenth note (6)",
+                              "Thirty-second note (7)", "Dot", "Triplet"};
+        const auto& mf = music_font();
+        for (std::size_t i = 0; i < std::size(keys); ++i) {
+            auto k = std::make_unique<hw::Keycap>(keys[i].second ? juce::String() : juce::String("3"), false);
+            if (keys[i].second && mf.loaded)
+                k->set_music_symbol(juce::String::fromUTF8(keys[i].second), mf.font.font_for_staff_space(4.2));
+            k->setTooltip(tips[i]);
+            k->setTitle(tips[i]);
+            k->setComponentID("chord_value_" + juce::String(static_cast<int>(keys[i].first)));
+            const auto cmd = keys[i].first;
+            k->onClick = [this, cmd] {
+                if (on_value) on_value(cmd);
+            };
+            addAndMakeVisible(*k);
+            values_.emplace_back(cmd, std::move(k));
+        }
+    }
     for (int i = 0; i < 7; ++i) {
         roots_.push_back(std::make_unique<hw::Keycap>(juce::String::charToString(kLetters[i]), false));
         auto& k = *roots_.back();
@@ -582,6 +623,8 @@ void ChordPalette::paint(juce::Graphics& g)
 {
     hw::Panel::paint(g);
     auto r = content().reduced(10, 4);
+    hw::paint::silk(g, "Tool and note value", juce::Rectangle<float>(static_cast<float>(r.getX()), static_cast<float>(r.getY()), 300.0f, 12.0f), 9.5f);
+    r.removeFromTop(kTop);
     auto silk = [&](const juce::String& t, int y) {
         hw::paint::silk(g, t, juce::Rectangle<float>(static_cast<float>(r.getX()), static_cast<float>(y), 300.0f, 12.0f), 9.5f);
     };
@@ -613,6 +656,16 @@ void ChordPalette::resized()
 {
     close_.setBounds(getWidth() - 34, 6, 24, 20);
     auto r = content().reduced(10, 4);
+    {
+        // The tool row: arrow and quill, then the note values.
+        auto tools = juce::Rectangle<int>(r.getX(), r.getY() + 16, r.getWidth(), 34);
+        arrow_.setBounds(tools.removeFromLeft(40).withTrimmedRight(3));
+        quill_.setBounds(tools.removeFromLeft(40).withTrimmedRight(3));
+        tools.removeFromLeft(10);
+        const int vw = std::min(36, tools.getWidth() / std::max<int>(1, static_cast<int>(values_.size())));
+        for (auto& [cmd, key] : values_) key->setBounds(tools.removeFromLeft(vw).withTrimmedRight(3));
+    }
+    r.removeFromTop(kTop);
     auto line = [&](int y, int h) { return juce::Rectangle<int>(r.getX(), r.getY() + y, r.getWidth(), h); };
     // Root: the key's seven notes in scale order from the tonic, then the
     // three accidentals for a chromatic root.
@@ -700,6 +753,33 @@ void ChordPalette::mouseDrag(const juce::MouseEvent& e)
         return;
     }
     target.setTopLeftPosition(window_from_ + (e.getScreenPosition() - drag_from_));
+}
+
+}  // namespace vcc::desktop::composer_ui
+
+namespace vcc::desktop::composer_ui {
+
+void ChordPalette::show_tools(bool write, int value, bool dot, bool triplet)
+{
+    arrow_.setToggleState(!write, juce::dontSendNotification);
+    quill_.setToggleState(write, juce::dontSendNotification);
+    using C = composer::Command;
+    for (auto& [cmd, key] : values_) {
+        bool lit = false;
+        const int c = static_cast<int>(cmd);
+        if (c >= static_cast<int>(C::SelectDurationWhole) && c <= static_cast<int>(C::SelectDurationThirtySecond))
+            lit = value == c - static_cast<int>(C::SelectDurationWhole);
+        else if (cmd == C::ToggleDot) lit = dot;
+        else if (cmd == C::ToggleTuplet) lit = triplet;
+        if (key->getToggleState() != lit) key->setToggleState(lit, juce::dontSendNotification);
+    }
+}
+
+hw::Keycap* ChordPalette::value_key(composer::Command c)
+{
+    for (auto& [cmd, key] : values_)
+        if (cmd == c) return key.get();
+    return nullptr;
 }
 
 }  // namespace vcc::desktop::composer_ui

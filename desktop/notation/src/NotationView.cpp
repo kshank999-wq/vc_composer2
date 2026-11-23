@@ -391,6 +391,18 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
         on_event_menu(hit.id);
         return;
     }
+    // Select mode: only a notehead (or what hangs on it) is grabbed to drag;
+    // a press on a rest, stem, beam or anything else may draw a box, so notes
+    // can be boxed even where the staff is full of them.
+    if (box_select_ && hit.id != notation::kInvalidEventId && !event.mods.isPopupMenu() &&
+        hit.role != engraving::ItemRole::Notehead && hit.role != engraving::ItemRole::Accidental &&
+        hit.role != engraving::ItemRole::AugmentationDot) {
+        boxing_ = true;
+        box_event_ = hit.id;
+        box_click_ = engraving::insertion_point_at(layout_, *score_, timeline_, point, entry_grid_);
+        press_at_ = drag_at_ = event.getPosition();
+        return;
+    }
     if (hit.id != notation::kInvalidEventId) {
         // Pressed: selected now; let go in place, or dragged (mouseUp).
         pressed_ = hit.id;
@@ -416,6 +428,7 @@ void NotationView::mouseDown(const juce::MouseEvent& event)
     if (box_select_ && !event.mods.isPopupMenu()) {
         // Maybe a box: decided when the pointer moves (a plain click stays a click).
         boxing_ = true;
+        box_event_ = notation::kInvalidEventId;
         box_click_ = insertion;
         press_at_ = drag_at_ = event.getPosition();
         return;
@@ -462,7 +475,11 @@ void NotationView::mouseUp(const juce::MouseEvent& event)
         boxing_ = false;
         repaint();
         if (event.getPosition().getDistanceFrom(press_at_) <= 4) {
-            if (box_click_.valid && on_staff_clicked) on_staff_clicked(box_click_);
+            if (box_event_ != notation::kInvalidEventId) {
+                if (on_event_clicked) on_event_clicked(box_event_);
+            } else if (box_click_.valid && on_staff_clicked) {
+                on_staff_clicked(box_click_);
+            }
             return;
         }
         const auto box = juce::Rectangle<int>(press_at_, event.getPosition()).toFloat();

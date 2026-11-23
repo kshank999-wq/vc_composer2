@@ -1,7 +1,9 @@
 // Notation entry and the command bindings (spec 02 sections 5.2, 5.3, 8).
 #include "vcc/editing/ScoreEditor.h"
 
+#include <algorithm>
 #include <set>
+#include <vector>
 #include <string>
 
 #include "vcc_test.h"
@@ -1264,4 +1266,43 @@ VCC_TEST(a_tie_joins_a_note_to_the_same_pitch_after_it_and_can_be_removed)
     VCC_CHECK(score.find_note(a)->tied_to_next);
     VCC_CHECK(editor.remove_marking_of(ScoreEditor::MarkingKind::Tie, 0, kQuarter / 2, kQuarter / 2).succeeded());
     VCC_CHECK(!score.find_note(a)->tied_to_next);
+}
+
+VCC_TEST(a_value_on_the_note_at_the_cursor_retimes_it_and_moves_what_follows)
+{
+    notation::Score score;
+    ScoreEditor editor(score);
+    // Four quarters: C D E F.
+    for (auto step : {notation::Step::C, notation::Step::D, notation::Step::E, notation::Step::F})
+        VCC_CHECK(editor.insert_pitch(pitch_of(step, 4)).succeeded());
+    editor.clear_selection();
+    // The cursor on the second; a half note: it takes two beats and E, F move a beat on.
+    auto cur = editor.cursor();
+    cur.tick = kQuarter;
+    editor.set_cursor(cur);
+    VCC_CHECK(editor.set_duration(notation::NoteValue::Half).succeeded());
+    std::vector<std::pair<notation::Ticks, notation::Ticks>> got;
+    for (const auto& n : score.notes(0))
+        if (!n.is_rest) got.emplace_back(n.start_tick, n.duration.ticks());
+    std::sort(got.begin(), got.end());
+    VCC_CHECK_EQ(got.size(), std::size_t{4});
+    if (got.size() == 4) {
+        VCC_CHECK_EQ(got[1].second, 2 * kQuarter);
+        VCC_CHECK_EQ(got[2].first, 3 * kQuarter);
+        VCC_CHECK_EQ(got[3].first, kBar);  // pushed into the next bar
+    }
+    // Undone in one step.
+    editor.undo();
+    std::vector<notation::Ticks> starts;
+    for (const auto& n : score.notes(0))
+        if (!n.is_rest) starts.push_back(n.start_tick);
+    std::sort(starts.begin(), starts.end());
+    VCC_CHECK(starts == (std::vector<notation::Ticks>{0, kQuarter, 2 * kQuarter, 3 * kQuarter}));
+
+    // Off (right after writing a note): the value is for the next note only.
+    editor.set_retime_at_cursor(false);
+    editor.set_cursor(cur);
+    VCC_CHECK(editor.set_duration(notation::NoteValue::Whole).succeeded());
+    for (const auto& n : score.notes(0))
+        if (n.start_tick == kQuarter) VCC_CHECK_EQ(n.duration.ticks(), kQuarter);
 }

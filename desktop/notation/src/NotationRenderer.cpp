@@ -263,16 +263,37 @@ void draw_notation(juce::Graphics& graphics, const engraving::LayoutResult& layo
     // reads the bounding boxes the layout recorded per score event, which
     // exist for hit testing and selection, and a read-only strip in the
     // plug-in window has neither.
-    if (selection != nullptr && !selection->empty()) {
+    const bool any = selection != nullptr && !selection->empty();
+    if (any) {
         const Projection project{settings.pixels_per_staff_space, settings.origin};
-        graphics.setColour(settings.colours.selection.withAlpha(0.35f));
+        graphics.setColour(settings.colours.selection.withAlpha(0.22f));
         for (const notation::EventId id : *selection) {
             for (const engraving::Rect& bounds : list.bounds_for_event(id))
-                graphics.fillRoundedRectangle(project.rect(bounds.expanded(0.1)), 2.0f);
+                graphics.fillRoundedRectangle(project.rect(bounds.expanded(0.25)), 2.0f);
         }
     }
 
     draw_display_list(graphics, list, glyphs, settings, music_font);
+
+    // Selected notes drawn again in the selection colour, heads, stems,
+    // accidentals and all, so what is selected is plain to see.
+    if (any) {
+        auto picked = [&](notation::EventId id) {
+            return id != notation::kInvalidEventId && std::find(selection->begin(), selection->end(), id) != selection->end();
+        };
+        engraving::DisplayList chosen;
+        for (const auto& g : list.glyphs)
+            if (picked(g.source_id)) chosen.add(g);
+        for (const auto& l : list.lines)
+            if (picked(l.source_id) && l.role != engraving::ItemRole::StaffLine) chosen.add(l);
+        for (const auto& q : list.quads)
+            if (picked(q.source_id)) chosen.add(q);
+        for (const auto& c : list.curves)
+            if (picked(c.source_id)) chosen.add(c);
+        NotationRenderSettings tinted = settings;
+        tinted.colours.ink = tinted.colours.staff = tinted.colours.ruler = settings.colours.selection;
+        draw_display_list(graphics, chosen, glyphs, tinted, music_font);
+    }
 }
 
 

@@ -1655,7 +1655,7 @@ juce::PopupMenu MainComponent::shortcuts_menu()
     for (const auto& p : all_shortcut_profiles()) {
         const std::string name = p.name();
         juce::String label(name);
-        if (name == "Composer 2") label << "  (5 quarter, 4 eighth, 6 half)";
+        if (name == "Composer 2") label << "  (2 whole, 3 half, 4 quarter, 5 eighth)";
         m.addItem(label, true, context_.shortcuts.name() == name, [this, name] {
             if (use_shortcut_profile(name)) context_.status("Keyboard shortcuts: " + juce::String(name));
         });

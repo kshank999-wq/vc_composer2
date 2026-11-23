@@ -141,6 +141,8 @@ StaffTools::StaffTools(bool detached) : detached_(detached)
     }
     cresc_level_.setComponentID("staff_tools_cresc_level");
     dim_level_.setComponentID("staff_tools_dim_level");
+    cresc_level_.setTitle("Crescendo start level");
+    dim_level_.setTitle("Diminuendo end level");
     cresc_level_.setTooltip("Where a crescendo starts: its quiet level (expression 0-100)");
     dim_level_.setTooltip("Where a diminuendo ends: its quiet level (expression 0-100)");
     cresc_level_.onValueChange = [this] {

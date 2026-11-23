@@ -185,7 +185,14 @@ public:
 
     // --- Entry tools --------------------------------------------------------
 
+    /// A value for the selected notes, or for the note (or chord) the
+    /// cursor stands on: it takes the value, and what follows it in its
+    /// voice moves along by the difference (a quarter made a half pushes
+    /// the rest of the bar on). With neither, the value is for the next note.
     EditResult set_duration(notation::NoteValue value);
+    /// Off: a value key only chooses the next note's value, even on a note
+    /// (right after writing one, as in Finale and Sibelius).
+    void set_retime_at_cursor(bool on) noexcept { retime_at_cursor_ = on; }
     EditResult set_dots(int dots);
     EditResult toggle_dot();
     EditResult toggle_double_dot();
@@ -390,6 +397,7 @@ private:
     EditCursor cursor_{};
     std::vector<notation::EventId> selection_;
     EditHistory history_;
+    bool retime_at_cursor_ = true;
     Clipboard clipboard_;
     ActiveSpan active_span_{};
 

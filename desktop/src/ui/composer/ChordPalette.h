@@ -13,6 +13,8 @@
 
 #include "ui/AppContext.h"
 #include "ui/hw/HwControls.h"
+#include "ui/composer/StaffTools.h"
+#include "vcc/composer/ShortcutProfile.h"
 #include "vcc/notation/Score.h"
 #include "vcc/theory/KeyReference.h"
 #include "vcc/theory/Voicing.h"
@@ -65,7 +67,8 @@ std::optional<theory::Chord> chord_for(const ChordModeState& state, std::string*
 class ChordPalette final : public hw::Panel {
 public:
     static constexpr int kWidth = 420;
-    static constexpr int kHeight = 512;
+    static constexpr int kTop = 66;  ///< The tool row (arrow, quill, note values) above the scale.
+    static constexpr int kHeight = 512 + kTop;
 
     explicit ChordPalette(ChordModeState& state);
 
@@ -79,6 +82,15 @@ public:
     std::function<void()> on_close;
     /// Something changed: the owner recomputes the preview.
     std::function<void()> on_changed;
+    /// The arrow (false: clicks select) or the quill (true: clicks write chords).
+    std::function<void(bool write)> on_tool;
+    /// A note value (or dot, triplet) key, as on the staff toolbar.
+    std::function<void(composer::Command)> on_value;
+    /// What the toolbar shows now: the tool and the value (0 whole ... 5 32nd), dot, triplet.
+    void show_tools(bool write, int value, bool dot, bool triplet);
+    hw::Keycap& arrow_key() { return arrow_; }
+    hw::Keycap& quill_key() { return quill_; }
+    hw::Keycap* value_key(composer::Command c);
 
     // For the checks.
     hw::Keycap& root_key(int letter) { return *roots_[static_cast<std::size_t>(letter)]; }
@@ -131,6 +143,8 @@ private:
     juce::ComboBox quality_, bass_, voicing_, then_, send_;
     hw::Keycap octave_down_{"-"}, octave_up_{"+"}, symbol_{"Symbol", true}, close_{"x"};
     hw::Keycap insert_{"Insert"}, replace_{"Replace sel."}, audition_{"Audition"};
+    IconKey arrow_{IconKey::Icon::Arrow}, quill_{IconKey::Icon::Quill};
+    std::vector<std::pair<composer::Command, std::unique_ptr<hw::Keycap>>> values_;
     hw::Lcd octave_lcd_{"", 12.0f}, name_lcd_{"", 15.0f};
     juce::String notes_, warning_;
     juce::ComponentDragger dragger_;

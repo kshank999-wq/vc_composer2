@@ -1852,9 +1852,9 @@ void selection_and_shortcut_checks(MainWindow& window, const juce::File& dir)
     auto& composer = main.composer();
     composer.grabKeyboardFocus();
 
-    // The default profile: Finale/Sibelius numbering (5 quarter, 4 eighth).
+    // The default profile: 2 whole, 3 half, 4 quarter, 5 eighth.
     check(ctx.shortcuts.name() == "Composer 2", "the default keyboard profile is Composer 2");
-    for (const char c : {'5', 'c', 'd', '4', 'e', 'f', '6', 'g'}) composer.keyPressed(juce::KeyPress(c));
+    for (const char c : {'4', 'c', 'd', '5', 'e', 'f', '3', 'g'}) composer.keyPressed(juce::KeyPress(c));
     pump(50);
     const auto* t = session.data().find_track(track);
     std::vector<notation::ScoreNote> line;
@@ -1865,7 +1865,7 @@ void selection_and_shortcut_checks(MainWindow& window, const juce::File& dir)
     const bool values = line.size() == 5 && line[0].duration.value == notation::NoteValue::Quarter &&
                         line[2].duration.value == notation::NoteValue::Eighth &&
                         line[4].duration.value == notation::NoteValue::Half;
-    check(values, "5, 4 and 6 choose a quarter, an eighth and a half, as in Finale and Sibelius");
+    check(values, "4, 5 and 3 choose a quarter, an eighth and a half");
 
     // Select everything in the Composer view: the shared selection, the
     // counters and the inspector follow.
@@ -1967,11 +1967,11 @@ void composer_lane_checks(MainWindow& window, const juce::File& dir)
 
     // A C chord in bar 1, then a line in bar 2; the 6 key (half) is lit after
     // choosing it from the toolbar for the next note.
-    composer.keyPressed(juce::KeyPress('7'));
+    composer.keyPressed(juce::KeyPress('2'));
     composer.keyPressed(juce::KeyPress('c'));
     composer.keyPressed(juce::KeyPress('E', juce::ModifierKeys::shiftModifier, 'E'));
     composer.keyPressed(juce::KeyPress('G', juce::ModifierKeys::shiftModifier, 'G'));
-    composer.keyPressed(juce::KeyPress('5'));
+    composer.keyPressed(juce::KeyPress('4'));
     for (const char ch : {'d', 'e', 'f', 'g'}) composer.keyPressed(juce::KeyPress(ch));
     pump(80);
     if (auto* k = main.toolbar().command_key(Command::SelectDurationHalf)) k->triggerClick();
@@ -1984,8 +1984,8 @@ void composer_lane_checks(MainWindow& window, const juce::File& dir)
     check(half && quarter && half->getToggleState() && !quarter->getToggleState() &&
               composer.cursor() && composer.cursor()->duration.value == notation::NoteValue::Half,
           "the note-value keypad chooses the next note's value and lights it");
-    check(half && half->getButtonText() == "6" && quarter->getButtonText() == "5",
-          "the keypad prints the Finale/Sibelius numbers (5 quarter, 6 half)");
+    check(half && half->getButtonText() == "3" && quarter->getButtonText() == "4",
+          "the keypad prints the numbers (4 quarter, 3 half)");
     const auto& chords = composer.ruler().chords();
     // D Phrygian spells the E as E flat: a C minor chord.
     check(!chords.empty() && chords[0] == "Cm", "the Chords row reads the score (bar 1: " +
@@ -2351,7 +2351,7 @@ void print_checks(MainWindow& window, const juce::File& dir)
     // A line on each of the first two tracks.
     main.show_workspace(MainComponent::Workspace::Composer);
     auto& composer = main.composer();
-    for (const auto& [track, keys] : std::vector<std::pair<std::string, std::string>>{{a, "5cdefg"}, {b, "6ec"}}) {
+    for (const auto& [track, keys] : std::vector<std::pair<std::string, std::string>>{{a, "4cdefg"}, {b, "3ec"}}) {
         session.select_track(track);
         pump(80);
         composer.grabKeyboardFocus();
@@ -2628,7 +2628,7 @@ void master_checks(MainWindow& window, const juce::File& dir)
         if (t->kind == project::TrackKind::Instrument) inst.push_back(t->id);
     main.show_workspace(MainComponent::Workspace::Composer);
     auto& composer = main.composer();
-    for (const auto& [track, keys] : std::vector<std::pair<std::string, std::string>>{{inst[0], "6cdefgab"}, {inst[3], "7ce"}}) {
+    for (const auto& [track, keys] : std::vector<std::pair<std::string, std::string>>{{inst[0], "3cdefgab"}, {inst[3], "2ce"}}) {
         session.select_track(track);
         pump(80);
         composer.grabKeyboardFocus();
@@ -3828,7 +3828,7 @@ void drag_drop_checks(MainWindow& window, const juce::File& dir)
         session.select_track(session.music_tracks().front()->id);
         pump(50);
         composer.grabKeyboardFocus();
-        for (const char ch : {'5', 'c', 'd', 'e', 'f'}) composer.keyPressed(juce::KeyPress(ch));
+        for (const char ch : {'4', 'c', 'd', 'e', 'f'}) composer.keyPressed(juce::KeyPress(ch));
         pump(50);
         const auto xml = source.getChildFile("Theme.musicxml");
         juce::String m;
@@ -4430,7 +4430,7 @@ void chord_mode_checks(MainWindow& window, const juce::File& dir)
     session.select_track(piano);
     pump(50);
     composer.grabKeyboardFocus();
-    composer.keyPressed(juce::KeyPress('5'));  // quarter notes
+    composer.keyPressed(juce::KeyPress('4'));  // quarter notes
     auto* chord_key = main.toolbar().key("Chord mode");
     if (chord_key) chord_key->triggerClick();
     pump(80);
@@ -5468,7 +5468,7 @@ void chord_palette_checks(MainWindow& window, const juce::File& dir)
     palette.inversion_key(0).triggerClick(), pump(40);
     palette.close_key().triggerClick(), pump(40);
     palette.span_key(1).triggerClick(), pump(40);
-    composer.keyPressed(juce::KeyPress('5'));
+    composer.keyPressed(juce::KeyPress('4'));
     // Piano: the right hand the chord on the note clicked, the left hand its root.
     click_note(notation::Step::C, 4, 0);
     auto c = on_staves(0);
@@ -5560,7 +5560,7 @@ void range_checks(MainWindow& window, const juce::File& dir)
     session.select_track(flute);
     pump(50);
     composer.grabKeyboardFocus();
-    composer.keyPressed(juce::KeyPress('5'));
+    composer.keyPressed(juce::KeyPress('4'));
     const Ticks Q = kTicksPerQuarter;
     auto click = [&](Ticks tick, notation::Step step, int octave) {
         engraving::InsertionPoint p;
@@ -10601,6 +10601,40 @@ void quick_keys_checks(MainWindow& window, const juce::File& dir)
     check(written == 3 && pitched(staffs[1]) == before + 3,
           "notes copied on one track paste onto another (" + juce::String(pitched(staffs[1]) - before) + " of " +
               juce::String(written) + ")");
+    // Chord Mode has the arrow and the quill and the note values on top:
+    // with the arrow a click selects (a box too) and writes no chord.
+    composer.set_chord_mode(true);
+    pump(200);
+    auto& palette = composer.chord_palette();
+    const bool opens_writing = composer.note_entry();
+    palette.arrow_key().triggerClick();
+    pump(300);
+    const bool arrow_selects = !composer.note_entry();
+    if (auto* half = palette.value_key(composer::Command::SelectDurationHalf)) half->triggerClick();
+    pump(300);
+    const bool half_lit = palette.value_key(composer::Command::SelectDurationHalf) &&
+                          palette.value_key(composer::Command::SelectDurationHalf)->getToggleState();
+    const int notes_before = pitched(staffs[1]);
+    {
+        auto& lane = composer.lane(1);
+        const juce::Point<float> p(lane.x_of_tick(6 * notation::kTicksPerQuarter), lane.getHeight() / 2.0f);
+        lane.mouseDown(mouse_event(lane, p, p, false));
+        lane.mouseUp(mouse_event(lane, p, p, false));
+        pump(100);
+    }
+    const bool no_chord = pitched(staffs[1]) == notes_before;
+    palette.quill_key().triggerClick();
+    pump(300);
+    check(opens_writing && arrow_selects && half_lit && no_chord && composer.note_entry() && palette.quill_key().getToggleState(),
+          "Chord Mode: arrow and quill on top (the arrow writes no chord when you click), note values lit as chosen (" +
+              juce::String(int(opens_writing)) + juce::String(int(arrow_selects)) + juce::String(int(half_lit)) +
+              juce::String(int(no_chord)) + juce::String(int(composer.note_entry())) +
+              juce::String(int(palette.quill_key().getToggleState())) + ")");
+    shoot(*palette.getTopLevelComponent(), dir, "chord-mode-tools");
+    composer.set_chord_mode(false);
+    composer.perform(composer::Command::SelectTool);
+    pump(100);
+
     // The staff tools stay up, untouched, until you fold them.
     composer.set_staff_tools_collapsed(false);
     pump(16500);
@@ -12581,7 +12615,7 @@ void chord_symbol_checks(MainWindow& window, const juce::File& dir)
     pump(50);
     composer.grabKeyboardFocus();
     // A C major chord filling bar 1 (a whole note), then a bar of G.
-    composer.keyPressed(juce::KeyPress('7'));
+    composer.keyPressed(juce::KeyPress('2'));
     composer.keyPressed(juce::KeyPress('c'));
     composer.keyPressed(juce::KeyPress('E', juce::ModifierKeys::shiftModifier, 'E'));
     composer.keyPressed(juce::KeyPress('G', juce::ModifierKeys::shiftModifier, 'G'));
@@ -12696,7 +12730,7 @@ void page_view_checks(MainWindow& window, const juce::File& dir)
         session.select_track(session.music_tracks().front()->id);
         pump(50);
         composer.grabKeyboardFocus();
-        composer.keyPressed(juce::KeyPress('6'));  // half notes
+        composer.keyPressed(juce::KeyPress('3'));  // half notes
         for (int i = 0; i < 32; ++i) composer.keyPressed(juce::KeyPress("cdefgab"[i % 7]));
         pump(50);
     }
@@ -12901,7 +12935,7 @@ void realtime_print_checks(MainWindow& window, const juce::File& dir)
         }
     main.show_workspace(MainComponent::Workspace::Composer);
     auto& composer = main.composer();
-    for (const auto& [track, keys] : std::vector<std::pair<std::string, std::string>>{{midi, "5cdef"}, {inst, "5gab"}}) {
+    for (const auto& [track, keys] : std::vector<std::pair<std::string, std::string>>{{midi, "4cdef"}, {inst, "4gab"}}) {
         session.select_track(track);
         pump(80);
         composer.grabKeyboardFocus();
@@ -13345,6 +13379,8 @@ int main(int argc, char** argv)
                 {"sound_pack_checks", sound_pack_checks},
                 {"range_checks", range_checks},
                 {"composer_lane_checks", composer_lane_checks},
+                {"print_checks", print_checks},
+                {"selection_and_shortcut_checks", selection_and_shortcut_checks},
                 {"staff_tools_checks", staff_tools_checks},
                 {"page_view_checks", page_view_checks},
                 {"swell_checks", swell_checks},

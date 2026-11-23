@@ -229,6 +229,9 @@ private:
     bool box_select_ = false, boxing_ = false, rests_as_staff_ = false;
     engraving::ItemRole marking_role_ = engraving::ItemRole::Dynamic;
     engraving::InsertionPoint box_click_;
+    /// Select mode: a press on a rest, stem or beam may start a box; let go
+    /// in place, it is a click on that event.
+    notation::EventId box_event_ = notation::kInvalidEventId;
 
     notation::Ticks playhead_tick_ = 0;
     bool playhead_visible_ = false;

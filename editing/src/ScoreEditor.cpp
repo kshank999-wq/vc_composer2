@@ -653,32 +653,86 @@ EditResult ScoreEditor::set_duration(notation::NoteValue value)
     notation::Duration wanted;
     wanted.value = value;
 
-    if (!selection_.empty()) {
-        // With a selection, choosing a duration retimes those notes, which
-        // is what a selected note plus a duration key means. Dots and
-        // tuplets are kept, since the user chose them for these notes.
+    // What is retimed: the selection, or the note or chord at the cursor.
+    std::vector<notation::EventId> targets(selection_.begin(), selection_.end());
+    const bool at_cursor = targets.empty();
+    if (at_cursor && retime_at_cursor_ && cursor_.staff_index < score_->staff_count()) {
+        for (const notation::ScoreNote& n : score_->notes(cursor_.staff_index))
+            if (!n.grace && n.start_tick == cursor_.tick && n.voice == cursor_.voice) targets.push_back(n.id);
+    }
+    if (!targets.empty()) {
+        // Chords: the notes sharing a staff, voice and start, retimed together.
+        struct Group {
+            std::size_t staff;
+            std::uint8_t voice;
+            notation::Ticks start, old_end;
+            std::vector<notation::EventId> ids;
+        };
+        std::vector<Group> groups;
+        for (const notation::EventId id : targets) {
+            const notation::ScoreNote* n = score_->find_note(id);
+            if (n == nullptr || n->grace) continue;
+            const std::size_t staff = score_->staff_index_of(id);
+            auto g = std::find_if(groups.begin(), groups.end(), [&](const Group& x) {
+                return x.staff == staff && x.voice == n->voice && x.start == n->start_tick;
+            });
+            if (g == groups.end()) {
+                groups.push_back({staff, n->voice, n->start_tick, n->end_tick(), {}});
+                g = groups.end() - 1;
+            }
+            g->old_end = std::max(g->old_end, n->end_tick());
+            g->ids.push_back(id);
+        }
+        // Latest first: moving what follows a later chord never moves an
+        // earlier one, and an earlier one's move carries the later along.
+        std::sort(groups.begin(), groups.end(), [](const Group& x, const Group& y) { return x.start > y.start; });
         std::size_t changed = 0;
         history_.begin("Change duration", cursor_);
-        for (const notation::EventId id : selection_) {
-            const notation::ScoreNote* existing = score_->find_note(id);
-            if (existing == nullptr)
-                continue;
-
-            notation::ScoreNote updated = *existing;
-            updated.duration.value = value;
-            if (!updated.duration.is_valid() || !updated.is_valid())
-                continue;
-
-            const notation::ScoreNote before = *existing;
-            if (modify_recorded(before, updated))
-                ++changed;
+        for (const Group& g : groups) {
+            notation::Ticks new_end = g.start;
+            std::size_t done = 0;
+            for (const notation::EventId id : g.ids) {
+                const notation::ScoreNote* existing = score_->find_note(id);
+                if (existing == nullptr) continue;
+                notation::ScoreNote updated = *existing;
+                updated.duration.value = value;
+                if (!updated.duration.is_valid() || !updated.is_valid()) continue;
+                const notation::ScoreNote before = *existing;
+                if (modify_recorded(before, updated)) {
+                    ++done;
+                    new_end = std::max(new_end, updated.end_tick());
+                }
+            }
+            if (done == 0) continue;
+            changed += done;
+            const notation::Ticks delta = new_end - g.old_end;
+            if (delta == 0) continue;
+            // What follows in the voice moves along by the difference.
+            std::vector<notation::ScoreNote> later;
+            for (const notation::ScoreNote& n : score_->notes(g.staff))
+                if (n.voice == g.voice && n.start_tick >= g.old_end &&
+                    std::find(g.ids.begin(), g.ids.end(), n.id) == g.ids.end())
+                    later.push_back(n);
+            // Pushed later: the last first, so none lands on one not yet moved.
+            std::sort(later.begin(), later.end(), [delta](const auto& x, const auto& y) {
+                return delta > 0 ? x.start_tick > y.start_tick : x.start_tick < y.start_tick;
+            });
+            for (const notation::ScoreNote& before : later) {
+                notation::ScoreNote moved = before;
+                moved.start_tick = std::max<notation::Ticks>(0, before.start_tick + delta);
+                modify_recorded(before, moved);
+            }
         }
         if (changed == 0) {
             history_.abandon();
-            return nothing("Nothing in the selection could take that duration");
+            if (!at_cursor) return nothing("Nothing in the selection could take that duration");
+        } else {
+            history_.commit(cursor_);
+            cursor_.duration = wanted;  // and the next notes take it too (the toolbar shows it)
+            return applied(at_cursor ? "Changed the note's value; what follows moved along"
+                                     : "Changed the duration of the selection",
+                           changed);
         }
-        history_.commit(cursor_);
-        return applied("Changed the duration of the selection", changed);
     }
 
     // Choosing a value clears the dots and tuplet, because the dot is

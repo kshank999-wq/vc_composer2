@@ -415,7 +415,7 @@ void ComposerView::apply_colours()
     c.ink = th.ink();
     c.ruler = th.staff_line();
     c.cursor = th.led();
-    c.selection = th.led();
+    c.selection = juce::Colour(0xff1d6ae5);  // selected notes: a strong blue, plain to see
     c.playhead = th.lcd();
     for (auto& s : strips_) s->view().set_colours(c);
     repaint();
@@ -538,7 +538,7 @@ void ComposerView::reload_working_copy(bool new_editor)
     editing_track_ = t->id;
     editing_version_ = v->id;
     hint_.setText("Writing on " + juce::String(t->name) + " (" + juce::String(v->name) + ")" +
-                      juce::String("  -  type A-G to enter notes, 5 quarter / 4 eighth / 6 half for durations, Space to play"),
+                      juce::String("  -  type A-G to enter notes, 2 whole / 3 half / 4 quarter / 5 eighth for values, Opt/Alt+A arrow, Opt/Alt+W quill, Space to play"),
                   juce::dontSendNotification);
 }
 
@@ -552,10 +552,11 @@ void ComposerView::apply_view_settings()
         view.set_layout_options(options);
         // Writing: the quill is the pointer over the staff that writes.
         // Select mode: a drag on empty staff draws a box that selects the notes in it.
-        view.set_box_select(!note_entry_ && !chord_mode_);
+        // Chord mode with the arrow selects as well: only the quill writes chords.
+        view.set_box_select(!note_entry_);
         // Writing: a click on a rest puts the note there (it is not a rest to select).
-        view.set_rests_as_staff(note_entry_ || chord_mode_);
-        view.set_idle_cursor(note_entry_ && !chord_mode_ && s->track_id() == editing_track_
+        view.set_rests_as_staff(note_entry_);
+        view.set_idle_cursor(note_entry_ && s->track_id() == editing_track_
                                  ? composer_ui::IconKey::quill_cursor()
                                  : juce::MouseCursor(juce::MouseCursor::NormalCursor));
         // Track Trans in notation mode: the lane shows the notes as heard,
@@ -568,7 +569,7 @@ void ComposerView::apply_view_settings()
         };
         if (s->track_id() == editing_track_ && editor_) {
             view.set_score(shown(&working_));
-            view.set_cursor(editor_->cursor().tick, editor_->cursor().staff_index, note_entry_);
+            view.set_cursor(editor_->cursor().tick, editor_->cursor().staff_index, true);  // always: where you are
             view.set_selection(editor_->selection());
         } else {
             view.set_score(shown(v ? &v->score : nullptr));
@@ -638,7 +639,7 @@ void ComposerView::follow_jog(Ticks tick, bool move_cursor)
     c.tick = tick;
     editor_->set_cursor(c);
     for (auto& s : strips_)
-        if (s->track_id() == editing_track_) s->view().set_cursor(editor_->cursor().tick, editor_->cursor().staff_index, note_entry_);
+        if (s->track_id() == editing_track_) s->view().set_cursor(editor_->cursor().tick, editor_->cursor().staff_index, true);
 }
 
 void ComposerView::discard_uncommitted()
@@ -758,10 +759,11 @@ void ComposerView::strip_clicked(Strip& strip, const engraving::InsertionPoint* 
     if (point && point->valid) {
         editing::EditCursor c = editor_->cursor();
         // Not chord mode's free placement: the hidden grid of the note value.
-        c.tick = chord_mode_ ? point->tick : snap_entry_tick(point->tick, point->staff_index);
+        const bool chords = chord_mode_ && note_entry_;  // the arrow only moves the cursor
+        c.tick = chords ? point->tick : snap_entry_tick(point->tick, point->staff_index);
         c.staff_index = point->staff_index;
         editor_->set_cursor(c);
-        if (chord_mode_) {
+        if (chords) {
             // The bass goes in the octave clicked (sounding).
             const auto& staff = working_.staff(std::min<std::size_t>(point->staff_index, working_.staff_count() - 1));
             const int sounding = notation::midi_note_number(point->pitch) + staff.total_transposition();
@@ -1077,7 +1079,9 @@ void ComposerView::perform(Command command)
                           command == Command::ToggleTuplet || command == Command::ToggleRest;
     if (for_next && just_entered_) {
         editor_->clear_selection();
+        editor_->set_retime_at_cursor(false);  // for the next note, not the one the cursor reached
         handle(editor_->apply(command));
+        editor_->set_retime_at_cursor(true);
         return;  // still "just entered": 4 then . chooses a dotted eighth
     }
     just_entered_ = false;
@@ -1323,6 +1327,7 @@ void ComposerView::update_staff_tools()
     auto dial_off = [&](composer_ui::StaffTools& t) { return juce::roundToInt(t.accent_knob().getValue()) != s.accent; };
     if (!same(s, tools.state()) || dial_off(tools)) tools.set_state(s);
     if (tools_floating_ && (!same(s, tools_floating_->state()) || dial_off(*tools_floating_))) tools_floating_->set_state(s);
+    if (palette_ && chord_mode_) palette_->show_tools(s.writing, s.value, s.dot, s.triplet);
 
     // Docked: beside the selected staff, above it when the view has room,
     // otherwise below; hidden when the staff is scrolled away.
@@ -1389,6 +1394,14 @@ composer_ui::ChordPalette& ComposerView::chord_palette()
         palette_ = std::make_unique<composer_ui::ChordPalette>(chord_state_);
         palette_->on_insert = [this](bool replace) { enter_chord(replace); };
         palette_->on_audition = [this] { audition_chord(); };
+        palette_->on_tool = [this](bool write) {
+            note_activity();
+            set_note_entry(write);
+        };
+        palette_->on_value = [this](Command c) {
+            note_activity();
+            perform(c);
+        };
         palette_->on_close = [this] { set_chord_mode(false); };
         palette_->on_changed = [this] {
             const auto [notes, warning] = chord_preview();
@@ -1401,6 +1414,7 @@ composer_ui::ChordPalette& ComposerView::chord_palette()
 void ComposerView::set_chord_mode(bool on)
 {
     chord_mode_ = on;
+    if (on && !note_entry_) set_note_entry(true);  // opened to write chords: the quill
     auto& p = chord_palette();
     // Always the project's key: the root keys show its scale, the borrowed row its borrowings.
     chord_state_.key = dialogs::project_key(context_);
