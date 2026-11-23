@@ -4015,6 +4015,29 @@ void chord_builder_checks(MainWindow& window, const juce::File& dir)
     if (divided)
         for (const auto& rc : divided->chords) at_half = at_half || rc.start == bar2 + 2 * q;
     check(divided && divided->chords.size() == 5 && at_half, "the third quarter of bar 2 plays its own chord");
+    // The x on a chord deletes it; the x by BAR empties the bar; an empty bar has none.
+    {
+        auto click = [&](juce::Rectangle<int> r) {
+            const auto p = r.getCentre().toFloat();
+            strip->mouseDown(mouse_event(*strip, p, p, false));
+            strip->mouseUp(mouse_event(*strip, p, p, false));
+            pump(60);
+        };
+        const auto cell_x = ex->delete_key_area(3, 0), bar_x = ex->delete_key_area(2, -1);
+        const bool quarter_x = !ex->delete_key_area(1, 2).isEmpty();
+        const bool none_empty = ex->delete_key_area(4, -1).isEmpty() && ex->delete_key_area(1, 1).isEmpty();
+        if (!cell_x.isEmpty()) click(cell_x);
+        const bool cell_gone = !ex->cell(3, 0);
+        if (!bar_x.isEmpty()) click(bar_x);
+        const bool bar_gone = !ex->build_chord(2);
+        shoot(*ex, dir, "chord-build-delete");
+        check(!cell_x.isEmpty() && !bar_x.isEmpty() && quarter_x && none_empty && cell_gone && bar_gone &&
+                  ex->build_chord(0) && ex->build_chord(1),
+              "the x on a chord deletes it, the x by BAR empties the bar (a quarter cell has one too; empty ones none)");
+        ex->set_cell(2, 0, ex->borrowed_chord(0), "borrowed");
+        ex->set_cell(3, 0, ex->key_chord(4), "V");
+        pump(60);
+    }
     // A cell's notes, edited: one moved, one deleted, one added.
     auto cnotes = ex->cell_notes(0, 0);
     check(cnotes.size() >= 3, "a cell knows the notes it plays (" + juce::String(static_cast<int>(cnotes.size())) + ")");

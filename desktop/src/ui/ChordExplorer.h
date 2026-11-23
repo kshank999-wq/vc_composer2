@@ -66,6 +66,9 @@ public:
     /// Puts a chord in the first empty cell (adding a bar when all are full).
     bool add_to_build(const theory::Chord& chord, const std::string& numeral);
     void clear_build_chord(int slot);
+    /// Where the x that deletes a cell's chord is in the build strip (cell -1:
+    /// the bar's x, emptying it); empty when there is nothing there to delete.
+    juce::Rectangle<int> delete_key_area(int bar, int cell) const;
     void clear_build();
     /// Copies the chosen progression's chords into the build, each bar divided as its chords fall.
     void fill_build_from_progression();

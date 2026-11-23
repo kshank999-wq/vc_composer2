@@ -269,7 +269,8 @@ public:
     {
         setComponentID("chord_build_strip");
         setTitle("Your progression");
-        setTooltip("Drag chords into the cells, or click one to type a chord and edit its notes. Right-click for more. "
+        setTooltip("Drag chords into the cells, or click one to type a chord and edit its notes. The x on a chord deletes it; "
+                   "the x by BAR empties the bar. Right-click for more. "
                    "Click a bar's division to split it into up to 16 chords. An empty cell holds the chord before it.");
     }
 
@@ -289,6 +290,25 @@ public:
         const int n = owner_.divisions(bar);
         const int x0 = r.getX() + r.getWidth() * cell / n, x1 = r.getX() + r.getWidth() * (cell + 1) / n;
         return {x0 + (cell > 0 ? 1 : 0), r.getY(), x1 - x0 - (cell > 0 ? 1 : 0), r.getHeight()};
+    }
+    /// The little x that deletes a cell's chord (top-right of a filled cell
+    /// wide enough for it), or the whole bar's chords (cell -1: in the bar's
+    /// header, left of its division). Empty when there is nothing to delete.
+    juce::Rectangle<int> delete_rect(int bar, int c) const
+    {
+        if (bar < 0 || bar >= owner_.bar_count()) return {};
+        if (c < 0) {
+            bool any = false;
+            for (int i = 0; i < owner_.divisions(bar); ++i) any = any || owner_.cell(bar, i).has_value();
+            if (!any) return {};
+            const auto d = division_rect(bar);
+            return {d.getX() - 18, d.getY() + 1, 16, kHeader - 2};
+        }
+        if (c >= owner_.divisions(bar) || !owner_.cell(bar, c)) return {};
+        const auto r = cell_rect(bar, c);
+        if (r.getWidth() < 24) return {};
+        const int size = r.getWidth() < 40 ? 12 : 15;
+        return {r.getRight() - size - 2, r.getY() + 2, size, size};
     }
     std::pair<int, int> cell_at(juce::Point<int> p) const
     {
@@ -325,6 +345,18 @@ public:
     void mouseDown(const juce::MouseEvent& e) override
     {
         const int bar = e.x / std::max(1, bar_width());
+        if (bar >= 0 && bar < owner_.bar_count() && !e.mods.isPopupMenu()) {
+            // The x on a chord deletes it; the one in the header empties the bar.
+            if (delete_rect(bar, -1).contains(e.getPosition())) {
+                owner_.clear_build_chord(bar);
+                return;
+            }
+            for (int c = 0; c < owner_.divisions(bar); ++c)
+                if (delete_rect(bar, c).contains(e.getPosition())) {
+                    owner_.clear_cell(bar, c);
+                    return;
+                }
+        }
         if (bar >= 0 && bar < owner_.bar_count() && division_rect(bar).contains(e.getPosition())) {
             show_division_menu(bar);
             return;
@@ -336,6 +368,38 @@ public:
             return;
         }
         owner_.edit_cell(b, c);
+    }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        std::pair<int, int> on{-1, -2};
+        const int bar = e.x / std::max(1, bar_width());
+        for (int c = -1; bar >= 0 && bar < owner_.bar_count() && c < owner_.divisions(bar); ++c)
+            if (delete_rect(bar, c).contains(e.getPosition())) on = {bar, c};
+        if (on != x_hover_) {
+            x_hover_ = on;
+            setMouseCursor(on.first >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+            repaint();
+        }
+    }
+    void mouseExit(const juce::MouseEvent&) override
+    {
+        if (x_hover_.first >= 0) {
+            x_hover_ = {-1, -2};
+            repaint();
+        }
+    }
+    void draw_x(juce::Graphics& g, juce::Rectangle<int> r, bool hot, bool square) const
+    {
+        if (r.isEmpty()) return;
+        auto box = square ? r.toFloat() : r.toFloat().withSizeKeepingCentre(static_cast<float>(r.getWidth()),
+                                                                                static_cast<float>(r.getWidth()));
+        g.setColour(hot ? juce::Colour(0xffc8463c) : colours::panel.withAlpha(0.85f));
+        g.fillRoundedRectangle(box, 3.0f);
+        g.setColour(hot ? juce::Colours::white : colours::text_dim);
+        const auto c = box.reduced(4.0f);
+        g.drawLine(c.getX(), c.getY(), c.getRight(), c.getBottom(), 1.6f);
+        g.drawLine(c.getRight(), c.getY(), c.getX(), c.getBottom(), 1.6f);
     }
 
     void show_division_menu(int bar)
@@ -385,7 +449,8 @@ public:
             auto head = br.reduced(3, 0).withHeight(kHeader);
             g.setColour(colours::text_dim);
             g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
-            g.drawText("BAR " + juce::String(first + b), head.withTrimmedRight(36), juce::Justification::centredLeft);
+            g.drawText("BAR " + juce::String(first + b), head.withTrimmedRight(54), juce::Justification::centredLeft);
+            draw_x(g, delete_rect(b, -1), x_hover_ == std::make_pair(b, -1), false);
             const auto dr = division_rect(b).toFloat().reduced(0.5f, 1.5f);
             g.setColour(colours::panel_raised);
             g.fillRoundedRectangle(dr, 3.0f);
@@ -428,6 +493,7 @@ public:
                                                    1.5f);
                         }
                     }
+                    draw_x(g, delete_rect(b, c), x_hover_ == std::make_pair(b, c), true);
                 } else {
                     const bool holds = held && std::make_pair(b, c) < last;
                     g.setColour(colours::text_dim.withAlpha(0.7f));
@@ -443,7 +509,13 @@ public:
 private:
     ChordExplorer& owner_;
     std::pair<int, int> hover_{-1, -1};
+    std::pair<int, int> x_hover_{-1, -2};
 };
+
+juce::Rectangle<int> ChordExplorer::delete_key_area(int bar, int cell) const
+{
+    return strip_ ? strip_->delete_rect(bar, cell) : juce::Rectangle<int>();
+}
 
 // --- Cell editor --------------------------------------------------------------------------------
 
