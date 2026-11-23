@@ -10551,31 +10551,27 @@ void view_tools_checks(MainWindow& window, const juce::File& dir)
         if (zw) zw->setValue(composer.zoom_width() * 2.0, juce::sendNotificationSync);
         pump(100);
         const float bar_wide = lane.x_of_tick(4 * kTicksPerQuarter) - lane.x_of_tick(0);
-        const float bar3_wide = lane.x_of_tick(8 * kTicksPerQuarter), first_wide = lane.x_of_tick(0);
-        if (zh) zh->setValue(composer.zoom_height() * 1.5, juce::sendNotificationSync);
+        const int height_wide = lane.getHeight();
+        check(bar_wide > bar_before * 1.8f && height_wide == height_before,
+              "W spreads the music out (bar " + juce::String(bar_before, 0) + " -> " + juce::String(bar_wide, 0) +
+                  " px) and leaves the staff's size alone");
+        // H magnifies everything together, as a zoom: the staff, the bars and the clef.
+        const double h0 = composer.zoom_height();
+        if (zh) zh->setValue(h0 * 2.0, juce::sendNotificationSync);
         pump(100);
-        const float bar_after = lane.x_of_tick(4 * kTicksPerQuarter) - lane.x_of_tick(0);
-        check(std::abs(bar_after - bar_wide) <= 2.0f, "H only makes the staves taller: the bars keep their width (" +
-                                                          juce::String(bar_wide, 0) + " -> " + juce::String(bar_after, 0) + " px)");
-        // Nor does the music slide: the first note and bar 3 stay where they were, H up or down.
-        const float bar3_up = lane.x_of_tick(8 * kTicksPerQuarter), first_up = lane.x_of_tick(0);
-        if (zh) zh->setValue(zh->getMinimum(), juce::sendNotificationSync);
-        pump(100);
-        const float bar3_down = lane.x_of_tick(8 * kTicksPerQuarter), first_down = lane.x_of_tick(0);
+        const float bar_big = lane.x_of_tick(4 * kTicksPerQuarter) - lane.x_of_tick(0);
+        const int height_big = lane.getHeight();
+        const float ratio = bar_big / bar_wide;
+        check(ratio > 1.85f && ratio < 2.15f && height_big > height_wide * 1.6,
+              "H zooms the score: twice the size makes the bars " + juce::String(ratio, 2) + "x as wide and the lane " +
+                  juce::String(height_wide) + " -> " + juce::String(height_big) + " px tall (the staff in proportion)");
         if (zh) zh->setValue(zh->getMaximum(), juce::sendNotificationSync);
         pump(100);
-        const float bar3_max = lane.x_of_tick(8 * kTicksPerQuarter);
-        check(std::abs(bar3_up - bar3_wide) <= 2.0f && std::abs(bar3_down - bar3_wide) <= 2.0f &&
-                  std::abs(bar3_max - bar3_wide) <= 2.0f && std::abs(first_up - first_wide) <= 2.0f &&
-                  std::abs(first_down - first_wide) <= 2.0f,
-              "H never slides the music sideways: bar 3 at " + juce::String(bar3_wide, 0) + " px stays at " +
-                  juce::String(bar3_up, 0) + ", " + juce::String(bar3_down, 0) + " and " + juce::String(bar3_max, 0) +
-                  " px (smallest and largest H)");
+        check(composer.zoom_height() / 7.0 >= 3.9 && lane.getHeight() > height_wide * 3,
+              "H goes up to 400% (lane " + juce::String(lane.getHeight()) + " px tall)");
+        shoot(window, dir, "100-zoomed-400", true);
         if (zh) zh->setValue(10.5, juce::sendNotificationSync);
         pump(100);
-        check(bar_after > bar_before * 1.8f && lane.getHeight() > height_before,
-              "W widens the bars, H enlarges the staves (bar " + juce::String(bar_before, 0) + " -> " + juce::String(bar_after, 0) +
-                  " px, lane " + juce::String(height_before) + " -> " + juce::String(lane.getHeight()) + " px)");
         shoot(window, dir, "100-zoomed", true);
         composer.set_zoom(7.0, 30.0 / 7.0);
         pump(100);

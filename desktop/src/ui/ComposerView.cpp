@@ -323,23 +323,21 @@ ComposerView::ComposerView(AppContext& context) : context_(context)
     zoom_h_.setComponentID("composer_zoom_height");
     zoom_w_.setTitle("Zoom width");
     zoom_h_.setTitle("Zoom height");
-    zoom_w_.setTooltip("Width: more or less music across the window (double-click: 100%)");
-    zoom_h_.setTooltip("Height: bigger or smaller staves (double-click: 100%)");
+    zoom_w_.setTooltip("Width: spread the music out or squeeze it together (double-click: 100%)");
+    zoom_h_.setTooltip("Zoom: everything bigger or smaller - staves, notes and bars together (double-click: 100%)");
     zoom_w_.setRange(1.5, 14.0);
     zoom_w_.setSkewFactorFromMidPoint(kSpacesPerQuarter);
-    zoom_h_.setRange(4.0, 16.0);
+    zoom_h_.setRange(kMinSpacePx, kMaxSpacePx);
+    zoom_h_.setSkewFactorFromMidPoint(12.0);
     zoom_w_.setDoubleClickReturnValue(true, kSpacesPerQuarter);
     zoom_h_.setDoubleClickReturnValue(true, kSpaceAt100);
-    zoom_w_.setValue(spaces_per_quarter_ * pixels_per_space_ / kSpaceAt100, juce::dontSendNotification);
+    zoom_w_.setValue(spaces_per_quarter_, juce::dontSendNotification);
     zoom_h_.setValue(pixels_per_space_, juce::dontSendNotification);
-    // W is the music's width on screen (a beat's pixels, at 100% height); H only the
-    // staves' size: changing H keeps a beat as wide as it was.
-    zoom_w_.onValueChange = [this] { set_zoom(pixels_per_space_, zoom_w_.getValue() * kSpaceAt100 / pixels_per_space_); };
-    zoom_h_.onValueChange = [this] {
-        const double beat_px = spaces_per_quarter_ * pixels_per_space_;
-        const double h = juce::jlimit(4.0, 16.0, zoom_h_.getValue());
-        set_zoom(h, beat_px / h);
-    };
+    // H magnifies the whole score, as a zoom does: staves, notes and bars grow
+    // together, the bar at the left edge staying there. W only spreads the
+    // music out (or squeezes it) at the size H sets.
+    zoom_w_.onValueChange = [this] { set_zoom(pixels_per_space_, zoom_w_.getValue()); };
+    zoom_h_.onValueChange = [this] { set_zoom(zoom_h_.getValue(), spaces_per_quarter_); };
     for (auto* l : {&zoom_w_label_, &zoom_h_label_}) {
         l->setColour(juce::Label::textColourId, colours::text_dim);
         l->setFont(hw::fonts::ui(10.5f));
@@ -576,7 +574,7 @@ void ComposerView::apply_view_settings()
         }
         view.set_vertical_zoom(pixels_per_space_);
         view.set_horizontal_zoom(spaces_per_quarter_);
-        view.set_lead(kLeadPx / pixels_per_space_);  // the same on screen at any H
+        view.set_lead(kLeadSpaces);
         view.set_origin_tick(origin_);
         view.score_changed();
     }
@@ -586,11 +584,10 @@ void ComposerView::apply_view_settings()
 
 void ComposerView::align_clef_zones()
 {
-    // The clef zone (clef, key, time) is one width on screen at every
-    // staff size, so H never slides the music sideways: it is as wide as
-    // the widest lane's clef, key and time need at the largest H, and never
-    // narrower than the spec's 46 px. Every lane takes the same width, so
-    // bars line up from track to track.
+    // The clef zone (clef, key, time) is as wide as the widest lane's clef,
+    // key and time need, growing with H as the rest of the score does, and
+    // never narrower than the spec's 46 px at 100%. Every lane takes the same
+    // width, so bars line up from track to track.
     double needed = 0.0;  // staff spaces
     for (auto& s : strips_) {
         auto& v = s->view();
@@ -602,7 +599,7 @@ void ComposerView::align_clef_zones()
         }
         needed = std::max(needed, static_cast<double>(v.x_of_tick(v.origin_tick())) / pixels_per_space_ - v.lead());
     }
-    clef_zone_px_ = std::max(46.0, std::ceil(needed * kMaxSpacePx));
+    clef_zone_px_ = std::max(46.0 * pixels_per_space_ / kSpaceAt100, std::ceil(needed * pixels_per_space_));
     const double width = clef_zone_px_ / pixels_per_space_;
     for (auto& s : strips_) {
         auto o = s->view().layout_options();
@@ -717,10 +714,10 @@ void ComposerView::set_lane_room(const std::string& track_id, double spaces)
 
 void ComposerView::set_zoom(double pixels_per_space, double spaces_per_quarter)
 {
-    pixels_per_space_ = juce::jlimit(4.0, 16.0, pixels_per_space);
+    pixels_per_space_ = juce::jlimit(kMinSpacePx, kMaxSpacePx, pixels_per_space);
     spaces_per_quarter_ = juce::jlimit(0.5, 40.0, spaces_per_quarter);
     zoom_h_.setValue(pixels_per_space_, juce::dontSendNotification);
-    zoom_w_.setValue(spaces_per_quarter_ * pixels_per_space_ / kSpaceAt100, juce::dontSendNotification);
+    zoom_w_.setValue(spaces_per_quarter_, juce::dontSendNotification);
     apply_view_settings();
     resized();
     ruler_->repaint();
@@ -728,9 +725,7 @@ void ComposerView::set_zoom(double pixels_per_space, double spaces_per_quarter)
 
 void ComposerView::zoom(bool larger)
 {
-    const double beat_px = spaces_per_quarter_ * pixels_per_space_;
-    pixels_per_space_ = juce::jlimit(4.0, 16.0, pixels_per_space_ * (larger ? 1.15 : 1.0 / 1.15));
-    spaces_per_quarter_ = juce::jlimit(0.5, 40.0, beat_px / pixels_per_space_);  // height only
+    pixels_per_space_ = juce::jlimit(kMinSpacePx, kMaxSpacePx, pixels_per_space_ * (larger ? 1.15 : 1.0 / 1.15));
     zoom_h_.setValue(pixels_per_space_, juce::dontSendNotification);
     apply_view_settings();
     resized();

@@ -57,8 +57,9 @@ public:
     /// quarter note) - the H and W sliders at the bottom right.
     void set_zoom(double pixels_per_space, double spaces_per_quarter);
     double zoom_height() const noexcept { return pixels_per_space_; }
-    /// The W slider's value: a beat's width on screen, at 100% height.
-    double zoom_width() const noexcept { return spaces_per_quarter_ * pixels_per_space_ / kSpaceAt100; }
+    /// The W slider's value: how spread out the music is (staff spaces per
+    /// quarter); H magnifies everything, W only spreads the music out.
+    double zoom_width() const noexcept { return spaces_per_quarter_; }
     /// A staff's own room above and below (its slider at the lane's right edge).
     double lane_room(const std::string& track_id) const;
     void set_lane_room(const std::string& track_id, double spaces);
@@ -214,9 +215,10 @@ private:
     std::uint64_t generation_ = 0;
     /// The spec's 100%: a 7 px staff space and a 120 px bar of 4/4.
     static constexpr double kSpaceAt100 = 7.0;
-    static constexpr double kMaxSpacePx = 16.0;    ///< The H slider's top.
-    static constexpr double kLeadPx = 1.2 * kSpaceAt100;  ///< Barline to first note, on screen.
-    double clef_zone_px_ = 46.0;  ///< The clef zone's width on screen, the same at every H.
+    static constexpr double kMinSpacePx = 4.0;     ///< The H slider's bottom (57%).
+    static constexpr double kMaxSpacePx = 28.0;    ///< The H slider's top (400%).
+    static constexpr double kLeadSpaces = 1.2;     ///< Barline to first note, in staff spaces.
+    double clef_zone_px_ = 46.0;  ///< The clef zone's width on screen (it grows with H).
     static constexpr double kSpacesPerQuarter = 30.0 / 7.0;
     double spaces_per_quarter_ = kSpacesPerQuarter;  ///< Horizontal zoom (the W slider).
     std::map<std::string, double> lane_room_;          ///< Per staff: extra room above and below, in staff spaces.
